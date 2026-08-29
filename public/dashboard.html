@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard · API Studio</title>
+<link rel="stylesheet" href="/css/auth.css">
+<script src="/js/theme.js"></script>
+<style>
+  .dash{ max-width:520px; margin:80px auto; padding:0 24px; }
+  .dash-card{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:28px; }
+  .dash-row{ display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--border); font-size:14px; }
+  .dash-row:last-child{ border-bottom:none; }
+  .dash-row span:first-child{ color:var(--text-dim); }
+  .dash-row span:last-child{ font-weight:600; }
+  .logout{ margin-top:20px; }
+</style>
+</head>
+<body>
+<div class="dash">
+  <div class="dash-card">
+    <h2 style="margin-top:0;">Signed in ✓</h2>
+    <p style="color:var(--text-dim); font-size:14px;">This is a placeholder landing page confirming your session works end to end. Wire your real API Studio workspace in behind this route next.</p>
+    <div id="userInfo">
+      <div class="dash-row"><span>Loading…</span><span></span></div>
+    </div>
+    <button class="btn-primary logout" id="logoutBtn">Log out</button>
+  </div>
+</div>
+<script>
+(async function () {
+  const infoEl = document.getElementById('userInfo');
+  try {
+    const res = await fetch('/api/auth/me', { credentials: 'include' });
+    if (!res.ok) { window.location.href = '/login.html'; return; }
+    const { user } = await res.json();
+    infoEl.innerHTML = `
+      <div class="dash-row"><span>Username</span><span>${user.username}</span></div>
+      <div class="dash-row"><span>Organisation</span><span>${user.organisation}</span></div>
+      <div class="dash-row"><span>Role</span><span>${user.role}</span></div>
+    `;
+  } catch {
+    window.location.href = '/login.html';
+  }
+})();
+
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+  window.location.href = '/login.html';
+});
+</script>
+</body>
+</html>
