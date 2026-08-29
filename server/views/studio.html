@@ -3321,6 +3321,7 @@ function renderAll(){
   applyTheme();
   applyEnvAccent();
   applySidebarCollapsed();
+  renderAuthorLabel();
   renderEnvSwitcher();
   renderSidebar();
   renderMain();
@@ -6226,8 +6227,6 @@ document.getElementById('btnLogout').addEventListener('click', async ()=>{
   window.location.href = '/login.html';
 });
 
-renderAuthorLabel();
-
 /* ---------- Command palette wiring ---------- */
 document.getElementById('paletteOverlay').addEventListener('click', (e)=>{ if(e.target.id === 'paletteOverlay') closePalette(); });
 document.getElementById('paletteInput').addEventListener('input', (e)=>renderPaletteResults(e.target.value));
@@ -6349,6 +6348,7 @@ document.getElementById('railScrim').addEventListener('click', ()=>{
 });
 /* ==================== SECTION:INIT ==================== */
 loadState();
+renderAuthorLabel();
 renderAll();
 </script>
 </body>

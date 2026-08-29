@@ -98,6 +98,20 @@
     return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
+  // Masks the email for display in the decorative JSON preview only — the real
+  // input box stays plain text so you can proofread what you typed.
+  function maskIdentifier(val) {
+    if (!val) return '';
+    const at = val.indexOf('@');
+    if (at === -1) {
+      return val.length <= 1 ? val : val[0] + '•'.repeat(val.length - 1);
+    }
+    const local = val.slice(0, at);
+    const domain = val.slice(at + 1);
+    const maskedLocal = local.length <= 2 ? local[0] + '•'.repeat(Math.max(local.length - 1, 1)) : local.slice(0, 2) + '•'.repeat(local.length - 2);
+    return `${maskedLocal}@${domain}`;
+  }
+
   function renderConsole() {
     const email = emailInput.value.trim();
     const info = email ? classifyEmail(email) : { valid: null, kind: null };
@@ -119,7 +133,7 @@
 
     consoleBody.innerHTML =
       '<span class="punct">{</span>\n' +
-      `  <span class="k">"email"</span><span class="punct">:</span> <span class="s">"${email ? escapeHtml(email) : '…'}"</span><span class="punct">,</span>\n` +
+      `  <span class="k">"email"</span><span class="punct">:</span> <span class="s">"${email ? escapeHtml(maskIdentifier(email)) : '…'}"</span><span class="punct">,</span>\n` +
       `  <span class="k">"domain_type"</span><span class="punct">:</span> <span class="s">"${info.kind || 'unknown'}"</span><span class="punct">,</span>\n` +
       `  <span class="k">"organisation"</span><span class="punct">:</span> <span class="s">"${orgInput.value.trim() ? escapeHtml(orgInput.value.trim()) : '…'}"</span><span class="punct">,</span>\n` +
       `  <span class="k">"role"</span><span class="punct">:</span> <span class="s">"${selectedRole || '…'}"</span><span class="punct">,</span>\n` +

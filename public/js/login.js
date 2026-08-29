@@ -11,12 +11,27 @@
     return str.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
+  // Masks the identifier for display in the decorative JSON preview only — the
+  // real input box stays plain text so you can proofread what you typed.
+  function maskIdentifier(val) {
+    if (!val) return '';
+    const at = val.indexOf('@');
+    if (at === -1) {
+      // Not an email — just show the first character and mask the rest.
+      return val.length <= 1 ? val : val[0] + '•'.repeat(val.length - 1);
+    }
+    const local = val.slice(0, at);
+    const domain = val.slice(at + 1);
+    const maskedLocal = local.length <= 2 ? local[0] + '•'.repeat(Math.max(local.length - 1, 1)) : local.slice(0, 2) + '•'.repeat(local.length - 2);
+    return `${maskedLocal}@${domain}`;
+  }
+
   function renderConsole() {
     const idVal = identifierInput.value.trim();
     const pwLen = passwordInput.value.length;
     consoleBody.innerHTML =
       '<span class="punct">{</span>\n' +
-      `  <span class="k">"identifier"</span><span class="punct">:</span> <span class="s">"${idVal ? escapeHtml(idVal) : 'waiting for input…'}"</span><span class="punct">,</span>\n` +
+      `  <span class="k">"identifier"</span><span class="punct">:</span> <span class="s">"${idVal ? escapeHtml(maskIdentifier(idVal)) : 'waiting for input…'}"</span><span class="punct">,</span>\n` +
       `  <span class="k">"password"</span><span class="punct">:</span> <span class="s">"${'•'.repeat(Math.min(pwLen, 20)) || '••••••••'}"</span>\n` +
       '<span class="punct">}</span>';
   }
