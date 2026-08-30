@@ -79,6 +79,7 @@ app.get('/dashboard.html', requireAuth, (req, res) => {
     username: req.user.username,
     organisation: req.user.organisation,
     role: req.user.role,
+    ...(req.user.role === 'custom' ? { customPermissions: req.user.customPermissions || null } : {}),
   };
   const html = studioTemplate
     .replace(/__CSP_NONCE__/g, res.locals.cspNonce)

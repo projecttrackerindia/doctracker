@@ -278,6 +278,7 @@ kbd{
 .role-pill.role-admin{ background:var(--accent-soft); color:var(--accent); }
 .role-pill.role-Developer{ background:var(--post-bg); color:var(--post); }
 .role-pill.role-viewer{ background:var(--surface); color:var(--text-faint); border:1px solid var(--border-strong); }
+.role-pill.role-custom{ background:var(--patch-bg); color:var(--patch); }
 .role-select-row{ display:flex; align-items:center; gap:7px; margin-top:12px; }
 .role-opt{
   font-family:var(--sans); font-size:11.5px; font-weight:600; padding:6px 12px; border-radius:7px;
@@ -1091,6 +1092,28 @@ pre.code-block{
 .modal-actions{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:20px; }
 .modal-actions .right{ display:flex; gap:8px; }
 .modal-actions button{ padding:8px 16px; }
+
+/* Team member invite/role modal: role-card picker, env chip picker, edit toggle */
+.role-card-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.role-card{ border:1px solid var(--border); border-radius:9px; padding:10px 12px; cursor:pointer; background:var(--surface); transition:border-color .15s, background .15s; }
+.role-card:hover{ border-color:var(--border-strong); }
+.role-card.sel{ border-color:var(--accent); background:var(--accent-soft); }
+.role-card .rc-title{ font-size:12.5px; font-weight:700; margin-bottom:3px; }
+.role-card .rc-desc{ font-size:11px; color:var(--text-faint); line-height:1.45; }
+.env-chip-picker{ display:flex; flex-wrap:wrap; gap:6px; }
+.env-chip-opt{
+  display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:11px; font-weight:700;
+  padding:6px 12px; border-radius:999px; border:1px solid var(--border); background:var(--surface);
+  color:var(--text-faint); cursor:pointer; letter-spacing:.3px; user-select:none;
+}
+.env-chip-opt::before{ content:''; width:6px; height:6px; border-radius:50%; background:currentColor; flex-shrink:0; }
+.env-chip-opt.sel{ border-color:var(--env-accent, var(--accent)); background:var(--env-accent-bg, var(--accent-soft)); color:var(--env-accent, var(--accent)); }
+.toggle-field{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+.toggle-field label{ margin-bottom:0 !important; }
+.toggle-switch{ position:relative; width:38px; height:22px; border-radius:999px; background:var(--surface-2); border:1px solid var(--border-strong); cursor:pointer; flex-shrink:0; padding:0; }
+.toggle-switch::after{ content:''; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:var(--text-faint); transition:transform .15s, background .15s; }
+.toggle-switch.on{ background:var(--accent-soft); border-color:var(--accent); }
+.toggle-switch.on::after{ transform:translateX(16px); background:var(--accent); }
 .hint{ color:var(--text-faint); font-size:11px; margin-top:-8px; margin-bottom:14px; line-height:1.5; }
 .modal-tabs{ display:flex; gap:4px; margin-bottom:18px; border-bottom:1px solid var(--border); }
 .modal-tab{ padding:8px 4px; margin-right:16px; font-size:12px; font-weight:600; color:var(--text-faint); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
@@ -1686,6 +1709,42 @@ pre.json-raw{ max-height:360px; margin:0; }
   </div>
 </div>
 
+<div class="modal-overlay" id="userModal">
+  <div class="modal" style="width:520px;">
+    <h2 id="userModalTitle">Invite user</h2>
+    <div class="modal-sub" id="userModalSubtitle"></div>
+    <div class="field" id="userModalUsernameField">
+      <label>Username</label>
+      <input type="text" id="userModalUsername" placeholder="e.g. jane.doe" maxlength="30">
+    </div>
+    <div class="field" id="userModalEmailField">
+      <label>Email</label>
+      <input type="text" id="userModalEmail" placeholder="name@company.com — this is how they'll sign in">
+    </div>
+    <div class="field">
+      <label>Role</label>
+      <div class="role-card-grid" id="userModalRoleGrid"></div>
+    </div>
+    <div id="userModalCustomSection" style="display:none;">
+      <div class="field">
+        <label>Environments</label>
+        <div class="env-chip-picker" id="userModalEnvChips"></div>
+      </div>
+      <div class="toggle-field">
+        <label>Can create &amp; edit endpoints</label>
+        <button type="button" class="toggle-switch" id="userModalEditToggle" role="switch" aria-checked="false"></button>
+      </div>
+    </div>
+    <div class="hint" id="userModalHint" style="margin-top:-6px;"></div>
+    <div class="modal-actions" style="justify-content:flex-end;">
+      <div class="right">
+        <button type="button" id="userModalCancel">Cancel</button>
+        <button type="button" class="primary" id="userModalSave">Send invite</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 
 <div class="modal-overlay" id="tryItModal">
   <div class="modal">
@@ -2269,21 +2328,42 @@ function resolveFlowDirection(proj){
 // gate what the interface offers: which environments show up in the switcher, and
 // whether create/edit/delete affordances render at all.
 const ROLES = [
-  { id:'admin',  label:'Admin',  seesAll:true,  canEdit:true  },
-  { id:'Developer', label:'Developer', seesAll:false, canEdit:true  },
-  { id:'viewer', label:'Viewer', seesAll:false, canEdit:false },
+  { id:'admin',  label:'Admin',  seesAll:true,  canEdit:true,
+    desc:'Full access to every environment, and can create, edit, or delete endpoints.' },
+  { id:'Developer', label:'Developer', seesAll:false, canEdit:true,
+    desc:'Can create and edit endpoints, scoped to non-restricted environments.' },
+  { id:'viewer', label:'Viewer', seesAll:false, canEdit:false,
+    desc:"Read-only — can browse and try endpoints, but can't create, edit, or delete." },
+  { id:'custom', label:'Custom', seesAll:false, canEdit:false,
+    desc:'Pick exactly which environments they can reach, and whether they can edit.' },
 ];
 function roleMeta(id){ return ROLES.find(r=>r.id===id) || ROLES[1]; }
 
-// The backend stores roles as 'admin' | 'editor' | 'viewer' (matches the DB
-// constraint); the UI's local role-preview system predates real accounts and
-// uses 'admin' | 'Developer' | 'viewer'. These convert between the two so the
-// Team members table can reuse the existing role-pill styling and ROLES list.
+// The backend stores roles as 'admin' | 'editor' | 'viewer' | 'custom' (matches
+// the DB constraint); the UI's local role-preview system predates real accounts
+// and uses 'admin' | 'Developer' | 'viewer' | 'custom'. These convert between
+// the two so the Team members table can reuse the existing role-pill styling
+// and ROLES list ('custom' passes through unchanged on both sides).
 function dbRoleToLocalId(dbRole){ return dbRole === 'editor' ? 'Developer' : dbRole; }
 function localIdToDbRole(localId){ return localId === 'Developer' ? 'editor' : localId; }
 
-function canEdit(){ return roleMeta(state.authorRole).canEdit; }
+// 'custom' has no fixed permission set — it's per-user, carried on the signed-in
+// user's own AUTH_USER.customPermissions — so it's special-cased ahead of the
+// generic ROLES lookup rather than living in roleMeta().
+function canEdit(){
+  if(state.authorRole === 'custom'){
+    return !!(AUTH_USER && AUTH_USER.role === 'custom' && AUTH_USER.customPermissions && AUTH_USER.customPermissions.canEdit);
+  }
+  return roleMeta(state.authorRole).canEdit;
+}
 function roleAllowedEnvs(roleId){
+  if(roleId === 'custom'){
+    if(AUTH_USER && AUTH_USER.role === 'custom' && AUTH_USER.customPermissions){
+      const allowed = AUTH_USER.customPermissions.envs || [];
+      return environments().filter(e=>allowed.includes(e.id));
+    }
+    return [];
+  }
   const role = roleMeta(roleId);
   return role.seesAll ? environments() : environments().filter(e=>!e.restricted);
 }
@@ -2570,7 +2650,7 @@ function loadState(){
     // Signed in via the real auth service — identity comes from the session, not localStorage.
     state.authorName = AUTH_USER.username;
     state.organisation = AUTH_USER.organisation;
-    const roleMap = { admin:'admin', editor:'Developer', viewer:'viewer' };
+    const roleMap = { admin:'admin', editor:'Developer', viewer:'viewer', custom:'custom' };
     state.authorRole = roleMap[AUTH_USER.role] || (ROLES.some(r=>r.id===role) ? role : 'Developer');
   } else {
     state.authorName = localStorage.getItem(AUTHOR_KEY) || '';
@@ -4075,7 +4155,7 @@ function renderProfilePage(main){
         ` : `
         <div class="role-select-row">
           <span class="profile-swatch-label">Role</span>
-          ${ROLES.map(r=>`<span class="role-opt${state.authorRole===r.id?' sel':''}" data-role="${r.id}">${r.label}</span>`).join('')}
+          ${ROLES.filter(r=>r.id!=='custom').map(r=>`<span class="role-opt${state.authorRole===r.id?' sel':''}" data-role="${r.id}">${r.label}</span>`).join('')}
         </div>
         <div class="role-hint">${roleHintText(state.authorRole)}</div>
         `}
@@ -4550,8 +4630,7 @@ async function handleEnvRowAction(act, id, el){
 }
 
 /* ==================== SECTION:USERS (Admin-only team management) ==================== */
-let usersState = { status:'idle', list:[], search:'', rowMenu:{ id:null, mode:'menu' }, addFormOpen:false, error:'' };
-let usersAddRoleChoice = 'viewer';
+let usersState = { status:'idle', list:[], search:'', rowMenu:{ id:null }, error:'' };
 
 async function ensureUsersLoaded(force){
   if(!AUTH_USER || AUTH_USER.role !== 'admin') return;
@@ -4627,7 +4706,6 @@ function usersTableHtml(){
       <button type="button" id="usersRefreshBtn" title="Refresh list">⟲ Refresh</button>
       <button type="button" class="primary" id="usersAddBtn">+ Invite user</button>
     </div>
-    ${usersState.addFormOpen ? userAddFormHtml() : ''}
     <div class="table-scroll">
     <table class="data-table">
       <thead><tr>
@@ -4643,31 +4721,6 @@ function usersTableHtml(){
   `;
 }
 
-function userAddFormHtml(){
-  return `
-  <div id="usersAddForm" style="max-width:440px;margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px;">
-    <div>
-      <div style="font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-bottom:5px;">Username</div>
-      <input type="text" id="usersAddUsernameInput" placeholder="e.g. jane.doe" maxlength="30" style="width:100%;">
-    </div>
-    <div>
-      <div style="font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-bottom:5px;">Email</div>
-      <input type="text" id="usersAddEmailInput" placeholder="name@company.com — this is how they'll sign in" style="width:100%;">
-    </div>
-    <div>
-      <div style="font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-bottom:5px;">Role</div>
-      <select id="usersAddRoleInput" style="width:100%;">
-        ${ROLES.map(r=>{ const dbRole = localIdToDbRole(r.id); return `<option value="${dbRole}"${dbRole===usersAddRoleChoice?' selected':''}>${r.label}</option>`; }).join('')}
-      </select>
-    </div>
-    <div style="font-size:11.5px;color:var(--text-faint);">There's no email service hooked up, so this creates the account directly and gives you a one-time temporary password to share with them yourself.</div>
-    <div style="display:flex;justify-content:flex-end;gap:8px;">
-      <button type="button" id="usersAddCancel">Cancel</button>
-      <button type="button" class="primary" id="usersAddSave">Send invite</button>
-    </div>
-  </div>`;
-}
-
 function avatarColorFor(name){
   return PROFILE_COLORS[hashStr(name||'') % PROFILE_COLORS.length];
 }
@@ -4678,6 +4731,9 @@ function userRowHtml(u){
   const rMeta = roleMeta(localRoleId);
   const menuOpen = usersState.rowMenu.id === u.id;
   const initials = profileInitials(u.username);
+  const customTitle = (rMeta.id === 'custom' && u.custom_permissions)
+    ? ` title="${escapeHtml((u.custom_permissions.envs||[]).join(', '))} · ${u.custom_permissions.canEdit ? 'can edit' : 'read-only'}"`
+    : '';
   return `
   <tr class="env-row">
     <td>
@@ -4689,26 +4745,19 @@ function userRowHtml(u){
         </div>
       </div>
     </td>
-    <td><span class="role-pill role-${rMeta.id}">${rMeta.label}</span></td>
+    <td><span class="role-pill role-${rMeta.id}"${customTitle}>${rMeta.label}</span></td>
     <td><span class="access-badge access-user">Active</span></td>
     <td class="mono" style="font-size:11px;color:var(--text-faint);">${u.last_login_at ? formatDateTime(u.last_login_at) : 'Never signed in'}</td>
     <td>
       <div class="row-actions-dd${menuOpen?' open':''}" data-urow-dd="${u.id}">
         <button type="button" class="icon-btn row-actions-btn" data-urow-dd-btn="${u.id}" title="More actions">⋮</button>
-        <div class="row-actions-panel" data-urow-panel="${u.id}">${menuOpen ? userRowActionsPanelHtml(u, usersState.rowMenu.mode, isSelf) : ''}</div>
+        <div class="row-actions-panel" data-urow-panel="${u.id}">${menuOpen ? userRowActionsPanelHtml(u, isSelf) : ''}</div>
       </div>
     </td>
   </tr>`;
 }
 
-function userRowActionsPanelHtml(u, mode, isSelf){
-  if(mode === 'role'){
-    return ROLES.map(r=>{
-      const dbRole = localIdToDbRole(r.id);
-      const current = dbRole === u.role;
-      return `<button type="button" class="row-actions-item" data-uact="pick-role" data-role="${dbRole}" data-id="${u.id}"${current?' disabled':''}>${r.label}${current?' ✓':''}</button>`;
-    }).join('') + `<div class="row-actions-divider"></div><button type="button" class="row-actions-item" data-uact="back" data-id="${u.id}">Back</button>`;
-  }
+function userRowActionsPanelHtml(u, isSelf){
   return `
     <button type="button" class="row-actions-item" data-uact="role" data-id="${u.id}"${isSelf?' disabled title="Ask another Admin to change your own role"':''}>Change role</button>
     <button type="button" class="row-actions-item" data-uact="reset-password" data-id="${u.id}">Reset password</button>
@@ -4735,55 +4784,13 @@ function bindUsersTableEvents(container){
   if(retryBtn) retryBtn.addEventListener('click', ()=>{ ensureUsersLoaded(true); });
 
   const addBtn = document.getElementById('usersAddBtn');
-  if(addBtn) addBtn.addEventListener('click', ()=>{
-    usersAddRoleChoice = 'viewer';
-    usersState.addFormOpen = true;
-    renderUsersTableSection();
-    const el = document.getElementById('usersAddUsernameInput');
-    if(el) el.focus();
-  });
-
-  const addCancel = document.getElementById('usersAddCancel');
-  if(addCancel) addCancel.addEventListener('click', ()=>{ usersState.addFormOpen = false; renderUsersTableSection(); });
-
-  const addSave = document.getElementById('usersAddSave');
-  if(addSave) addSave.addEventListener('click', async ()=>{
-    const username = document.getElementById('usersAddUsernameInput').value.trim();
-    const email = document.getElementById('usersAddEmailInput').value.trim();
-    const role = document.getElementById('usersAddRoleInput').value;
-    usersAddRoleChoice = role;
-    addSave.disabled = true;
-    const origLabel = addSave.textContent;
-    addSave.textContent = 'Sending…';
-    try{
-      const res = await fetch('/api/users/invite', {
-        method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include',
-        body: JSON.stringify({ username, email, role })
-      });
-      const data = await res.json().catch(()=>({}));
-      if(!res.ok){ toast(data.error || 'Could not invite that user.'); return; }
-      usersState.addFormOpen = false;
-      usersState.list.push(data.user);
-      logAudit('created', 'user', username, `Invited ${username} (${email}) as ${roleMeta(dbRoleToLocalId(role)).label}`);
-      renderUsersTableSection();
-      openCredentialModal({
-        title: 'Account created',
-        subtitle: `Share these sign-in details with ${username} — the password won't be shown again.`,
-        username, password: data.temporaryPassword,
-      });
-    }catch(e){
-      toast('Could not reach the server. Check your connection and try again.');
-    }finally{
-      addSave.disabled = false;
-      addSave.textContent = origLabel;
-    }
-  });
+  if(addBtn) addBtn.addEventListener('click', ()=>{ openUserModal({ mode:'invite' }); });
 
   container.querySelectorAll('[data-urow-dd-btn]').forEach(btn=>{
     btn.addEventListener('click', (ev)=>{
       ev.stopPropagation();
       const id = parseInt(btn.getAttribute('data-urow-dd-btn'), 10);
-      usersState.rowMenu = (usersState.rowMenu.id === id) ? { id:null, mode:'menu' } : { id, mode:'menu' };
+      usersState.rowMenu = (usersState.rowMenu.id === id) ? { id:null } : { id };
       renderUsersTableSection();
     });
   });
@@ -4793,7 +4800,6 @@ function bindUsersTableEvents(container){
       ev.stopPropagation();
       const act = el.getAttribute('data-uact');
       const id = parseInt(el.getAttribute('data-id'), 10);
-      if(act === 'back'){ usersState.rowMenu = { id, mode:'menu' }; renderUsersTableSection(); return; }
       handleUserRowAction(act, id, el);
     });
   });
@@ -4803,27 +4809,10 @@ async function handleUserRowAction(act, id, el){
   const user = usersState.list.find(u=>u.id===id);
 
   if(act === 'role'){
-    usersState.rowMenu = { id, mode:'role' };
+    if(!user) return;
+    usersState.rowMenu = { id:null };
     renderUsersTableSection();
-    return;
-  }
-
-  if(act === 'pick-role'){
-    const role = el.getAttribute('data-role');
-    try{
-      const res = await fetch(`/api/users/${id}/role`, {
-        method:'PATCH', headers:{'Content-Type':'application/json'}, credentials:'include',
-        body: JSON.stringify({ role })
-      });
-      const data = await res.json().catch(()=>({}));
-      if(!res.ok){ toast(data.error || 'Could not change that role.'); return; }
-      const idx = usersState.list.findIndex(u=>u.id===id);
-      if(idx !== -1) usersState.list[idx] = data.user;
-      usersState.rowMenu = { id:null, mode:'menu' };
-      logAudit('updated', 'user', user ? user.username : String(id), `Changed role to ${roleMeta(dbRoleToLocalId(role)).label}`);
-      toast(`Role updated to ${roleMeta(dbRoleToLocalId(role)).label}`);
-      renderUsersTableSection();
-    }catch(e){ toast('Could not reach the server. Check your connection and try again.'); }
+    openUserModal({ mode:'edit-role', user });
     return;
   }
 
@@ -4839,7 +4828,7 @@ async function handleUserRowAction(act, id, el){
       const res = await fetch(`/api/users/${id}/reset-password`, { method:'POST', credentials:'include' });
       const data = await res.json().catch(()=>({}));
       if(!res.ok){ toast(data.error || 'Could not reset that password.'); return; }
-      usersState.rowMenu = { id:null, mode:'menu' };
+      usersState.rowMenu = { id:null };
       logAudit('updated', 'user', user.username, 'Reset password');
       renderUsersTableSection();
       openCredentialModal({
@@ -4864,12 +4853,148 @@ async function handleUserRowAction(act, id, el){
       const data = await res.json().catch(()=>({}));
       if(!res.ok){ toast(data.error || 'Could not delete that user.'); return; }
       usersState.list = usersState.list.filter(u=>u.id!==id);
-      usersState.rowMenu = { id:null, mode:'menu' };
+      usersState.rowMenu = { id:null };
       logAudit('deleted', 'user', user.username, 'Removed from the organisation');
       toast(`Deleted ${user.username}`);
       renderUsersTableSection();
     }catch(e){ toast('Could not reach the server. Check your connection and try again.'); }
     return;
+  }
+}
+
+/* ---- Shared invite / change-role modal ---- */
+let userModalState = { mode:'invite', user:null, role:'viewer', envs:[], canEditFlag:false };
+
+function openUserModal({ mode, user }){
+  const existingPerms = (user && user.custom_permissions) || null;
+  userModalState = {
+    mode,
+    user: user || null,
+    role: user ? user.role : 'viewer',
+    envs: existingPerms ? (existingPerms.envs || []).slice() : [],
+    canEditFlag: existingPerms ? !!existingPerms.canEdit : false,
+  };
+  document.getElementById('userModalTitle').textContent = mode === 'invite' ? 'Invite user' : `Change ${user.username}'s role`;
+  document.getElementById('userModalSubtitle').textContent = mode === 'invite'
+    ? "There's no email service hooked up, so this creates the account directly and gives you a one-time temporary password to share with them yourself."
+    : "Takes effect the next time they load the app.";
+  document.getElementById('userModalUsernameField').style.display = mode === 'invite' ? '' : 'none';
+  document.getElementById('userModalEmailField').style.display = mode === 'invite' ? '' : 'none';
+  if(mode === 'invite'){
+    document.getElementById('userModalUsername').value = '';
+    document.getElementById('userModalEmail').value = '';
+  }
+  document.getElementById('userModalSave').textContent = mode === 'invite' ? 'Send invite' : 'Save role';
+  renderUserModalBody();
+  document.getElementById('userModal').classList.add('show');
+  if(mode === 'invite') setTimeout(()=>{ const el = document.getElementById('userModalUsername'); if(el) el.focus(); }, 0);
+}
+
+function closeUserModal(){
+  document.getElementById('userModal').classList.remove('show');
+}
+
+function renderUserModalBody(){
+  const grid = document.getElementById('userModalRoleGrid');
+  grid.innerHTML = ROLES.map(r=>{
+    const dbRole = localIdToDbRole(r.id);
+    const sel = dbRole === userModalState.role;
+    return `<div class="role-card${sel?' sel':''}" data-role-card="${dbRole}">
+      <div class="rc-title">${r.label}</div>
+      <div class="rc-desc">${r.desc}</div>
+    </div>`;
+  }).join('');
+  grid.querySelectorAll('[data-role-card]').forEach(card=>{
+    card.addEventListener('click', ()=>{
+      userModalState.role = card.getAttribute('data-role-card');
+      renderUserModalBody();
+    });
+  });
+
+  const isCustom = userModalState.role === 'custom';
+  document.getElementById('userModalCustomSection').style.display = isCustom ? '' : 'none';
+
+  if(isCustom){
+    const chipsWrap = document.getElementById('userModalEnvChips');
+    chipsWrap.innerHTML = environments().map(e=>{
+      const sel = userModalState.envs.includes(e.id);
+      const style = sel ? ` style="--env-accent:${envAccentColor(e.id)};--env-accent-bg:${envBgColor(e.id)};"` : '';
+      return `<span class="env-chip-opt${sel?' sel':''}" data-env-chip="${e.id}"${style}>${e.label}</span>`;
+    }).join('');
+    chipsWrap.querySelectorAll('[data-env-chip]').forEach(chip=>{
+      chip.addEventListener('click', ()=>{
+        const id = chip.getAttribute('data-env-chip');
+        const idx = userModalState.envs.indexOf(id);
+        if(idx === -1) userModalState.envs.push(id); else userModalState.envs.splice(idx,1);
+        renderUserModalBody();
+      });
+    });
+    const toggle = document.getElementById('userModalEditToggle');
+    toggle.className = 'toggle-switch' + (userModalState.canEditFlag ? ' on' : '');
+    toggle.setAttribute('aria-checked', String(userModalState.canEditFlag));
+    toggle.onclick = ()=>{ userModalState.canEditFlag = !userModalState.canEditFlag; renderUserModalBody(); };
+  }
+
+  const hintEl = document.getElementById('userModalHint');
+  if(isCustom){
+    const envList = environments().filter(e=>userModalState.envs.includes(e.id)).map(e=>e.label).join(', ');
+    hintEl.textContent = `Access to ${envList || 'no environments yet'} — ${userModalState.canEditFlag ? 'can create and edit endpoints.' : 'read-only.'}`;
+  } else {
+    hintEl.textContent = roleHintText(dbRoleToLocalId(userModalState.role));
+  }
+}
+
+async function saveUserModal(){
+  const role = userModalState.role;
+  let customPermissions;
+  if(role === 'custom'){
+    if(!userModalState.envs.length){ toast('Pick at least one environment for a custom role.'); return; }
+    customPermissions = { envs: userModalState.envs.slice(), canEdit: userModalState.canEditFlag };
+  }
+
+  let url, method, body;
+  if(userModalState.mode === 'invite'){
+    const username = document.getElementById('userModalUsername').value.trim();
+    const email = document.getElementById('userModalEmail').value.trim();
+    body = { username, email, role, customPermissions };
+    url = '/api/users/invite'; method = 'POST';
+  } else {
+    body = { role, customPermissions };
+    url = `/api/users/${userModalState.user.id}/role`; method = 'PATCH';
+  }
+
+  const saveBtn = document.getElementById('userModalSave');
+  saveBtn.disabled = true;
+  const origLabel = saveBtn.textContent;
+  saveBtn.textContent = userModalState.mode === 'invite' ? 'Sending…' : 'Saving…';
+  try{
+    const res = await fetch(url, { method, headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify(body) });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok){ toast(data.error || 'Could not save that.'); return; }
+
+    if(userModalState.mode === 'invite'){
+      usersState.list.push(data.user);
+      logAudit('created', 'user', body.username, `Invited ${body.username} (${body.email}) as ${roleMeta(dbRoleToLocalId(role)).label}`);
+      closeUserModal();
+      renderUsersTableSection();
+      openCredentialModal({
+        title: 'Account created',
+        subtitle: `Share these sign-in details with ${body.username} — the password won't be shown again.`,
+        username: body.username, password: data.temporaryPassword,
+      });
+    } else {
+      const idx = usersState.list.findIndex(u=>u.id===userModalState.user.id);
+      if(idx !== -1) usersState.list[idx] = data.user;
+      logAudit('updated', 'user', userModalState.user.username, `Changed role to ${roleMeta(dbRoleToLocalId(role)).label}`);
+      toast(`Role updated to ${roleMeta(dbRoleToLocalId(role)).label}`);
+      closeUserModal();
+      renderUsersTableSection();
+    }
+  }catch(e){
+    toast('Could not reach the server. Check your connection and try again.');
+  }finally{
+    saveBtn.disabled = false;
+    saveBtn.textContent = origLabel;
   }
 }
 
@@ -4888,6 +5013,10 @@ function roleHintText(roleId){
   const envList = roleAllowedEnvs(roleId).map(e=>e.label).join(', ');
   if(roleId==='admin')  return `Full access. Can reach every environment (${envList}) and create, edit, or delete endpoints.`;
   if(roleId==='Developer') return `Can create and edit endpoints, scoped to ${envList}. Prod and DR stay read-only from another role.`;
+  if(roleId==='custom'){
+    const editPart = canEdit() ? 'create, edit, or delete endpoints' : "browse and try endpoints, but can't create, edit, or delete anything";
+    return `Custom access, set by an Admin. Can reach ${envList || 'no environments yet'} and ${editPart}.`;
+  }
   return `Read-only. Can browse and try endpoints in ${envList}, but can't create, edit, or delete anything.`;
 }
 
@@ -5423,6 +5552,12 @@ document.getElementById('credentialModalCopy').addEventListener('click', (e)=>{
 });
 document.getElementById('credentialModal').addEventListener('click', (e)=>{
   if(e.target.id === 'credentialModal') closeCredentialModal();
+});
+
+document.getElementById('userModalCancel').addEventListener('click', closeUserModal);
+document.getElementById('userModalSave').addEventListener('click', saveUserModal);
+document.getElementById('userModal').addEventListener('click', (e)=>{
+  if(e.target.id === 'userModal') closeUserModal();
 });
 
 function openPalette(){

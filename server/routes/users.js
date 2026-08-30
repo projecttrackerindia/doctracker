@@ -7,6 +7,7 @@ const {
   validateEmail,
   validateUsername,
   validateRole,
+  validateCustomPermissions,
   generateTemporaryPassword,
 } = require('../validators');
 
@@ -25,7 +26,7 @@ const adminActionLimiter = rateLimit({
 
 router.use(authenticate, requireAdmin, adminActionLimiter);
 
-const SAFE_COLUMNS = 'id, username, email, organisation, role, created_at, last_login_at';
+const SAFE_COLUMNS = 'id, username, email, organisation, role, custom_permissions, created_at, last_login_at';
 
 // ---- GET /api/users — everyone in the admin's organisation ----
 router.get('/', async (req, res) => {
@@ -47,7 +48,7 @@ router.get('/', async (req, res) => {
 // admin to share with the person directly.
 router.post('/invite', async (req, res) => {
   try {
-    const { username, email, role } = req.body || {};
+    const { username, email, role, customPermissions } = req.body || {};
 
     const usernameCheck = validateUsername(username);
     if (!usernameCheck.valid) return res.status(400).json({ field: 'username', error: usernameCheck.reason });
@@ -57,6 +58,13 @@ router.post('/invite', async (req, res) => {
 
     const roleCheck = validateRole(role);
     if (!roleCheck.valid) return res.status(400).json({ field: 'role', error: roleCheck.reason });
+
+    let permsToStore = null;
+    if (roleCheck.value === 'custom') {
+      const permsCheck = validateCustomPermissions(customPermissions);
+      if (!permsCheck.valid) return res.status(400).json({ field: 'customPermissions', error: permsCheck.reason });
+      permsToStore = permsCheck.value;
+    }
 
     const existing = await pool.query(
       'SELECT id FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($2)',
@@ -70,10 +78,13 @@ router.post('/invite', async (req, res) => {
     const passwordHash = await bcrypt.hash(temporaryPassword, 12);
 
     const result = await pool.query(
-      `INSERT INTO users (username, email, password_hash, organisation, role)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO users (username, email, password_hash, organisation, role, custom_permissions)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING ${SAFE_COLUMNS}`,
-      [usernameCheck.value, email.trim().toLowerCase(), passwordHash, req.authUser.organisation, roleCheck.value]
+      [
+        usernameCheck.value, email.trim().toLowerCase(), passwordHash, req.authUser.organisation, roleCheck.value,
+        permsToStore ? JSON.stringify(permsToStore) : null,
+      ]
     );
 
     res.status(201).json({ user: result.rows[0], temporaryPassword });
@@ -111,12 +122,21 @@ router.patch('/:id/role', async (req, res) => {
       return res.status(400).json({ error: "You can't change your own role. Ask another Admin to do this." });
     }
 
-    const roleCheck = validateRole((req.body || {}).role);
+    const { role, customPermissions } = req.body || {};
+    const roleCheck = validateRole(role);
     if (!roleCheck.valid) return res.status(400).json({ field: 'role', error: roleCheck.reason });
 
+    let permsToStore = null;
+    if (roleCheck.value === 'custom') {
+      const permsCheck = validateCustomPermissions(customPermissions);
+      if (!permsCheck.valid) return res.status(400).json({ field: 'customPermissions', error: permsCheck.reason });
+      permsToStore = permsCheck.value;
+    }
+    // Switching away from 'custom' clears any stored permissions rather than leaving stale data behind.
+
     const result = await pool.query(
-      `UPDATE users SET role = $1 WHERE id = $2 RETURNING ${SAFE_COLUMNS}`,
-      [roleCheck.value, user.id]
+      `UPDATE users SET role = $1, custom_permissions = $2 WHERE id = $3 RETURNING ${SAFE_COLUMNS}`,
+      [roleCheck.value, permsToStore ? JSON.stringify(permsToStore) : null, user.id]
     );
     res.json({ user: result.rows[0] });
   } catch (err) {

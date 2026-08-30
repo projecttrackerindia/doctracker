@@ -31,7 +31,13 @@ const COOKIE_OPTS = {
 
 function signSession(user) {
   return jwt.sign(
-    { sub: user.id, username: user.username, role: user.role, organisation: user.organisation },
+    {
+      sub: user.id,
+      username: user.username,
+      role: user.role,
+      organisation: user.organisation,
+      customPermissions: user.role === 'custom' ? (user.custom_permissions || null) : undefined,
+    },
     process.env.JWT_SECRET,
     { expiresIn: '7d' }
   );
@@ -59,6 +65,9 @@ router.post('/register', authLimiter, async (req, res) => {
 
     const roleCheck = validateRole(role);
     if (!roleCheck.valid) return res.status(400).json({ field: 'role', error: roleCheck.reason });
+    if (roleCheck.value === 'custom') {
+      return res.status(400).json({ field: 'role', error: 'The custom role can only be assigned by an Admin after you register.' });
+    }
 
     const pwCheck = evaluatePassword(password, { username: usernameCheck.value, email });
     if (!pwCheck.valid) {
@@ -101,7 +110,7 @@ router.post('/login', authLimiter, async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT id, username, email, password_hash, organisation, role
+      `SELECT id, username, email, password_hash, organisation, role, custom_permissions
        FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)`,
       [identifier.trim()]
     );
@@ -115,8 +124,11 @@ router.post('/login', authLimiter, async (req, res) => {
 
     await pool.query('UPDATE users SET last_login_at = now() WHERE id = $1', [user.id]);
 
-    const safeUser = { id: user.id, username: user.username, email: user.email, organisation: user.organisation, role: user.role };
-    const token = signSession(safeUser);
+    const safeUser = {
+      id: user.id, username: user.username, email: user.email, organisation: user.organisation, role: user.role,
+      ...(user.role === 'custom' ? { customPermissions: user.custom_permissions } : {}),
+    };
+    const token = signSession(user);
     res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
     res.json({ user: safeUser });
   } catch (err) {
@@ -137,7 +149,12 @@ router.get('/me', (req, res) => {
   if (!token) return res.status(401).json({ error: 'Not signed in.' });
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    res.json({ user: { username: payload.username, role: payload.role, organisation: payload.organisation } });
+    res.json({
+      user: {
+        username: payload.username, role: payload.role, organisation: payload.organisation,
+        ...(payload.role === 'custom' ? { customPermissions: payload.customPermissions || null } : {}),
+      },
+    });
   } catch {
     res.status(401).json({ error: 'Session expired. Please sign in again.' });
   }

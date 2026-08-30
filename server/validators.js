@@ -78,12 +78,41 @@ function validateOrganisation(name) {
   return { valid: true, value };
 }
 
-const VALID_ROLES = new Set(['admin', 'editor', 'viewer']);
+const VALID_ROLES = new Set(['admin', 'editor', 'viewer', 'custom']);
 function validateRole(role) {
   if (!VALID_ROLES.has(role)) {
     return { valid: false, reason: 'Select a valid role.' };
   }
   return { valid: true, value: role };
+}
+
+// Environments aren't a fixed server-side list in this app — each browser
+// keeps its own set in localStorage — so this validates *shape*, not
+// specific environment names: { envs: string[], canEdit: boolean }.
+const MAX_CUSTOM_ENVS = 20;
+function validateCustomPermissions(perms) {
+  if (!perms || typeof perms !== 'object' || Array.isArray(perms)) {
+    return { valid: false, reason: 'Custom permissions are required for the custom role.' };
+  }
+  const { envs, canEdit } = perms;
+  if (!Array.isArray(envs) || envs.length === 0) {
+    return { valid: false, reason: 'Pick at least one environment for the custom role.' };
+  }
+  if (envs.length > MAX_CUSTOM_ENVS) {
+    return { valid: false, reason: `Pick at most ${MAX_CUSTOM_ENVS} environments.` };
+  }
+  const cleanEnvs = [];
+  for (const e of envs) {
+    if (typeof e !== 'string' || !e.trim() || e.length > 40) {
+      return { valid: false, reason: 'Environment list contains an invalid entry.' };
+    }
+    const trimmed = e.trim();
+    if (!cleanEnvs.includes(trimmed)) cleanEnvs.push(trimmed);
+  }
+  if (typeof canEdit !== 'boolean') {
+    return { valid: false, reason: 'canEdit must be true or false.' };
+  }
+  return { valid: true, value: { envs: cleanEnvs, canEdit } };
 }
 
 // Generates a random password that always satisfies evaluatePassword()'s
@@ -173,6 +202,7 @@ module.exports = {
   validateUsername,
   validateOrganisation,
   validateRole,
+  validateCustomPermissions,
   evaluatePassword,
   generateTemporaryPassword,
   VALID_ROLES,
