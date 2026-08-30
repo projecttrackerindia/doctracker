@@ -593,7 +593,7 @@ kbd{
 .pdf-print-root .pdf-code{ margin:0; padding:12px; font-family:var(--mono); font-size:10.5px; color:#0f1420; white-space:pre-wrap; word-break:break-word; line-height:1.6; }
 .pdf-print-root .section-sub{ font-size:10.5px; font-weight:800; color:#4b5468; margin:13px 0 7px; text-transform:uppercase; letter-spacing:.4px; display:flex; align-items:center; gap:6px; }
 .pdf-print-root table.data-table{ width:100%; border-collapse:collapse; font-size:10.5px; margin-bottom:13px; border:1px solid #e2e6ee; border-radius:8px; overflow:hidden; background:#ffffff; }
-.pdf-print-root table.data-table thead th{ text-align:left; font-size:9px; text-transform:uppercase; letter-spacing:.4px; color:#8890a3; font-weight:700; padding:8px 10px; background:#eef1f6; border-bottom:1px solid #e2e6ee; }
+.pdf-print-root table.data-table thead th{ text-align:left; font-size:9px; text-transform:uppercase; letter-spacing:.4px; color:#4a5fe0; font-weight:700; padding:8px 10px; background:rgba(74,95,224,.08); border-bottom:1px solid #e2e6ee; }
 .pdf-print-root table.data-table tbody td{ padding:8px 10px; border-bottom:1px solid #e2e6ee; vertical-align:top; color:#4b5468; background:#ffffff; }
 .pdf-print-root table.data-table tbody tr:last-child td{ border-bottom:none; }
 .pdf-print-root table.data-table .pname{ color:#0f1420; font-weight:600; }
@@ -685,8 +685,8 @@ code{ font-family:var(--mono); background:var(--surface-2); border:1px solid var
 
 table.data-table{ width:100%; border-collapse:separate; border-spacing:0; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); overflow:hidden; }
 table.data-table th{
-  text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint);
-  padding:10px 16px; background:var(--surface-2); border-bottom:1px solid var(--border); font-weight:700;
+  text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--accent);
+  padding:10px 16px; background:var(--accent-soft); border-bottom:1px solid var(--border); font-weight:700;
 }
 table.data-table td{ padding:12px 16px; border-bottom:1px solid var(--border); font-size:12.5px; line-height:1.55; vertical-align:top; }
 table.data-table tbody tr:last-child td{ border-bottom:none; }
@@ -1429,6 +1429,12 @@ pre.json-preview{
   background:var(--bg-elevated); border:1px solid var(--border); border-radius:8px; padding:12px;
   font-family:var(--mono); font-size:11.5px; color:var(--text-dim); line-height:1.6; max-height:260px; overflow:auto; white-space:pre-wrap; word-break:break-all;
 }
+textarea.json-preview-editable{
+  display:block; width:100%; min-height:110px; resize:vertical;
+  background:var(--bg-elevated); border:1px solid var(--border); border-radius:8px; padding:12px;
+  font-family:var(--mono); font-size:11.5px; color:var(--text-dim); line-height:1.6;
+}
+textarea.json-preview-editable:focus{ outline:none; border-color:var(--accent); color:var(--text); }
 
 .resp-block{ border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface); margin-bottom:10px; overflow:hidden; border-left-width:3px; }
 .resp-block-head{ display:flex; align-items:center; gap:8px; padding:9px 10px; background:var(--surface-2); border-bottom:1px solid var(--border); flex-wrap:wrap; }
@@ -1995,10 +2001,6 @@ pre.json-raw{ max-height:360px; margin:0; }
         <div class="builder-head">
           <span class="builder-title">Request parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what's needed to authenticate</span></span>
           <div class="auth-param-toolbar">
-            <div class="view-toggle">
-              <button type="button" class="vt-btn active" data-auth-view="table" data-auth-kind="req">Table</button>
-              <button type="button" class="vt-btn" data-auth-view="json" data-auth-kind="req">JSON</button>
-            </div>
             <button type="button" class="builder-add" id="addAuthReqRow">+ Add parameter</button>
           </div>
         </div>
@@ -2007,10 +2009,12 @@ pre.json-raw{ max-height:360px; margin:0; }
             <thead><tr><th class="col-name">Name</th><th class="col-type">Type</th><th class="col-req">Required</th><th class="col-example">Example</th><th class="col-desc">Description</th><th class="col-del"></th></tr></thead>
             <tbody id="authReqRows"></tbody>
           </table>
-          <textarea id="authReqJson" class="mono hidden auth-json-editor" placeholder='[&#10;  { "name": "apiKey", "type": "String", "required": true, "example": "xxxxx", "description": "…" }&#10;]'></textarea>
           <div class="json-preview-wrap">
-            <div class="json-preview-label"><span>Request JSON (default example)</span></div>
-            <pre class="json-preview" id="authReqJsonPreview"></pre>
+            <div class="json-preview-label">
+              <span>Request JSON (default example) <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— auto-generated, editable</span></span>
+              <button type="button" class="ghost icon" data-auth-json-regen="req" title="Regenerate from parameters" style="width:auto;padding:3px 8px;font-size:10.5px;">↻ Regenerate</button>
+            </div>
+            <textarea class="mono json-preview-editable" id="authReqJsonPreview" placeholder='{ "user": "string", "password": "string" }'></textarea>
           </div>
         </div>
       </div>
@@ -2020,10 +2024,6 @@ pre.json-raw{ max-height:360px; margin:0; }
         <div class="builder-head">
           <span class="builder-title">Response parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what auth returns (token, expiry…)</span></span>
           <div class="auth-param-toolbar">
-            <div class="view-toggle">
-              <button type="button" class="vt-btn active" data-auth-view="table" data-auth-kind="resp">Table</button>
-              <button type="button" class="vt-btn" data-auth-view="json" data-auth-kind="resp">JSON</button>
-            </div>
             <button type="button" class="builder-add" id="addAuthRespRow">+ Add parameter</button>
           </div>
         </div>
@@ -2032,10 +2032,12 @@ pre.json-raw{ max-height:360px; margin:0; }
             <thead><tr><th class="col-name">Name</th><th class="col-type">Type</th><th class="col-req">Required</th><th class="col-example">Example</th><th class="col-desc">Description</th><th class="col-del"></th></tr></thead>
             <tbody id="authRespRows"></tbody>
           </table>
-          <textarea id="authRespJson" class="mono hidden auth-json-editor" placeholder='[&#10;  { "name": "access_token", "type": "String", "example": "eyJhbGciOi...", "description": "…" }&#10;]'></textarea>
           <div class="json-preview-wrap">
-            <div class="json-preview-label"><span>Response JSON (default example)</span></div>
-            <pre class="json-preview" id="authRespJsonPreview"></pre>
+            <div class="json-preview-label">
+              <span>Response JSON (default example) <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— auto-generated, editable</span></span>
+              <button type="button" class="ghost icon" data-auth-json-regen="resp" title="Regenerate from parameters" style="width:auto;padding:3px 8px;font-size:10.5px;">↻ Regenerate</button>
+            </div>
+            <textarea class="mono json-preview-editable" id="authRespJsonPreview" placeholder='{ "token": "string", "expiration": "string" }'></textarea>
           </div>
         </div>
       </div>
@@ -2047,6 +2049,7 @@ pre.json-raw{ max-height:360px; margin:0; }
           <label class="checkbox-row"><input type="checkbox" id="paIncludeSwagger"> Swagger / OpenAPI <span class="item-sub">Generated spec &amp; security scheme</span></label>
         </div>
       </div>
+
     </div>
     <div class="modal-pane" data-mpane="docs">
       <div class="hint" style="margin-top:0;">Upload reference material for this project — Postman collections, architecture PDFs, sample payloads, contracts, anything teammates should be able to grab. Shown as downloadable files on the project's overview page. Stored locally in this browser.</div>
@@ -6493,10 +6496,15 @@ function populateFlowDirectionSelect(selectedId){
   sel.value = dirs.some(d=>d.id===selectedId) ? selectedId : dirs[0].id;
 }
 
-/* ---------- Auth tab: request/response parameters (table + JSON views) ---------- */
+/* ---------- Auth tab: request/response parameters (table view only) ---------- */
 let authReqParams = [];
 let authRespParams = [];
-const authParamView = { req: 'table', resp: 'table' };
+// Tracks the last auto-generated JSON string per box, so we only overwrite the
+// editable textarea when the user hasn't typed their own custom example — the
+// same "auto-generated but you can hand-edit it" behavior as the endpoint's
+// Request JSON box (regenerateRequestJson), just tracked explicitly here since
+// this box doesn't regenerate on every keystroke.
+const authJsonAutoValue = { req: '', resp: '' };
 
 function newAuthParamRow(){ return { id:uid(), name:'', type:'String', required:false, example:'', description:'' }; }
 
@@ -6543,68 +6551,36 @@ function renderAuthParamRows(kind){
   updateAuthJsonPreview(kind);
 }
 
-// Same "auto-generated, read-only JSON preview below the table" pattern already
-// used for endpoint response fields (updateResponseJsonPreview) — mirrored here
-// for the Auth request/response parameter tables.
+// The Request/Response JSON boxes are editable textareas that auto-fill from the
+// parameter table — but only while the box still holds what we last generated.
+// The moment someone types their own example in, further row edits stop
+// clobbering it (same idea as the endpoint's "auto-generated — editable" body,
+// minus the intentional every-keystroke overwrite, since these two textareas
+// don't have a form field driving them the way mBody drives request params).
 function updateAuthJsonPreview(kind){
-  const pre = document.getElementById(kind === 'req' ? 'authReqJsonPreview' : 'authRespJsonPreview');
-  if(!pre) return;
+  const ta = document.getElementById(kind === 'req' ? 'authReqJsonPreview' : 'authRespJsonPreview');
+  if(!ta) return;
   const rows = kind === 'req' ? authReqParams : authRespParams;
-  pre.textContent = JSON.stringify(buildJsonFromRows(rows), null, 2);
-}
-
-function syncAuthJsonFromRows(kind){
-  const rows = kind === 'req' ? authReqParams : authRespParams;
-  const ta = document.getElementById(kind === 'req' ? 'authReqJson' : 'authRespJson');
-  if(ta) ta.value = JSON.stringify(rows.filter(r=>r.name.trim()).map(r=>(
-    { name:r.name, type:r.type, required:!!r.required, example:r.example, description:r.description }
-  )), null, 2);
-}
-
-function syncAuthRowsFromJson(kind){
-  const ta = document.getElementById(kind === 'req' ? 'authReqJson' : 'authRespJson');
-  if(!ta) return true;
-  const text = ta.value.trim();
-  try{
-    const parsed = text ? JSON.parse(text) : [];
-    if(!Array.isArray(parsed)) throw new Error('Expected a JSON array');
-    const rows = parsed.map(p=>({
-      id: uid(), name: (p && p.name) || '', type: (p && PARAM_TYPES.includes(p.type)) ? p.type : 'String',
-      required: !!(p && p.required), example: (p && p.example) || '', description: (p && p.description) || '',
-    }));
-    if(kind === 'req') authReqParams = rows; else authRespParams = rows;
-    return true;
-  }catch(e){
-    toast('That JSON is invalid — fix it before switching to table view');
-    return false;
+  const generated = JSON.stringify(buildJsonFromRows(rows), null, 2);
+  if(ta.value === '' || ta.value === authJsonAutoValue[kind]){
+    ta.value = generated;
   }
+  authJsonAutoValue[kind] = generated;
 }
 
-function setAuthParamView(kind, view){
-  if(authParamView[kind] === view) return;
-  if(view === 'json'){
-    syncAuthJsonFromRows(kind);
-  } else {
-    if(!syncAuthRowsFromJson(kind)) return;
-    renderAuthParamRows(kind);
-  }
-  authParamView[kind] = view;
-  const table = document.getElementById(kind === 'req' ? 'authReqTable' : 'authRespTable');
-  const jsonTa = document.getElementById(kind === 'req' ? 'authReqJson' : 'authRespJson');
-  const addBtn = document.getElementById(kind === 'req' ? 'addAuthReqRow' : 'addAuthRespRow');
-  if(table) table.classList.toggle('hidden', view !== 'table');
-  if(jsonTa) jsonTa.classList.toggle('hidden', view !== 'json');
-  if(addBtn) addBtn.classList.toggle('hidden', view !== 'table');
-  document.querySelectorAll(`[data-auth-kind="${kind}"]`).forEach(btn=>{
-    btn.classList.toggle('active', btn.getAttribute('data-auth-view') === view);
-  });
-}
-
-document.querySelectorAll('[data-auth-view]').forEach(btn=>{
+// Explicit "↻ Regenerate" button — force the box back to what the table says,
+// discarding any manual edits (same escape hatch as the endpoint's Request JSON).
+document.querySelectorAll('[data-auth-json-regen]').forEach(btn=>{
   btn.addEventListener('click', ()=>{
-    setAuthParamView(btn.getAttribute('data-auth-kind'), btn.getAttribute('data-auth-view'));
+    const kind = btn.getAttribute('data-auth-json-regen');
+    const rows = kind === 'req' ? authReqParams : authRespParams;
+    const ta = document.getElementById(kind === 'req' ? 'authReqJsonPreview' : 'authRespJsonPreview');
+    const generated = JSON.stringify(buildJsonFromRows(rows), null, 2);
+    if(ta) ta.value = generated;
+    authJsonAutoValue[kind] = generated;
   });
 });
+
 document.getElementById('addAuthReqRow').addEventListener('click', ()=>{ authReqParams.push(newAuthParamRow()); renderAuthParamRows('req'); });
 document.getElementById('addAuthRespRow').addEventListener('click', ()=>{ authRespParams.push(newAuthParamRow()); renderAuthParamRows('resp'); });
 
@@ -6644,20 +6620,17 @@ function openProjectModal(projectId, initialTab){
   document.getElementById('paIncludeSwagger').checked = !!(proj.auth && proj.auth.includeInSwagger);
   authReqParams = cloneAuthParams(proj.auth && proj.auth.requestParams);
   authRespParams = cloneAuthParams(proj.auth && proj.auth.responseParams);
-  authParamView.req = 'table'; authParamView.resp = 'table';
-  ['req','resp'].forEach(kind=>{
-    const table = document.getElementById(kind === 'req' ? 'authReqTable' : 'authRespTable');
-    const jsonTa = document.getElementById(kind === 'req' ? 'authReqJson' : 'authRespJson');
-    const addBtn = document.getElementById(kind === 'req' ? 'addAuthReqRow' : 'addAuthRespRow');
-    if(table) table.classList.remove('hidden');
-    if(jsonTa) jsonTa.classList.add('hidden');
-    if(addBtn) addBtn.classList.remove('hidden');
-    document.querySelectorAll(`[data-auth-kind="${kind}"]`).forEach(btn=>{
-      btn.classList.toggle('active', btn.getAttribute('data-auth-view') === 'table');
-    });
-  });
   renderAuthParamRows('req');
   renderAuthParamRows('resp');
+  // Restore any hand-edited JSON example saved with the project (falls back to
+  // what renderAuthParamRows already auto-generated above if none was saved).
+  ['req','resp'].forEach(kind=>{
+    const saved = kind === 'req' ? (proj.auth && proj.auth.requestExample) : (proj.auth && proj.auth.responseExample);
+    if(saved){
+      const ta = document.getElementById(kind === 'req' ? 'authReqJsonPreview' : 'authRespJsonPreview');
+      if(ta) ta.value = saved;
+    }
+  });
 
   renderEnvSettingsCards(proj);
   renderProjectDocsList(proj);
@@ -6802,10 +6775,6 @@ function saveProjectSettings(){
     name: document.getElementById('pgLicenseName').value.trim(),
     url: document.getElementById('pgLicenseUrl').value.trim(),
   };
-  // If either param list is currently shown as raw JSON, sync it back into the
-  // row arrays first so in-progress JSON edits aren't lost on save.
-  if(authParamView.req === 'json') syncAuthRowsFromJson('req');
-  if(authParamView.resp === 'json') syncAuthRowsFromJson('resp');
   const cleanAuthParams = (list)=> list.filter(r=>r.name.trim()).map(r=>(
     { name:r.name.trim(), type:r.type, required:!!r.required, example:r.example.trim(), description:r.description.trim() }
   ));
@@ -6817,6 +6786,10 @@ function saveProjectSettings(){
     description: document.getElementById('paDesc').value.trim(),
     requestParams: cleanAuthParams(authReqParams),
     responseParams: cleanAuthParams(authRespParams),
+    // Whatever's currently sitting in the editable JSON boxes — auto-generated
+    // or hand-edited, same as how the endpoint's Request JSON body is saved.
+    requestExample: (document.getElementById('authReqJsonPreview').value || '').trim(),
+    responseExample: (document.getElementById('authRespJsonPreview').value || '').trim(),
     includeInDocs: document.getElementById('paIncludeDocs').checked,
     includeInSwagger: document.getElementById('paIncludeSwagger').checked,
   };
