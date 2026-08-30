@@ -620,6 +620,26 @@ kbd{
 .pdf-print-root .pdf-footer{ text-align:center; color:#8890a3; font-size:10.5px; padding:22px 0 4px; }
 .pdf-print-root .pdf-atom{ display:block; width:100%; }
 
+/* ---------- PDF export: Lifecycle section (print-safe colors, no CSS vars) ---------- */
+.pdf-print-root .pdf-lc-card{ border:1px solid #e2e6ee; border-radius:11px; background:#f6f8fb; padding:18px 20px; margin-bottom:6px; }
+.pdf-print-root .pdf-lc-top{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+.pdf-print-root .pdf-lc-badge{ font-size:11px; font-weight:800; padding:5px 14px; border-radius:999px; text-transform:uppercase; letter-spacing:.4px; }
+.pdf-print-root .pdf-lc-chip{ font-size:11.5px; color:#4b5468; }
+.pdf-print-root .pdf-lc-chip .k{ color:#8890a3; font-weight:700; text-transform:uppercase; font-size:9.5px; letter-spacing:.3px; margin-right:5px; }
+.pdf-print-root .pdf-lc-wheel-wrap{ display:flex; align-items:center; gap:24px; flex-wrap:wrap; }
+.pdf-print-root .pdf-lc-wheel-svg{ width:140px; height:140px; flex-shrink:0; }
+.pdf-print-root .pdf-lc-legend{ display:flex; flex-wrap:wrap; gap:6px; flex:1; min-width:220px; }
+.pdf-print-root .pdf-lc-legend-chip{ display:inline-flex; align-items:center; gap:5px; font-size:9.5px; font-weight:700; padding:4px 9px; border-radius:999px; }
+.pdf-print-root .pdf-lc-legend-chip .dot{ width:5px; height:5px; border-radius:50%; flex-shrink:0; }
+
+/* ---------- PDF export: Request flow diagram (print-safe colors) ---------- */
+.pdf-print-root .pdf-rf-svg-wrap{ width:100%; overflow:hidden; padding:6px 0 2px; }
+.pdf-print-root .pdf-rf-svg{ width:100%; height:auto; display:block; }
+.pdf-print-root .pdf-rf-legend{ display:flex; gap:16px; margin-top:10px; font-size:10.5px; color:#8890a3; }
+.pdf-print-root .pdf-rf-legend span{ display:inline-flex; align-items:center; gap:6px; }
+.pdf-print-root .pdf-rf-legend .sw{ width:16px; height:0; border-top:2px solid #5c7cfa; opacity:.7; display:inline-block; }
+.pdf-print-root .pdf-rf-legend .sw.ret{ border-top:2px dashed #8890a3; }
+
 /* Markdown rendering for descriptions imported from OpenAPI specs (info.description,
    operation.description, auth.description). Scoped so it only kicks in wherever md-h /
    md-p / md-list are actually emitted by renderMarkdown(). */
@@ -3901,6 +3921,115 @@ function requestFlowSvg(stages, direction){
   </div>`;
 }
 
+// ---------- Print-safe variants for PDF export ----------
+// The on-screen versions above (lifecycleWheelSvg, requestFlowSvg) color themselves with
+// CSS custom properties (var(--accent), var(--surface-2), etc.) that resolve against the
+// app's current theme. That's fine live, but the PDF is always rendered on a fixed white
+// page — reusing the themed versions meant colors could vanish or invert depending on
+// light/dark mode. These two build the same diagrams with fixed, print-safe hex colors
+// matching the rest of the PDF's palette, so the Lifecycle and Request flow sections
+// actually show up in exported PDFs.
+function pdfLifecycleBadgeStyle(stage){
+  const s = (stage||'').toUpperCase();
+  if(s==='DEVELOPMENT') return 'background:rgba(79,163,247,.14);color:#2f7fd1;';
+  if(s==='SIT' || s==='UAT') return 'background:rgba(224,168,62,.14);color:#b1791f;';
+  if(s==='PRE-PROD') return 'background:rgba(179,137,240,.14);color:#7a53c9;';
+  if(s==='PRODUCTION') return 'background:rgba(53,196,145,.14);color:#1f9d6f;';
+  if(s==='DEPRECATED') return 'background:rgba(239,92,110,.14);color:#c73b4d;';
+  return 'background:#eef1f6;color:#8890a3;'; // DRAFT, DESIGN, RETIRED
+}
+
+function pdfLifecycleWheelSvg(currentStage){
+  const idx = LIFECYCLE_STAGES.indexOf(currentStage);
+  const total = LIFECYCLE_STAGES.length;
+  const cx = 90, cy = 90, rOuter = 76, rInner = 50, gapDeg = 3;
+  const segAngle = 360 / total;
+  const toRad = deg => (deg - 90) * Math.PI / 180;
+  const polar = (r, deg) => { const rad = toRad(deg); return [cx + r*Math.cos(rad), cy + r*Math.sin(rad)]; };
+  const segPath = (startDeg, endDeg, r1, r2) => {
+    const [x1,y1] = polar(r2, startDeg), [x2,y2] = polar(r2, endDeg);
+    const [x3,y3] = polar(r1, endDeg), [x4,y4] = polar(r1, startDeg);
+    const large = (endDeg - startDeg) > 180 ? 1 : 0;
+    return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r2} ${r2} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} L ${x3.toFixed(2)} ${y3.toFixed(2)} A ${r1} ${r1} 0 ${large} 0 ${x4.toFixed(2)} ${y4.toFixed(2)} Z`;
+  };
+
+  const segments = LIFECYCLE_STAGES.map((stage,i)=>{
+    const start = i*segAngle + gapDeg/2, end = (i+1)*segAngle - gapDeg/2;
+    const st = i < idx ? 'done' : i === idx ? 'current' : 'upcoming';
+    const fill = st==='done' ? '#1f9d6f' : st==='current' ? '#5c7cfa' : '#eef1f6';
+    const opacity = st==='upcoming' ? '0.8' : '1';
+    return `<path d="${segPath(start,end,rInner,rOuter)}" fill="${fill}" opacity="${opacity}"><title>${escapeHtml(stage)}${st==='current'?' — current stage':st==='done'?' — completed':' — upcoming'}</title></path>`;
+  }).join('');
+
+  const stageDisplay = currentStage.charAt(0) + currentStage.slice(1).toLowerCase();
+
+  const legend = LIFECYCLE_STAGES.map((stage,i)=>{
+    const st = i < idx ? 'done' : i === idx ? 'current' : 'upcoming';
+    const label = stage.charAt(0) + stage.slice(1).toLowerCase();
+    const c = st==='done' ? {bg:'rgba(53,196,145,.14)', fg:'#1f9d6f'} : st==='current' ? {bg:'rgba(92,124,250,.16)', fg:'#5c7cfa'} : {bg:'#eef1f6', fg:'#8890a3'};
+    return `<span class="pdf-lc-legend-chip" style="background:${c.bg};color:${c.fg};"><span class="dot" style="background:${c.fg};"></span>${escapeHtml(label)}</span>`;
+  }).join('');
+
+  return `
+    <div class="pdf-lc-wheel-wrap">
+      <svg viewBox="0 0 180 180" class="pdf-lc-wheel-svg" role="img" aria-label="Lifecycle stage ${idx+1} of ${total}: ${escapeHtml(currentStage)}">
+        ${segments}
+        <circle cx="90" cy="90" r="47" fill="#ffffff" stroke="#e2e6ee"></circle>
+        <text x="90" y="84" text-anchor="middle" font-family="var(--mono)" font-size="9px" letter-spacing=".4px" font-weight="700" fill="#8890a3">STAGE ${idx+1} / ${total}</text>
+        <text x="90" y="103" text-anchor="middle" font-size="13px" font-weight="800" fill="#0f1420">${escapeHtml(stageDisplay)}</text>
+      </svg>
+      <div class="pdf-lc-legend">${legend}</div>
+    </div>`;
+}
+
+function pdfRequestFlowSvg(stages, direction){
+  const n = stages.length;
+  const boxW = 152, boxH = 62, gap = 68, padX = 22;
+  const iconR = 16, topPad = 8;
+  const iconCy = topPad + iconR;
+  const boxY = iconCy + iconR + 12;
+  const totalW = padX*2 + n*boxW + (n-1)*gap;
+  const totalH = boxY + boxH + (direction==='2-way' ? 30 : 16);
+  const midY = boxY + boxH/2;
+  const accent = '#5c7cfa';
+
+  const boxes = stages.map((s,i)=>{
+    const x = padX + i*(boxW+gap);
+    const cx = x + boxW/2;
+    const mid = i===1;
+    const icon = RF_ICONS[s.icon] || RF_ICONS.flow;
+    return `<g>
+      <circle cx="${cx}" cy="${iconCy}" r="${iconR+7}" fill="${mid?'rgba(92,124,250,.14)':'#eef1f6'}"></circle>
+      <rect x="${x}" y="${boxY}" width="${boxW}" height="${boxH}" rx="10" fill="#ffffff" stroke="${mid?accent:'#e2e6ee'}" stroke-width="${mid?1.6:1.2}"></rect>
+      <circle cx="${cx}" cy="${iconCy}" r="${iconR}" fill="#f6f8fb" stroke="${mid?accent:'#c7ccd8'}" stroke-width="1.2"></circle>
+      <g transform="translate(${cx},${iconCy})" stroke="${mid?accent:'#4b5468'}" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round">${icon}</g>
+      <text x="${cx}" y="${boxY+22}" text-anchor="middle" font-size="8.5px" letter-spacing=".6px" font-weight="700" fill="${mid?accent:'#8890a3'}">${escapeHtml(String(s.k).toUpperCase())}</text>
+      <text x="${cx}" y="${boxY+42}" text-anchor="middle" font-size="12px" font-weight="700" fill="#0f1420">${escapeHtml(s.v)}</text>
+    </g>`;
+  }).join('');
+
+  const connectors = stages.slice(0,-1).map((s,i)=>{
+    const x1 = padX + i*(boxW+gap) + boxW;
+    const x2 = x1 + gap;
+    const fwdY = direction==='2-way' ? midY - 9 : midY;
+    const retY = midY + 11;
+    let out = `<line x1="${x1}" y1="${fwdY}" x2="${x2-9}" y2="${fwdY}" stroke="${accent}" stroke-width="1.5" opacity="0.6"></line>
+      <polygon points="${x2-9},${fwdY-4} ${x2-9},${fwdY+4} ${x2},${fwdY}" fill="${accent}" opacity="0.8"></polygon>`;
+    if(direction==='2-way'){
+      out += `<line x1="${x2-9}" y1="${retY}" x2="${x1}" y2="${retY}" stroke="#8890a3" stroke-dasharray="3 3" stroke-width="1.5" opacity="0.7"></line>
+      <polygon points="${x1+9},${retY-4} ${x1+9},${retY+4} ${x1},${retY}" fill="#8890a3" opacity="0.8"></polygon>`;
+    }
+    return out;
+  }).join('');
+
+  return `<div class="pdf-rf-svg-wrap">
+    <svg viewBox="0 0 ${totalW} ${totalH}" class="pdf-rf-svg" preserveAspectRatio="xMinYMid meet" role="img" aria-label="Request flow diagram, ${direction === '2-way' ? 'two-way' : 'one-way'}">
+      ${connectors}
+      ${boxes}
+    </svg>
+  </div>`;
+}
+
 function docScoreBarHtml(percent, size){
   const color = percent >= 80 ? 'var(--post)' : percent >= 50 ? 'var(--put)' : 'var(--delete)';
   return `<div class="doc-score-bar${size==='sm'?' sm':''}">
@@ -7053,7 +7182,63 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
   const groups = groupByTag(endpoints);
   const generatedAt = new Date();
   const generatedAtStr = generatedAt.toLocaleDateString(undefined,{month:'long', day:'numeric', year:'numeric'}) + ' at ' + generatedAt.toLocaleTimeString(undefined,{hour:'numeric', minute:'2-digit'});
-  const envLabel = envMeta(state.env).label;
+  const env = envMeta(state.env);
+  const envLabel = env.label;
+
+  const flowPreset = resolveFlowDirection(proj);
+  const direction = flowPreset.pattern;
+  const isCustomFlowPreset = flowPreset.id !== '1-way' && flowPreset.id !== '2-way';
+  const flowStages = [
+    { k:'Client', v:'Consumer app', icon:'client' },
+    { k:`${env.label} · MuleSoft`, v:'API Gateway', icon:'gateway' },
+    { k:'Flow', v: proj.name, icon:'flow' },
+    { k:'Downstream', v:'Backend system', icon:'downstream' },
+  ];
+
+  const lifecycleHtml = proj.lifecycle ? `
+    <div class="pdf-atom">
+    <section>
+      <div class="pdf-section-title">Lifecycle</div>
+      <div class="pdf-lc-card">
+        <div class="pdf-lc-top">
+          <span class="pdf-lc-badge" style="${pdfLifecycleBadgeStyle(proj.lifecycle)}">${escapeHtml(proj.lifecycle)}</span>
+          <span class="pdf-lc-chip"><span class="k">Owner</span>${proj.owner ? escapeHtml(proj.owner) : 'Not set'}</span>
+          <span class="pdf-lc-chip"><span class="k">Team</span>${proj.team ? escapeHtml(proj.team) : 'Not set'}</span>
+        </div>
+        ${pdfLifecycleWheelSvg(proj.lifecycle)}
+      </div>
+    </section>
+    </div>` : '';
+
+  const requestFlowHtml = `
+    <div class="pdf-atom">
+    <section>
+      <div class="pdf-section-title">Request flow <span style="text-transform:none; letter-spacing:0; font-weight:500; color:#8890a3;">— ${isCustomFlowPreset ? escapeHtml(flowPreset.label) : (direction==='2-way' ? 'two-way (request &amp; response)' : 'one-way (request only)')}</span></div>
+      ${pdfRequestFlowSvg(flowStages, direction)}
+      <div class="pdf-rf-legend">
+        <span><span class="sw"></span>Request</span>
+        ${direction==='2-way' ? '<span><span class="sw ret"></span>Response</span>' : ''}
+      </div>
+    </section>
+    </div>`;
+
+  const endpointsHistoryHtml = endpoints.length ? `
+    <div class="pdf-atom">
+    <section>
+      <div class="pdf-section-title">Endpoints <span style="text-transform:none; letter-spacing:0; font-weight:500; color:#8890a3;">— added &amp; last-modified history</span></div>
+      <table class="data-table">
+        <thead><tr><th>Endpoint</th><th>Added</th><th>Last modified</th></tr></thead>
+        <tbody>
+          ${endpoints.map(ep=>`
+            <tr>
+              <td><span class="badge ${methodClass(ep.method)}" style="margin-right:8px;">${escapeHtml(ep.method)}</span><span class="pexample">${escapeHtml(ep.path)}</span></td>
+              <td>${ep.createdAt ? escapeHtml(formatDateTime(ep.createdAt)) : '<span class="empty-field">Unknown</span>'}${ep.createdBy ? ' by ' + escapeHtml(ep.createdBy) : ''}</td>
+              <td>${ep.updatedAt ? escapeHtml(formatDateTime(ep.updatedAt)) : '<span class="empty-field">Unknown</span>'}${ep.updatedBy ? ' by ' + escapeHtml(ep.updatedBy) : ''}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </section>
+    </div>` : '';
 
   const tocHtml = Object.keys(groups).map(tag=>`
     <div class="pdf-toc-group">
@@ -7077,6 +7262,9 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
       ${opts.includeNotes && proj.notes ? `<div class="pdf-notes-card"><div class="pdf-notes-title">Integration notes</div><div class="pdf-notes-body">${escapeHtml(proj.notes)}</div></div>` : ''}
     </section>
     </div>
+    ${lifecycleHtml}
+    ${requestFlowHtml}
+    ${endpointsHistoryHtml}
     <div class="pdf-atom">
     <section class="pdf-toc">
       <div class="pdf-section-title">Contents</div>
