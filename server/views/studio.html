@@ -595,8 +595,19 @@ kbd{
 .pdf-print-root table.data-table tbody td{ padding:8px 10px; border-bottom:1px solid #e2e6ee; vertical-align:top; color:#4b5468; }
 .pdf-print-root table.data-table tbody tr:last-child td{ border-bottom:none; }
 .pdf-print-root .pname{ color:#0f1420; font-weight:600; }
-.pdf-print-root .ptype{ font-family:var(--mono); font-size:9.5px; color:#8890a3; }
-.pdf-print-root .pexample{ font-family:var(--mono); font-size:9.5px; }
+.pdf-print-root .ptype{
+  font-family:var(--mono); font-size:9.5px; letter-spacing:.2px; color:#4b5468; display:inline-block;
+  background:#eef1f6; border:1px solid #e2e6ee; border-radius:5px; padding:2.5px 7px;
+}
+.pdf-print-root .pexample{
+  font-family:var(--mono); font-size:9.5px; color:#0f1420; display:inline-block; max-width:100%;
+  background:#f6f8fb; border:1px solid #e2e6ee; border-radius:5px; padding:2.5px 8px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:top;
+}
+.pdf-print-root code{
+  font-family:var(--mono); background:#eef1f6; border:1px solid #e2e6ee; color:#0f1420;
+  border-radius:4px; padding:1px 5px; font-size:.92em;
+}
 .pdf-print-root .req-star{ color:#ef5c6e; margin-left:2px; }
 .pdf-print-root .empty-field{ color:#8890a3; font-style:italic; }
 .pdf-print-root .icon-btn{ display:none; }
