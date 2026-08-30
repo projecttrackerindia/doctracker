@@ -617,6 +617,7 @@ kbd{
 .pdf-print-root .md-list{ margin:0 0 9px; padding-left:18px; }
 .pdf-print-root .md-list li{ margin-bottom:4px; }
 .pdf-print-root .pdf-footer{ text-align:center; color:#8890a3; font-size:10.5px; padding:22px 0 4px; }
+.pdf-print-root .pdf-atom{ display:block; width:100%; }
 
 /* Markdown rendering for descriptions imported from OpenAPI specs (info.description,
    operation.description, auth.description). Scoped so it only kicks in wherever md-h /
@@ -6736,6 +6737,12 @@ function filterPdfEpList(q){
 // Staged, fake-but-honest progress copy — the actual render is near-instant, but a single
 // abrupt jump cut feels broken for a "document generation" action, so it steps through
 // what's genuinely happening (gather → mask → render → rasterize → save).
+//
+// Each "atom" (an endpoint header, one table, one code block, one response) is captured as
+// its own image and placed as a whole unit — if it doesn't fit on the current page, the
+// whole atom moves to the next page instead of being cut mid-row/mid-line. Only if a single
+// atom is taller than a full page (a huge JSON example, say) does it get sliced, and only
+// at that point — never a normal table or paragraph.
 async function generateProjectPdf(){
   const proj = state.projects[pdfExportProjectId];
   if(!proj) return;
@@ -6772,27 +6779,57 @@ async function generateProjectPdf(){
     if(document.fonts && document.fonts.ready) await document.fonts.ready;
     await wait(60); // let layout settle before rasterizing
 
-    setStage('Rasterizing pages…');
-    const canvas = await html2canvas(container, { scale:2, backgroundColor:'#ffffff', useCORS:true, windowWidth:container.scrollWidth });
+    const atoms = Array.from(container.querySelectorAll('.pdf-atom'));
 
-    setStage('Saving file…');
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF('p', 'mm', 'a4');
+    const marginX = 12, marginTop = 14, marginBottom = 14;
     const pageWidth = pdf.internal.pageSize.getWidth();
     const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgWidth = pageWidth;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-    const imgData = canvas.toDataURL('image/jpeg', 0.95);
-    let heightLeft = imgHeight;
-    let position = 0;
-    pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
-    while(heightLeft > 0){
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
+    const contentWidth = pageWidth - marginX * 2;
+    const contentBottom = pageHeight - marginBottom;
+    const gapMM = 3;
+    let cursorY = marginTop;
+    let firstAtom = true;
+
+    for(let idx = 0; idx < atoms.length; idx++){
+      setStage(`Rendering section ${idx + 1} of ${atoms.length}…`);
+      const atomEl = atoms[idx];
+      const canvas = await html2canvas(atomEl, { scale:2, backgroundColor:'#ffffff', useCORS:true });
+      const imgWidth = contentWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+
+      if(!firstAtom && cursorY + imgHeight > contentBottom){
+        pdf.addPage();
+        cursorY = marginTop;
+      }
+      firstAtom = false;
+
+      if(imgHeight > (contentBottom - marginTop)){
+        // Rare: a single atom (e.g. a very long example) is taller than one page —
+        // slice just this atom across as many pages as it needs, using the page
+        // boundary itself as a clip: draw the same image shifted upward on each
+        // subsequent page so only the un-shown remainder falls within the page.
+        let heightLeft = imgHeight;
+        let position = cursorY;
+        pdf.addImage(imgData, 'JPEG', marginX, position, imgWidth, imgHeight);
+        heightLeft -= (contentBottom - cursorY);
+        while(heightLeft > 0){
+          pdf.addPage();
+          position = marginTop - (imgHeight - heightLeft);
+          pdf.addImage(imgData, 'JPEG', marginX, position, imgWidth, imgHeight);
+          heightLeft -= (contentBottom - marginTop);
+        }
+        const usable = contentBottom - marginTop;
+        cursorY = marginTop + (usable + heightLeft) + gapMM;
+      } else {
+        pdf.addImage(imgData, 'JPEG', marginX, cursorY, imgWidth, imgHeight);
+        cursorY += imgHeight + gapMM;
+      }
     }
+
+    setStage('Saving file…');
     const filename = `${(proj.name||'api-docs').replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').toLowerCase() || 'api-docs'}.pdf`;
     pdf.save(filename);
 
@@ -6818,47 +6855,49 @@ function buildExportPdfEndpointSection(proj, ep, index){
 
   const hasReqBody = !!(ep.requestBody && ep.requestBody.example);
 
-  const responses = ep.responses || [];
-  const responsesHtml = responses.map(r=>{
-    const cls = respClass(r.code);
-    return `
-      <div class="pdf-resp">
-        <div class="pdf-resp-head">
-          <span class="pdf-status-pill st-${cls}">${escapeHtml(String(r.code))}</span>
-          <span class="pdf-resp-desc">${escapeHtml(r.description || '')}</span>
-        </div>
-        ${r.fields && r.fields.length ? paramSection('Response fields', r.fields, r.code) : ''}
-        ${r.example ? `<div class="pdf-code-card"><div class="pdf-code-head">Example response</div><pre class="pdf-code">${escapeHtml(r.example)}</pre></div>` : ''}
-      </div>`;
-  }).join('');
-
   return `
   <section class="pdf-endpoint" id="ep-${escapeHtml(ep.id)}">
-    <div class="pdf-ep-banner grad-${mClass}">
-      <span class="pdf-ep-index">${String(index+1).padStart(2,'0')}</span>
-      <span class="badge-lg ${mClass}">${escapeHtml(ep.method)}</span>
-      <span class="pdf-ep-path">${escapeHtml(ep.path)}</span>
-      ${ep.version ? `<span class="pdf-ep-version">v${escapeHtml(ep.version)}</span>` : ''}
-    </div>
-    ${ep.summary ? `<div class="pdf-ep-summary">${escapeHtml(ep.summary)}</div>` : ''}
-    ${ep.description ? `<div class="pdf-ep-desc">${renderMarkdown(ep.description)}</div>` : ''}
-    <div class="pdf-ep-chips">
-      <span class="pdf-chip">${escapeHtml(ep.tag || 'General')}</span>
-      <span class="pdf-chip">${escapeHtml(ep.contentType || 'application/json')}</span>
-      <span class="pdf-chip">${escapeHtml(envMeta(state.env).label)} environment</span>
-    </div>
-
-    <div class="pdf-code-card">
-      <div class="pdf-code-head">Request<span class="pdf-code-head-sub">host masked unless revealed by an Admin</span></div>
-      <pre class="pdf-code">${escapeHtml(curlSample(proj, ep))}</pre>
+    <div class="pdf-atom pdf-atom-header">
+      <div class="pdf-ep-banner grad-${mClass}">
+        <span class="pdf-ep-index">${String(index+1).padStart(2,'0')}</span>
+        <span class="badge-lg ${mClass}">${escapeHtml(ep.method)}</span>
+        <span class="pdf-ep-path">${escapeHtml(ep.path)}</span>
+        ${ep.version ? `<span class="pdf-ep-version">v${escapeHtml(ep.version)}</span>` : ''}
+      </div>
+      ${ep.summary ? `<div class="pdf-ep-summary">${escapeHtml(ep.summary)}</div>` : ''}
+      ${ep.description ? `<div class="pdf-ep-desc">${renderMarkdown(ep.description)}</div>` : ''}
+      <div class="pdf-ep-chips">
+        <span class="pdf-chip">${escapeHtml(ep.tag || 'General')}</span>
+        <span class="pdf-chip">${escapeHtml(ep.contentType || 'application/json')}</span>
+        <span class="pdf-chip">${escapeHtml(envMeta(state.env).label)} environment</span>
+      </div>
     </div>
 
-    ${allParams.length ? paramSection('Path &amp; query parameters', allParams) : ''}
-    ${headerParams.length ? paramSection('Headers', headerParams, 'header') : ''}
-    ${hasReqBody ? `<div class="pdf-code-card"><div class="pdf-code-head">Example request body</div><pre class="pdf-code">${escapeHtml(ep.requestBody.example)}</pre></div>` : ''}
+    <div class="pdf-atom">
+      <div class="pdf-code-card">
+        <div class="pdf-code-head">Request<span class="pdf-code-head-sub">host masked unless revealed by an Admin</span></div>
+        <pre class="pdf-code">${escapeHtml(curlSample(proj, ep))}</pre>
+      </div>
+    </div>
 
-    <div class="pdf-section-title">Responses</div>
-    ${responsesHtml || '<div class="pdf-empty">No responses documented.</div>'}
+    ${allParams.length ? `<div class="pdf-atom">${paramSection('Path &amp; query parameters', allParams)}</div>` : ''}
+    ${headerParams.length ? `<div class="pdf-atom">${paramSection('Headers', headerParams, 'header')}</div>` : ''}
+    ${hasReqBody ? `<div class="pdf-atom"><div class="pdf-code-card"><div class="pdf-code-head">Example request body</div><pre class="pdf-code">${escapeHtml(ep.requestBody.example)}</pre></div></div>` : ''}
+
+    <div class="pdf-atom pdf-atom-tight"><div class="pdf-section-title">Responses</div></div>
+    ${responses.length ? responses.map(r=>{
+      const cls = respClass(r.code);
+      return `<div class="pdf-atom">
+        <div class="pdf-resp">
+          <div class="pdf-resp-head">
+            <span class="pdf-status-pill st-${cls}">${escapeHtml(String(r.code))}</span>
+            <span class="pdf-resp-desc">${escapeHtml(r.description || '')}</span>
+          </div>
+          ${r.fields && r.fields.length ? paramSection('Response fields', r.fields, r.code) : ''}
+          ${r.example ? `<div class="pdf-code-card"><div class="pdf-code-head">Example response</div><pre class="pdf-code">${escapeHtml(r.example)}</pre></div>` : ''}
+        </div>
+      </div>`;
+    }).join('') : '<div class="pdf-atom pdf-atom-tight"><div class="pdf-empty">No responses documented.</div></div>'}
   </section>`;
 }
 
@@ -6875,6 +6914,7 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
     </div>`).join('');
 
   const coverHtml = opts.includeOverview ? `
+    <div class="pdf-atom">
     <section class="pdf-cover">
       <div class="pdf-cover-badge"><span class="dot"></span>API Studio · ${escapeHtml(envLabel)} environment</div>
       <h1>${escapeHtml(proj.name)}</h1>
@@ -6888,17 +6928,20 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
       ${proj.auth && proj.auth.type ? `<div class="pdf-auth-card"><div class="ic">🔑</div><div><div class="h">${escapeHtml(proj.auth.type)}${proj.auth.headerName ? ' · '+escapeHtml(proj.auth.headerName)+' header' : ''}</div><div class="d">${proj.auth.description ? escapeHtml(proj.auth.description) : 'No further notes.'}</div></div></div>` : ''}
       ${opts.includeNotes && proj.notes ? `<div class="pdf-notes-card"><div class="pdf-notes-title">Integration notes</div><div class="pdf-notes-body">${escapeHtml(proj.notes)}</div></div>` : ''}
     </section>
+    </div>
+    <div class="pdf-atom">
     <section class="pdf-toc">
       <div class="pdf-section-title">Contents</div>
       ${tocHtml}
-    </section>` : '';
+    </section>
+    </div>` : '';
 
   const endpointsHtml = endpoints.map((ep,i)=>buildExportPdfEndpointSection(proj, ep, i)).join('');
 
   return `
     ${coverHtml}
     ${endpointsHtml}
-    <div class="pdf-footer">${escapeHtml(proj.name)} · Generated by API Studio · ${escapeHtml(generatedAtStr)} · by ${escapeHtml(state.authorName || 'Unknown')}</div>
+    <div class="pdf-atom pdf-atom-tight"><div class="pdf-footer">${escapeHtml(proj.name)} · Generated by API Studio · ${escapeHtml(generatedAtStr)} · by ${escapeHtml(state.authorName || 'Unknown')}</div></div>
   `;
 }
 
