@@ -11,6 +11,7 @@ const jwt = require('jsonwebtoken');
 const { initDb } = require('./db');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
+const workspaceRoutes = require('./routes/workspace');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -47,11 +48,17 @@ app.use(
   })
 );
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json({ limit: '20kb' }));
 app.use(cookieParser());
+
+// Workspace payloads carry base64-encoded document attachments, so they need a
+// much larger body limit than auth/user requests — scoped to this path only,
+// mounted ahead of the tighter global limit below.
+app.use('/api/workspace', express.json({ limit: '25mb' }));
+app.use(express.json({ limit: '20kb' }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/workspace', workspaceRoutes);
 
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 

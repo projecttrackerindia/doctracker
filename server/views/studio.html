@@ -1574,6 +1574,13 @@ pre.json-raw{ max-height:360px; margin:0; }
         <label>Endpoint / path</label>
         <input type="text" id="mPath" placeholder="/enach/1.0/sbi/initiateMandate">
       </div>
+      <div class="field">
+        <label>Visibility</label>
+        <select id="mVisibility" title="Private: only you. Public: everyone in your organisation.">
+          <option value="private">Private (only me)</option>
+          <option value="public">Public (my organisation)</option>
+        </select>
+      </div>
     </div>
     <div class="field-grid-3">
       <div class="field">
@@ -2068,7 +2075,75 @@ const ROLE_KEY = 'apiStudio_authorRole';
 const PROFILE_COLOR_KEY = 'apiStudio_profileColor';
 const SIDEBAR_KEY = 'apiStudio_sidebarCollapsed';
 const AUDIT_KEY = 'apiStudio_auditLog';
-const AUDIT_LOG_CAP = 1000; // keep the most recent N entries so localStorage doesn't grow unbounded
+const AUDIT_LOG_CAP = 1000; // server also caps this, kept here for the in-memory array
+const MIGRATED_FLAG_KEY = 'apiStudio_migratedToServer_v1'; // set once this browser's old localStorage data has been moved to Postgres
+
+/* ==================== SECTION:WORKSPACE API ====================
+   Projects/endpoints/attachments/environments/audit-log/request-history/flow
+   presets all live in Postgres now (server/routes/workspace.js) — nothing
+   workspace-related is read from or written to localStorage any more.
+   localStorage is still used for pure per-browser UI prefs (theme, sidebar
+   collapsed, which environment tab is selected) — those aren't shared data. */
+const WORKSPACE_API = '/api/workspace';
+async function apiGet(path){
+  const res = await fetch(WORKSPACE_API + path, { credentials:'same-origin' });
+  if(!res.ok) throw new Error('Request failed: ' + res.status);
+  return res.json();
+}
+async function apiSend(method, path, body){
+  const res = await fetch(WORKSPACE_API + path, {
+    method,
+    credentials:'same-origin',
+    headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify(body),
+  });
+  if(!res.ok){
+    const err = await res.json().catch(()=>({}));
+    throw new Error(err.error || ('Request failed: ' + res.status));
+  }
+  return res.json();
+}
+// One-time: if this browser still has the old localStorage workspace, ship it
+// to the server (owned privately by whoever is signed in) and wipe the local
+// copy. Safe to call on every load — it no-ops once MIGRATED_FLAG_KEY is set.
+async function migrateLocalStorageIfNeeded(){
+  if(!AUTH_USER || localStorage.getItem(MIGRATED_FLAG_KEY)) return;
+  let payload = null;
+  try{
+    const raw = localStorage.getItem(NEW_KEY);
+    const old = localStorage.getItem(OLD_KEY);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      const projects = {};
+      Object.values(parsed.projects || {}).forEach(p=>{ const m = migrateProject(p); projects[m.id] = m; });
+      payload = {
+        projects,
+        requestHistory: parsed.requestHistory || {},
+        environments: JSON.parse(localStorage.getItem(ENVIRONMENTS_KEY) || 'null') || [],
+        auditLog: JSON.parse(localStorage.getItem(AUDIT_KEY) || 'null') || [],
+        customFlowDirections: JSON.parse(localStorage.getItem(CUSTOM_FLOW_DIRECTIONS_KEY) || 'null') || [],
+      };
+    } else if(old){
+      const oldProjects = JSON.parse(old);
+      const projects = {};
+      Object.values(oldProjects).forEach(p=>{ const m = migrateProject(p); projects[m.id] = m; });
+      payload = { projects, requestHistory:{}, environments:[], auditLog:[], customFlowDirections:[] };
+    }
+  }catch(e){ console.error('Could not read old localStorage workspace', e); }
+
+  if(payload && Object.keys(payload.projects).length){
+    try{
+      const res = await apiSend('POST', '/migrate', payload);
+      toast(`Brought your ${res.imported} existing project${res.imported===1?'':'s'} into the shared workspace`);
+    }catch(e){
+      console.error('Migration to server failed', e);
+      toast('Could not migrate your old local data to the server — will retry next time you load this page.');
+      return; // leave the flag unset so we retry on the next load
+    }
+  }
+  localStorage.setItem(MIGRATED_FLAG_KEY, '1');
+  [NEW_KEY, OLD_KEY, ENVIRONMENTS_KEY, AUDIT_KEY, CUSTOM_FLOW_DIRECTIONS_KEY].forEach(k=>localStorage.removeItem(k));
+}
 
 // Curated avatar palette — deliberately distinct from the HTTP-method / environment
 // accent colors used elsewhere, so a profile avatar never looks like a status chip.
@@ -2118,18 +2193,11 @@ function migrateEnvironment(e){
     url: e.url || '',
   };
 }
-function loadEnvironments(){
-  try{
-    const raw = JSON.parse(localStorage.getItem(ENVIRONMENTS_KEY));
-    state.environments = (Array.isArray(raw) && raw.length) ? raw.map(migrateEnvironment) : DEFAULT_ENVIRONMENTS.map(e=>({...e}));
-    state.envTableStatus = 'ready';
-  }catch(e){
-    state.environments = DEFAULT_ENVIRONMENTS.map(e=>({...e}));
-    state.envTableStatus = 'error';
-  }
-}
+// Environments are shared across the whole organisation (see server/routes/workspace.js
+// GET/PUT /api/workspace/environments) — populated into state.environments by loadState().
 function saveEnvironments(){
-  try{ localStorage.setItem(ENVIRONMENTS_KEY, JSON.stringify(state.environments)); }catch(e){}
+  apiSend('PUT', '/environments', { environments: state.environments })
+    .catch(e=>{ console.error('Save environments failed', e); toast('Could not save environments to the server.'); });
 }
 function envIdFromLabel(label){
   return String(label||'').trim().toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/^_+|_+$/g,'') || uid().toUpperCase();
@@ -2295,14 +2363,10 @@ function envBgColor(envId){
 // ---------- Audit log: who changed what, when ----------
 // Kept in its own localStorage key (separate from the workspace blob) so it
 // survives backup/export cycles independently and keeps growing across sessions.
-function loadAuditLog(){
-  try{
-    const raw = JSON.parse(localStorage.getItem(AUDIT_KEY));
-    state.auditLog = Array.isArray(raw) ? raw : [];
-  }catch(e){ state.auditLog = []; }
-}
+// Audit log is shared per-organisation too — populated by loadState() from the server.
 function saveAuditLog(){
-  try{ localStorage.setItem(AUDIT_KEY, JSON.stringify(state.auditLog)); }catch(e){}
+  apiSend('PUT', '/audit-log', { auditLog: state.auditLog })
+    .catch(e=>{ console.error('Save audit log failed', e); });
 }
 // action: 'created' | 'updated' | 'deleted' | 'imported'
 // entityType: 'endpoint' | 'project' | 'environment' | 'profile' | 'document' | 'workspace'
@@ -2330,15 +2394,13 @@ const FLOW_DIRECTION_PRESETS = [
   { id:'1-way', label:'One-way — request only (Client → Gateway → Flow → Downstream)', pattern:'1-way' },
   { id:'2-way', label:'Two-way — request and response (Client ⇄ Gateway ⇄ Flow ⇄ Downstream)', pattern:'2-way' },
 ];
-const CUSTOM_FLOW_DIRECTIONS_KEY = 'apiStudio.customFlowDirections';
-function loadCustomFlowDirections(){
-  try{ const raw = JSON.parse(localStorage.getItem(CUSTOM_FLOW_DIRECTIONS_KEY)); return Array.isArray(raw) ? raw : []; }
-  catch(e){ return []; }
-}
+const CUSTOM_FLOW_DIRECTIONS_KEY = 'apiStudio.customFlowDirections'; // only used by the one-time localStorage migration now
 function saveCustomFlowDirections(list){
-  try{ localStorage.setItem(CUSTOM_FLOW_DIRECTIONS_KEY, JSON.stringify(list)); }catch(e){}
+  state.customFlowDirections = list;
+  apiSend('PUT', '/custom-flow-directions', { customFlowDirections: list })
+    .catch(e=>{ console.error('Save flow direction presets failed', e); toast('Could not save flow direction presets to the server.'); });
 }
-function allFlowDirections(){ return FLOW_DIRECTION_PRESETS.concat(loadCustomFlowDirections()); }
+function allFlowDirections(){ return FLOW_DIRECTION_PRESETS.concat(state.customFlowDirections || []); }
 function resolveFlowDirection(proj){
   const id = (proj && proj.requestFlowDirection) || '1-way';
   return allFlowDirections().find(d=>d.id===id) || FLOW_DIRECTION_PRESETS[0];
@@ -2421,12 +2483,13 @@ let state = {
   authorName: '',                   // display name used to attribute added/modified endpoints — from AUTH_USER when signed in
   organisation: '',                 // from AUTH_USER when signed in
   sidebarCollapsed: false,          // desktop sidebar collapse (persisted) — separate from the mobile drawer's .show class
-  environments: [],                 // user-configurable environment list — see loadEnvironments()
+  environments: [],                 // user-configurable environment list — see loadState()
   auditLog: [],                     // who changed what, when — see logAudit()
+  customFlowDirections: [],         // org-shared custom flow direction presets — see saveCustomFlowDirections()
   envUrlRevealed: {},                // { [envId]: true } — session-only, never persisted; Admin-role reveal toggle
   sensitiveRevealed: false,          // session-only Admin-role toggle: reveals real hosts & secret header values
   envTableUI: { search:'', filterAccess:'', filterColor:'', sortBy:null, sortDir:'asc' },
-  envTableStatus: 'ready',           // 'ready' | 'loading' | 'error' — see loadEnvironments()
+  envTableStatus: 'ready',           // 'ready' | 'loading' | 'error' — see loadState()
 };
 
 /* ==================== SECTION:UTIL ==================== */
@@ -2634,30 +2697,30 @@ function blankEnvironments(){
   return envs;
 }
 
-function loadState(){
-  loadEnvironments();
-  loadAuditLog();
-  const raw = localStorage.getItem(NEW_KEY);
-  if(raw){
-    try{
-      const parsed = JSON.parse(raw);
-      state.projects = parsed.projects || {};
-      Object.values(state.projects).forEach(ensureProjectDefaults);
-      state.requestHistory = parsed.requestHistory || {};
-    }catch(e){ console.error('Failed to load workspace', e); }
-  } else {
-    const old = localStorage.getItem(OLD_KEY);
-    if(old){
-      try{
-        const oldProjects = JSON.parse(old);
-        const migrated = {};
-        Object.values(oldProjects).forEach(p=>{ migrated[p.id] = migrateProject(p); });
-        state.projects = migrated;
-        saveState();
-        toast('Brought your existing API docs into the new workspace');
-      }catch(e){ console.error('Migration failed', e); }
-    }
+async function loadState(){
+  // One-time: bring any pre-Postgres localStorage workspace over to the server.
+  await migrateLocalStorageIfNeeded();
+
+  try{
+    const ws = await apiGet('');
+    state.projects = ws.projects || {};
+    Object.values(state.projects).forEach(ensureProjectDefaults);
+    state.requestHistory = ws.requestHistory || {};
+    state.environments = (Array.isArray(ws.environments) && ws.environments.length) ? ws.environments.map(migrateEnvironment) : [];
+    state.auditLog = Array.isArray(ws.auditLog) ? ws.auditLog : [];
+    state.customFlowDirections = Array.isArray(ws.customFlowDirections) ? ws.customFlowDirections : [];
+    state.envTableStatus = 'ready';
+  }catch(e){
+    console.error('Failed to load workspace from server', e);
+    state.projects = {};
+    state.requestHistory = {};
+    state.environments = [];
+    state.auditLog = [];
+    state.customFlowDirections = [];
+    state.envTableStatus = 'error';
+    toast('Could not load your workspace from the server — check your connection and reload.');
   }
+
   const theme = localStorage.getItem(THEME_KEY);
   state.theme = theme === 'light' ? 'light' : 'dark';
   const env = localStorage.getItem(ENV_KEY);
@@ -2684,6 +2747,7 @@ function migrateProject(p){
   const now = new Date().toISOString();
   return ensureProjectDefaults({
     id: p.id, name: p.name || 'Untitled API', description:'',
+    visibility: p.visibility === 'public' ? 'public' : 'private',
     environments: envs,
     auth: { type:'', headerName:'', description:'' },
     notes: '',
@@ -2697,6 +2761,7 @@ function migrateProject(p){
 function migrateEndpoint(ep){
   return {
     id: ep.id || uid(), method: ep.method || 'GET', path: ep.path || '/',
+    visibility: ep.visibility === 'public' ? 'public' : 'private',
     tag: ep.tag || 'General', summary: ep.summary || '', description: ep.description || '',
     version: ep.version || '', contentType: ep.contentType || 'application/json',
     parameters: (ep.parameters||[]).filter(p=>p.in!=='header').map(p=>({ name:p.name||'', in:p.in||'query', type:p.type||'string', required:!!p.required, example:p.example||'', description:p.description||'' })),
@@ -2707,11 +2772,28 @@ function migrateEndpoint(ep){
   };
 }
 
+// Debounced so rapid edits (typing, drag-reordering) don't fire a network
+// request per keystroke — trailing call wins, same as the old localStorage
+// write but batched. Callers that used the boolean return value to detect a
+// full local disk are kept working by always returning true optimistically;
+// a real failure surfaces via toast once the request actually completes.
+let _saveStateTimer = null;
 function saveState(){
-  try{
-    localStorage.setItem(NEW_KEY, JSON.stringify({ projects: state.projects, requestHistory: state.requestHistory }));
-    return true;
-  }catch(e){ toast('Could not save — storage may be full or blocked.'); return false; }
+  clearTimeout(_saveStateTimer);
+  _saveStateTimer = setTimeout(()=>{
+    apiSend('PUT', '/projects', { projects: state.projects }).then(res=>{
+      if(res && res.skipped && res.skipped.length){
+        toast("Some changes couldn't be saved — you're not the owner of that project.");
+      }
+    }).catch(e=>{
+      console.error('Save failed', e);
+      toast('Could not save to the server — check your connection.');
+    });
+    apiSend('PUT', '/request-history', { requestHistory: state.requestHistory }).catch(e=>{
+      console.error('Save request history failed', e);
+    });
+  }, 300);
+  return true;
 }
 function saveTheme(){ localStorage.setItem(THEME_KEY, state.theme); }
 function saveEnv(){ localStorage.setItem(ENV_KEY, state.env); }
@@ -2798,6 +2880,7 @@ function applyRoleGatedUI(){
 
 function ensureEndpointDefaults(ep){
   const now = new Date().toISOString();
+  if(ep.visibility !== 'public' && ep.visibility !== 'private') ep.visibility = 'private';
   if(!ep.createdAt) ep.createdAt = now;
   if(!ep.updatedAt) ep.updatedAt = ep.createdAt;
   if(typeof ep.createdBy !== 'string') ep.createdBy = '';
@@ -2807,6 +2890,7 @@ function ensureEndpointDefaults(ep){
 
 function ensureProjectDefaults(proj){
   const now = new Date().toISOString();
+  if(proj.visibility !== 'public' && proj.visibility !== 'private') proj.visibility = 'private';
   if(!LIFECYCLE_STAGES.includes(proj.lifecycle)) proj.lifecycle = 'PRODUCTION';
   if(typeof proj.owner !== 'string') proj.owner = '';
   if(typeof proj.team !== 'string') proj.team = '';
@@ -2825,6 +2909,7 @@ function blankProject(name){
   const now = new Date().toISOString();
   return {
     id: uid(), name: name || 'Untitled API', description:'',
+    visibility: 'private', // private to me until I choose to make it public — see project settings
     environments: blankEnvironments(),
     auth: { type:'', headerName:'', description:'' },
     notes:'',
@@ -2837,6 +2922,30 @@ function blankProject(name){
     attachments: [],
     _open: true,
   };
+}
+
+function toggleProjectVisibility(projId){
+  const proj = state.projects[projId];
+  if(!proj || proj._readonly) return;
+  proj.visibility = proj.visibility === 'public' ? 'private' : 'public';
+  proj.updatedAt = new Date().toISOString();
+  logAudit('updated', 'project', proj.name, `Made project ${proj.visibility}`, proj.name);
+  saveState();
+  renderAll();
+  toast(proj.visibility === 'public' ? 'Project is now public to your organisation' : 'Project is now private');
+}
+
+function toggleEndpointVisibility(epId){
+  const found = findEndpoint(epId);
+  if(!found || found.proj._readonly) return;
+  const { proj, ep } = found;
+  ep.visibility = ep.visibility === 'public' ? 'private' : 'public';
+  ep.updatedAt = new Date().toISOString();
+  ep.updatedBy = state.authorName || ep.updatedBy;
+  logAudit('updated', 'endpoint', `${ep.method} ${ep.path}`, `Made endpoint ${ep.visibility}`, proj.name);
+  saveState();
+  renderAll();
+  toast(ep.visibility === 'public' ? 'Endpoint is now public to your organisation' : 'Endpoint is now private');
 }
 
 function findOrCreateProjectByName(name){
@@ -5190,6 +5299,10 @@ function renderProjectOverview(main, projectId){
     <div class="overview-hero">
       <div class="overview-hero-badge"><span class="dot"></span>API Studio · ${escapeHtml(env.label)} environment</div>
       <h1>${escapeHtml(proj.name)}</h1>
+      ${proj._readonly ? `<div class="empty-field" style="margin:8px 0 0;">Shared publicly by someone else in your organisation — view only.</div>` : `
+      <button type="button" class="badge ${proj.visibility==='public' ? 'badge-lg' : ''}" data-toggle-proj-visibility="${proj.id}" title="Click to switch" style="margin-top:8px; cursor:pointer;">
+        ${proj.visibility==='public' ? '🌐 Public — visible to your organisation' : '🔒 Private — only visible to you'}
+      </button>`}
       <div class="overview-hero-sub">${proj.description ? renderMarkdown(proj.description) : 'No description yet — add one in project settings.'}</div>
       <div class="overview-stats">
         <div class="overview-stat"><div class="n" style="color:var(--accent);">${totalEndpoints}</div><div class="l">Endpoints</div></div>
@@ -5445,6 +5558,7 @@ function renderEndpointDoc(main, proj, ep){
         <span class="badge badge-lg ${methodClass(ep.method)}">${ep.method}</span>
         <span class="path" title="${escapeHtml(maskedFullUrl(proj, ep))}"><span style="color:var(--text-faint);font-weight:500;">${escapeHtml(envVarToken(state.env))}</span>${escapeHtml(pathWithParams(ep))}</span>
         <div class="path-actions">
+          ${proj._readonly ? '' : `<button type="button" class="badge" data-toggle-ep-visibility="${ep.id}" title="Click to switch" style="cursor:pointer;">${ep.visibility==='public' ? '🌐 Public' : '🔒 Private'}</button>`}
           <button class="primary" id="btnTryIt">Try it</button>
           <div class="ep-actions-dd" id="epActionsDD">
             <button type="button" class="ep-actions-btn" id="epActionsBtn" aria-haspopup="true" aria-expanded="false" aria-controls="epActionsPanel" title="More actions">
@@ -6032,6 +6146,7 @@ function openManualModal(epId){
     document.getElementById('mSummary').value = ep.summary || '';
     document.getElementById('mDesc').value = ep.description || '';
     document.getElementById('mApiDesc').value = proj.description || '';
+    document.getElementById('mVisibility').value = ep.visibility === 'public' ? 'public' : 'private';
 
     builderParams = (ep.parameters||[]).map(p=>({ id:uid(), name:p.name||'', type:normalizeTypeLabel(p.type), required:!!p.required, example: p.example!==undefined?String(p.example):'', description:p.description||'' }));
     builderHeaders = (ep.headers||[]).map(p=>({ id:uid(), name:p.name||'', type:normalizeTypeLabel(p.type), required:!!p.required, example: p.example!==undefined?String(p.example):'', description:p.description||'' }));
@@ -6049,6 +6164,7 @@ function openManualModal(epId){
     ['mProject','mPath','mTag','mVersion','mContentType','mSummary','mDesc','mBody','mApiDesc'].forEach(id=>document.getElementById(id).value = '');
     document.getElementById('mMethod').value = 'GET';
     document.getElementById('mContentType').value = 'application/json';
+    document.getElementById('mVisibility').value = 'private';
     if(state.selected && state.selected.type==='overview'){
       const proj = state.projects[state.selected.projectId];
       if(proj){
@@ -6088,6 +6204,7 @@ function saveManualEndpoint(){
   if(!projectName || !path){ toast('Project name and path are required.'); return; }
 
   const proj = findOrCreateProjectByName(projectName);
+  if(proj._readonly){ toast("You can only view this project — it's public content from someone else in your organisation."); return; }
   const fields = gatherFormAsEndpoint();
   fields.path = path;
 
@@ -6310,6 +6427,7 @@ function renderProjectDocsList(proj){
 function handleProjectDocFiles(proj, fileList){
   const files = Array.from(fileList || []);
   if(!files.length || !proj) return;
+  if(proj._readonly){ toast("You can only view this project — it's public content from someone else in your organisation."); return; }
   let remaining = files.length, added = 0, failed = 0;
   const finish = ()=>{
     renderProjectDocsList(proj);
@@ -6424,6 +6542,7 @@ function gatherFormAsEndpoint(){
   return {
     method: document.getElementById('mMethod').value,
     path,
+    visibility: document.getElementById('mVisibility').value === 'public' ? 'public' : 'private',
     tag: document.getElementById('mTag').value.trim() || 'General',
     version: document.getElementById('mVersion').value.trim(),
     contentType: document.getElementById('mContentType').value.trim() || 'application/json',
@@ -7349,7 +7468,7 @@ document.getElementById('flowCustomAdd').addEventListener('click', ()=>{
   if(!label){ toast('Enter a label for the custom direction'); return; }
   const pattern = document.getElementById('flowCustomPattern').value === '2-way' ? '2-way' : '1-way';
   const id = 'custom_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const list = loadCustomFlowDirections();
+  const list = (state.customFlowDirections || []).slice();
   list.push({ id, label, pattern });
   saveCustomFlowDirections(list);
   document.getElementById('flowCustomBuilder').style.display = 'none';
@@ -7548,6 +7667,10 @@ document.addEventListener('click', (e)=>{
   if(envAddFormOpen && envAddForm && !envAddForm.contains(e.target) && e.target!==envAddBtnEl && e.target!==envAddBtnEmptyEl){
     envAddFormOpen = false; renderEnvTableSection();
   }
+  const toggleProjVisBtn = e.target.closest('[data-toggle-proj-visibility]');
+  if(toggleProjVisBtn){ toggleProjectVisibility(toggleProjVisBtn.getAttribute('data-toggle-proj-visibility')); }
+  const toggleEpVisBtn = e.target.closest('[data-toggle-ep-visibility]');
+  if(toggleEpVisBtn){ toggleEndpointVisibility(toggleEpVisBtn.getAttribute('data-toggle-ep-visibility')); }
   const ovCopyBtn = e.target.closest('[data-ov-env-copy]');
   if(ovCopyBtn){
     const url = ovCopyBtn.getAttribute('data-ov-env-copy');
@@ -7571,9 +7694,11 @@ document.getElementById('railScrim').addEventListener('click', ()=>{
   document.getElementById('railScrim').classList.remove('show');
 });
 /* ==================== SECTION:INIT ==================== */
-loadState();
-renderAuthorLabel();
-renderAll();
+(async function boot(){
+  await loadState();
+  renderAuthorLabel();
+  renderAll();
+})();
 </script>
 </body>
 </html>
