@@ -6781,6 +6781,18 @@ async function generateProjectPdf(){
 
     const atoms = Array.from(container.querySelectorAll('.pdf-atom'));
 
+    // html2canvas clones the *whole* document to compute a render tree, not just the
+    // element you pass it — so anything else on the page still gets walked. This app's
+    // own UI (env pill, escalation dots, etc.) uses CSS color-mix(), which html2canvas's
+    // renderer can't parse, and it throws the moment it reaches one. Since none of that
+    // is needed for the export, skip it entirely and only let our own container through.
+    const ignoreForCanvas = (el)=>{
+      if(el === container || container.contains(el)) return false;
+      if(el.id === 'app') return true;
+      if(el.classList && (el.classList.contains('modal-overlay') || el.classList.contains('palette-overlay') || el.classList.contains('render-overlay'))) return true;
+      return false;
+    };
+
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF('p', 'mm', 'a4');
     const marginX = 12, marginTop = 14, marginBottom = 14;
@@ -6795,7 +6807,7 @@ async function generateProjectPdf(){
     for(let idx = 0; idx < atoms.length; idx++){
       setStage(`Rendering section ${idx + 1} of ${atoms.length}…`);
       const atomEl = atoms[idx];
-      const canvas = await html2canvas(atomEl, { scale:2, backgroundColor:'#ffffff', useCORS:true });
+      const canvas = await html2canvas(atomEl, { scale:2, backgroundColor:'#ffffff', useCORS:true, ignoreElements: ignoreForCanvas });
       const imgWidth = contentWidth;
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
       const imgData = canvas.toDataURL('image/jpeg', 0.95);
@@ -6838,7 +6850,7 @@ async function generateProjectPdf(){
     toast(`Downloaded ${filename}`);
   }catch(err){
     console.error('PDF export failed', err);
-    toast('Something went wrong generating the PDF — please try again.');
+    toast(`Couldn't generate the PDF${err && err.message ? ': ' + err.message : ''} — please try again.`);
   }finally{
     if(container && container.parentNode) container.parentNode.removeChild(container);
     gen.classList.remove('loading');
