@@ -478,7 +478,7 @@ kbd{
 .ep-actions-btn .dd-chev{ font-size:8px; color:var(--text-faint); transition:transform .15s ease; }
 .ep-actions-dd.open .ep-actions-btn .dd-chev{ transform:rotate(180deg); }
 .ep-actions-panel{
-  position:absolute; top:calc(100% + 8px); right:0; width:200px; z-index:80;
+  position:absolute; top:calc(100% + 8px); right:0; width:224px; max-width:calc(100vw - 24px); z-index:80;
   background:var(--glass-bg-strong); backdrop-filter:saturate(180%) blur(20px); -webkit-backdrop-filter:saturate(180%) blur(20px);
   border:1px solid var(--glass-border); border-radius:12px; box-shadow:var(--shadow-modal);
   padding:6px; opacity:0; visibility:hidden; transform:translateY(-4px) scale(.98); pointer-events:none;
@@ -486,14 +486,21 @@ kbd{
 }
 .ep-actions-dd.open .ep-actions-panel{ opacity:1; visibility:visible; transform:translateY(0) scale(1); pointer-events:auto; }
 .ep-actions-item{
-  display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%;
+  display:flex; align-items:center; gap:8px; width:100%; box-sizing:border-box; overflow:hidden;
   padding:8px 10px; border-radius:8px; font-size:12.5px; font-weight:600; color:var(--text-dim);
   background:transparent; border:none; text-align:left; cursor:pointer;
 }
 .ep-actions-item:hover{ background:var(--surface-hover); color:var(--text); }
 .ep-actions-item:disabled{ opacity:.4; cursor:not-allowed; }
 .ep-actions-item:disabled:hover{ background:transparent; color:var(--text-dim); }
-.ep-actions-item .item-sub{ font-size:10.5px; font-weight:500; color:var(--text-faint); }
+.ep-actions-item .item-label{
+  display:flex; align-items:center; gap:8px; flex:1 1 auto; min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.ep-actions-item .item-sub{
+  font-size:10.5px; font-weight:500; color:var(--text-faint); flex:0 0 auto;
+  max-width:104px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-left:6px;
+}
 .ep-actions-divider{ height:1px; background:var(--border); margin:5px 2px; }
 
 /* ---------- Project overview action menu (Edit settings / Export PDF) ---------- */
@@ -1064,7 +1071,7 @@ pre.code-block{
   .main-wrap{ grid-column:1; }
   .inspector-split{ grid-template-columns:1fr; }
 }
-.sidebar-toggle{ display:none; }
+.sidebar-toggle{ display:inline-flex; }
 
 /* ============================================================
    MODALS
@@ -1371,6 +1378,17 @@ table.env-data-table th .sort-arrow{ font-size:9px; margin-left:3px; color:var(-
 .builder-title.headers-title{ color:var(--text); font-weight:800; }
 .builder-add{ font-size:11.5px; padding:5px 10px; }
 .builder-body{ padding:8px; overflow-x:auto; }
+.auth-param-toolbar{ display:flex; align-items:center; gap:8px; }
+.auth-json-editor{ display:block; width:100%; min-height:140px; font-size:12px; margin-top:4px; }
+.auth-json-editor.hidden{ display:none; }
+.auth-include-field label{ margin-bottom:8px; }
+.auth-include-row{ display:flex; flex-direction:column; gap:10px; }
+.checkbox-row{
+  display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600; color:var(--text);
+  text-transform:none; cursor:pointer;
+}
+.checkbox-row input[type="checkbox"]{ flex-shrink:0; }
+.checkbox-row .item-sub{ font-size:11px; font-weight:500; color:var(--text-faint); }
 .dyn-table{ width:100%; min-width:560px; border-collapse:collapse; table-layout:fixed; }
 .dyn-table th{ text-align:left; font-size:9.5px; text-transform:uppercase; letter-spacing:.3px; color:var(--text-faint); padding:6px; font-weight:700; }
 .dyn-table.req-table thead tr{ background:var(--accent-soft); }
@@ -1945,6 +1963,56 @@ pre.json-raw{ max-height:360px; margin:0; }
       <div class="field">
         <label>Notes</label>
         <textarea id="paDesc" placeholder="How to obtain a token, expiry, scopes…" style="min-height:56px; font-family:var(--sans);"></textarea>
+      </div>
+
+      <!-- Auth request parameters -->
+      <div class="builder-section">
+        <div class="builder-head">
+          <span class="builder-title">Request parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what's needed to authenticate</span></span>
+          <div class="auth-param-toolbar">
+            <div class="view-toggle">
+              <button type="button" class="vt-btn active" data-auth-view="table" data-auth-kind="req">Table</button>
+              <button type="button" class="vt-btn" data-auth-view="json" data-auth-kind="req">JSON</button>
+            </div>
+            <button type="button" class="builder-add" id="addAuthReqRow">+ Add parameter</button>
+          </div>
+        </div>
+        <div class="builder-body">
+          <table class="dyn-table req-table" id="authReqTable">
+            <thead><tr><th class="col-name">Name</th><th class="col-type">Type</th><th class="col-req">Required</th><th class="col-example">Example</th><th class="col-desc">Description</th><th class="col-del"></th></tr></thead>
+            <tbody id="authReqRows"></tbody>
+          </table>
+          <textarea id="authReqJson" class="mono hidden auth-json-editor" placeholder='[&#10;  { "name": "apiKey", "type": "String", "required": true, "example": "xxxxx", "description": "…" }&#10;]'></textarea>
+        </div>
+      </div>
+
+      <!-- Auth response parameters -->
+      <div class="builder-section">
+        <div class="builder-head">
+          <span class="builder-title">Response parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what auth returns (token, expiry…)</span></span>
+          <div class="auth-param-toolbar">
+            <div class="view-toggle">
+              <button type="button" class="vt-btn active" data-auth-view="table" data-auth-kind="resp">Table</button>
+              <button type="button" class="vt-btn" data-auth-view="json" data-auth-kind="resp">JSON</button>
+            </div>
+            <button type="button" class="builder-add" id="addAuthRespRow">+ Add parameter</button>
+          </div>
+        </div>
+        <div class="builder-body">
+          <table class="dyn-table req-table" id="authRespTable">
+            <thead><tr><th class="col-name">Name</th><th class="col-type">Type</th><th class="col-req">Required</th><th class="col-example">Example</th><th class="col-desc">Description</th><th class="col-del"></th></tr></thead>
+            <tbody id="authRespRows"></tbody>
+          </table>
+          <textarea id="authRespJson" class="mono hidden auth-json-editor" placeholder='[&#10;  { "name": "access_token", "type": "String", "example": "eyJhbGciOi...", "description": "…" }&#10;]'></textarea>
+        </div>
+      </div>
+
+      <div class="field auth-include-field">
+        <label>Include auth parameters in</label>
+        <div class="auth-include-row">
+          <label class="checkbox-row"><input type="checkbox" id="paIncludeDocs"> Documentation <span class="item-sub">Overview page &amp; PDF export</span></label>
+          <label class="checkbox-row"><input type="checkbox" id="paIncludeSwagger"> Swagger / OpenAPI <span class="item-sub">Generated spec &amp; security scheme</span></label>
+        </div>
       </div>
     </div>
     <div class="modal-pane" data-mpane="docs">
@@ -3522,6 +3590,22 @@ function swaggerSample(proj, ep){
     } else {
       securityScheme = { type:'apiKey', in:'header', name: authHeader.name || 'Authorization', description: authHeader.description || undefined };
     }
+  }
+
+  // Auth request/response parameters — documented in Project settings ▸ Auth and
+  // opted into the exported spec via "Include in Swagger / OpenAPI". Carried as
+  // x- extensions on the security scheme since OpenAPI has no native slot for
+  // "what the token endpoint needs" / "what it returns".
+  if(securityScheme && proj.auth && proj.auth.includeInSwagger){
+    const swaggerAuthParam = (p)=>({
+      name: p.name, type: p.type || 'String', required: !!p.required,
+      ...(p.example ? { example: p.example } : {}),
+      ...(p.description ? { description: p.description } : {}),
+    });
+    const authReqP = (proj.auth.requestParams || []).filter(p=>p.name);
+    const authRespP = (proj.auth.responseParams || []).filter(p=>p.name);
+    if(authReqP.length) securityScheme['x-request-parameters'] = authReqP.map(swaggerAuthParam);
+    if(authRespP.length) securityScheme['x-response-parameters'] = authRespP.map(swaggerAuthParam);
   }
 
   // Named, reusable schemas — inferred from the real request/response examples —
@@ -5327,10 +5411,13 @@ function renderProjectOverview(main, projectId){
               ${proj._readonly ? '' : `
               <div class="ep-actions-divider"></div>
               <button type="button" class="ep-actions-item proj-actions-item" data-toggle-proj-visibility="${proj.id}" role="menuitem">
-                <span class="item-ic">${proj.visibility==='public'
-                  ? '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>'
-                  : '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>'}</span>
-                ${proj.visibility==='public' ? 'Make private' : 'Make public'} <span class="item-sub">${proj.visibility==='public' ? 'Only you' : 'Your organisation'}</span>
+                <span class="item-label">
+                  <span class="item-ic">${proj.visibility==='public'
+                    ? '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>'
+                    : '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>'}</span>
+                  <span>${proj.visibility==='public' ? 'Make private' : 'Make public'}</span>
+                </span>
+                <span class="item-sub">${proj.visibility==='public' ? 'Only you' : 'Your organisation'}</span>
               </button>`}
               <div class="ep-actions-divider"></div>
               <button type="button" class="ep-actions-item proj-actions-item" id="btnExportPdf" role="menuitem">
@@ -5408,7 +5495,9 @@ function renderProjectOverview(main, projectId){
             <div class="h">${escapeHtml(proj.auth.type)}${proj.auth.headerName ? ' · '+escapeHtml(proj.auth.headerName)+' header' : ''}</div>
             <div class="d">${proj.auth.description ? escapeHtml(proj.auth.description) : 'No further notes.'}</div>
           </div>
-        </div>` : `<div class="auth-card"><div class="ic">🔓</div><div><div class="h">No auth configured</div><div class="d">Add authentication details in project settings.</div></div></div>`}
+        </div>
+        ${proj.auth.includeInDocs ? paramSection('Auth request parameters', proj.auth.requestParams||[]) : ''}
+        ${proj.auth.includeInDocs ? paramSection('Auth response parameters', proj.auth.responseParams||[]) : ''}` : `<div class="auth-card"><div class="ic">🔓</div><div><div class="h">No auth configured</div><div class="d">Add authentication details in project settings.</div></div></div>`}
     </div>
 
     <div class="section">
@@ -5572,17 +5661,20 @@ function renderEndpointDoc(main, proj, ep){
               Actions <span class="dd-chev">▾</span>
             </button>
             <div class="ep-actions-panel" id="epActionsPanel" role="menu">
-              <button type="button" class="ep-actions-item" id="btnViewCode" role="menuitem">View <span class="item-sub">cURL &amp; Swagger</span></button>
+              <button type="button" class="ep-actions-item" id="btnViewCode" role="menuitem"><span class="item-label">View</span><span class="item-sub">cURL &amp; Swagger</span></button>
               <div class="ep-actions-divider"></div>
               <button type="button" class="ep-actions-item" id="btnEditEp" role="menuitem"${canEdit()?'':' disabled title="Your role is read-only"'}>Edit</button>
               <button type="button" class="ep-actions-item" id="btnDuplicateEp" role="menuitem"${canEdit()?'':' disabled title="Your role is read-only"'}>Duplicate</button>
               ${proj._readonly ? '' : `
               <div class="ep-actions-divider"></div>
               <button type="button" class="ep-actions-item" data-toggle-ep-visibility="${ep.id}" role="menuitem">
-                <span class="item-ic">${ep.visibility==='public'
-                  ? '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>'
-                  : '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>'}</span>
-                ${ep.visibility==='public' ? 'Make private' : 'Make public'} <span class="item-sub">${ep.visibility==='public' ? 'Only you' : 'Your organisation'}</span>
+                <span class="item-label">
+                  <span class="item-ic">${ep.visibility==='public'
+                    ? '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>'
+                    : '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>'}</span>
+                  <span>${ep.visibility==='public' ? 'Make private' : 'Make public'}</span>
+                </span>
+                <span class="item-sub">${ep.visibility==='public' ? 'Only you' : 'Your organisation'}</span>
               </button>`}
             </div>
           </div>
@@ -6352,6 +6444,109 @@ function populateFlowDirectionSelect(selectedId){
   sel.value = dirs.some(d=>d.id===selectedId) ? selectedId : dirs[0].id;
 }
 
+/* ---------- Auth tab: request/response parameters (table + JSON views) ---------- */
+let authReqParams = [];
+let authRespParams = [];
+const authParamView = { req: 'table', resp: 'table' };
+
+function newAuthParamRow(){ return { id:uid(), name:'', type:'String', required:false, example:'', description:'' }; }
+
+function cloneAuthParams(list){
+  return (Array.isArray(list) ? list : []).map(p=>({
+    id: uid(), name: p.name || '', type: PARAM_TYPES.includes(p.type) ? p.type : 'String',
+    required: !!p.required, example: p.example || '', description: p.description || '',
+  }));
+}
+
+function renderAuthParamRows(kind){
+  const rows = kind === 'req' ? authReqParams : authRespParams;
+  const tbody = document.getElementById(kind === 'req' ? 'authReqRows' : 'authRespRows');
+  if(!tbody) return;
+  if(!rows.length){
+    tbody.innerHTML = `<tr><td colspan="6" class="dyn-empty-row">No ${kind==='req'?'request':'response'} parameters yet — click "+ Add parameter" to define one.</td></tr>`;
+  } else {
+    tbody.innerHTML = rows.map(r=>`
+      <tr class="dyn-row" data-row-id="${r.id}">
+        <td class="col-name"><input type="text" data-f="name" value="${escapeHtml(r.name)}" placeholder="${kind==='req'?'apiKey':'access_token'}"></td>
+        <td class="col-type"><select data-f="type">${PARAM_TYPES.map(t=>`<option value="${t}" ${r.type===t?'selected':''}>${t}</option>`).join('')}</select></td>
+        <td class="col-req"><input type="checkbox" data-f="required" ${r.required?'checked':''}></td>
+        <td class="col-example"><input type="text" data-f="example" value="${escapeHtml(r.example)}" placeholder="e.g. xxxxx"></td>
+        <td class="col-desc"><input type="text" data-f="description" value="${escapeHtml(r.description)}" placeholder="Description"></td>
+        <td class="col-del"><button type="button" class="dyn-del-btn icon" data-del="${r.id}">✕</button></td>
+      </tr>`).join('');
+  }
+  tbody.querySelectorAll('input,select').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      const row = rows.find(r=>r.id===inp.closest('tr').getAttribute('data-row-id'));
+      if(!row) return;
+      row[inp.getAttribute('data-f')] = inp.type === 'checkbox' ? inp.checked : inp.value;
+    });
+  });
+  tbody.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const id = btn.getAttribute('data-del');
+      if(kind === 'req') authReqParams = authReqParams.filter(r=>r.id!==id);
+      else authRespParams = authRespParams.filter(r=>r.id!==id);
+      renderAuthParamRows(kind);
+    });
+  });
+}
+
+function syncAuthJsonFromRows(kind){
+  const rows = kind === 'req' ? authReqParams : authRespParams;
+  const ta = document.getElementById(kind === 'req' ? 'authReqJson' : 'authRespJson');
+  if(ta) ta.value = JSON.stringify(rows.filter(r=>r.name.trim()).map(r=>(
+    { name:r.name, type:r.type, required:!!r.required, example:r.example, description:r.description }
+  )), null, 2);
+}
+
+function syncAuthRowsFromJson(kind){
+  const ta = document.getElementById(kind === 'req' ? 'authReqJson' : 'authRespJson');
+  if(!ta) return true;
+  const text = ta.value.trim();
+  try{
+    const parsed = text ? JSON.parse(text) : [];
+    if(!Array.isArray(parsed)) throw new Error('Expected a JSON array');
+    const rows = parsed.map(p=>({
+      id: uid(), name: (p && p.name) || '', type: (p && PARAM_TYPES.includes(p.type)) ? p.type : 'String',
+      required: !!(p && p.required), example: (p && p.example) || '', description: (p && p.description) || '',
+    }));
+    if(kind === 'req') authReqParams = rows; else authRespParams = rows;
+    return true;
+  }catch(e){
+    toast('That JSON is invalid — fix it before switching to table view');
+    return false;
+  }
+}
+
+function setAuthParamView(kind, view){
+  if(authParamView[kind] === view) return;
+  if(view === 'json'){
+    syncAuthJsonFromRows(kind);
+  } else {
+    if(!syncAuthRowsFromJson(kind)) return;
+    renderAuthParamRows(kind);
+  }
+  authParamView[kind] = view;
+  const table = document.getElementById(kind === 'req' ? 'authReqTable' : 'authRespTable');
+  const jsonTa = document.getElementById(kind === 'req' ? 'authReqJson' : 'authRespJson');
+  const addBtn = document.getElementById(kind === 'req' ? 'addAuthReqRow' : 'addAuthRespRow');
+  if(table) table.classList.toggle('hidden', view !== 'table');
+  if(jsonTa) jsonTa.classList.toggle('hidden', view !== 'json');
+  if(addBtn) addBtn.classList.toggle('hidden', view !== 'table');
+  document.querySelectorAll(`[data-auth-kind="${kind}"]`).forEach(btn=>{
+    btn.classList.toggle('active', btn.getAttribute('data-auth-view') === view);
+  });
+}
+
+document.querySelectorAll('[data-auth-view]').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    setAuthParamView(btn.getAttribute('data-auth-kind'), btn.getAttribute('data-auth-view'));
+  });
+});
+document.getElementById('addAuthReqRow').addEventListener('click', ()=>{ authReqParams.push(newAuthParamRow()); renderAuthParamRows('req'); });
+document.getElementById('addAuthRespRow').addEventListener('click', ()=>{ authRespParams.push(newAuthParamRow()); renderAuthParamRows('resp'); });
+
 function openProjectModal(projectId, initialTab){
   editingProjectId = projectId;
   const proj = state.projects[projectId];
@@ -6378,6 +6573,24 @@ function openProjectModal(projectId, initialTab){
   document.getElementById('paType').value = (proj.auth && proj.auth.type) || '';
   document.getElementById('paHeader').value = (proj.auth && proj.auth.headerName) || '';
   document.getElementById('paDesc').value = (proj.auth && proj.auth.description) || '';
+  document.getElementById('paIncludeDocs').checked = !!(proj.auth && proj.auth.includeInDocs);
+  document.getElementById('paIncludeSwagger').checked = !!(proj.auth && proj.auth.includeInSwagger);
+  authReqParams = cloneAuthParams(proj.auth && proj.auth.requestParams);
+  authRespParams = cloneAuthParams(proj.auth && proj.auth.responseParams);
+  authParamView.req = 'table'; authParamView.resp = 'table';
+  ['req','resp'].forEach(kind=>{
+    const table = document.getElementById(kind === 'req' ? 'authReqTable' : 'authRespTable');
+    const jsonTa = document.getElementById(kind === 'req' ? 'authReqJson' : 'authRespJson');
+    const addBtn = document.getElementById(kind === 'req' ? 'addAuthReqRow' : 'addAuthRespRow');
+    if(table) table.classList.remove('hidden');
+    if(jsonTa) jsonTa.classList.add('hidden');
+    if(addBtn) addBtn.classList.remove('hidden');
+    document.querySelectorAll(`[data-auth-kind="${kind}"]`).forEach(btn=>{
+      btn.classList.toggle('active', btn.getAttribute('data-auth-view') === 'table');
+    });
+  });
+  renderAuthParamRows('req');
+  renderAuthParamRows('resp');
 
   renderEnvSettingsCards(proj);
   renderProjectDocsList(proj);
@@ -6522,10 +6735,21 @@ function saveProjectSettings(){
     name: document.getElementById('pgLicenseName').value.trim(),
     url: document.getElementById('pgLicenseUrl').value.trim(),
   };
+  // If either param list is currently shown as raw JSON, sync it back into the
+  // row arrays first so in-progress JSON edits aren't lost on save.
+  if(authParamView.req === 'json') syncAuthRowsFromJson('req');
+  if(authParamView.resp === 'json') syncAuthRowsFromJson('resp');
+  const cleanAuthParams = (list)=> list.filter(r=>r.name.trim()).map(r=>(
+    { name:r.name.trim(), type:r.type, required:!!r.required, example:r.example.trim(), description:r.description.trim() }
+  ));
   proj.auth = {
     type: document.getElementById('paType').value.trim(),
     headerName: document.getElementById('paHeader').value.trim(),
     description: document.getElementById('paDesc').value.trim(),
+    requestParams: cleanAuthParams(authReqParams),
+    responseParams: cleanAuthParams(authRespParams),
+    includeInDocs: document.getElementById('paIncludeDocs').checked,
+    includeInSwagger: document.getElementById('paIncludeSwagger').checked,
   };
   document.querySelectorAll('[data-env-input]').forEach(inp=>{
     proj.environments[inp.getAttribute('data-env-input')] = inp.value.trim();
@@ -6897,7 +7121,8 @@ function buildAuditLogHtml(){
     const meta = auditActionMeta(e.action);
     const dt = new Date(e.ts);
     const when = isNaN(dt.getTime()) ? '' : dt.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) + ', ' + dt.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit',second:'2-digit'});
-    return `<tr data-search="${escapeHtml((e.actor+' '+e.entityType+' '+e.entityName+' '+e.projectName+' '+e.details+' '+meta.label).toLowerCase())}" data-action="${escapeHtml(e.action)}" data-entity="${escapeHtml(e.entityType)}" data-actor="${escapeHtml(e.actor)}">
+    const tsMs = isNaN(dt.getTime()) ? '' : dt.getTime();
+    return `<tr data-search="${escapeHtml((e.actor+' '+e.entityType+' '+e.entityName+' '+e.projectName+' '+e.details+' '+meta.label).toLowerCase())}" data-action="${escapeHtml(e.action)}" data-entity="${escapeHtml(e.entityType)}" data-actor="${escapeHtml(e.actor)}" data-ts="${tsMs}">
       <td class="al-when"><span class="al-when-main">${when.split(',')[0]}</span><span class="al-when-sub">${when.split(',').slice(1).join(',').trim()}</span></td>
       <td><span class="al-actor"><span class="al-avatar">${escapeHtml((e.actor||'?').slice(0,1).toUpperCase())}</span>${escapeHtml(e.actor)}</span></td>
       <td><span class="al-badge" style="color:${meta.color};background:${meta.bg};">${meta.label}</span></td>
@@ -6948,6 +7173,27 @@ body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--sans)
 .al-search input{ flex:1; background:none; border:none; outline:none; color:var(--text); font-size:13px; font-family:var(--sans); }
 .al-toolbar select{ background:var(--bg-elevated); border:1px solid var(--border); color:var(--text); font-size:12.5px; padding:8px 10px; border-radius:8px; font-family:var(--sans); cursor:pointer; }
 .al-toolbar .al-count{ font-size:11.5px; color:var(--text-faint); white-space:nowrap; margin-left:auto; }
+.al-date-range{ display:flex; align-items:center; gap:6px; }
+.al-date-range .al-date-label{ font-size:10.5px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.4px; white-space:nowrap; }
+.al-date-range input[type="date"]{
+  background:var(--bg-elevated); border:1px solid var(--border); color:var(--text); font-size:12px;
+  padding:7px 9px; border-radius:8px; font-family:var(--sans); color-scheme:dark;
+}
+.al-date-range input[type="date"]:focus{ outline:none; border-color:var(--accent); }
+.al-date-sep{ color:var(--text-faint); font-size:11px; }
+.al-date-clear{
+  background:var(--bg-elevated); border:1px solid var(--border); color:var(--text-faint); border-radius:8px;
+  padding:7px 10px; cursor:pointer; font-size:11px; line-height:1;
+}
+.al-date-clear:hover{ color:var(--text); border-color:var(--border-strong); }
+.al-pagination{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:14px; flex-wrap:wrap; }
+.al-page-size{ display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--text-faint); }
+.al-page-size select{ background:var(--surface); border:1px solid var(--border); color:var(--text); font-size:12px; padding:6px 8px; border-radius:7px; font-family:var(--sans); cursor:pointer; }
+.al-page-nav{ display:flex; align-items:center; gap:10px; }
+.al-page-nav button{ background:var(--surface); border:1px solid var(--border); color:var(--text); font-size:12px; font-weight:600; padding:7px 13px; border-radius:8px; cursor:pointer; font-family:var(--sans); }
+.al-page-nav button:hover:not(:disabled){ background:var(--surface-hover); }
+.al-page-nav button:disabled{ opacity:.4; cursor:not-allowed; }
+.al-page-indicator{ font-size:11.5px; color:var(--text-faint); font-family:var(--mono); min-width:96px; text-align:center; }
 .al-table-wrap{ background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
 table{ width:100%; border-collapse:collapse; font-size:12.5px; }
 thead th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint); font-weight:700; padding:12px 14px; border-bottom:1px solid var(--border); background:var(--surface-2); position:sticky; top:0; }
@@ -7012,6 +7258,14 @@ tbody tr.al-hidden{ display:none; }
       <option value="">All contributors</option>
       ${actors.map(a=>`<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('')}
     </select>
+    <div class="al-date-range">
+      <span class="al-date-label">From</span>
+      <input type="date" id="alFromDate">
+      <span class="al-date-sep">–</span>
+      <span class="al-date-label">To</span>
+      <input type="date" id="alToDate">
+      <button type="button" class="al-date-clear" id="alDateClear" title="Clear date range">✕</button>
+    </div>
     <span class="al-count" id="alCount"></span>
   </div>
 
@@ -7024,6 +7278,24 @@ tbody tr.al-hidden{ display:none; }
     </table>
     ${entries.length ? '' : '<div class="al-empty">No changes recorded yet — this log fills in as endpoints, projects, environments, and documents are created, edited, or deleted.</div>'}
   </div>
+
+  ${entries.length ? `
+  <div class="al-pagination">
+    <div class="al-page-size">
+      <label for="alPageSize">Rows per page</label>
+      <select id="alPageSize">
+        <option value="25">25</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+        <option value="200">200</option>
+      </select>
+    </div>
+    <div class="al-page-nav">
+      <button type="button" id="alPrevPage">‹ Prev</button>
+      <span class="al-page-indicator" id="alPageIndicator">Page 1 of 1</span>
+      <button type="button" id="alNextPage">Next ›</button>
+    </div>
+  </div>` : ''}
 </div>
 <script>
 (function(){
@@ -7031,28 +7303,64 @@ tbody tr.al-hidden{ display:none; }
   const actionSel = document.getElementById('alActionFilter');
   const entitySel = document.getElementById('alEntityFilter');
   const actorSel = document.getElementById('alActorFilter');
+  const fromDate = document.getElementById('alFromDate');
+  const toDate = document.getElementById('alToDate');
+  const dateClear = document.getElementById('alDateClear');
+  const pageSizeSel = document.getElementById('alPageSize');
+  const prevBtn = document.getElementById('alPrevPage');
+  const nextBtn = document.getElementById('alNextPage');
+  const pageIndicator = document.getElementById('alPageIndicator');
   const rows = Array.from(document.querySelectorAll('#alBody tr'));
   const countEl = document.getElementById('alCount');
-  function applyFilters(){
+  let currentPage = 1;
+
+  function rowMatches(r){
     const q = search.value.trim().toLowerCase();
     const action = actionSel.value;
     const entity = entitySel.value;
     const actor = actorSel.value;
-    let visible = 0;
-    rows.forEach(r=>{
-      const matchesSearch = !q || (r.getAttribute('data-search')||'').includes(q);
-      const matchesAction = !action || r.getAttribute('data-action') === action;
-      const matchesEntity = !entity || r.getAttribute('data-entity') === entity;
-      const matchesActor = !actor || r.getAttribute('data-actor') === actor;
-      const show = matchesSearch && matchesAction && matchesEntity && matchesActor;
-      r.classList.toggle('al-hidden', !show);
-      if(show) visible++;
-    });
-    countEl.textContent = visible + ' of ' + rows.length + ' change' + (rows.length===1?'':'s');
+    const tsAttr = r.getAttribute('data-ts');
+    const ts = tsAttr ? Number(tsAttr) : NaN;
+    const from = fromDate.value ? new Date(fromDate.value + 'T00:00:00').getTime() : null;
+    const to = toDate.value ? new Date(toDate.value + 'T23:59:59.999').getTime() : null;
+    const matchesSearch = !q || (r.getAttribute('data-search')||'').includes(q);
+    const matchesAction = !action || r.getAttribute('data-action') === action;
+    const matchesEntity = !entity || r.getAttribute('data-entity') === entity;
+    const matchesActor = !actor || r.getAttribute('data-actor') === actor;
+    const matchesFrom = from === null || (!isNaN(ts) && ts >= from);
+    const matchesTo = to === null || (!isNaN(ts) && ts <= to);
+    return matchesSearch && matchesAction && matchesEntity && matchesActor && matchesFrom && matchesTo;
   }
-  [search].forEach(el=>el.addEventListener('input', applyFilters));
-  [actionSel, entitySel, actorSel].forEach(el=>el.addEventListener('change', applyFilters));
-  applyFilters();
+
+  function applyFilters(resetPage){
+    if(resetPage) currentPage = 1;
+    const matched = rows.filter(rowMatches);
+    const pageSize = parseInt((pageSizeSel && pageSizeSel.value) || '50', 10) || 50;
+    const totalPages = Math.max(1, Math.ceil(matched.length / pageSize));
+    if(currentPage > totalPages) currentPage = totalPages;
+    if(currentPage < 1) currentPage = 1;
+    const start = (currentPage - 1) * pageSize;
+    const end = start + pageSize;
+    const matchedSet = new Set(matched);
+    rows.forEach(r=>{
+      const idx = matched.indexOf(r);
+      const inPage = matchedSet.has(r) && idx >= start && idx < end;
+      r.classList.toggle('al-hidden', !inPage);
+    });
+    countEl.textContent = matched.length + ' of ' + rows.length + ' change' + (rows.length===1?'':'s');
+    if(pageIndicator) pageIndicator.textContent = 'Page ' + currentPage + ' of ' + totalPages;
+    if(prevBtn) prevBtn.disabled = currentPage <= 1;
+    if(nextBtn) nextBtn.disabled = currentPage >= totalPages;
+  }
+
+  [search].forEach(el=>el.addEventListener('input', ()=>applyFilters(true)));
+  [actionSel, entitySel, actorSel, fromDate, toDate].forEach(el=>el.addEventListener('change', ()=>applyFilters(true)));
+  if(pageSizeSel) pageSizeSel.addEventListener('change', ()=>applyFilters(true));
+  if(dateClear) dateClear.addEventListener('click', ()=>{ fromDate.value=''; toDate.value=''; applyFilters(true); });
+  if(prevBtn) prevBtn.addEventListener('click', ()=>{ if(currentPage>1){ currentPage--; applyFilters(false); } });
+  if(nextBtn) nextBtn.addEventListener('click', ()=>{ currentPage++; applyFilters(false); });
+
+  applyFilters(true);
 })();
 <\/script>
 </body>
@@ -7393,6 +7701,11 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
         <div class="pdf-cover-stat"><div class="n">${proj.lifecycle ? escapeHtml(proj.lifecycle) : '—'}</div><div class="l">Lifecycle</div></div>
       </div>
       ${proj.auth && proj.auth.type ? `<div class="pdf-auth-card"><div class="ic">🔑</div><div><div class="h">${escapeHtml(proj.auth.type)}${proj.auth.headerName ? ' · '+escapeHtml(proj.auth.headerName)+' header' : ''}</div><div class="d">${proj.auth.description ? escapeHtml(proj.auth.description) : 'No further notes.'}</div></div></div>` : ''}
+      ${proj.auth && proj.auth.includeInDocs && ((proj.auth.requestParams||[]).length || (proj.auth.responseParams||[]).length) ? `
+      <div style="text-align:left; max-width:640px; margin:14px auto 0;">
+        ${paramSection('Auth request parameters', proj.auth.requestParams||[])}
+        ${paramSection('Auth response parameters', proj.auth.responseParams||[])}
+      </div>` : ''}
       ${opts.includeNotes && proj.notes ? `<div class="pdf-notes-card"><div class="pdf-notes-title">Integration notes</div><div class="pdf-notes-body">${escapeHtml(proj.notes)}</div></div>` : ''}
     </section>
     </div>
