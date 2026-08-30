@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 // Consumer webmail domains we don't treat as a "work" email.
 // Gmail is explicitly allowed as a personal-email exception (per product requirement);
 // every other freemail domain below is rejected so registration effectively requires
@@ -84,6 +86,30 @@ function validateRole(role) {
   return { valid: true, value: role };
 }
 
+// Generates a random password that always satisfies evaluatePassword()'s
+// requirements, for admin-provisioned accounts (invite / reset). Avoids
+// visually ambiguous characters (0/O, 1/l/I) since these get read aloud or
+// copy-pasted by a human.
+function generateTemporaryPassword() {
+  const UPPER = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const LOWER = 'abcdefghijkmnopqrstuvwxyz';
+  const DIGITS = '23456789';
+  const SPECIAL = '!@#$%^&*';
+  const ALL = UPPER + LOWER + DIGITS + SPECIAL;
+  const pick = (set) => set[crypto.randomInt(set.length)];
+
+  const chars = [pick(UPPER), pick(LOWER), pick(DIGITS), pick(SPECIAL)];
+  for (let i = 0; i < 8; i++) chars.push(pick(ALL));
+
+  // Fisher–Yates shuffle so the guaranteed classes aren't always in the same
+  // positions.
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join('');
+}
+
 // Returns { score: 0-4, label, checks: {...}, valid, reasons: [] }
 function evaluatePassword(password, { username = '', email = '' } = {}) {
   const reasons = [];
@@ -148,5 +174,6 @@ module.exports = {
   validateOrganisation,
   validateRole,
   evaluatePassword,
+  generateTemporaryPassword,
   VALID_ROLES,
 };

@@ -10,6 +10,7 @@ const jwt = require('jsonwebtoken');
 
 const { initDb } = require('./db');
 const authRoutes = require('./routes/auth');
+const userRoutes = require('./routes/users');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -50,6 +51,7 @@ app.use(express.json({ limit: '20kb' }));
 app.use(cookieParser());
 
 app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
@@ -73,6 +75,7 @@ const studioTemplate = fs.readFileSync(path.join(__dirname, 'views', 'studio.htm
 // requireAuth instead of being publicly reachable like the rest of /public.
 app.get('/dashboard.html', requireAuth, (req, res) => {
   const authUser = {
+    id: req.user.sub,
     username: req.user.username,
     organisation: req.user.organisation,
     role: req.user.role,

@@ -1538,6 +1538,29 @@ pre.json-raw{ max-height:360px; margin:0; }
   </div>
 </div>
 
+<div class="modal-overlay" id="credentialModal">
+  <div class="modal" style="width:420px;">
+    <h2 id="credentialModalTitle">Account created</h2>
+    <div class="modal-sub" id="credentialModalSubtitle" style="margin-bottom:16px;"></div>
+    <div style="background:var(--surface-2);border:1px solid var(--border-strong);border-radius:10px;padding:14px;margin-bottom:8px;">
+      <div style="font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-bottom:4px;">Username</div>
+      <div class="mono" id="credentialModalUsername" style="font-size:13px;margin-bottom:12px;"></div>
+      <div style="font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-bottom:4px;">Temporary password</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="mono" id="credentialModalPassword" style="font-size:14px;font-weight:700;letter-spacing:.5px;"></span>
+        <button type="button" id="credentialModalCopy" style="margin-left:auto;">Copy</button>
+      </div>
+    </div>
+    <div style="font-size:11.5px;color:var(--text-faint);margin-bottom:20px;">This is shown once and isn't stored anywhere you can come back to — copy it now.</div>
+    <div class="modal-actions" style="justify-content:flex-end;">
+      <div class="right">
+        <button type="button" class="primary" id="credentialModalDone">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
 <div class="modal-overlay" id="tryItModal">
   <div class="modal">
     <div style="display:flex; align-items:center; gap:10px; margin-bottom:2px;">
@@ -2071,6 +2094,14 @@ const ROLES = [
   { id:'viewer', label:'Viewer', seesAll:false, canEdit:false },
 ];
 function roleMeta(id){ return ROLES.find(r=>r.id===id) || ROLES[1]; }
+
+// The backend stores roles as 'admin' | 'editor' | 'viewer' (matches the DB
+// constraint); the UI's local role-preview system predates real accounts and
+// uses 'admin' | 'Developer' | 'viewer'. These convert between the two so the
+// Team members table can reuse the existing role-pill styling and ROLES list.
+function dbRoleToLocalId(dbRole){ return dbRole === 'editor' ? 'Developer' : dbRole; }
+function localIdToDbRole(localId){ return localId === 'Developer' ? 'editor' : localId; }
+
 function canEdit(){ return roleMeta(state.authorRole).canEdit; }
 function roleAllowedEnvs(roleId){
   const role = roleMeta(roleId);
@@ -3842,7 +3873,6 @@ function renderProfilePage(main){
         ${AUTH_USER ? `
         <div class="profile-name-row">
           <input type="text" id="profileNameInput" value="${escapeHtml(name)}" maxlength="60" disabled title="Managed by your account">
-          <button class="profile-save" id="btnLogoutProfile">Log out</button>
         </div>
         <div class="profile-sub">Endpoints you add or edit are credited to ${escapeHtml(name)} (${escapeHtml(AUTH_USER.organisation)}).</div>
         ` : `
@@ -3856,11 +3886,19 @@ function renderProfilePage(main){
           <span class="profile-swatch-label">Avatar color</span>
           ${swatches}
         </div>
+        ${AUTH_USER ? `
+        <div class="role-select-row">
+          <span class="profile-swatch-label">Role</span>
+          <span class="role-pill role-${roleMeta(state.authorRole).id}">${roleMeta(state.authorRole).label}</span>
+        </div>
+        <div class="role-hint">${roleHintText(state.authorRole)} Set by an Admin — see Team members below to change it.</div>
+        ` : `
         <div class="role-select-row">
           <span class="profile-swatch-label">Role</span>
           ${ROLES.map(r=>`<span class="role-opt${state.authorRole===r.id?' sel':''}" data-role="${r.id}">${r.label}</span>`).join('')}
         </div>
         <div class="role-hint">${roleHintText(state.authorRole)}</div>
+        `}
       </div>
     </div>
 
@@ -3887,16 +3925,24 @@ function renderProfilePage(main){
       </div>
       <div id="envTableSection"></div>
     </div>
+
+    ${AUTH_USER && AUTH_USER.role === 'admin' ? `
+    <div class="section">
+      <div class="section-title">
+        <span style="flex:1;">Team members <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— invite people into ${escapeHtml(AUTH_USER.organisation)}, change their role, reset a password, or remove access. Visible to Admins only.</span></span>
+      </div>
+      <div id="usersTableSection"></div>
+    </div>
+    ` : ''}
   `;
   renderEnvTableSection();
 
-  if(AUTH_USER){
-    document.getElementById('btnLogoutProfile').addEventListener('click', async ()=>{
-      try{ await fetch('/api/auth/logout', { method:'POST', credentials:'include' }); }
-      catch(e){ /* ignore — redirect to login regardless */ }
-      window.location.href = '/login.html';
-    });
-  } else {
+  if(AUTH_USER && AUTH_USER.role === 'admin'){
+    renderUsersTableSection(); // paint from whatever we already have (loading/ready/error)
+    ensureUsersLoaded(); // fetches only if not already loaded; re-renders when it resolves
+  }
+
+  if(!AUTH_USER){
     const nameInput = document.getElementById('profileNameInput');
     const saveProfileName = ()=>{
       const val = nameInput.value.trim();
@@ -4321,6 +4367,341 @@ async function handleEnvRowAction(act, id, el){
     renderEnvTableSection();
     return;
   }
+}
+
+/* ==================== SECTION:USERS (Admin-only team management) ==================== */
+let usersState = { status:'idle', list:[], search:'', rowMenu:{ id:null, mode:'menu' }, addFormOpen:false, error:'' };
+let usersAddRoleChoice = 'viewer';
+
+async function ensureUsersLoaded(force){
+  if(!AUTH_USER || AUTH_USER.role !== 'admin') return;
+  if(!force && (usersState.status === 'ready' || usersState.status === 'loading')) return;
+  usersState.status = 'loading';
+  renderUsersTableSection();
+  try{
+    const res = await fetch('/api/users', { credentials:'include' });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(data.error || 'Could not load team members.');
+    usersState.list = data.users || [];
+    usersState.status = 'ready';
+  }catch(e){
+    usersState.status = 'error';
+    usersState.error = e.message || 'Could not load team members.';
+  }
+  renderUsersTableSection();
+}
+
+function renderUsersTableSection(){
+  const container = document.getElementById('usersTableSection');
+  if(!container) return;
+  container.innerHTML = usersTableHtml();
+  bindUsersTableEvents(container);
+  positionOpenUserRowPanel();
+}
+
+function positionOpenUserRowPanel(){
+  if(!usersState.rowMenu.id) return;
+  const btn = document.querySelector(`[data-urow-dd-btn="${usersState.rowMenu.id}"]`);
+  const panel = document.querySelector(`[data-urow-panel="${usersState.rowMenu.id}"]`);
+  if(!btn || !panel || !panel.firstElementChild) return;
+  const rect = btn.getBoundingClientRect();
+  const pw = panel.offsetWidth || 200;
+  const ph = panel.offsetHeight || 140;
+  let left = rect.right - pw;
+  if(left < 8) left = 8;
+  if(left + pw > window.innerWidth - 8) left = window.innerWidth - 8 - pw;
+  let top = rect.bottom + 4;
+  if(top + ph > window.innerHeight - 8) top = rect.top - ph - 4;
+  if(top < 8) top = 8;
+  panel.style.left = left + 'px';
+  panel.style.top = top + 'px';
+}
+
+function usersTableHtml(){
+  if(usersState.status === 'error'){
+    return `<div class="env-table-error">
+      ${escapeHtml(usersState.error || 'Could not load team members.')}
+      <br><button type="button" class="primary" id="usersRetry" style="margin-top:8px;">Retry</button>
+    </div>`;
+  }
+
+  const q = usersState.search.trim().toLowerCase();
+  let list = usersState.list.slice();
+  if(q) list = list.filter(u => u.username.toLowerCase().includes(q) || u.email.toLowerCase().includes(q));
+
+  const bodyHtml = (usersState.status === 'loading' && !usersState.list.length)
+    ? `<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--text-faint);">Loading team members…</td></tr>`
+    : (list.length
+        ? list.map(u=>userRowHtml(u)).join('')
+        : `<tr><td colspan="5" style="padding:0;border-bottom:none;">
+            <div class="env-table-empty">${q ? 'No members match your search.' : 'No one invited yet — invite your first teammate.'}</div>
+          </td></tr>`);
+
+  return `
+    <div class="env-table-toolbar">
+      <div class="env-table-search">
+        <span class="env-table-search-ic"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.2" y2="16.2"></line></svg></span>
+        <input type="text" id="usersSearchInput" placeholder="Search by username or email…" value="${escapeHtml(usersState.search)}">
+      </div>
+      <span class="spacer"></span>
+      <button type="button" id="usersRefreshBtn" title="Refresh list">⟲ Refresh</button>
+      <button type="button" class="primary" id="usersAddBtn">+ Invite user</button>
+    </div>
+    ${usersState.addFormOpen ? userAddFormHtml() : ''}
+    <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr>
+        <th>User</th>
+        <th>Role</th>
+        <th>Status</th>
+        <th>Last login</th>
+        <th style="width:40px;"></th>
+      </tr></thead>
+      <tbody id="usersTableBody">${bodyHtml}</tbody>
+    </table>
+    </div>
+  `;
+}
+
+function userAddFormHtml(){
+  return `
+  <div id="usersAddForm" style="max-width:440px;margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px;">
+    <div>
+      <div style="font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-bottom:5px;">Username</div>
+      <input type="text" id="usersAddUsernameInput" placeholder="e.g. jane.doe" maxlength="30" style="width:100%;">
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-bottom:5px;">Email</div>
+      <input type="text" id="usersAddEmailInput" placeholder="name@company.com — this is how they'll sign in" style="width:100%;">
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-bottom:5px;">Role</div>
+      <select id="usersAddRoleInput" style="width:100%;">
+        ${ROLES.map(r=>{ const dbRole = localIdToDbRole(r.id); return `<option value="${dbRole}"${dbRole===usersAddRoleChoice?' selected':''}>${r.label}</option>`; }).join('')}
+      </select>
+    </div>
+    <div style="font-size:11.5px;color:var(--text-faint);">There's no email service hooked up, so this creates the account directly and gives you a one-time temporary password to share with them yourself.</div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;">
+      <button type="button" id="usersAddCancel">Cancel</button>
+      <button type="button" class="primary" id="usersAddSave">Send invite</button>
+    </div>
+  </div>`;
+}
+
+function avatarColorFor(name){
+  return PROFILE_COLORS[hashStr(name||'') % PROFILE_COLORS.length];
+}
+
+function userRowHtml(u){
+  const isSelf = !!(AUTH_USER && u.id === AUTH_USER.id);
+  const localRoleId = dbRoleToLocalId(u.role);
+  const rMeta = roleMeta(localRoleId);
+  const menuOpen = usersState.rowMenu.id === u.id;
+  const initials = profileInitials(u.username);
+  return `
+  <tr class="env-row">
+    <td>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="avatar-circle" style="background:${avatarColorFor(u.username)};">${initials}</span>
+        <div style="min-width:0;">
+          <div style="font-weight:600;font-size:12.5px;white-space:nowrap;">${escapeHtml(u.username)}${isSelf ? ' <span style="color:var(--text-faint);font-weight:500;">(you)</span>' : ''}</div>
+          <div class="mono" style="font-size:11px;color:var(--text-faint);">${escapeHtml(u.email)}</div>
+        </div>
+      </div>
+    </td>
+    <td><span class="role-pill role-${rMeta.id}">${rMeta.label}</span></td>
+    <td><span class="access-badge access-user">Active</span></td>
+    <td class="mono" style="font-size:11px;color:var(--text-faint);">${u.last_login_at ? formatDateTime(u.last_login_at) : 'Never signed in'}</td>
+    <td>
+      <div class="row-actions-dd${menuOpen?' open':''}" data-urow-dd="${u.id}">
+        <button type="button" class="icon-btn row-actions-btn" data-urow-dd-btn="${u.id}" title="More actions">⋮</button>
+        <div class="row-actions-panel" data-urow-panel="${u.id}">${menuOpen ? userRowActionsPanelHtml(u, usersState.rowMenu.mode, isSelf) : ''}</div>
+      </div>
+    </td>
+  </tr>`;
+}
+
+function userRowActionsPanelHtml(u, mode, isSelf){
+  if(mode === 'role'){
+    return ROLES.map(r=>{
+      const dbRole = localIdToDbRole(r.id);
+      const current = dbRole === u.role;
+      return `<button type="button" class="row-actions-item" data-uact="pick-role" data-role="${dbRole}" data-id="${u.id}"${current?' disabled':''}>${r.label}${current?' ✓':''}</button>`;
+    }).join('') + `<div class="row-actions-divider"></div><button type="button" class="row-actions-item" data-uact="back" data-id="${u.id}">Back</button>`;
+  }
+  return `
+    <button type="button" class="row-actions-item" data-uact="role" data-id="${u.id}"${isSelf?' disabled title="Ask another Admin to change your own role"':''}>Change role</button>
+    <button type="button" class="row-actions-item" data-uact="reset-password" data-id="${u.id}">Reset password</button>
+    <div class="row-actions-divider"></div>
+    <button type="button" class="row-actions-item danger" data-uact="delete" data-id="${u.id}"${isSelf?' disabled title="You can’t delete your own account"':''}>Delete user</button>
+  `;
+}
+
+function bindUsersTableEvents(container){
+  const searchInput = document.getElementById('usersSearchInput');
+  if(searchInput){
+    searchInput.addEventListener('input', ()=>{
+      usersState.search = searchInput.value;
+      renderUsersTableSection();
+      const el = document.getElementById('usersSearchInput');
+      if(el){ el.focus(); const v = el.value; el.setSelectionRange(v.length, v.length); }
+    });
+  }
+
+  const refreshBtn = document.getElementById('usersRefreshBtn');
+  if(refreshBtn) refreshBtn.addEventListener('click', ()=>{ ensureUsersLoaded(true); });
+
+  const retryBtn = document.getElementById('usersRetry');
+  if(retryBtn) retryBtn.addEventListener('click', ()=>{ ensureUsersLoaded(true); });
+
+  const addBtn = document.getElementById('usersAddBtn');
+  if(addBtn) addBtn.addEventListener('click', ()=>{
+    usersAddRoleChoice = 'viewer';
+    usersState.addFormOpen = true;
+    renderUsersTableSection();
+    const el = document.getElementById('usersAddUsernameInput');
+    if(el) el.focus();
+  });
+
+  const addCancel = document.getElementById('usersAddCancel');
+  if(addCancel) addCancel.addEventListener('click', ()=>{ usersState.addFormOpen = false; renderUsersTableSection(); });
+
+  const addSave = document.getElementById('usersAddSave');
+  if(addSave) addSave.addEventListener('click', async ()=>{
+    const username = document.getElementById('usersAddUsernameInput').value.trim();
+    const email = document.getElementById('usersAddEmailInput').value.trim();
+    const role = document.getElementById('usersAddRoleInput').value;
+    usersAddRoleChoice = role;
+    addSave.disabled = true;
+    const origLabel = addSave.textContent;
+    addSave.textContent = 'Sending…';
+    try{
+      const res = await fetch('/api/users/invite', {
+        method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include',
+        body: JSON.stringify({ username, email, role })
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok){ toast(data.error || 'Could not invite that user.'); return; }
+      usersState.addFormOpen = false;
+      usersState.list.push(data.user);
+      logAudit('created', 'user', username, `Invited ${username} (${email}) as ${roleMeta(dbRoleToLocalId(role)).label}`);
+      renderUsersTableSection();
+      openCredentialModal({
+        title: 'Account created',
+        subtitle: `Share these sign-in details with ${username} — the password won't be shown again.`,
+        username, password: data.temporaryPassword,
+      });
+    }catch(e){
+      toast('Could not reach the server. Check your connection and try again.');
+    }finally{
+      addSave.disabled = false;
+      addSave.textContent = origLabel;
+    }
+  });
+
+  container.querySelectorAll('[data-urow-dd-btn]').forEach(btn=>{
+    btn.addEventListener('click', (ev)=>{
+      ev.stopPropagation();
+      const id = parseInt(btn.getAttribute('data-urow-dd-btn'), 10);
+      usersState.rowMenu = (usersState.rowMenu.id === id) ? { id:null, mode:'menu' } : { id, mode:'menu' };
+      renderUsersTableSection();
+    });
+  });
+
+  container.querySelectorAll('[data-uact]').forEach(el=>{
+    el.addEventListener('click', (ev)=>{
+      ev.stopPropagation();
+      const act = el.getAttribute('data-uact');
+      const id = parseInt(el.getAttribute('data-id'), 10);
+      if(act === 'back'){ usersState.rowMenu = { id, mode:'menu' }; renderUsersTableSection(); return; }
+      handleUserRowAction(act, id, el);
+    });
+  });
+}
+
+async function handleUserRowAction(act, id, el){
+  const user = usersState.list.find(u=>u.id===id);
+
+  if(act === 'role'){
+    usersState.rowMenu = { id, mode:'role' };
+    renderUsersTableSection();
+    return;
+  }
+
+  if(act === 'pick-role'){
+    const role = el.getAttribute('data-role');
+    try{
+      const res = await fetch(`/api/users/${id}/role`, {
+        method:'PATCH', headers:{'Content-Type':'application/json'}, credentials:'include',
+        body: JSON.stringify({ role })
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok){ toast(data.error || 'Could not change that role.'); return; }
+      const idx = usersState.list.findIndex(u=>u.id===id);
+      if(idx !== -1) usersState.list[idx] = data.user;
+      usersState.rowMenu = { id:null, mode:'menu' };
+      logAudit('updated', 'user', user ? user.username : String(id), `Changed role to ${roleMeta(dbRoleToLocalId(role)).label}`);
+      toast(`Role updated to ${roleMeta(dbRoleToLocalId(role)).label}`);
+      renderUsersTableSection();
+    }catch(e){ toast('Could not reach the server. Check your connection and try again.'); }
+    return;
+  }
+
+  if(act === 'reset-password'){
+    if(!user) return;
+    const ok = await openConfirmModal({
+      title: `Reset ${user.username}'s password?`,
+      message: "Their current password stops working immediately, and a new temporary one is generated for you to share with them.",
+      confirmLabel: 'Reset password',
+    });
+    if(!ok) return;
+    try{
+      const res = await fetch(`/api/users/${id}/reset-password`, { method:'POST', credentials:'include' });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok){ toast(data.error || 'Could not reset that password.'); return; }
+      usersState.rowMenu = { id:null, mode:'menu' };
+      logAudit('updated', 'user', user.username, 'Reset password');
+      renderUsersTableSection();
+      openCredentialModal({
+        title: 'Password reset',
+        subtitle: `Share this new password with ${user.username} — it won't be shown again.`,
+        username: user.username, password: data.temporaryPassword,
+      });
+    }catch(e){ toast('Could not reach the server. Check your connection and try again.'); }
+    return;
+  }
+
+  if(act === 'delete'){
+    if(!user) return;
+    const ok = await openConfirmModal({
+      title: `Delete ${user.username}'s account?`,
+      message: `They'll immediately lose access to ${AUTH_USER.organisation}'s workspace. This can't be undone.`,
+      confirmLabel: 'Delete user',
+    });
+    if(!ok) return;
+    try{
+      const res = await fetch(`/api/users/${id}`, { method:'DELETE', credentials:'include' });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok){ toast(data.error || 'Could not delete that user.'); return; }
+      usersState.list = usersState.list.filter(u=>u.id!==id);
+      usersState.rowMenu = { id:null, mode:'menu' };
+      logAudit('deleted', 'user', user.username, 'Removed from the organisation');
+      toast(`Deleted ${user.username}`);
+      renderUsersTableSection();
+    }catch(e){ toast('Could not reach the server. Check your connection and try again.'); }
+    return;
+  }
+}
+
+function openCredentialModal({ title, subtitle, username, password }){
+  document.getElementById('credentialModalTitle').textContent = title || 'Credentials';
+  document.getElementById('credentialModalSubtitle').textContent = subtitle || '';
+  document.getElementById('credentialModalUsername').textContent = username || '';
+  document.getElementById('credentialModalPassword').textContent = password || '';
+  document.getElementById('credentialModal').classList.add('show');
+}
+function closeCredentialModal(){
+  document.getElementById('credentialModal').classList.remove('show');
 }
 
 function roleHintText(roleId){
@@ -4828,6 +5209,14 @@ document.getElementById('confirmModalCancel').addEventListener('click', ()=> clo
 document.getElementById('confirmModalOk').addEventListener('click', ()=> closeConfirmModal(true));
 document.getElementById('confirmModal').addEventListener('click', (e)=>{
   if(e.target.id === 'confirmModal') closeConfirmModal(false);
+});
+
+document.getElementById('credentialModalDone').addEventListener('click', closeCredentialModal);
+document.getElementById('credentialModalCopy').addEventListener('click', (e)=>{
+  copyToClipboard(document.getElementById('credentialModalPassword').textContent, e.currentTarget);
+});
+document.getElementById('credentialModal').addEventListener('click', (e)=>{
+  if(e.target.id === 'credentialModal') closeCredentialModal();
 });
 
 function openPalette(){
