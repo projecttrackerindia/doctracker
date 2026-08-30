@@ -1969,6 +1969,18 @@ pre.json-raw{ max-height:360px; margin:0; }
         <label>Auth type</label>
         <input type="text" id="paType" placeholder="e.g. Bearer token, API key, JWT">
       </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Method</label>
+          <select id="paMethod">
+            <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+          </select>
+        </div>
+        <div class="field" style="flex:2">
+          <label>Endpoint / path</label>
+          <input type="text" id="paPath" placeholder="/auth/jwt/token">
+        </div>
+      </div>
       <div class="field">
         <label>Header name</label>
         <input type="text" id="paHeader" placeholder="Authorization">
@@ -1996,6 +2008,10 @@ pre.json-raw{ max-height:360px; margin:0; }
             <tbody id="authReqRows"></tbody>
           </table>
           <textarea id="authReqJson" class="mono hidden auth-json-editor" placeholder='[&#10;  { "name": "apiKey", "type": "String", "required": true, "example": "xxxxx", "description": "…" }&#10;]'></textarea>
+          <div class="json-preview-wrap">
+            <div class="json-preview-label"><span>Request JSON (default example)</span></div>
+            <pre class="json-preview" id="authReqJsonPreview"></pre>
+          </div>
         </div>
       </div>
 
@@ -2017,6 +2033,10 @@ pre.json-raw{ max-height:360px; margin:0; }
             <tbody id="authRespRows"></tbody>
           </table>
           <textarea id="authRespJson" class="mono hidden auth-json-editor" placeholder='[&#10;  { "name": "access_token", "type": "String", "example": "eyJhbGciOi...", "description": "…" }&#10;]'></textarea>
+          <div class="json-preview-wrap">
+            <div class="json-preview-label"><span>Response JSON (default example)</span></div>
+            <pre class="json-preview" id="authRespJsonPreview"></pre>
+          </div>
         </div>
       </div>
 
@@ -5521,6 +5541,7 @@ function renderProjectOverview(main, projectId){
           <div class="ic">🔑</div>
           <div>
             <div class="h">${escapeHtml(proj.auth.type)}${proj.auth.headerName ? ' · '+escapeHtml(proj.auth.headerName)+' header' : ''}</div>
+            ${proj.auth.path ? `<div class="d" style="margin-top:4px;"><span class="badge ${methodClass(proj.auth.method||'POST')}" style="margin-right:8px;">${escapeHtml(proj.auth.method||'POST')}</span><span class="mono" style="font-size:12px;">${escapeHtml(proj.auth.path)}</span></div>` : ''}
             <div class="d">${proj.auth.description ? escapeHtml(proj.auth.description) : 'No further notes.'}</div>
           </div>
         </div>
@@ -5871,7 +5892,7 @@ function renderRail(){
       <button class="copy-btn" id="railCopy">Copy</button>
     </div>
     ${!hasBaseUrl ? `<div class="rail-note">No base URL set for ${escapeHtml(envMeta(state.env).label)} yet. Add one in project settings to get a real request URL.</div>` : ''}
-    ${proj.auth && proj.auth.type ? `<div class="rail-note">Requires ${escapeHtml(proj.auth.type)}${proj.auth.headerName ? ' via the '+escapeHtml(proj.auth.headerName)+' header' : ''}.</div>` : ''}
+    ${proj.auth && proj.auth.type ? `<div class="rail-note">Requires ${escapeHtml(proj.auth.type)}${proj.auth.headerName ? ' via the '+escapeHtml(proj.auth.headerName)+' header' : ''}.${proj.auth.path ? ` Obtain via <span class="badge ${methodClass(proj.auth.method||'POST')}" style="margin:0 4px;">${escapeHtml(proj.auth.method||'POST')}</span><span class="mono" style="font-size:11px;">${escapeHtml(proj.auth.path)}</span>` : ''}</div>` : ''}
     <div class="rail-note">The host and secret header values shown here are masked${canRevealSensitive() ? ' — use the eye icon above to reveal them' : '; only the Admin role can reveal them'}.</div>
   `;
 
@@ -6508,6 +6529,7 @@ function renderAuthParamRows(kind){
       const row = rows.find(r=>r.id===inp.closest('tr').getAttribute('data-row-id'));
       if(!row) return;
       row[inp.getAttribute('data-f')] = inp.type === 'checkbox' ? inp.checked : inp.value;
+      updateAuthJsonPreview(kind);
     });
   });
   tbody.querySelectorAll('[data-del]').forEach(btn=>{
@@ -6518,6 +6540,17 @@ function renderAuthParamRows(kind){
       renderAuthParamRows(kind);
     });
   });
+  updateAuthJsonPreview(kind);
+}
+
+// Same "auto-generated, read-only JSON preview below the table" pattern already
+// used for endpoint response fields (updateResponseJsonPreview) — mirrored here
+// for the Auth request/response parameter tables.
+function updateAuthJsonPreview(kind){
+  const pre = document.getElementById(kind === 'req' ? 'authReqJsonPreview' : 'authRespJsonPreview');
+  if(!pre) return;
+  const rows = kind === 'req' ? authReqParams : authRespParams;
+  pre.textContent = JSON.stringify(buildJsonFromRows(rows), null, 2);
 }
 
 function syncAuthJsonFromRows(kind){
@@ -6603,6 +6636,8 @@ function openProjectModal(projectId, initialTab){
   document.getElementById('pgLicenseName').value = (proj.license && proj.license.name) || '';
   document.getElementById('pgLicenseUrl').value = (proj.license && proj.license.url) || '';
   document.getElementById('paType').value = (proj.auth && proj.auth.type) || '';
+  document.getElementById('paMethod').value = (proj.auth && proj.auth.method) || 'POST';
+  document.getElementById('paPath').value = (proj.auth && proj.auth.path) || '';
   document.getElementById('paHeader').value = (proj.auth && proj.auth.headerName) || '';
   document.getElementById('paDesc').value = (proj.auth && proj.auth.description) || '';
   document.getElementById('paIncludeDocs').checked = !!(proj.auth && proj.auth.includeInDocs);
@@ -6776,6 +6811,8 @@ function saveProjectSettings(){
   ));
   proj.auth = {
     type: document.getElementById('paType').value.trim(),
+    method: document.getElementById('paMethod').value,
+    path: document.getElementById('paPath').value.trim(),
     headerName: document.getElementById('paHeader').value.trim(),
     description: document.getElementById('paDesc').value.trim(),
     requestParams: cleanAuthParams(authReqParams),
@@ -7732,7 +7769,7 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
         <div class="pdf-cover-stat"><div class="n">${proj.auth && proj.auth.type ? escapeHtml(proj.auth.type) : 'None'}</div><div class="l">Authentication</div></div>
         <div class="pdf-cover-stat"><div class="n">${proj.lifecycle ? escapeHtml(proj.lifecycle) : '—'}</div><div class="l">Lifecycle</div></div>
       </div>
-      ${proj.auth && proj.auth.type ? `<div class="pdf-auth-card"><div class="ic">🔑</div><div><div class="h">${escapeHtml(proj.auth.type)}${proj.auth.headerName ? ' · '+escapeHtml(proj.auth.headerName)+' header' : ''}</div><div class="d">${proj.auth.description ? escapeHtml(proj.auth.description) : 'No further notes.'}</div></div></div>` : ''}
+      ${proj.auth && proj.auth.type ? `<div class="pdf-auth-card"><div class="ic">🔑</div><div><div class="h">${escapeHtml(proj.auth.type)}${proj.auth.headerName ? ' · '+escapeHtml(proj.auth.headerName)+' header' : ''}</div>${proj.auth.path ? `<div class="d" style="margin-top:4px;"><span class="badge ${methodClass(proj.auth.method||'POST')}" style="margin-right:8px;">${escapeHtml(proj.auth.method||'POST')}</span><span style="font-family:var(--mono);">${escapeHtml(proj.auth.path)}</span></div>` : ''}<div class="d">${proj.auth.description ? escapeHtml(proj.auth.description) : 'No further notes.'}</div></div></div>` : ''}
       ${proj.auth && proj.auth.includeInDocs && ((proj.auth.requestParams||[]).length || (proj.auth.responseParams||[]).length) ? `
       <div style="text-align:left; max-width:640px; margin:14px auto 0;">
         ${paramSection('Auth request parameters', proj.auth.requestParams||[])}
