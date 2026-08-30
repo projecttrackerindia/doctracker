@@ -6866,6 +6866,7 @@ function buildExportPdfEndpointSection(proj, ep, index){
   const allParams = [...pathParams.map(p=>({...p, in:'path'})), ...queryParams.map(p=>({...p, in:'query'}))];
 
   const hasReqBody = !!(ep.requestBody && ep.requestBody.example);
+  const responses = ep.responses || [];
 
   return `
   <section class="pdf-endpoint" id="ep-${escapeHtml(ep.id)}">
