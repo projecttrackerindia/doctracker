@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Audit Log — API Studio</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+:root{
+  --bg:#0a0e15; --bg-elevated:#0d1219; --surface:#121822; --surface-2:#171f2b; --surface-hover:#1c2531;
+  --border:#212a38; --border-strong:#2c3648; --text:#e9edf5; --text-dim:#909cb0; --text-faint:#576277;
+  --accent:#5c7cfa; --accent-soft:rgba(92,124,250,.14);
+  --get:#4fa3f7; --post:#35c491; --put:#e0a83e; --patch:#b389f0; --delete:#ef5c6e;
+  --sans:'Inter', system-ui, sans-serif; --mono:'JetBrains Mono', ui-monospace, monospace;
+}
+*{ box-sizing:border-box; }
+body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); -webkit-font-smoothing:antialiased; }
+a{ color:inherit; }
+.al-wrap{ max-width:1280px; margin:0 auto; padding:28px 28px 60px; }
+.al-header{ display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px; flex-wrap:wrap; }
+.al-title{ display:flex; align-items:center; gap:12px; }
+.al-title .mark{ width:38px; height:38px; border-radius:10px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; font-weight:800; font-family:var(--mono); font-size:15px; }
+.al-title h1{ margin:0; font-size:19px; font-weight:800; letter-spacing:-.2px; }
+.al-title .sub{ margin-top:2px; font-size:11.5px; color:var(--text-faint); }
+.al-back{
+  display:flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; color:var(--text-dim);
+  text-decoration:none; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:8px 14px;
+}
+.al-back:hover{ color:var(--text); border-color:var(--border-strong); background:var(--surface-hover); }
+.al-kpis{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-bottom:22px; }
+.al-kpi{ background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
+.al-kpi .n{ font-family:var(--mono); font-size:22px; font-weight:800; }
+.al-kpi .l{ font-size:10px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.5px; margin-top:3px; }
+.al-toolbar{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:16px; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:10px 12px; }
+.al-search{ flex:1; min-width:220px; display:flex; align-items:center; gap:8px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:8px; padding:8px 12px; }
+.al-search svg{ color:var(--text-faint); flex-shrink:0; }
+.al-search input{ flex:1; background:none; border:none; outline:none; color:var(--text); font-size:13px; font-family:var(--sans); }
+.al-toolbar select{ background:var(--bg-elevated); border:1px solid var(--border); color:var(--text); font-size:12.5px; padding:8px 10px; border-radius:8px; font-family:var(--sans); cursor:pointer; }
+.al-toolbar .al-count{ font-size:11.5px; color:var(--text-faint); white-space:nowrap; margin-left:auto; }
+.al-date-range{ display:flex; align-items:center; gap:6px; }
+.al-date-range .al-date-label{ font-size:10.5px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.4px; white-space:nowrap; }
+.al-date-range input[type="date"]{
+  background:var(--bg-elevated); border:1px solid var(--border); color:var(--text); font-size:12px;
+  padding:7px 9px; border-radius:8px; font-family:var(--sans); color-scheme:dark;
+}
+.al-date-range input[type="date"]:focus{ outline:none; border-color:var(--accent); }
+.al-date-sep{ color:var(--text-faint); font-size:11px; }
+.al-date-clear{
+  background:var(--bg-elevated); border:1px solid var(--border); color:var(--text-faint); border-radius:8px;
+  padding:7px 10px; cursor:pointer; font-size:11px; line-height:1;
+}
+.al-date-clear:hover{ color:var(--text); border-color:var(--border-strong); }
+.al-pagination{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:14px; flex-wrap:wrap; }
+.al-page-size{ display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--text-faint); }
+.al-page-size select{ background:var(--surface); border:1px solid var(--border); color:var(--text); font-size:12px; padding:6px 8px; border-radius:7px; font-family:var(--sans); cursor:pointer; }
+.al-page-nav{ display:flex; align-items:center; gap:10px; }
+.al-page-nav button{ background:var(--surface); border:1px solid var(--border); color:var(--text); font-size:12px; font-weight:600; padding:7px 13px; border-radius:8px; cursor:pointer; font-family:var(--sans); }
+.al-page-nav button:hover:not(:disabled){ background:var(--surface-hover); }
+.al-page-nav button:disabled{ opacity:.4; cursor:not-allowed; }
+.al-page-indicator{ font-size:11.5px; color:var(--text-faint); font-family:var(--mono); min-width:96px; text-align:center; }
+.al-table-wrap{ background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+table{ width:100%; border-collapse:collapse; font-size:12.5px; }
+thead th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint); font-weight:700; padding:12px 14px; border-bottom:1px solid var(--border); background:var(--surface-2); position:sticky; top:0; }
+tbody td{ padding:11px 14px; border-bottom:1px solid var(--border); vertical-align:top; }
+tbody tr:last-child td{ border-bottom:none; }
+tbody tr:hover{ background:var(--surface-hover); }
+tbody tr.al-hidden{ display:none; }
+.al-when{ white-space:nowrap; }
+.al-when-main{ display:block; font-weight:600; }
+.al-when-sub{ display:block; font-size:10.5px; color:var(--text-faint); font-family:var(--mono); }
+.al-actor{ display:flex; align-items:center; gap:8px; white-space:nowrap; font-weight:600; }
+.al-avatar{ width:22px; height:22px; border-radius:50%; background:var(--accent-soft); color:var(--accent); font-size:10.5px; font-weight:800; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.al-badge{ font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; padding:4px 9px; border-radius:999px; white-space:nowrap; }
+.al-entity-type{ font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--text-dim); background:var(--surface-2); padding:3px 7px; border-radius:5px; }
+.al-entity-name{ font-family:var(--mono); font-size:12px; color:var(--text); max-width:220px; }
+.al-project{ color:var(--text-dim); max-width:150px; }
+.al-details{ color:var(--text-dim); max-width:320px; }
+.al-empty{ padding:60px 20px; text-align:center; color:var(--text-faint); font-size:13px; }
+.al-loading{ padding:60px 20px; text-align:center; color:var(--text-faint); font-size:13px; }
+::selection{ background:var(--accent-soft); }
+@media (max-width:900px){
+  .al-details, .al-project{ display:none; }
+}
+</style>
+</head>
+<body>
+<div class="al-wrap">
+  <div class="al-header">
+    <div class="al-title">
+      <div class="mark">{ }</div>
+      <div>
+        <h1>Audit Log</h1>
+        <div class="sub" id="alSub">API Studio · every create, edit, and delete — who did it, and when</div>
+      </div>
+    </div>
+    <a class="al-back" id="alBackLink" href="/dashboard.html">← Back to dashboard</a>
+  </div>
+
+  <div class="al-kpis" id="alKpis">
+    <div class="al-kpi"><div class="n" id="kpiTotal">—</div><div class="l">Total changes</div></div>
+    <div class="al-kpi"><div class="n" id="kpiActors">—</div><div class="l">Contributors</div></div>
+    <div class="al-kpi"><div class="n" id="kpiCreated" style="color:var(--post);">—</div><div class="l">Created</div></div>
+    <div class="al-kpi"><div class="n" id="kpiUpdated" style="color:var(--put);">—</div><div class="l">Updated</div></div>
+    <div class="al-kpi"><div class="n" id="kpiDeleted" style="color:var(--delete);">—</div><div class="l">Deleted</div></div>
+  </div>
+
+  <div class="al-toolbar">
+    <div class="al-search">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.2" y2="16.2"></line></svg>
+      <input type="text" id="alSearch" placeholder="Search by actor, entity, project, or details…">
+    </div>
+    <select id="alActionFilter">
+      <option value="">All actions</option>
+      <option value="created">Created</option>
+      <option value="updated">Updated</option>
+      <option value="deleted">Deleted</option>
+      <option value="imported">Imported</option>
+    </select>
+    <select id="alEntityFilter"><option value="">All entity types</option></select>
+    <select id="alActorFilter"><option value="">All contributors</option></select>
+    <div class="al-date-range">
+      <span class="al-date-label">From</span>
+      <input type="date" id="alFromDate">
+      <span class="al-date-sep">–</span>
+      <span class="al-date-label">To</span>
+      <input type="date" id="alToDate">
+      <button type="button" class="al-date-clear" id="alDateClear" title="Clear date range">✕</button>
+    </div>
+    <span class="al-count" id="alCount"></span>
+  </div>
+
+  <div class="al-table-wrap">
+    <table>
+      <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Type</th><th>Entity</th><th>Project</th><th>Details</th></tr></thead>
+      <tbody id="alBody"><tr><td colspan="7" class="al-loading">Loading audit log…</td></tr></tbody>
+    </table>
+    <div class="al-empty hidden" id="alEmpty">No changes recorded yet — this log fills in as endpoints, projects, environments, and documents are created, edited, or deleted.</div>
+  </div>
+
+  <div class="al-pagination hidden" id="alPagination">
+    <div class="al-page-size">
+      <label for="alPageSize">Rows per page</label>
+      <select id="alPageSize">
+        <option value="25">25</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+        <option value="200">200</option>
+      </select>
+    </div>
+    <div class="al-page-nav">
+      <button type="button" id="alPrevPage">‹ Prev</button>
+      <span class="al-page-indicator" id="alPageIndicator">Page 1 of 1</span>
+      <button type="button" id="alNextPage">Next ›</button>
+    </div>
+  </div>
+</div>
+<script nonce="__CSP_NONCE__">
+(function(){
+  function escapeHtml(s){
+    return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function auditActionMeta(action){
+    if(action === 'created')  return { label:'Created',  color:'#35c491', bg:'rgba(53,196,145,.14)'  };
+    if(action === 'updated')  return { label:'Updated',  color:'#e0a83e', bg:'rgba(224,168,62,.14)'  };
+    if(action === 'deleted')  return { label:'Deleted',  color:'#ef5c6e', bg:'rgba(239,92,110,.14)'  };
+    if(action === 'imported') return { label:'Imported', color:'#4fa3f7', bg:'rgba(79,163,247,.14)'  };
+    if(action === 'PII_REVEAL') return { label:'PII Reveal', color:'#ef5c6e', bg:'rgba(239,92,110,.14)' };
+    if(action === 'ENCRYPTION_KEY_ROTATED') return { label:'Key Rotated', color:'#ef5c6e', bg:'rgba(239,92,110,.14)' };
+    if(action === 'ENCRYPTION_REENCRYPT_RUN') return { label:'Re-encrypted', color:'#b389f0', bg:'rgba(179,137,240,.14)' };
+    if(typeof action==='string' && action.startsWith('PII_MASK_RULE_')) return { label: action.replace('PII_MASK_RULE_','Rule ').replace('_',' ').toLowerCase().replace(/^\w/,c=>c.toUpperCase()), color:'#b389f0', bg:'rgba(179,137,240,.14)' };
+    if(action === 'ADMIN_SETTING_CHANGED') return { label:'Admin Setting', color:'#b389f0', bg:'rgba(179,137,240,.14)' };
+    if(action === 'LEGACY_AUDIT_IMPORTED') return { label:'Legacy Import', color:'#8a97b3', bg:'rgba(138,151,179,.14)' };
+    if(typeof action==='string' && action.startsWith('LOGIN')) return { label:'Login', color:'#35c491', bg:'rgba(53,196,145,.14)' };
+    if(typeof action==='string' && action.startsWith('LOGOUT')) return { label:'Logout', color:'#8a97b3', bg:'rgba(138,151,179,.14)' };
+    return { label: action, color:'#8a97b3', bg:'rgba(138,151,179,.14)' };
+  }
+
+  const backLink = document.getElementById('alBackLink');
+  // Point "Back to dashboard" at this same tenant's tokenized URL, e.g.
+  // /<orgToken>/dashboard.html, derived from the current path rather than
+  // hardcoded, so it works regardless of which org is signed in.
+  const pathMatch = window.location.pathname.match(/^\/([^/]+)\/auditlog\/?$/);
+  if(pathMatch) backLink.href = '/' + pathMatch[1] + '/dashboard.html';
+
+  const els = {
+    search: document.getElementById('alSearch'),
+    action: document.getElementById('alActionFilter'),
+    entity: document.getElementById('alEntityFilter'),
+    actor: document.getElementById('alActorFilter'),
+    from: document.getElementById('alFromDate'),
+    to: document.getElementById('alToDate'),
+    dateClear: document.getElementById('alDateClear'),
+    pageSize: document.getElementById('alPageSize'),
+    prev: document.getElementById('alPrevPage'),
+    next: document.getElementById('alNextPage'),
+    pageIndicator: document.getElementById('alPageIndicator'),
+    body: document.getElementById('alBody'),
+    count: document.getElementById('alCount'),
+    empty: document.getElementById('alEmpty'),
+    pagination: document.getElementById('alPagination'),
+  };
+  let rows = [];
+  let currentPage = 1;
+
+  function buildRowHtml(e){
+    const meta = auditActionMeta(e.action);
+    const dt = new Date(e.ts);
+    const when = isNaN(dt.getTime()) ? '' : dt.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) + ', ' + dt.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit',second:'2-digit'});
+    const tsMs = isNaN(dt.getTime()) ? '' : dt.getTime();
+    const tr = document.createElement('tr');
+    tr.dataset.search = (e.actor+' '+e.entityType+' '+e.entityName+' '+e.projectName+' '+e.details+' '+meta.label+' '+(e.role||'')+' '+(e.severity||'')).toLowerCase();
+    tr.dataset.action = e.action || '';
+    tr.dataset.entity = e.entityType || '';
+    tr.dataset.actor = e.actor || '';
+    tr.dataset.ts = tsMs;
+    tr.innerHTML = `
+      <td class="al-when"><span class="al-when-main">${when.split(',')[0]}</span><span class="al-when-sub">${when.split(',').slice(1).join(',').trim()}</span></td>
+      <td><span class="al-actor"><span class="al-avatar">${escapeHtml((e.actor||'?').slice(0,1).toUpperCase())}</span>${escapeHtml(e.actor)}${e.role ? `<span style="margin-left:6px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-faint);background:var(--surface-2);padding:2px 6px;border-radius:5px;">${escapeHtml(e.role)}</span>` : ''}</span></td>
+      <td><span class="al-badge" style="color:${meta.color};background:${meta.bg};">${e.severity==='critical'?'⛔ ':e.severity==='warning'?'⚠ ':''}${meta.label}</span></td>
+      <td><span class="al-entity-type">${escapeHtml(e.entityType)}</span></td>
+      <td class="al-entity-name">${escapeHtml(e.entityName || '—')}</td>
+      <td class="al-project">${escapeHtml(e.projectName || '—')}</td>
+      <td class="al-details">${escapeHtml(e.details || '')}</td>
+    `;
+    return tr;
+  }
+
+  function rowMatches(r){
+    const q = els.search.value.trim().toLowerCase();
+    const action = els.action.value;
+    const entity = els.entity.value;
+    const actor = els.actor.value;
+    const tsAttr = r.getAttribute('data-ts');
+    const ts = tsAttr ? Number(tsAttr) : NaN;
+    const from = els.from.value ? new Date(els.from.value + 'T00:00:00').getTime() : null;
+    const to = els.to.value ? new Date(els.to.value + 'T23:59:59.999').getTime() : null;
+    const matchesSearch = !q || (r.getAttribute('data-search')||'').includes(q);
+    const matchesAction = !action || r.getAttribute('data-action') === action;
+    const matchesEntity = !entity || r.getAttribute('data-entity') === entity;
+    const matchesActor = !actor || r.getAttribute('data-actor') === actor;
+    const matchesFrom = from === null || (!isNaN(ts) && ts >= from);
+    const matchesTo = to === null || (!isNaN(ts) && ts <= to);
+    return matchesSearch && matchesAction && matchesEntity && matchesActor && matchesFrom && matchesTo;
+  }
+
+  function applyFilters(resetPage){
+    if(resetPage) currentPage = 1;
+    const allRows = Array.from(els.body.querySelectorAll('tr[data-ts]'));
+    const matched = allRows.filter(rowMatches);
+    const pageSize = parseInt(els.pageSize.value || '50', 10) || 50;
+    const totalPages = Math.max(1, Math.ceil(matched.length / pageSize));
+    if(currentPage > totalPages) currentPage = totalPages;
+    if(currentPage < 1) currentPage = 1;
+    const start = (currentPage - 1) * pageSize;
+    const end = start + pageSize;
+    const matchedSet = new Set(matched);
+    allRows.forEach(r=>{
+      const idx = matched.indexOf(r);
+      const inPage = matchedSet.has(r) && idx >= start && idx < end;
+      r.classList.toggle('al-hidden', !inPage);
+    });
+    els.count.textContent = matched.length + ' of ' + allRows.length + ' change' + (allRows.length===1?'':'s');
+    els.pageIndicator.textContent = 'Page ' + currentPage + ' of ' + totalPages;
+    els.prev.disabled = currentPage <= 1;
+    els.next.disabled = currentPage >= totalPages;
+  }
+
+  [els.search].forEach(el=>el.addEventListener('input', ()=>applyFilters(true)));
+  [els.action, els.entity, els.actor, els.from, els.to].forEach(el=>el.addEventListener('change', ()=>applyFilters(true)));
+  els.pageSize.addEventListener('change', ()=>applyFilters(true));
+  els.dateClear.addEventListener('click', ()=>{ els.from.value=''; els.to.value=''; applyFilters(true); });
+  els.prev.addEventListener('click', ()=>{ if(currentPage>1){ currentPage--; applyFilters(false); } });
+  els.next.addEventListener('click', ()=>{ currentPage++; applyFilters(false); });
+
+  async function load(){
+    let entries = [];
+    try{
+      const res = await fetch('/api/audit/events', { credentials: 'same-origin' });
+      if(res.status === 401){ window.location.href = '/login.html'; return; }
+      const data = await res.json();
+      entries = Array.isArray(data.entries) ? data.entries : [];
+    }catch(err){
+      els.body.innerHTML = '<tr><td colspan="7" class="al-loading">Could not load the audit log. Refresh to try again.</td></tr>';
+      return;
+    }
+    rows = entries;
+    const actors = Array.from(new Set(entries.map(e=>e.actor))).filter(Boolean).sort();
+    const entityTypes = Array.from(new Set(entries.map(e=>e.entityType))).filter(Boolean).sort();
+    entityTypes.forEach(t=>{ const o=document.createElement('option'); o.value=t; o.textContent=t; els.entity.appendChild(o); });
+    actors.forEach(a=>{ const o=document.createElement('option'); o.value=a; o.textContent=a; els.actor.appendChild(o); });
+
+    document.getElementById('kpiTotal').textContent = entries.length;
+    document.getElementById('kpiActors').textContent = actors.length;
+    document.getElementById('kpiCreated').textContent = entries.filter(e=>e.action==='created').length;
+    document.getElementById('kpiUpdated').textContent = entries.filter(e=>e.action==='updated').length;
+    document.getElementById('kpiDeleted').textContent = entries.filter(e=>e.action==='deleted').length;
+    const lastWhen = entries[0] ? new Date(entries[0].ts).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—';
+    document.getElementById('alSub').textContent = 'API Studio · every create, edit, and delete — who did it, and when · last activity ' + lastWhen;
+
+    if(!entries.length){
+      els.body.innerHTML = '';
+      els.empty.classList.remove('hidden');
+      return;
+    }
+    els.pagination.classList.remove('hidden');
+    const frag = document.createDocumentFragment();
+    entries.forEach(e => frag.appendChild(buildRowHtml(e)));
+    els.body.innerHTML = '';
+    els.body.appendChild(frag);
+    applyFilters(true);
+  }
+  load();
+})();
+</script>
+</body>
+</html>

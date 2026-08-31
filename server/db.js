@@ -167,6 +167,42 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_logs_org_created ON audit_logs (organisation, created_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_logs_org_action ON audit_logs (organisation, action);`);
 
+  // ---- Envelope-encryption key registry ----
+  // Each row is one Data Encryption Key (DEK), itself encrypted ("wrapped")
+  // with the MASTER_KEY env var — the DEK plaintext never touches disk. Admins
+  // can rotate (create a new active DEK) instantly, from the app, with no
+  // redeploy; old versions are kept forever (deactivated) so previously
+  // encrypted rows stay decryptable. See server/crypto.js.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS encryption_keys (
+      version INTEGER PRIMARY KEY,
+      wrapped_dek TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      reason TEXT
+    );
+  `);
+  // Enforces "at most one active key at a time" at the DB level.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_encryption_keys_one_active ON encryption_keys (active) WHERE active;
+  `);
+
+  // ---- Encrypted-at-rest columns ----
+  // `data`/`environments`/`request_history` above stay in place (JSONB) for
+  // backward compatibility with rows written before encryption existed, but
+  // are no longer where real content lives going forward — new/updated rows
+  // write ciphertext into these TEXT sibling columns instead (see
+  // server/crypto.js + server/routes/workspace.js). `*_key_version` records
+  // which DEK protects each row so encryption_keys never has to be scanned to
+  // find out, and so a row keeps decrypting correctly across key rotations.
+  await pool.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS data_enc TEXT;`);
+  await pool.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS data_key_version INTEGER;`);
+  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS environments_enc TEXT;`);
+  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS environments_key_version INTEGER;`);
+  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS request_history_enc TEXT;`);
+  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS request_history_key_version INTEGER;`);
+
   console.log('Database schema ready.');
 }
 

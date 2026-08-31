@@ -244,7 +244,7 @@
 
       statusPill.dataset.state = 'ok';
       statusPill.textContent = '201 Created';
-      window.location.href = '/dashboard.html';
+      window.location.href = data.orgToken ? `/${data.orgToken}/dashboard.html` : '/dashboard.html';
     } catch (err) {
       statusPill.dataset.state = 'fail';
       statusPill.textContent = 'network';

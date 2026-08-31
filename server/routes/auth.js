@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { pool } = require('../db');
+const dataCrypto = require('../crypto');
 const {
   validateEmail,
   validateUsername,
@@ -94,7 +95,7 @@ router.post('/register', authLimiter, async (req, res) => {
     const user = result.rows[0];
     const token = signSession(user);
     res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
-    res.status(201).json({ user });
+    res.status(201).json({ user, orgToken: dataCrypto.encryptOrgToken(user.organisation) });
   } catch (err) {
     console.error('Register error:', err);
     res.status(500).json({ error: 'Something went wrong creating your account. Please try again.' });
@@ -130,7 +131,7 @@ router.post('/login', authLimiter, async (req, res) => {
     };
     const token = signSession(user);
     res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
-    res.json({ user: safeUser });
+    res.json({ user: safeUser, orgToken: dataCrypto.encryptOrgToken(user.organisation) });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Something went wrong signing you in. Please try again.' });

@@ -170,13 +170,32 @@ svg{ display:block; }
   grid-template-columns:var(--sb-w, 272px) 1fr;
   grid-template-rows:3px 56px 1fr;
   height:100vh;
-  transition:grid-template-columns .22s cubic-bezier(.4,0,.2,1);
+  transition:grid-template-columns .2s cubic-bezier(.16,1,.3,1);
 }
-/* Collapsed state keeps a slim 14px strip (not 0) so the expand handle stays
-   visibly reachable — a fully-vanished sidebar leaves no obvious way back. */
-.app.sb-collapsed{ --sb-w:14px; }
-.app.sb-collapsed .sidebar{ border-right-color:transparent; overflow:visible; }
-.app.sb-collapsed .sidebar>*:not(.sidebar-edge-toggle){ opacity:0; pointer-events:none; transition:opacity .12s ease; }
+/* ---------- Collapsed sidebar: a compact icon rail, not a bare sliver ----------
+   Inspired by VSCode's activity bar / Linear's collapsed nav: the essentials
+   (search, home, "new endpoint") stay reachable as centered icon buttons with
+   native tooltips, the full project/endpoint tree tucks away, and clicking any
+   of those icons (or the edge handle) re-expands the sidebar. This keeps a
+   real "way back" visible at all times, unlike hiding everything behind opacity. */
+.app.sb-collapsed{ --sb-w:64px; }
+.app.sb-collapsed .sidebar{ border-right-color:var(--border); align-items:center; }
+.app.sb-collapsed #projectList{ display:none; }
+.app.sb-collapsed .sidebar-search{ width:100%; padding:12px 0 8px; display:flex; justify-content:center; background:none; border-bottom:none; }
+.app.sb-collapsed .sidebar-search-wrap{
+  width:38px; height:38px; border-radius:10px; justify-content:center; cursor:pointer;
+  background:var(--surface-2); border:1px solid var(--border); transition:border-color .12s ease, background-color .12s ease;
+}
+.app.sb-collapsed .sidebar-search-wrap:hover{ border-color:var(--border-strong); background:var(--surface-hover); }
+.app.sb-collapsed .sidebar-search input{ display:none; }
+.app.sb-collapsed .sidebar-search-ic{ position:static; font-size:14px; }
+.app.sb-collapsed .sidebar-pinned{ width:100%; align-items:center; border-bottom:none; padding:0 0 8px; }
+.app.sb-collapsed .pinned-row{
+  width:38px; height:38px; padding:0; justify-content:center; border-radius:10px; margin:0 auto;
+}
+.app.sb-collapsed .pinned-label{ display:none; }
+.app.sb-collapsed .pinned-ic{ width:20px; height:20px; }
+.app.sb-collapsed .pinned-row.active .pinned-ic{ width:100%; height:100%; border-radius:8px; }
 .env-rail{
   grid-column:1/3; grid-row:1; height:3px; width:100%;
   background:linear-gradient(90deg, var(--env-accent, var(--accent)), transparent 140%);
@@ -331,26 +350,24 @@ kbd{
 .icon-btn.sidebar-toggle[aria-expanded="false"]{ color:var(--accent); }
 
 /* ---------- Sidebar edge collapse/expand handle ----------
-   A small control integrated into the sidebar's own right border (not a
-   generic hamburger in the topbar) — visible on hover/focus when expanded,
-   always visible (poking out of the 14px collapsed strip) when collapsed,
-   so there's always an obvious way back regardless of state. */
+   A small floating control anchored to the sidebar's own right edge (not a
+   generic hamburger in the topbar) — a subtle chevron-in-a-circle, visible on
+   hover/focus when expanded, always visible when collapsed, so there's always
+   an obvious, discoverable way back regardless of state. */
 .sidebar-edge-toggle{
-  position:absolute; top:50%; right:-11px; transform:translateY(-50%);
-  width:22px; height:44px; z-index:32;
+  position:absolute; top:22px; right:-13px; z-index:32;
+  width:26px; height:26px; border-radius:50%;
   display:flex; align-items:center; justify-content:center;
-  background:var(--bg-elevated); color:var(--text-faint);
-  border:1px solid var(--border); border-radius:0 10px 10px 0; border-left:none;
-  cursor:pointer; opacity:0;
-  transition:opacity .15s ease, color .15s ease, background-color .15s ease, box-shadow .15s ease;
+  background:var(--surface); color:var(--text-faint);
+  border:1px solid var(--border-strong); box-shadow:0 1px 4px rgba(0,0,0,.28);
+  cursor:pointer; opacity:0; transform:scale(.85);
+  transition:opacity .15s ease, transform .15s ease, color .15s ease, background-color .15s ease, border-color .15s ease;
 }
 .sidebar:hover .sidebar-edge-toggle,
-.sidebar-edge-toggle:focus-visible{ opacity:1; }
-.sidebar-edge-toggle:hover{ color:var(--accent); background:var(--surface-hover); box-shadow:2px 0 10px -4px rgba(0,0,0,.35); }
-.sidebar-edge-toggle svg{ width:12px; height:12px; transition:transform .22s ease; pointer-events:none; }
-.app.sb-collapsed .sidebar-edge-toggle{
-  opacity:1; right:auto; left:0; border-radius:0 10px 10px 0;
-}
+.sidebar-edge-toggle:focus-visible{ opacity:1; transform:scale(1); }
+.sidebar-edge-toggle:hover{ color:var(--accent-ink); background:var(--accent); border-color:var(--accent); }
+.sidebar-edge-toggle svg{ width:12px; height:12px; transition:transform .22s cubic-bezier(.16,1,.3,1); pointer-events:none; }
+.app.sb-collapsed .sidebar-edge-toggle{ opacity:1; transform:scale(1); }
 @media (max-width:820px){ .sidebar-edge-toggle{ display:none; } } /* mobile uses the drawer + topbar button instead */
 
 .sidebar-search{ padding:10px 12px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--bg-elevated); z-index:2; }
@@ -1099,6 +1116,12 @@ pre.code-block{
 @media (max-width:820px){
   .app{ grid-template-columns:1fr; }
   .app.sb-collapsed .sidebar{ opacity:1; pointer-events:auto; } /* collapse only applies on desktop */
+  .app.sb-collapsed #projectList{ display:block; }
+  .app.sb-collapsed .sidebar-search{ display:block; padding:10px 12px; }
+  .app.sb-collapsed .sidebar-search input{ display:block; }
+  .app.sb-collapsed .sidebar-search-wrap{ width:auto; height:auto; border-radius:8px; justify-content:flex-start; background:none; border:none; }
+  .app.sb-collapsed .pinned-row{ width:auto; height:auto; padding:7px 10px; justify-content:flex-start; margin:0; }
+  .app.sb-collapsed .pinned-label{ display:inline; }
   .sidebar{
     position:fixed; left:0; top:59px; bottom:0; width:270px; z-index:30;
     transform:translateX(-100%); transition:transform .22s ease; box-shadow:var(--shadow-modal);
@@ -1837,7 +1860,7 @@ pre.json-raw{ max-height:360px; margin:0; }
       </div>
     </div>
     <div class="sidebar-pinned" id="sidebarPinned">
-      <div class="pinned-row" data-nav="home"><span class="pinned-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect></svg></span>API Control Center</div>
+      <div class="pinned-row" data-nav="home" title="API Control Center"><span class="pinned-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect></svg></span><span class="pinned-label">API Control Center</span></div>
     </div>
     <div id="projectList"></div>
   </div>
@@ -2454,6 +2477,10 @@ pre.json-raw{ max-height:360px; margin:0; }
    Injected server-side from the signed session — see server/server.js.
    Real identity (username/organisation/role) comes from here, not localStorage. */
 const AUTH_USER = __AUTH_USER_JSON__;
+// Encrypted, org-scoped URL token for this session (see server/crypto.js +
+// server.js) — used to link to other tenant-scoped pages (the audit log)
+// without ever putting the organisation name itself in a URL.
+const ORG_TOKEN = '__ORG_TOKEN__';
 
 /* ==================== SECTION:CONSTANTS ==================== */
 const NEW_KEY = 'apiStudio_workspace_v1';
@@ -3413,6 +3440,14 @@ function toggleSidebar(){
   state.sidebarCollapsed = !state.sidebarCollapsed;
   localStorage.setItem(SIDEBAR_KEY, state.sidebarCollapsed ? '1' : '0');
   applySidebarCollapsed();
+}
+
+function expandSidebarThen(focusSearch){
+  if(!state.sidebarCollapsed) { if(focusSearch) document.getElementById('searchBox').focus(); return; }
+  state.sidebarCollapsed = false;
+  localStorage.setItem(SIDEBAR_KEY, '0');
+  applySidebarCollapsed();
+  if(focusSearch) setTimeout(()=>document.getElementById('searchBox').focus(), 180);
 }
 
 // Local "identity" for attribution only — there's no login system, just a name
@@ -4998,6 +5033,7 @@ function renderSecurityCenter(main){
   const tabs = [
     { id:'summary', label:'Summary', icon:SEC_TAB_ICON.summary },
     { id:'pii', label:'PII & Data Masking', icon:SEC_TAB_ICON.pii, count:activeRules },
+    { id:'encryption', label:'Encryption Keys', icon:SEC_TAB_ICON.encryption },
     { id:'storage', label:'Data Storage', icon:SEC_TAB_ICON.storage, count:(riskyCount||null) },
   ];
 
@@ -5048,6 +5084,7 @@ function renderSecurityCenter(main){
   const body = document.getElementById('secTabBody');
   if(tab === 'summary') renderSecuritySummaryTab(body);
   else if(tab === 'pii') renderPiiRulesTab(body);
+  else if(tab === 'encryption') renderEncryptionKeysTab(body);
   else renderStorageScanTab(body);
 }
 function positionSecTabIndicator(tabsEl, noAnim){
@@ -5064,6 +5101,7 @@ const SEC_TAB_ICON = {
   summary: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6l8-4z"></path></svg>',
   pii: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a19.9 19.9 0 0 1 4.22-5.06M9.9 4.24A10.4 10.4 0 0 1 12 5c7 0 11 7 11 7a19.86 19.86 0 0 1-2.34 3.36"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>',
   storage: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg>',
+  encryption: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>',
 };
 
 function renderSecuritySummaryTab(body){
@@ -5660,6 +5698,113 @@ function renderProfilePage(main){
     });
   });
 
+}
+
+/* ---------- Encryption Keys tab (Admin only): view + rotate the data-encryption-key ----------
+   This is the "if the key is ever compromised, change it immediately" control.
+   Rotating creates a brand-new Data Encryption Key (DEK), wrapped by the
+   server's MASTER_KEY, and makes it active for all *new* writes right away —
+   no redeploy needed. Existing encrypted rows stay readable (each remembers
+   which key version protected it) and get upgraded to the new key the next
+   time they're saved, or immediately if "Re-encrypt existing data now" is
+   checked. See server/crypto.js + server/routes/security.js. */
+async function securityApi(method, path, body){
+  const res = await fetch('/api/security'+path, {
+    method, credentials:'same-origin',
+    headers: body ? { 'Content-Type':'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || ('Request failed ('+res.status+')'));
+  return data;
+}
+function renderEncryptionKeysTab(body){
+  body.innerHTML = `<div class="al-loading" style="padding:40px 0;text-align:center;color:var(--text-faint);font-size:13px;">Loading key status…</div>`;
+  securityApi('GET', '/encryption').then(({ keys, activeVersion })=>{
+    const active = keys.find(k=>k.version===activeVersion) || keys[0];
+    body.innerHTML = `
+      <div class="sec-grid" style="margin-bottom:26px;">
+        <div class="sec-card" style="--sc-accent:var(--post);">
+          <div class="k">Active key version</div>
+          <div class="v"><span class="dot"></span>v${activeVersion}</div>
+          <div class="s">${active ? 'In use since ' + new Date(active.createdAt).toLocaleString(undefined,{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}) : ''}</div>
+        </div>
+        <div class="sec-card" style="--sc-accent:var(--accent);">
+          <div class="k">Key versions on file</div>
+          <div class="v"><span class="dot"></span>${keys.length}</div>
+          <div class="s">Older versions are kept (never deleted) so previously encrypted data stays readable.</div>
+        </div>
+        <div class="sec-card" style="--sc-accent:var(--put);">
+          <div class="k">What's encrypted</div>
+          <div class="v" style="font-size:13px;">Endpoint data, environments, request history</div>
+          <div class="s">Organisation/username/email stay plaintext — the app has to query/index on those to sign you in and route requests.</div>
+        </div>
+      </div>
+
+      <div class="section" style="margin-bottom:26px;max-width:640px;">
+        <div class="section-title">Rotate encryption key</div>
+        <div class="sec-card" style="--sc-accent:var(--delete);">
+          <div class="s" style="margin-bottom:14px;line-height:1.6;">
+            If you believe the encryption key may have been exposed, rotate it now. A brand-new key is generated and activated immediately — every new save is protected by it right away. This does <strong>not</strong> require a deploy or restart.
+          </div>
+          <label class="sec-switch" style="margin-bottom:14px;">
+            <input type="checkbox" id="reencryptNowToggle">
+            <span class="track"></span>
+            <span class="lbl">Also re-encrypt this organisation's existing data under the new key right now (recommended after a suspected compromise)</span>
+          </label>
+          <input type="text" id="rotateReason" placeholder="Reason (optional, goes in the audit log)" style="width:100%;margin-bottom:14px;">
+          <button type="button" class="danger" id="btnRotateKey">Rotate key now</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Key version history</div>
+        <div class="al-table-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">
+          <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+            <thead><tr>
+              <th style="text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text-faint);font-size:10px;text-transform:uppercase;">Version</th>
+              <th style="text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text-faint);font-size:10px;text-transform:uppercase;">Status</th>
+              <th style="text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text-faint);font-size:10px;text-transform:uppercase;">Created</th>
+              <th style="text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text-faint);font-size:10px;text-transform:uppercase;">By</th>
+              <th style="text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text-faint);font-size:10px;text-transform:uppercase;">Reason</th>
+            </tr></thead>
+            <tbody>
+              ${keys.map(k=>`<tr>
+                <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-family:var(--mono);">v${k.version}</td>
+                <td style="padding:10px 14px;border-bottom:1px solid var(--border);">${k.active ? '<span class="al-badge" style="color:#35c491;background:rgba(53,196,145,.14);">Active</span>' : '<span class="al-badge" style="color:#8a97b3;background:rgba(138,151,179,.14);">Retired</span>'}</td>
+                <td style="padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text-dim);">${new Date(k.createdAt).toLocaleString(undefined,{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'})}</td>
+                <td style="padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text-dim);">${escapeHtml(k.createdBy || '—')}</td>
+                <td style="padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text-dim);">${escapeHtml(k.reason || '—')}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+    document.getElementById('btnRotateKey').addEventListener('click', async ()=>{
+      const ok = await openConfirmModal({
+        title: 'Rotate encryption key?',
+        message: 'This immediately activates a new encryption key for all new data. ' + (document.getElementById('reencryptNowToggle').checked ? 'Existing data for your organisation will also be re-encrypted right now.' : 'Existing data stays on its current key until it is next saved.'),
+        confirmLabel: 'Rotate key',
+      });
+      if(!ok) return;
+      const btn = document.getElementById('btnRotateKey');
+      btn.disabled = true; btn.textContent = 'Rotating…';
+      try{
+        const result = await securityApi('POST', '/encryption/rotate', {
+          reason: document.getElementById('rotateReason').value.trim() || undefined,
+          reencryptNow: document.getElementById('reencryptNowToggle').checked,
+        });
+        toast(`Key rotated — now on v${result.activeVersion}` + (result.reencrypted ? ` · re-encrypted ${result.reencrypted.projects} project(s)` : ''));
+        renderEncryptionKeysTab(body);
+      }catch(e){
+        toast(e.message || 'Could not rotate the key');
+        btn.disabled = false; btn.textContent = 'Rotate key now';
+      }
+    });
+  }).catch(e=>{
+    body.innerHTML = `<div class="al-loading" style="padding:40px 0;text-align:center;color:var(--text-faint);font-size:13px;">Could not load encryption key status. ${escapeHtml(e.message||'')}</div>`;
+  });
 }
 
 /* ==================== SECTION:ENDPOINT TABLE ==================== */
@@ -8249,7 +8394,12 @@ function wireRenderSheet(proj, ep){
   if(footClose) footClose.addEventListener('click', closeRenderView);
 }
 
-/* ==================== SECTION:AUDIT-LOG-PAGE ==================== */
+/* ==================== SECTION:AUDIT-LOG-PAGE ====================
+   NOTE: buildAuditLogHtml()/auditActionMeta() below are no longer called —
+   the audit log now lives at the real, bookmarkable /<orgToken>/auditlog
+   route (server/views/auditlog.html), which fetches /api/audit/events itself.
+   Kept here only as a reference for that page's markup/styling; safe to
+   delete once the two are confirmed to have fully diverged. */
 // Renders the audit trail as a fully standalone HTML document (its own <style>, its own
 // search/filter script) so it can be opened in a separate browser tab via window.open(),
 // independent of the main app's DOM and state.
@@ -8520,11 +8670,12 @@ tbody tr.al-hidden{ display:none; }
 </html>`;
 }
 function openAuditLogTab(){
-  const w = window.open('', '_blank');
-  if(!w){ toast('Please allow popups to open the audit log in a new tab.'); return; }
-  w.document.open();
-  w.document.write(buildAuditLogHtml());
-  w.document.close();
+  // Real, bookmarkable, shareable URL now — /<orgToken>/auditlog — instead of
+  // an about:blank popup built from document.write(). Still gated by
+  // requireAuth + the org-token check server-side (see server.js), so opening
+  // it in a new tab is safe: the session cookie travels with it.
+  const w = window.open('/' + ORG_TOKEN + '/auditlog', '_blank');
+  if(!w){ toast('Please allow popups to open the audit log in a new tab.'); }
 }
 
 /* ==================== SECTION:EXPORT-AS-PDF ====================
@@ -9096,6 +9247,15 @@ document.addEventListener('keydown', (e)=>{
 /* ---------- Sidebar / rail chrome toggles ---------- */
 document.getElementById('btnSidebarToggle').addEventListener('click', toggleSidebar);
 document.getElementById('btnSidebarEdgeToggle').addEventListener('click', toggleSidebar);
+// When collapsed to the icon rail, clicking the search icon or the home icon
+// re-expands the sidebar (rather than doing nothing, or requiring the person
+// to find the edge handle) — search additionally focuses the input.
+document.querySelector('.sidebar-search-wrap').addEventListener('click', ()=>{
+  if(state.sidebarCollapsed) expandSidebarThen(true);
+});
+document.querySelector('[data-nav="home"]').addEventListener('click', ()=>{
+  if(state.sidebarCollapsed) expandSidebarThen(false);
+});
 
 /* ---------- Environment dropdown (delegated — #envSwitcher itself persists across re-renders) ---------- */
 document.getElementById('envSwitcher').addEventListener('click', (e)=>{

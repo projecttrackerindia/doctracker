@@ -89,7 +89,11 @@
       }
 
       setStatus('ok', '200 OK');
-      window.location.href = '/dashboard.html';
+      // The organisation name never appears in the URL in the clear — the
+      // server hands back an encrypted token bound to this account's org
+      // (see server/crypto.js), and every tenant-scoped page is addressed as
+      // /<token>/... instead of /....
+      window.location.href = data.orgToken ? `/${data.orgToken}/dashboard.html` : '/dashboard.html';
     } catch (err) {
       setStatus('fail', 'network');
       showAlert('Could not reach the server. Check your connection and try again.');
