@@ -1247,34 +1247,86 @@ pre.code-block{
 .env-settings-summary .bar-fill{ height:100%; background:var(--get); border-radius:99px; transition:width .2s ease; }
 
 /* ---------- Release Pipeline (Project settings ▸ Release Pipeline) ---------- */
-.rp-pipeline{ display:flex; align-items:stretch; flex-wrap:wrap; gap:0; }
-.rp-stage{ display:flex; align-items:center; }
-.rp-stage-card{
-  background:var(--surface); border:1px solid var(--border); border-top:3px solid var(--rp-accent, var(--border-strong));
-  border-radius:11px; padding:13px 16px; min-width:150px;
+/* Compact read-only strip across the top — orientation only, not the primary
+   interaction anymore (that's the from/to diff panel below it). */
+.rp-strip{ display:flex; align-items:center; flex-wrap:wrap; gap:0; margin-bottom:18px; }
+.rp-strip-chip{
+  display:flex; align-items:center; gap:7px; background:var(--surface); border:1px solid var(--border);
+  border-left:3px solid var(--rp-accent, var(--border-strong)); border-radius:9px; padding:7px 12px;
 }
-.rp-stage-label{ font-family:var(--mono); font-size:12px; font-weight:800; color:var(--text); letter-spacing:.3px; display:flex; align-items:center; gap:7px; margin-bottom:6px; }
+.rp-strip-chip-label{ font-family:var(--mono); font-size:11.5px; font-weight:800; color:var(--text); }
+.rp-strip-chip-version{ font-size:11px; color:var(--text-faint); }
+.rp-strip-chip-version.empty{ font-style:italic; }
 .rp-draft-pill{ font-family:var(--sans); font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--accent); background:var(--accent-soft); padding:2px 7px; border-radius:999px; }
-.rp-stage-version{ font-size:13px; font-weight:700; color:var(--text); margin-bottom:4px; }
-.rp-stage-meta{ font-size:10.5px; color:var(--text-faint); line-height:1.4; max-width:180px; }
-.rp-connector{ display:flex; flex-direction:column; align-items:center; gap:6px; padding:0 14px; color:var(--text-faint); }
-.rp-promote-btn{
-  font-size:10.5px; font-weight:700; white-space:nowrap; padding:6px 11px; border-radius:999px;
-  background:var(--surface-2); border:1px solid var(--border); color:var(--text-dim); cursor:pointer;
+.rp-strip-arrow{ color:var(--text-faint); padding:0 6px; display:flex; }
+.rp-mirror-inline{
+  display:flex; align-items:center; gap:6px; margin-left:14px; padding-left:14px; border-left:1px dashed var(--border);
+  font-size:11px; color:var(--text-faint);
 }
-.rp-promote-btn:hover:not(:disabled){ border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
-.rp-promote-btn:disabled{ opacity:.45; cursor:not-allowed; }
-.rp-mirrors{ margin-top:18px; padding-top:16px; border-top:1px dashed var(--border); }
-.rp-mirror-card{
-  background:var(--surface); border:1px solid var(--border); border-radius:11px; padding:13px 16px; max-width:260px;
+.rp-mirror-inline b{ color:var(--text-dim); font-family:var(--mono); }
+
+/* From/To diff panel */
+.rp-diffbar{ display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+.rp-diffbar .field{ margin:0; flex:1; min-width:180px; }
+.rp-diffbar .field label{ font-size:10.5px; }
+.rp-diffbar select{
+  width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--border);
+  background:var(--bg-elevated); color:var(--text); font-size:12.5px;
 }
-.rp-mirror-label{ font-family:var(--mono); font-size:12px; font-weight:800; color:var(--text); display:flex; align-items:center; gap:7px; margin-bottom:6px; }
-.rp-mirror-pill{ font-family:var(--sans); font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--text-faint); background:var(--surface-2); padding:2px 7px; border-radius:999px; }
+.rp-diffbar-swap{
+  flex-shrink:0; width:32px; height:32px; border-radius:8px; border:1px solid var(--border); background:var(--surface-2);
+  color:var(--text-dim); cursor:pointer; display:flex; align-items:center; justify-content:center; margin-bottom:1px;
+}
+.rp-diffbar-swap:hover{ border-color:var(--accent); color:var(--accent); }
+
+.rp-diff-summary{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
+.rp-diff-count{ font-size:12px; font-weight:700; display:flex; align-items:center; gap:5px; }
+.rp-diff-count.added{ color:#2e9e5b; }
+.rp-diff-count.removed{ color:var(--danger); }
+.rp-diff-count.modified{ color:var(--accent); }
+.rp-diff-count .swatch{ width:9px; height:9px; border-radius:2px; background:currentColor; }
+.rp-diff-nochanges{ font-size:12.5px; color:var(--text-faint); padding:22px 0; text-align:center; }
+
+.rp-diff-list{ display:flex; flex-direction:column; gap:8px; }
+.rp-diff-ep{ border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--surface); }
+.rp-diff-ep-head{
+  display:flex; align-items:center; gap:10px; padding:10px 13px; cursor:pointer; user-select:none;
+}
+.rp-diff-ep.added .rp-diff-ep-head{ background:color-mix(in srgb, #2e9e5b 8%, transparent); }
+.rp-diff-ep.removed .rp-diff-ep-head{ background:color-mix(in srgb, var(--danger) 8%, transparent); }
+.rp-diff-ep.modified .rp-diff-ep-head{ background:color-mix(in srgb, var(--accent) 7%, transparent); }
+.rp-diff-marker{ font-family:var(--mono); font-weight:800; font-size:13px; width:14px; text-align:center; flex-shrink:0; }
+.rp-diff-ep.added .rp-diff-marker{ color:#2e9e5b; }
+.rp-diff-ep.removed .rp-diff-marker{ color:var(--danger); }
+.rp-diff-ep.modified .rp-diff-marker{ color:var(--accent); }
+.rp-diff-ep-method{ font-family:var(--mono); font-size:10.5px; font-weight:800; padding:2px 6px; border-radius:5px; background:var(--surface-2); color:var(--text-dim); flex-shrink:0; }
+.rp-diff-ep-path{ font-family:var(--mono); font-size:12.5px; color:var(--text); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rp-diff-ep-summary{ font-size:11px; color:var(--text-faint); flex-shrink:0; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rp-diff-ep-count{ font-size:10.5px; color:var(--text-faint); flex-shrink:0; }
+.rp-diff-ep-caret{ color:var(--text-faint); flex-shrink:0; transition:transform .12s ease; }
+.rp-diff-ep.open .rp-diff-ep-caret{ transform:rotate(90deg); }
+.rp-diff-ep-body{ display:none; border-top:1px solid var(--border); padding:4px 0; }
+.rp-diff-ep.open .rp-diff-ep-body{ display:block; }
+.rp-diff-field{ padding:7px 13px 7px 37px; font-size:11.5px; border-bottom:1px solid var(--border); }
+.rp-diff-field:last-child{ border-bottom:none; }
+.rp-diff-field-path{ font-family:var(--mono); color:var(--text-dim); margin-bottom:3px; }
+.rp-diff-line{ font-family:var(--mono); font-size:11px; padding:2px 8px; border-radius:4px; white-space:pre-wrap; word-break:break-word; margin-bottom:2px; }
+.rp-diff-line.rm{ background:var(--danger-soft); color:var(--danger); }
+.rp-diff-line.add{ background:color-mix(in srgb, #2e9e5b 14%, transparent); color:#2e9e5b; }
+.rp-diff-line.rm::before{ content:"− "; }
+.rp-diff-line.add::before{ content:"+ "; }
+
+.rp-mergebar{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:18px; padding-top:16px; border-top:1px dashed var(--border); flex-wrap:wrap; }
+.rp-mergebar-note{ font-size:11.5px; color:var(--text-faint); }
+.rp-merge-btn{
+  font-size:12.5px; font-weight:700; padding:9px 18px; border-radius:999px;
+  background:var(--accent); border:1px solid var(--accent); color:var(--accent-contrast, #fff); cursor:pointer;
+}
+.rp-merge-btn:hover:not(:disabled){ opacity:.9; }
+.rp-merge-btn:disabled{ opacity:.4; cursor:not-allowed; background:var(--surface-2); border-color:var(--border); color:var(--text-faint); }
 @media (max-width:700px){
-  .rp-pipeline{ flex-direction:column; align-items:stretch; }
-  .rp-stage{ flex-direction:column; }
-  .rp-connector{ flex-direction:row; padding:8px 0; }
-  .rp-connector svg{ transform:rotate(90deg); }
+  .rp-diffbar{ flex-direction:column; align-items:stretch; }
+  .rp-diffbar-swap{ align-self:center; transform:rotate(90deg); }
 }
 
 /* ---------- Your Profile — environment management (add/delete global environments) ---------- */
@@ -2312,7 +2364,7 @@ pre.json-raw{ max-height:360px; margin:0; }
       <div id="envInputs" class="env-settings-grid"></div>
     </div>
     <div class="modal-pane" data-mpane="release">
-      <div class="hint" style="margin-top:0;">Changes are made in the first environment (the live draft) and move forward one stage at a time. Each stage keeps its own frozen, versioned copy until it's promoted again.</div>
+      <div class="hint" style="margin-top:0;">Pick a From and To stage to see exactly what changed, then merge — like a diff before a promote. Changes move forward one stage at a time; each stage keeps its own frozen, versioned copy until it's promoted again.</div>
       <div id="releasePipelineBody">Loading…</div>
     </div>
     <div class="modal-pane" data-mpane="auth">
@@ -7792,67 +7844,172 @@ async function renderReleasePipeline(proj){
     return;
   }
 
-  const stageHtml = data.stages.map((s, idx)=>{
-    const isDraft = s.isDraftStage;
-    const versionLabel = isDraft ? data.draftLabel : (s.versionLabel || '— nothing promoted yet');
-    const promotedInfo = !isDraft && s.promotedAt
-      ? `Promoted by ${escapeHtml(s.promotedBy || 'unknown')} · ${new Date(s.promotedAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}`
-      : (isDraft ? 'Always the live, editable draft' : 'Nothing promoted here yet');
-    const next = data.stages[idx+1];
-    const canPromote = !!next; // last pipeline stage has no "next" — no button
-    const sourceHasContent = isDraft || s.version != null; // can't promote out of an empty stage
-    return `
-      <div class="rp-stage" style="--rp-accent:${escapeHtml(s.color || 'var(--accent)')};">
-        <div class="rp-stage-card">
-          <div class="rp-stage-label">${escapeHtml(s.label)}${isDraft ? ' <span class="rp-draft-pill">draft</span>' : ''}</div>
-          <div class="rp-stage-version mono">${escapeHtml(versionLabel)}</div>
-          <div class="rp-stage-meta">${promotedInfo}</div>
-        </div>
-        ${canPromote ? `
-          <div class="rp-connector">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
-            <button type="button" class="rp-promote-btn" data-promote-from="${escapeHtml(s.environmentId)}" data-promote-to-label="${escapeHtml(next.label)}" ${sourceHasContent ? '' : 'disabled title="Nothing to promote yet"'}>
-              Promote to ${escapeHtml(next.label)}
-            </button>
-          </div>
-        ` : ''}
-      </div>`;
-  }).join('');
+  const stages = data.stages;
 
-  const mirrorHtml = data.mirrors.length ? data.mirrors.map(m=>`
-    <div class="rp-mirror-card">
-      <div class="rp-mirror-label">${escapeHtml(m.label)} <span class="rp-mirror-pill">auto-mirror</span></div>
-      <div class="rp-stage-version mono">${escapeHtml(m.versionLabel || '— not mirrored yet')}</div>
-      <div class="rp-stage-meta">Automatically kept in sync with the last pipeline stage — no separate promotion needed.</div>
-    </div>`).join('') : '';
+  // Slim read-only strip across the top, purely for orientation — the from/to
+  // diff panel below is where promotion actually happens now.
+  const stripHtml = stages.map((s, idx)=>{
+    const isDraft = s.isDraftStage;
+    const versionLabel = isDraft ? data.draftLabel : (s.versionLabel || 'Nothing promoted');
+    return `
+      <div class="rp-strip-chip" style="--rp-accent:${escapeHtml(s.color || 'var(--accent)')};">
+        <span class="rp-strip-chip-label">${escapeHtml(s.label)}${isDraft ? ' <span class="rp-draft-pill">draft</span>' : ''}</span>
+        <span class="rp-strip-chip-version mono${(!isDraft && !s.versionLabel) ? ' empty' : ''}">${escapeHtml(versionLabel)}</span>
+      </div>
+      ${idx < stages.length - 1 ? `<span class="rp-strip-arrow"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg></span>` : ''}
+    `;
+  }).join('');
+  const mirrorHtml = data.mirrors.map(m=>
+    `<span class="rp-mirror-inline">${escapeHtml(m.label)} auto-mirrors the last stage: <b>${escapeHtml(m.versionLabel || 'not mirrored yet')}</b></span>`
+  ).join('');
+
+  const optionLabel = (s)=> `${s.label} — ${s.isDraftStage ? data.draftLabel : (s.versionLabel || 'nothing promoted yet')}`;
+  const optHtml = (selectedId)=> stages.map(s=>
+    `<option value="${escapeHtml(s.environmentId)}" ${s.environmentId === selectedId ? 'selected' : ''}>${escapeHtml(optionLabel(s))}</option>`
+  ).join('');
+
+  // Default From/To: the furthest-along stage that already has content,
+  // promoting into whatever comes right after it — i.e. "what's next to ship".
+  let defaultFromIdx = 0;
+  for(let i = stages.length - 2; i >= 0; i--){
+    if(stages[i].isDraftStage || stages[i].version != null){ defaultFromIdx = i; break; }
+  }
+  const fromId = stages[defaultFromIdx].environmentId;
+  const toId = stages[Math.min(defaultFromIdx + 1, stages.length - 1)].environmentId;
 
   body.innerHTML = `
-    <div class="rp-pipeline">${stageHtml}</div>
-    ${mirrorHtml ? `<div class="rp-mirrors">${mirrorHtml}</div>` : ''}
+    <div class="rp-strip">${stripHtml}${mirrorHtml}</div>
+    <div class="rp-diffbar">
+      <div class="field">
+        <label>From</label>
+        <select id="rpFromSelect">${optHtml(fromId)}</select>
+      </div>
+      <button type="button" class="rp-diffbar-swap" id="rpSwapBtn" title="Swap From and To">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg>
+      </button>
+      <div class="field">
+        <label>To</label>
+        <select id="rpToSelect">${optHtml(toId)}</select>
+      </div>
+    </div>
+    <div id="rpDiffPanel"><div class="al-loading" style="padding:30px 0;text-align:center;color:var(--text-faint);font-size:13px;">Loading diff…</div></div>
   `;
 
-  body.querySelectorAll('[data-promote-from]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const fromEnvironmentId = btn.getAttribute('data-promote-from');
-      const toLabel = btn.getAttribute('data-promote-to-label');
+  const fromSel = document.getElementById('rpFromSelect');
+  const toSel = document.getElementById('rpToSelect');
+
+  async function loadDiff(){
+    const from = fromSel.value, to = toSel.value;
+    const panel = document.getElementById('rpDiffPanel');
+    if(from === to){
+      panel.innerHTML = `<div class="rp-diff-nochanges">Pick two different stages to compare.</div>`;
+      return;
+    }
+    panel.innerHTML = `<div class="al-loading" style="padding:30px 0;text-align:center;color:var(--text-faint);font-size:13px;">Comparing…</div>`;
+    let diff;
+    try{
+      diff = await apiGet(`/projects/${encodeURIComponent(proj.id)}/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    }catch(e){
+      panel.innerHTML = `<div class="rp-diff-nochanges">Could not load diff.</div>`;
+      return;
+    }
+    renderReleaseDiffPanel(panel, proj, diff);
+  }
+
+  fromSel.addEventListener('change', loadDiff);
+  toSel.addEventListener('change', loadDiff);
+  document.getElementById('rpSwapBtn').addEventListener('click', ()=>{
+    const f = fromSel.value, t = toSel.value;
+    fromSel.value = t; toSel.value = f;
+    loadDiff();
+  });
+
+  loadDiff();
+}
+
+// Renders the git-diff-style body of the release pipeline's from/to panel:
+// a summary count, then one row per added/removed/modified endpoint —
+// modified rows expand to show the exact field-level before/after — and the
+// Merge button, gated on the pair being an adjacent pipeline stage (the same
+// adjacency POST /promote enforces server-side).
+function renderReleaseDiffPanel(panel, proj, diff){
+  const total = diff.summary.added + diff.summary.removed + diff.summary.modified;
+  const summaryHtml = `
+    <div class="rp-diff-summary">
+      <span class="rp-diff-count added"><span class="swatch"></span>${diff.summary.added} added</span>
+      <span class="rp-diff-count removed"><span class="swatch"></span>${diff.summary.removed} removed</span>
+      <span class="rp-diff-count modified"><span class="swatch"></span>${diff.summary.modified} modified</span>
+    </div>`;
+
+  const epRow = (kind, ep, marker)=>{
+    const changeCount = kind === 'modified' ? ep.changes.length : 0;
+    return `
+      <div class="rp-diff-ep ${kind}" data-ep-id="${escapeHtml(ep.id)}">
+        <div class="rp-diff-ep-head">
+          <span class="rp-diff-marker">${marker}</span>
+          <span class="rp-diff-ep-method">${escapeHtml(ep.method || '')}</span>
+          <span class="rp-diff-ep-path mono">${escapeHtml(ep.path || '(no path)')}</span>
+          <span class="rp-diff-ep-summary">${escapeHtml(ep.summary || '')}</span>
+          ${changeCount ? `<span class="rp-diff-ep-count">${changeCount} field${changeCount === 1 ? '' : 's'} changed</span>` : ''}
+          ${kind === 'modified' ? `<span class="rp-diff-ep-caret">▸</span>` : ''}
+        </div>
+        ${kind === 'modified' ? `<div class="rp-diff-ep-body">${ep.changes.map(renderReleaseDiffField).join('')}</div>` : ''}
+      </div>`;
+  };
+
+  const rows = [
+    ...diff.added.map(ep => epRow('added', ep, '+')),
+    ...diff.removed.map(ep => epRow('removed', ep, '−')),
+    ...diff.modified.map(ep => epRow('modified', ep, '~')),
+  ];
+
+  panel.innerHTML = `
+    ${summaryHtml}
+    ${total
+      ? `<div class="rp-diff-list">${rows.join('')}</div>`
+      : `<div class="rp-diff-nochanges">No differences between ${escapeHtml(diff.from.label)} and ${escapeHtml(diff.to.label)} — they're already in sync.</div>`}
+    <div class="rp-mergebar">
+      <div class="rp-mergebar-note">${diff.canMerge
+        ? `Merging freezes ${escapeHtml(diff.from.label)}'s current content and makes it live in ${escapeHtml(diff.to.label)}.`
+        : `${escapeHtml(diff.to.label)} isn't the next stage after ${escapeHtml(diff.from.label)} — promote through each stage in order.`}</div>
+      <button type="button" class="rp-merge-btn" id="rpMergeBtn" ${(diff.canMerge && total) ? '' : 'disabled'}>Merge into ${escapeHtml(diff.to.label)}</button>
+    </div>
+  `;
+
+  panel.querySelectorAll('.rp-diff-ep.modified .rp-diff-ep-head').forEach(head=>{
+    head.addEventListener('click', ()=> head.closest('.rp-diff-ep').classList.toggle('open'));
+  });
+
+  const mergeBtn = document.getElementById('rpMergeBtn');
+  if(mergeBtn && !mergeBtn.disabled){
+    mergeBtn.addEventListener('click', async ()=>{
       const ok = await openConfirmModal({
-        title: `Promote to ${toLabel}?`,
-        message: `This freezes the current content and makes it live in ${toLabel}. Anyone viewing ${toLabel} will see this exact version until it's promoted again.`,
-        confirmLabel: 'Promote',
+        title: `Merge into ${diff.to.label}?`,
+        message: `This freezes ${diff.from.label}'s current content and makes it live in ${diff.to.label}. Anyone viewing ${diff.to.label} will see this exact version until it's promoted again.`,
+        confirmLabel: 'Merge',
       });
       if(!ok) return;
-      btn.disabled = true; btn.textContent = 'Promoting…';
+      mergeBtn.disabled = true; mergeBtn.textContent = 'Merging…';
       try{
-        const result = await apiSend('POST', `/projects/${encodeURIComponent(proj.id)}/promote`, { fromEnvironmentId });
-        toast(`Promoted to ${result.toEnvironmentLabel} — ${result.versionLabel}` + (result.mirrored ? ` · ${result.mirrored.label} auto-mirrored` : ''));
+        const result = await apiSend('POST', `/projects/${encodeURIComponent(proj.id)}/promote`, { fromEnvironmentId: diff.from.environmentId });
+        toast(`Merged into ${result.toEnvironmentLabel} — ${result.versionLabel}` + (result.mirrored ? ` · ${result.mirrored.label} auto-mirrored` : ''));
         logAudit('updated', 'project', proj.name, `Promoted to ${result.toEnvironmentLabel} (${result.versionLabel})`);
         renderReleasePipeline(proj);
       }catch(e){
-        toast(e.message || 'Could not promote.');
+        toast(e.message || 'Could not merge.');
         renderReleasePipeline(proj);
       }
     });
-  });
+  }
+}
+
+function renderReleaseDiffField(c){
+  const fmt = (v)=> (v === null || v === undefined) ? '(empty)' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+  let lines;
+  if(c.kind === 'added') lines = `<div class="rp-diff-line add">${escapeHtml(fmt(c.after))}</div>`;
+  else if(c.kind === 'removed') lines = `<div class="rp-diff-line rm">${escapeHtml(fmt(c.before))}</div>`;
+  else lines = `<div class="rp-diff-line rm">${escapeHtml(fmt(c.before))}</div><div class="rp-diff-line add">${escapeHtml(fmt(c.after))}</div>`;
+  return `<div class="rp-diff-field"><div class="rp-diff-field-path mono">${escapeHtml(c.path || '(root)')}</div>${lines}</div>`;
 }
 
 function populateFlowDirectionSelect(selectedId){

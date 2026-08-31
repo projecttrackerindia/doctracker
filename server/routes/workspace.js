@@ -694,6 +694,139 @@ router.post('/projects/:id/promote', async (req, res) => {
   }
 });
 
+// ----------------------------------------------------------------------------
+// Release pipeline diff — generic structural (git-diff-style) comparison of
+// the `endpoints` array between any two pipeline stages. Read-only: unlike
+// /promote, `from`/`to` don't have to be adjacent stages (comparing Dev
+// directly against Production is a legitimate thing to want to see); the
+// client is told via `canMerge` whether the pair also lines up with what
+// POST /promote will actually accept, and gates the "Merge" button on that.
+// ----------------------------------------------------------------------------
+
+// Fields that are pure bookkeeping (who/when an endpoint was last touched) —
+// diffing them would bury the actual content changes under noise every time
+// a stage is re-promoted.
+const DIFF_IGNORE_KEYS = new Set(['id', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy', '_open']);
+
+function isPlainObj(v) { return v && typeof v === 'object' && !Array.isArray(v); }
+
+// Arrays of parameters/headers/responses aren't identified by array index —
+// re-ordering shouldn't read as add+remove — so match items by their natural
+// key (name+in, response code, or name) when every item in both arrays has one.
+function arrayItemKey(item) {
+  if (isPlainObj(item)) {
+    if (item.name != null && item.in != null) return `ni:${item.in}:${item.name}`;
+    if (item.code != null) return `code:${item.code}`;
+    if (item.name != null) return `n:${item.name}`;
+  }
+  return null;
+}
+
+function diffArrays(a, b, path, out) {
+  a = a || []; b = b || [];
+  const keyable = (a.length || b.length) && a.every((x) => arrayItemKey(x) != null) && b.every((x) => arrayItemKey(x) != null);
+  if (keyable) {
+    const am = new Map(a.map((x) => [arrayItemKey(x), x]));
+    const bm = new Map(b.map((x) => [arrayItemKey(x), x]));
+    for (const k of new Set([...am.keys(), ...bm.keys()])) {
+      const av = am.get(k), bv = bm.get(k);
+      if (av === undefined) out.push({ path, kind: 'added', before: null, after: bv });
+      else if (bv === undefined) out.push({ path, kind: 'removed', before: av, after: null });
+      else diffValue(av, bv, path, out);
+    }
+  } else if (JSON.stringify(a) !== JSON.stringify(b)) {
+    out.push({ path, kind: 'changed', before: a, after: b });
+  }
+}
+
+function diffValue(a, b, path, out) {
+  if (a === b) return;
+  if (isPlainObj(a) && isPlainObj(b)) {
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      if (DIFF_IGNORE_KEYS.has(k)) continue;
+      diffValue(a[k], b[k], path ? `${path}.${k}` : k, out);
+    }
+    return;
+  }
+  if (Array.isArray(a) && Array.isArray(b)) { diffArrays(a, b, path, out); return; }
+  const av = a === undefined ? null : a;
+  const bv = b === undefined ? null : b;
+  if (JSON.stringify(av) !== JSON.stringify(bv)) {
+    out.push({ path, kind: a === undefined ? 'added' : b === undefined ? 'removed' : 'changed', before: av, after: bv });
+  }
+}
+
+function epSummary(ep) {
+  return { id: ep.id, method: ep.method || '', path: ep.path || '', summary: ep.summary || '' };
+}
+
+function diffEndpointLists(fromEps, toEps) {
+  const fm = new Map((fromEps || []).map((e) => [e.id, e]));
+  const tm = new Map((toEps || []).map((e) => [e.id, e]));
+  const added = [], removed = [], modified = [];
+  for (const id of new Set([...fm.keys(), ...tm.keys()])) {
+    const fe = fm.get(id), te = tm.get(id);
+    if (!fe) { added.push(epSummary(te)); continue; }
+    if (!te) { removed.push(epSummary(fe)); continue; }
+    const changes = [];
+    diffValue(fe, te, '', changes);
+    if (changes.length) modified.push({ ...epSummary(te), changes });
+  }
+  return { added, removed, modified };
+}
+
+// GET /api/workspace/projects/:id/diff?from=<environmentId>&to=<environmentId>
+// Any org member who can see the project may view a diff (same visibility as
+// GET /versions); only POST /promote itself is Admin-gated.
+router.get('/projects/:id/diff', async (req, res) => {
+  try {
+    const fromKey = req.query.from, toKey = req.query.to;
+    if (!fromKey || !toKey) return res.status(400).json({ error: 'from and to are required.' });
+
+    const { rows } = await pool.query(
+      `SELECT id, organisation, data, data_enc, release_version FROM projects WHERE id = $1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Project not found.' });
+    const project = rows[0];
+    if (project.organisation !== req.authUser.organisation) return res.status(404).json({ error: 'Project not found.' });
+
+    const allEnvs = await getOrgEnvironments(project.organisation);
+    const stages = pipelineStages(allEnvs);
+    const stageById = new Map(stages.map((s, idx) => [s.id, { ...s, idx }]));
+    if (!stageById.has(fromKey) || !stageById.has(toKey)) {
+      return res.status(400).json({ error: 'Unknown environment.' });
+    }
+
+    const loadStageData = async (envId) => {
+      if (stageById.get(envId).idx === 0) return decryptProjectData(project);
+      const { rows: vRows } = await pool.query(
+        `SELECT data_enc FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
+        [project.id, envId]
+      );
+      if (!vRows.length) return { endpoints: [] };
+      return JSON.parse(dataCrypto.decryptField(vRows[0].data_enc, `project-env:${project.id}:${envId}`));
+    };
+
+    const [fromData, toData] = await Promise.all([loadStageData(fromKey), loadStageData(toKey)]);
+    const diff = diffEndpointLists(fromData.endpoints || [], toData.endpoints || []);
+    const fromIdx = stageById.get(fromKey).idx, toIdx = stageById.get(toKey).idx;
+
+    res.json({
+      from: { environmentId: fromKey, label: stageById.get(fromKey).label },
+      to: { environmentId: toKey, label: stageById.get(toKey).label },
+      canMerge: toIdx === fromIdx + 1,
+      summary: { added: diff.added.length, removed: diff.removed.length, modified: diff.modified.length },
+      added: diff.added,
+      removed: diff.removed,
+      modified: diff.modified,
+    });
+  } catch (err) {
+    console.error('GET project diff failed:', err);
+    res.status(500).json({ error: 'Could not compute diff.' });
+  }
+});
+
 module.exports = router;
 module.exports.MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_BYTES;
 module.exports.reencryptOrganisation = reencryptOrganisation;
