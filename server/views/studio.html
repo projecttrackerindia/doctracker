@@ -1545,6 +1545,152 @@ pre.json-raw{ max-height:360px; margin:0; }
   .insp-fullscreen-sheet{ max-height:94vh; }
   .insp-fullscreen-sheet .insp-fullscreen-body{ padding:14px; }
 }
+/* ============================================================
+   SECURITY CENTER — signature visual language for this one page.
+   Reuses the app's own established motifs (environment accent colors,
+   glass surfaces, JetBrains Mono for data) rather than inventing an
+   unrelated look — this should read as a natural extension of the
+   product, not a bolted-on dashboard.
+   ============================================================ */
+@keyframes secPulse{
+  0%{ box-shadow:0 0 0 0 var(--sec-pulse-color, rgba(53,196,145,.45)); }
+  70%{ box-shadow:0 0 0 14px rgba(53,196,145,0); }
+  100%{ box-shadow:0 0 0 0 rgba(53,196,145,0); }
+}
+@keyframes secSweep{ to{ transform:rotate(360deg); } }
+
+.sec-hero{
+  display:flex; align-items:center; gap:20px; margin-bottom:28px; padding:22px 24px;
+  background:linear-gradient(135deg, var(--surface) 0%, var(--bg-elevated) 100%);
+  border:1px solid var(--border); border-radius:var(--radius-lg); position:relative; overflow:hidden;
+}
+.sec-hero::after{
+  content:''; position:absolute; inset:0; pointer-events:none; opacity:.5;
+  background:radial-gradient(420px 180px at 88% -10%, var(--sec-glow-bg, var(--accent-soft)), transparent 70%);
+}
+.sec-shield{
+  flex-shrink:0; width:56px; height:56px; border-radius:16px; position:relative; z-index:1;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--sec-shield-bg, var(--post-bg)); color:var(--sec-shield-color, var(--post));
+  border:1px solid color-mix(in srgb, var(--sec-shield-color, var(--post)) 35%, transparent);
+}
+.sec-shield.live{ animation:secPulse 2.4s ease-out infinite; }
+.sec-shield svg{ width:26px; height:26px; }
+.sec-hero-copy{ position:relative; z-index:1; flex:1; min-width:0; }
+.sec-hero-copy h1{ font-size:19px; font-weight:800; letter-spacing:-.3px; margin-bottom:3px; }
+.sec-hero-copy p{ font-size:12.5px; color:var(--text-faint); max-width:52ch; }
+.sec-hero-stat{ position:relative; z-index:1; text-align:right; flex-shrink:0; }
+.sec-hero-stat .n{ font-family:var(--mono); font-size:22px; font-weight:800; line-height:1; }
+.sec-hero-stat .l{ font-size:10.5px; color:var(--text-faint); margin-top:5px; white-space:nowrap; }
+
+/* Segmented tab control with a sliding indicator — page-scoped so it
+   doesn't affect the unrelated .resp-tabs response-status tabs elsewhere. */
+.sec-tabs{
+  position:relative; display:flex; width:fit-content; margin-bottom:22px;
+  background:var(--surface-2); border:1px solid var(--border); border-radius:999px; padding:3px;
+}
+.sec-tabs .sec-tab-indicator{
+  position:absolute; top:3px; bottom:3px; border-radius:999px; background:var(--accent);
+  transition:transform .28s cubic-bezier(.4,0,.2,1), width .28s cubic-bezier(.4,0,.2,1);
+}
+.sec-tab{
+  position:relative; z-index:1; flex:1; text-align:center; border:none; background:none; padding:8px 18px; font-size:12.5px;
+  font-weight:600; color:var(--text-faint); cursor:pointer; border-radius:999px; font-family:var(--sans);
+  transition:color .2s ease; white-space:nowrap;
+}
+.sec-tab.active{ color:var(--accent-ink); }
+
+.sec-grid{ display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; margin-bottom:20px; }
+@media (max-width:900px){ .sec-grid{ grid-template-columns:1fr; } }
+.sec-card{
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md);
+  padding:16px 18px; position:relative; overflow:hidden;
+}
+.sec-card::before{ content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--sc-accent, var(--border-strong)); }
+.sec-card .k{ font-size:11px; color:var(--text-faint); font-weight:600; margin-bottom:8px; }
+.sec-card .v{ display:flex; align-items:center; gap:8px; font-size:16px; font-weight:800; margin-bottom:4px; }
+.sec-card .v .dot{ width:8px; height:8px; border-radius:50%; background:var(--sc-accent, var(--text-faint)); flex-shrink:0; }
+.sec-card .s{ font-size:11.5px; color:var(--text-dim); line-height:1.5; }
+.sec-card .s a, .sec-card .s button.linklike{
+  background:none; border:none; padding:0; font:inherit; color:var(--accent); cursor:pointer; font-weight:600;
+}
+
+.sec-env-strip{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:26px; }
+.sec-env-pill{
+  display:flex; align-items:center; gap:7px; padding:7px 12px; border-radius:999px; font-size:11.5px; font-weight:600;
+  background:var(--se-bg); color:var(--se-color); border:1px solid color-mix(in srgb, var(--se-color) 30%, transparent);
+}
+.sec-env-pill .lv{ font-family:var(--mono); font-size:9.5px; text-transform:uppercase; letter-spacing:.4px; opacity:.85; }
+
+/* Custom toggle switch — real checkbox underneath for accessibility/keyboard focus. */
+.sec-switch{ position:relative; display:inline-flex; align-items:center; gap:10px; cursor:pointer; user-select:none; }
+.sec-switch input{ position:absolute; opacity:0; width:1px; height:1px; }
+.sec-switch .track{
+  width:38px; height:22px; border-radius:999px; background:var(--surface-2); border:1px solid var(--border-strong);
+  position:relative; flex-shrink:0; transition:background-color .2s ease, border-color .2s ease;
+}
+.sec-switch .track::after{
+  content:''; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%;
+  background:var(--text-faint); transition:transform .2s cubic-bezier(.4,0,.2,1), background-color .2s ease;
+}
+.sec-switch input:checked + .track{ background:var(--post-bg); border-color:var(--post); }
+.sec-switch input:checked + .track::after{ transform:translateX(16px); background:var(--post); }
+.sec-switch input:focus-visible + .track{ outline:2px solid var(--accent); outline-offset:2px; }
+.sec-switch .lbl{ font-size:13px; color:var(--text); }
+
+/* Chip-style multi-select (Apply To / Environments) replacing raw checkbox walls. */
+.sec-chip-group{ display:flex; flex-wrap:wrap; gap:8px; }
+.sec-chip{
+  display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:999px; font-size:11.5px;
+  font-weight:600; cursor:pointer; border:1px solid var(--border); background:var(--surface-2); color:var(--text-dim);
+  transition:all .15s ease; user-select:none;
+}
+.sec-chip input{ position:absolute; opacity:0; width:1px; height:1px; }
+.sec-chip:has(input:checked){ background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
+.sec-chip:has(input:focus-visible){ outline:2px solid var(--accent); outline-offset:2px; }
+.sec-chip.env:has(input:checked){ background:var(--sec-chip-bg); border-color:var(--sec-chip-color); color:var(--sec-chip-color); }
+
+/* Sensitive-fields table: category-colored left rail per row + a live masked-preview chip. */
+.sec-field-table{ width:100%; border-collapse:separate; border-spacing:0 8px; }
+.sec-field-row{ background:var(--surface); }
+.sec-field-row td{ padding:12px 14px; border-top:1px solid var(--border); border-bottom:1px solid var(--border); vertical-align:middle; }
+.sec-field-row td:first-child{ border-left:3px solid var(--sf-accent, var(--border-strong)); border-top-left-radius:8px; border-bottom-left-radius:8px; }
+.sec-field-row td:last-child{ border-right:1px solid var(--border); border-top-right-radius:8px; border-bottom-right-radius:8px; }
+.sec-field-name{ font-family:var(--mono); font-weight:700; font-size:12.5px; }
+.sec-cat-tag{
+  font-size:10px; font-weight:700; letter-spacing:.3px; padding:3px 9px; border-radius:6px;
+  border:1px solid color-mix(in srgb, var(--sf-accent, var(--text-faint)) 40%, transparent); color:var(--sf-accent, var(--text-dim));
+}
+.sec-mask-preview{ font-family:var(--mono); font-size:11px; color:var(--text-faint); white-space:nowrap; }
+.sec-mask-preview b{ color:var(--text-dim); font-weight:600; }
+.sec-status-dot{ display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:700; }
+.sec-status-dot .dot{ width:7px; height:7px; border-radius:50%; }
+
+/* Slide-over drawer for adding/editing a rule. */
+.sec-drawer-scrim{
+  position:fixed; inset:0; background:rgba(4,7,12,.5); backdrop-filter:blur(2px); z-index:60;
+  opacity:0; pointer-events:none; transition:opacity .2s ease;
+}
+.sec-drawer-scrim.show{ opacity:1; pointer-events:auto; }
+.sec-drawer{
+  position:fixed; top:0; right:0; bottom:0; width:420px; max-width:92vw; z-index:61;
+  background:var(--glass-bg-strong); backdrop-filter:blur(16px); border-left:1px solid var(--glass-border);
+  box-shadow:var(--shadow-modal); transform:translateX(100%); transition:transform .26s cubic-bezier(.4,0,.2,1);
+  display:flex; flex-direction:column;
+}
+.sec-drawer-scrim.show .sec-drawer{ transform:translateX(0); }
+.sec-drawer-head{ padding:20px 22px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+.sec-drawer-head h3{ font-size:15px; font-weight:800; }
+.sec-drawer-body{ padding:20px 22px; overflow-y:auto; flex:1; }
+.sec-drawer-foot{ padding:16px 22px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:10px; }
+.sec-field-label{ display:block; font-size:11.5px; font-weight:700; color:var(--text-dim); margin:16px 0 6px; }
+.sec-field-label:first-child{ margin-top:0; }
+
+.sec-scan-btn{ display:inline-flex; align-items:center; gap:8px; }
+.sec-scan-btn .radar{ width:14px; height:14px; flex-shrink:0; }
+.sec-scan-btn.scanning .radar{ animation:secSweep 1s linear infinite; }
+
+
 </style>
 </head>
 <body>
@@ -4748,16 +4894,45 @@ const PII_SURFACE_OPTIONS = [
 function renderSecurityCenter(main){
   const tab = state.securityTab || 'summary';
   const settings = PII_CONFIG.settings || {};
+  const lastScan = state._lastStorageScan;
+  const riskyCount = lastScan ? lastScan.filter(r=>r.risk==='Critical'||r.risk==='High').length : null;
+  const protectionOn = settings.automaticProtection !== false;
+  const shieldState = !protectionOn ? 'off' : (riskyCount ? 'risk' : 'protected');
+  const shieldColorVar = shieldState==='off' ? '--put' : shieldState==='risk' ? '--delete' : '--post';
+  const shieldBgVar = shieldState==='off' ? '--put-bg' : shieldState==='risk' ? '--delete-bg' : '--post-bg';
+  const shieldGlyph = shieldState==='protected'
+    ? '<path d="M9 12l2 2 4-4"></path>'
+    : shieldState==='risk'
+      ? '<path d="M12 8v4.5"></path><circle cx="12" cy="15.5" r="0.9" fill="currentColor" stroke="none"></circle>'
+      : '<path d="M9 9l6 6M15 9l-6 6"></path>';
+  const tabs = [
+    { id:'summary', label:'Summary' },
+    { id:'pii', label:'PII & Data Masking' },
+    { id:'storage', label:'Data Storage' },
+  ];
+  const activeIdx = Math.max(0, tabs.findIndex(t=>t.id===tab));
+  const activeRules = (PII_CONFIG.rules||[]).filter(r=>r.enabled!==false).length;
+
   main.innerHTML = `
     <div class="crumb">Security</div>
-    <div class="cc-hero">
-      <h1>Security &amp; data protection</h1>
-      <div class="cc-hero-sub">PII masking rules, authorized-reveal auditing, and what this app actually persists in your browser.</div>
+    <div class="sec-hero" style="--sec-shield-color:var(${shieldColorVar});--sec-shield-bg:var(${shieldBgVar});--sec-glow-bg:var(${shieldBgVar});">
+      <div class="sec-shield${shieldState==='protected'?' live':''}" style="--sec-pulse-color:var(${shieldBgVar});">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2l8 4v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6l8-4z"></path>${shieldGlyph}
+        </svg>
+      </div>
+      <div class="sec-hero-copy">
+        <h1>Security &amp; data protection</h1>
+        <p>PII masking rules, authorized-reveal auditing, and what this app actually persists in your browser.</p>
+      </div>
+      <div class="sec-hero-stat">
+        <div class="n">${activeRules}</div>
+        <div class="l">active masking rule${activeRules===1?'':'s'}</div>
+      </div>
     </div>
-    <div class="resp-tabs" style="margin-bottom:18px;">
-      <button type="button" class="resp-tab ${tab==='summary'?'active':''}" data-sec-tab="summary">Summary</button>
-      <button type="button" class="resp-tab ${tab==='pii'?'active':''}" data-sec-tab="pii">PII &amp; Data Masking</button>
-      <button type="button" class="resp-tab ${tab==='storage'?'active':''}" data-sec-tab="storage">Data Storage</button>
+    <div class="sec-tabs" id="secTabs">
+      <div class="sec-tab-indicator" style="width:${(100/tabs.length).toFixed(4)}%; transform:translateX(${activeIdx*100}%);"></div>
+      ${tabs.map(t=>`<button type="button" class="sec-tab ${t.id===tab?'active':''}" data-sec-tab="${t.id}">${t.label}</button>`).join('')}
     </div>
     <div id="secTabBody"></div>
   `;
@@ -4777,25 +4952,46 @@ function renderSecuritySummaryTab(body){
   const settings = PII_CONFIG.settings || {};
   const lastScan = state._lastStorageScan;
   const riskyCount = lastScan ? lastScan.filter(r=>r.risk==='Critical' || r.risk==='High').length : null;
-  const row = (label, value, ok)=>`<tr><td>${label}</td><td style="text-align:right;"><span style="color:${ok?'var(--post)':'var(--put)'};font-weight:700;">${ok?'● ':'○ '}${value}</span></td></tr>`;
+  const protectionOn = settings.automaticProtection !== false;
+  const policy = settings.environmentPolicy || {};
+  const policyLabel = { strict:'Strict', mask:'Masked', configurable:'Configurable' };
+
+  const envStrip = environments().map(e=>{
+    const lv = (policy[e.id] || 'mask');
+    return `<span class="sec-env-pill" style="--se-bg:${envBgColor(e.id)};--se-color:${envAccentColor(e.id)};">${e.label}<span class="lv">${policyLabel[lv]||lv}</span></span>`;
+  }).join('');
+
   body.innerHTML = `
-    <div class="section" style="max-width:640px;">
-      <div class="section-title">Security status</div>
-      <table class="data-table"><tbody>
-        ${row('PII protection', settings.automaticProtection===false?'Disabled':'Enabled', settings.automaticProtection!==false)}
-        ${row('Automatic field detection', settings.automaticProtection===false?'Off':'On', settings.automaticProtection!==false)}
-        ${row('Production masking policy', (settings.environmentPolicy&&settings.environmentPolicy.PROD)||'strict', true)}
-        ${row('Audit storage', 'PostgreSQL (server-authoritative)', true)}
-        ${row('PII reveal auditing', 'Enabled — requires reason, auto-remasks after '+(settings.revealTimeoutSeconds||60)+'s', true)}
-        ${row('Browser sensitive storage', riskyCount===null ? 'Not yet scanned' : (riskyCount+' risk'+(riskyCount===1?'':'s')+' detected'), riskyCount===0)}
-      </tbody></table>
-      <div style="margin-top:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        <button type="button" class="primary" id="btnRunScanFromSummary">Run security scan</button>
-        ${state._lastStorageScanAt ? `<span style="font-size:11px;color:var(--text-faint);">Last scan: ${new Date(state._lastStorageScanAt).toLocaleString()}</span>` : ''}
+    <div class="sec-grid">
+      <div class="sec-card" style="--sc-accent:var(${protectionOn?'--post':'--put'});">
+        <div class="k">PII protection</div>
+        <div class="v"><span class="dot"></span>${protectionOn?'Enabled':'Disabled'}</div>
+        <div class="s">Automatic field-name &amp; pattern detection is ${protectionOn?'on':'off'} — admin rules ${protectionOn?'still apply either way':'are the only active check'}.</div>
       </div>
-      ${riskyCount ? `<div style="margin-top:10px;font-size:12px;color:var(--delete);">⚠ ${riskyCount} browser storage risk${riskyCount===1?'':'s'} detected — see the Data Storage tab for details.</div>` : ''}
+      <div class="sec-card" style="--sc-accent:var(--accent);">
+        <div class="k">Audit trail</div>
+        <div class="v"><span class="dot"></span>PostgreSQL</div>
+        <div class="s">Append-only, server-authoritative — identity and timestamps come from the session, never the browser.</div>
+      </div>
+      <div class="sec-card" style="--sc-accent:var(${riskyCount===null?'--text-faint':riskyCount===0?'--post':'--delete'});">
+        <div class="k">Browser storage</div>
+        <div class="v"><span class="dot"></span>${riskyCount===null ? 'Not scanned' : riskyCount+' risk'+(riskyCount===1?'':'s')}</div>
+        <div class="s">${state._lastStorageScanAt ? 'Last scan: '+new Date(state._lastStorageScanAt).toLocaleString() : "Live scan of this browser's own storage."} <button type="button" class="linklike" id="btnRunScanFromSummary">Run scan</button></div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Environment masking policy</div>
+      <div class="sec-env-strip">${envStrip}</div>
+    </div>
+    <div class="section" style="max-width:520px;">
+      <div class="section-title">PII reveal</div>
+      <div class="sec-card" style="--sc-accent:var(--accent);">
+        <div class="v" style="font-size:14px;"><span class="dot"></span>Reason required, auto-remasks after ${settings.revealTimeoutSeconds||60}s</div>
+        <div class="s">Every reveal is Admin-only and recorded as a <span class="sec-field-name" style="font-size:11px;">PII_REVEAL</span> audit event with the reason given.</div>
+      </div>
     </div>`;
-  document.getElementById('btnRunScanFromSummary').addEventListener('click', async ()=>{
+  document.getElementById('btnRunScanFromSummary').addEventListener('click', async (e)=>{
+    e.currentTarget.textContent = 'Scanning…';
     state._lastStorageScan = await scanClientStorage();
     state._lastStorageScanAt = new Date().toISOString();
     renderSecuritySummaryTab(body);
@@ -4804,27 +5000,38 @@ function renderSecuritySummaryTab(body){
 
 function renderStorageScanTab(body){
   body.innerHTML = `<div class="section"><div class="section-title">Data storage inventory</div>
-    <div style="font-size:12px;color:var(--text-faint);margin-bottom:12px;">Scans this browser's actual localStorage, sessionStorage, cookies, IndexedDB, and Cache API right now — this is a live read, not a hardcoded list.</div>
-    <div id="storageScanBody"><button type="button" class="primary" id="btnRunScan">Run security scan</button></div>
+    <div style="font-size:12px;color:var(--text-faint);margin-bottom:14px;max-width:64ch;">Scans this browser's actual localStorage, sessionStorage, cookies, IndexedDB, and Cache API right now — this is a live read, not a hardcoded list.</div>
+    <div id="storageScanBody">
+      <button type="button" class="primary sec-scan-btn" id="btnRunScan">
+        <svg class="radar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" opacity=".35"></circle><path d="M12 12L12 4"></path></svg>
+        Run security scan
+      </button>
+    </div>
   </div>`;
   const scanBody = document.getElementById('storageScanBody');
+  const riskColor = r=> r==='Critical'?'var(--delete)': r==='High'?'var(--put)': r==='Medium'?'#e0a83e': r==='Unknown'?'var(--text-faint)':'var(--post)';
   const renderRows = (rows)=>{
-    const riskColor = r=> r==='Critical'?'var(--delete)': r==='High'?'var(--put)': r==='Medium'?'#e0a83e': r==='Unknown'?'var(--text-faint)':'var(--post)';
+    const counts = rows.reduce((a,r)=>{ a[r.risk]=(a[r.risk]||0)+1; return a; }, {});
+    const summary = ['Critical','High','Medium','Low','Unknown'].filter(k=>counts[k]).map(k=>
+      `<span class="sec-status-dot"><span class="dot" style="background:${riskColor(k)};"></span>${counts[k]} ${k}</span>`
+    ).join('');
     scanBody.innerHTML = !rows.length ? `<div class="empty-field">No client-side storage detected.</div>` : `
+      ${summary ? `<div style="display:flex;gap:16px;margin-bottom:14px;flex-wrap:wrap;">${summary}</div>` : ''}
       <table class="data-table"><thead><tr><th>Storage</th><th>Key / Name</th><th>Purpose</th><th>Classification</th><th>Risk</th></tr></thead>
       <tbody>${rows.map(r=>`<tr>
         <td><span class="al-entity-type">${escapeHtml(r.mechanism)}</span></td>
         <td class="mono">${escapeHtml(r.key)}</td>
         <td style="color:var(--text-dim);">${escapeHtml(r.purpose)}</td>
-        <td class="mono">${escapeHtml(r.classification)}</td>
-        <td><span style="color:${riskColor(r.risk)};font-weight:700;">${escapeHtml(r.risk)}</span></td>
+        <td class="mono" style="font-size:10.5px;color:var(--text-faint);">${escapeHtml(r.classification)}</td>
+        <td><span class="sec-status-dot"><span class="dot" style="background:${riskColor(r.risk)};"></span><span style="color:${riskColor(r.risk)};">${escapeHtml(r.risk)}</span></span></td>
       </tr>`).join('')}</tbody></table>
-      <div style="margin-top:12px;"><button type="button" id="btnRescan">Re-run scan</button></div>`;
+      <div style="margin-top:12px;"><button type="button" class="sec-scan-btn" id="btnRescan"><svg class="radar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" opacity=".35"></circle><path d="M12 12L12 4"></path></svg>Re-run scan</button></div>`;
     const rescan = document.getElementById('btnRescan');
     if(rescan) rescan.addEventListener('click', runScan);
   };
   async function runScan(){
-    scanBody.innerHTML = `<div class="empty-field">Scanning…</div>`;
+    const btn = document.getElementById('btnRunScan') || document.getElementById('btnRescan');
+    if(btn) btn.classList.add('scanning');
     const rows = await scanClientStorage();
     state._lastStorageScan = rows;
     state._lastStorageScanAt = new Date().toISOString();
@@ -4834,39 +5041,66 @@ function renderStorageScanTab(body){
   if(state._lastStorageScan) renderRows(state._lastStorageScan);
 }
 
+const PII_CATEGORY_COLOR_VAR = {
+  PUBLIC:'--text-faint', INTERNAL:'--get', CONFIDENTIAL:'--patch',
+  PII:'--put', FINANCIAL:'--put', SENSITIVE_PII:'--delete', AUTHENTICATION_SECRET:'--delete',
+};
+const PII_SAMPLE_VALUES = {
+  PII:'9876543210', SENSITIVE_PII:'ABCDE1234F', FINANCIAL:'4111111111111111',
+  AUTHENTICATION_SECRET:'sk_live_51H8xJ2KZq', CONFIDENTIAL:'ProjectFalcon',
+  INTERNAL:'internal-doc-42', PUBLIC:'PublicValue123',
+};
+// A real, computed preview (runs the same maskByStrategy() every render path
+// uses) so an admin can see exactly what a rule will do before saving it —
+// not a static screenshot-style example.
+function piiMaskPreview(category, strategy, maskChar){
+  const sample = PII_SAMPLE_VALUES[category] || 'ExampleValue123';
+  return { sample, masked: maskByStrategy(sample, { strategy, maskChar: maskChar||'*' }) };
+}
+
 function renderPiiRulesTab(body){
   const s = PII_CONFIG.settings || {};
   const rules = PII_CONFIG.rules || [];
   body.innerHTML = `
-    <div class="section" style="margin-bottom:20px;">
+    <div class="section" style="margin-bottom:24px;max-width:640px;">
       <div class="section-title">Automatic protection</div>
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px;">
-        <input type="checkbox" id="piiAutoToggle" ${s.automaticProtection!==false?'checked':''}>
-        Automatically detect &amp; mask PII by field name and value pattern (not just admin-defined rules below)
-      </label>
-      <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Reveal auto-remask timeout (seconds)</label>
-      <input type="number" id="piiTimeoutInput" value="${s.revealTimeoutSeconds||60}" min="10" max="3600" style="width:100px;">
+      <div class="sec-card" style="--sc-accent:var(${s.automaticProtection!==false?'--post':'--put'});margin-bottom:14px;">
+        <label class="sec-switch">
+          <input type="checkbox" id="piiAutoToggle" ${s.automaticProtection!==false?'checked':''}>
+          <span class="track"></span>
+          <span class="lbl">Automatically detect &amp; mask PII by field name and value pattern</span>
+        </label>
+        <div class="s" style="margin-top:8px;margin-left:48px;">Admin-defined rules below always apply, on top of this.</div>
+      </div>
+      <label class="sec-field-label">Reveal auto-remask timeout (seconds)</label>
+      <input type="number" id="piiTimeoutInput" value="${s.revealTimeoutSeconds||60}" min="10" max="3600" style="width:110px;">
       <div style="margin-top:14px;"><button type="button" class="primary" id="btnSavePiiSettings">Save settings</button></div>
     </div>
     <div class="section">
       <div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
         <span>Sensitive fields</span>
-        <button type="button" id="btnAddRule">+ Add sensitive field</button>
+        <button type="button" class="primary" id="btnAddRule">+ Add sensitive field</button>
       </div>
-      <table class="data-table"><thead><tr><th>Field</th><th>Category</th><th>Masking</th><th>Status</th><th></th></tr></thead>
-        <tbody>${rules.length ? rules.map(r=>`<tr>
-          <td class="mono">${escapeHtml(r.fieldName)}</td>
-          <td>${escapeHtml(r.category)}</td>
-          <td>${escapeHtml((PII_STRATEGY_OPTIONS.find(o=>o.id===r.maskingStrategy)||{}).label || r.maskingStrategy)}</td>
-          <td><span style="color:${r.enabled?'var(--post)':'var(--text-faint)'};font-weight:700;">${r.enabled?'● Active':'○ Disabled'}</span></td>
+      ${rules.length ? `<table class="sec-field-table"><tbody>${rules.map(r=>{
+        const colorVar = PII_CATEGORY_COLOR_VAR[r.category] || '--text-faint';
+        const preview = piiMaskPreview(r.category, r.maskingStrategy, r.maskChar);
+        return `<tr class="sec-field-row" style="--sf-accent:var(${colorVar});">
+          <td><div class="sec-field-name">${escapeHtml(r.fieldName)}</div></td>
+          <td><span class="sec-cat-tag">${escapeHtml(r.category)}</span></td>
+          <td><span class="sec-mask-preview">${escapeHtml(preview.sample)} → <b>${escapeHtml(preview.masked)}</b></span></td>
+          <td>
+            <label class="sec-switch" style="gap:8px;">
+              <input type="checkbox" data-toggle-rule="${r.id}" ${r.enabled?'checked':''}>
+              <span class="track"></span>
+            </label>
+          </td>
           <td style="text-align:right;white-space:nowrap;">
             <button type="button" class="icon-btn" data-edit-rule="${r.id}" title="Edit">✎</button>
             <button type="button" class="icon-btn" data-delete-rule="${r.id}" title="Delete">🗑</button>
           </td>
-        </tr>`).join('') : `<tr><td colspan="5" class="empty-field" style="padding:16px;">No admin-defined rules yet — built-in detection (mobile, email, PAN, Aadhaar, account/card numbers, etc.) still applies.</td></tr>`}</tbody>
-      </table>
+        </tr>`;
+      }).join('')}</tbody></table>` : `<div class="empty-field" style="padding:16px;">No admin-defined rules yet — built-in detection (mobile, email, PAN, Aadhaar, account/card numbers, etc.) still applies.</div>`}
     </div>
-    <div id="piiRuleFormWrap"></div>
   `;
   document.getElementById('btnSavePiiSettings').addEventListener('click', async ()=>{
     try{
@@ -4881,9 +5115,20 @@ function renderPiiRulesTab(body){
       renderPiiRulesTab(body);
     }catch(e){ toast(e.message || 'Could not save settings'); }
   });
-  document.getElementById('btnAddRule').addEventListener('click', ()=> openPiiRuleForm(body, null));
+  document.getElementById('btnAddRule').addEventListener('click', ()=> openPiiRuleDrawer(body, null));
   body.querySelectorAll('[data-edit-rule]').forEach(btn=>{
-    btn.addEventListener('click', ()=> openPiiRuleForm(body, rules.find(r=>String(r.id)===btn.getAttribute('data-edit-rule'))));
+    btn.addEventListener('click', ()=> openPiiRuleDrawer(body, rules.find(r=>String(r.id)===btn.getAttribute('data-edit-rule'))));
+  });
+  body.querySelectorAll('[data-toggle-rule]').forEach(input=>{
+    input.addEventListener('change', async ()=>{
+      const rule = rules.find(r=>String(r.id)===input.getAttribute('data-toggle-rule'));
+      if(!rule) return;
+      try{
+        const result = await piiApi('PUT', '/rules/'+rule.id, { ...rule, enabled: input.checked });
+        PII_CONFIG.rules = PII_CONFIG.rules.map(r=> r.id===rule.id ? result.rule : r);
+        toast(input.checked ? 'Rule enabled' : 'Rule disabled');
+      }catch(e){ input.checked = !input.checked; toast(e.message || 'Could not update rule'); }
+    });
   });
   body.querySelectorAll('[data-delete-rule]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
@@ -4900,41 +5145,62 @@ function renderPiiRulesTab(body){
   });
 }
 
-function openPiiRuleForm(body, existing){
-  const wrap = document.getElementById('piiRuleFormWrap');
+function openPiiRuleDrawer(body, existing){
+  document.getElementById('secRuleDrawerScrim')?.remove();
   const envOpts = environments();
-  wrap.innerHTML = `
-    <div class="section" style="margin-top:16px;border-color:var(--accent);">
-      <div class="section-title">${existing ? 'Edit sensitive field' : 'Add sensitive field'}</div>
-      <label style="display:block;font-size:12px;font-weight:600;margin:8px 0 4px;">Field name</label>
-      <input type="text" id="rfName" value="${existing ? escapeHtml(existing.fieldName) : ''}" placeholder="e.g. mobileNumber" style="width:100%;max-width:320px;">
-      <label style="display:block;font-size:12px;font-weight:600;margin:12px 0 4px;">Matching</label>
-      <select id="rfMatch" style="max-width:320px;">
-        ${['case_insensitive','exact','nested','regex'].map(m=>`<option value="${m}" ${existing&&existing.matchMode===m?'selected':''}>${m==='case_insensitive'?'Case insensitive':m==='exact'?'Exact':m==='nested'?'Nested JSON path (a.b.c)':'Regex'}</option>`).join('')}
-      </select>
-      <label style="display:block;font-size:12px;font-weight:600;margin:12px 0 4px;">Category</label>
-      <select id="rfCategory" style="max-width:320px;">${PII_CATEGORY_OPTIONS.map(c=>`<option value="${c}" ${existing&&existing.category===c?'selected':''}>${c}</option>`).join('')}</select>
-      <label style="display:block;font-size:12px;font-weight:600;margin:12px 0 4px;">Masking strategy</label>
-      <select id="rfStrategy" style="max-width:320px;">${PII_STRATEGY_OPTIONS.map(o=>`<option value="${o.id}" ${existing&&existing.maskingStrategy===o.id?'selected':''}>${o.label}</option>`).join('')}</select>
-      <label style="display:block;font-size:12px;font-weight:600;margin:12px 0 4px;">Apply to</label>
-      <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:6px;">
-        ${PII_SURFACE_OPTIONS.map(o=>`<label style="font-size:12px;display:flex;align-items:center;gap:5px;"><input type="checkbox" data-rf-apply="${o.id}" ${(!existing || (existing.applyTo||[]).includes(o.id))?'checked':''}>${o.label}</label>`).join('')}
+  const scrim = document.createElement('div');
+  scrim.className = 'sec-drawer-scrim';
+  scrim.id = 'secRuleDrawerScrim';
+  scrim.innerHTML = `
+    <div class="sec-drawer" role="dialog" aria-label="${existing?'Edit sensitive field':'Add sensitive field'}">
+      <div class="sec-drawer-head">
+        <h3>${existing ? 'Edit sensitive field' : 'Add sensitive field'}</h3>
+        <button type="button" class="icon-btn" id="rfClose" title="Close">✕</button>
       </div>
-      <label style="display:block;font-size:12px;font-weight:600;margin:12px 0 4px;">Environments</label>
-      <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:6px;">
-        ${envOpts.map(e=>`<label style="font-size:12px;display:flex;align-items:center;gap:5px;"><input type="checkbox" data-rf-env="${e.id}" ${(!existing || (existing.environments||[]).includes(e.id))?'checked':''}>${e.label}</label>`).join('')}
-      </div>
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:12px 0;">
-        <input type="checkbox" id="rfEnabled" ${!existing || existing.enabled ? 'checked' : ''}> Enabled
-      </label>
-      <div class="modal-actions" style="justify-content:flex-end;">
-        <div class="right">
-          <button type="button" id="rfCancel">Cancel</button>
-          <button type="button" class="primary" id="rfSave">${existing?'Save changes':'Save rule'}</button>
+      <div class="sec-drawer-body">
+        <label class="sec-field-label">Field name</label>
+        <input type="text" id="rfName" value="${existing ? escapeHtml(existing.fieldName) : ''}" placeholder="e.g. mobileNumber" style="width:100%;">
+        <label class="sec-field-label">Matching</label>
+        <select id="rfMatch" style="width:100%;">
+          ${['case_insensitive','exact','nested','regex'].map(m=>`<option value="${m}" ${existing&&existing.matchMode===m?'selected':''}>${m==='case_insensitive'?'Case insensitive':m==='exact'?'Exact':m==='nested'?'Nested JSON path (a.b.c)':'Regex'}</option>`).join('')}
+        </select>
+        <label class="sec-field-label">Category</label>
+        <select id="rfCategory" style="width:100%;">${PII_CATEGORY_OPTIONS.map(c=>`<option value="${c}" ${existing&&existing.category===c?'selected':''}>${c}</option>`).join('')}</select>
+        <label class="sec-field-label">Masking strategy</label>
+        <select id="rfStrategy" style="width:100%;">${PII_STRATEGY_OPTIONS.map(o=>`<option value="${o.id}" ${existing&&existing.maskingStrategy===o.id?'selected':''}>${o.label}</option>`).join('')}</select>
+        <div id="rfPreview" class="sec-mask-preview" style="display:block;margin-top:8px;font-size:12px;"></div>
+        <label class="sec-field-label">Apply to</label>
+        <div class="sec-chip-group">
+          ${PII_SURFACE_OPTIONS.map(o=>`<label class="sec-chip"><input type="checkbox" data-rf-apply="${o.id}" ${(!existing || (existing.applyTo||[]).includes(o.id))?'checked':''}>${o.label}</label>`).join('')}
         </div>
+        <label class="sec-field-label">Environments</label>
+        <div class="sec-chip-group">
+          ${envOpts.map(e=>`<label class="sec-chip env" style="--sec-chip-bg:${envBgColor(e.id)};--sec-chip-color:${envAccentColor(e.id)};"><input type="checkbox" data-rf-env="${e.id}" ${(!existing || (existing.environments||[]).includes(e.id))?'checked':''}>${e.label}</label>`).join('')}
+        </div>
+        <label class="sec-switch" style="margin-top:18px;">
+          <input type="checkbox" id="rfEnabled" ${!existing || existing.enabled ? 'checked' : ''}>
+          <span class="track"></span>
+          <span class="lbl">Enabled</span>
+        </label>
+      </div>
+      <div class="sec-drawer-foot">
+        <button type="button" id="rfCancel">Cancel</button>
+        <button type="button" class="primary" id="rfSave">${existing?'Save changes':'Save rule'}</button>
       </div>
     </div>`;
-  document.getElementById('rfCancel').addEventListener('click', ()=>{ wrap.innerHTML=''; });
+  document.body.appendChild(scrim);
+  requestAnimationFrame(()=> scrim.classList.add('show'));
+  const close = ()=>{ scrim.classList.remove('show'); setTimeout(()=>scrim.remove(), 260); };
+  scrim.addEventListener('click', (e)=>{ if(e.target === scrim) close(); });
+  document.getElementById('rfClose').addEventListener('click', close);
+  document.getElementById('rfCancel').addEventListener('click', close);
+  const updatePreview = ()=>{
+    const p = piiMaskPreview(document.getElementById('rfCategory').value, document.getElementById('rfStrategy').value, '*');
+    document.getElementById('rfPreview').innerHTML = `Preview: ${escapeHtml(p.sample)} → <b>${escapeHtml(p.masked)}</b>`;
+  };
+  document.getElementById('rfCategory').addEventListener('change', updatePreview);
+  document.getElementById('rfStrategy').addEventListener('change', updatePreview);
+  updatePreview();
   document.getElementById('rfSave').addEventListener('click', async ()=>{
     const fieldName = document.getElementById('rfName').value.trim();
     if(!fieldName){ toast('Field name is required'); return; }
@@ -4943,8 +5209,8 @@ function openPiiRuleForm(body, existing){
       matchMode: document.getElementById('rfMatch').value,
       category: document.getElementById('rfCategory').value,
       maskingStrategy: document.getElementById('rfStrategy').value,
-      applyTo: Array.from(wrap.querySelectorAll('[data-rf-apply]:checked')).map(el=>el.getAttribute('data-rf-apply')),
-      environments: Array.from(wrap.querySelectorAll('[data-rf-env]:checked')).map(el=>el.getAttribute('data-rf-env')),
+      applyTo: Array.from(scrim.querySelectorAll('[data-rf-apply]:checked')).map(el=>el.getAttribute('data-rf-apply')),
+      environments: Array.from(scrim.querySelectorAll('[data-rf-env]:checked')).map(el=>el.getAttribute('data-rf-env')),
       enabled: document.getElementById('rfEnabled').checked,
       charsToKeep: 4,
     };
@@ -4955,7 +5221,7 @@ function openPiiRuleForm(body, existing){
       if(existing) PII_CONFIG.rules = PII_CONFIG.rules.map(r=> r.id===existing.id ? result.rule : r);
       else PII_CONFIG.rules = [...PII_CONFIG.rules, result.rule];
       toast(existing ? 'Rule updated' : 'Rule added');
-      wrap.innerHTML = '';
+      close();
       renderPiiRulesTab(document.getElementById('secTabBody'));
     }catch(e){ toast(e.message || 'Could not save rule'); }
   });
