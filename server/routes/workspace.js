@@ -1,6 +1,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { authenticate } = require('../middleware/authGuard');
+const { recordAuditEvent } = require('../auditService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -58,20 +59,21 @@ router.get('/', async (req, res) => {
     });
 
     const wsResult = await pool.query(
-      `SELECT environments, audit_log, request_history, custom_flow_directions FROM org_workspace WHERE organisation = $1`,
+      `SELECT environments, request_history, custom_flow_directions FROM org_workspace WHERE organisation = $1`,
       [org]
     );
     const ws = wsResult.rows[0] || {
       environments: [],
-      audit_log: [],
       request_history: {},
       custom_flow_directions: [],
     };
 
+    // Audit log is no longer part of this payload — it's fetched separately
+    // from GET /api/audit/events, which returns server-authoritative entries
+    // from the audit_logs table instead of a client-writable JSONB blob.
     res.json({
       projects,
       environments: ws.environments || [],
-      auditLog: ws.audit_log || [],
       requestHistory: ws.request_history || {},
       customFlowDirections: ws.custom_flow_directions || [],
     });
@@ -175,9 +177,12 @@ router.delete('/projects/:id', async (req, res) => {
   }
 });
 
-// ---- Shared org-level extras (environments / audit log / request history / flow presets) ----
+// ---- Shared org-level extras (environments / request history / flow presets) ----
+// NOTE: audit logging used to be a third "column" here (a client-overwritable
+// JSONB blob) — that endpoint is removed. Audit events are now written one at
+// a time, server-side only, via POST /api/audit/events (see routes/audit.js).
 async function upsertOrgWorkspace(org, column, value) {
-  const columnWhitelist = ['environments', 'audit_log', 'request_history', 'custom_flow_directions'];
+  const columnWhitelist = ['environments', 'request_history', 'custom_flow_directions'];
   if (!columnWhitelist.includes(column)) throw new Error('Invalid column');
   await pool.query(
     `INSERT INTO org_workspace (organisation, ${column}, updated_at) VALUES ($1, $2, now())
@@ -194,17 +199,6 @@ router.put('/environments', async (req, res) => {
   } catch (err) {
     console.error('PUT environments failed:', err);
     res.status(500).json({ error: 'Could not save environments.' });
-  }
-});
-
-router.put('/audit-log', async (req, res) => {
-  if (!Array.isArray(req.body?.auditLog)) return res.status(400).json({ error: 'Expected { auditLog: [] }.' });
-  try {
-    await upsertOrgWorkspace(req.authUser.organisation, 'audit_log', req.body.auditLog);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('PUT audit-log failed:', err);
-    res.status(500).json({ error: 'Could not save audit log.' });
   }
 });
 
@@ -271,7 +265,7 @@ router.post('/migrate', async (req, res) => {
 
     // Merge org-level extras.
     const wsRes = await client.query('SELECT * FROM org_workspace WHERE organisation = $1 FOR UPDATE', [org]);
-    const current = wsRes.rows[0] || { environments: [], audit_log: [], request_history: {}, custom_flow_directions: [] };
+    const current = wsRes.rows[0] || { environments: [], request_history: {}, custom_flow_directions: [] };
 
     const mergeById = (existingArr, incomingArr) => {
       const arr = Array.isArray(existingArr) ? existingArr.slice() : [];
@@ -283,7 +277,6 @@ router.post('/migrate', async (req, res) => {
     };
 
     const mergedEnvironments = mergeById(current.environments, body.environments);
-    const mergedAuditLog = mergeById(current.audit_log, body.auditLog).slice(0, 1000);
     const mergedFlowDirections = mergeById(current.custom_flow_directions, body.customFlowDirections);
     const mergedHistory = { ...(current.request_history || {}) };
     if (isPlainObject(body.requestHistory)) {
@@ -294,16 +287,37 @@ router.post('/migrate', async (req, res) => {
     }
 
     await client.query(
-      `INSERT INTO org_workspace (organisation, environments, audit_log, request_history, custom_flow_directions, updated_at)
-       VALUES ($1, $2, $3, $4, $5, now())
+      `INSERT INTO org_workspace (organisation, environments, request_history, custom_flow_directions, updated_at)
+       VALUES ($1, $2, $3, $4, now())
        ON CONFLICT (organisation) DO UPDATE SET
          environments = EXCLUDED.environments,
-         audit_log = EXCLUDED.audit_log,
          request_history = EXCLUDED.request_history,
          custom_flow_directions = EXCLUDED.custom_flow_directions,
          updated_at = now()`,
-      [org, JSON.stringify(mergedEnvironments), JSON.stringify(mergedAuditLog), JSON.stringify(mergedHistory), JSON.stringify(mergedFlowDirections)]
+      [org, JSON.stringify(mergedEnvironments), JSON.stringify(mergedHistory), JSON.stringify(mergedFlowDirections)]
     );
+
+    // This browser's old localStorage audit history gets a one-time, clearly-
+    // labeled import into the real audit_logs table (as its own event type) —
+    // it does NOT get treated as authoritative history for arbitrary past
+    // actions, since we can't verify who really performed them.
+    if (Array.isArray(body.auditLog) && body.auditLog.length) {
+      for (const legacyEntry of body.auditLog.slice(0, 500)) {
+        await recordAuditEvent(req.authUser, req, {
+          action: 'LEGACY_AUDIT_IMPORTED',
+          resourceType: (legacyEntry && legacyEntry.entityType) || 'unknown',
+          entityName: legacyEntry && legacyEntry.entityName,
+          projectName: legacyEntry && legacyEntry.projectName,
+          details: legacyEntry && legacyEntry.details,
+          severity: 'info',
+          metadata: {
+            originalActor: legacyEntry && legacyEntry.actor,
+            originalTs: legacyEntry && legacyEntry.ts,
+            originalAction: legacyEntry && legacyEntry.action,
+          },
+        });
+      }
+    }
 
     await client.query('COMMIT');
     res.json({ ok: true, imported });

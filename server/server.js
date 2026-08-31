@@ -12,6 +12,8 @@ const { initDb } = require('./db');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const workspaceRoutes = require('./routes/workspace');
+const auditRoutes = require('./routes/audit');
+const piiRoutes = require('./routes/pii');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -59,6 +61,8 @@ app.use(express.json({ limit: '20kb' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/workspace', workspaceRoutes);
+app.use('/api/audit', auditRoutes);
+app.use('/api/pii', piiRoutes);
 
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 

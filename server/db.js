@@ -71,8 +71,17 @@ async function initDb() {
   `);
 
   // Shared, organisation-wide workspace extras that previously lived in their
-  // own separate localStorage keys (environments, audit log, try-it request
-  // history, custom flow-direction presets). One row per organisation.
+  // own separate localStorage keys (environments, try-it request history,
+  // custom flow-direction presets). One row per organisation.
+  //
+  // NOTE on `audit_log`: this JSONB column is DEPRECATED. It used to hold the
+  // entire audit history as a single blob that the *frontend* overwrote wholesale
+  // on every change — which meant a browser could forge actor names, timestamps,
+  // or delete history outright, since nothing server-side ever verified it.
+  // Audit events now live in the proper `audit_logs` table below, written only
+  // by the server from the authenticated session (see server/auditService.js).
+  // The column is kept only so any already-migrated data isn't silently dropped;
+  // nothing reads or writes it any more.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS org_workspace (
       organisation TEXT PRIMARY KEY,
@@ -83,6 +92,80 @@ async function initDb() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+
+  // Org-wide PII masking settings (Admin ▸ Security ▸ PII & Data Masking).
+  // Kept separate from the per-rule table below since it's a single JSON blob
+  // of switches, not a list of records.
+  await pool.query(`
+    ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS pii_settings JSONB NOT NULL DEFAULT '{
+      "automaticProtection": true,
+      "revealTimeoutSeconds": 60,
+      "environmentPolicy": {"PROD":"strict","PREPROD":"strict","UAT":"mask","SIT":"mask","DEV":"configurable"},
+      "surfaces": {"params":true,"headers":true,"body":true,"pdfExport":true}
+    }'::jsonb;
+  `);
+
+  // ---- Admin-managed sensitive-field masking rules (Admin ▸ Security ▸ PII & Data Masking) ----
+  // Every request/response parameter table consults this list (merged with the
+  // client's built-in field/pattern detectors) before ever rendering an example
+  // value — see displayValueFor()/piiRuleForField() in studio.html.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pii_field_rules (
+      id BIGSERIAL PRIMARY KEY,
+      organisation TEXT NOT NULL,
+      field_name TEXT NOT NULL,
+      match_mode TEXT NOT NULL DEFAULT 'case_insensitive'
+        CHECK (match_mode IN ('exact', 'case_insensitive', 'nested', 'regex')),
+      category TEXT NOT NULL DEFAULT 'PII'
+        CHECK (category IN ('PUBLIC','INTERNAL','CONFIDENTIAL','PII','SENSITIVE_PII','FINANCIAL','AUTHENTICATION_SECRET')),
+      masking_strategy TEXT NOT NULL DEFAULT 'partial'
+        CHECK (masking_strategy IN ('full','last2','last4','first2last2','email','secret','partial')),
+      chars_to_keep INTEGER NOT NULL DEFAULT 4,
+      mask_char TEXT NOT NULL DEFAULT '*',
+      apply_to JSONB NOT NULL DEFAULT '["params","headers","body","pdfExport"]',
+      environments JSONB NOT NULL DEFAULT '["PROD","PREPROD","UAT","SIT","DEV"]',
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pii_rules_org ON pii_field_rules (organisation);`);
+
+  // ---- Authoritative, append-only audit log (Security ▸ Audit Logs) ----
+  // Every column here is derived server-side from the authenticated session/
+  // request (see recordAuditEvent in server/auditService.js) — the frontend
+  // only ever supplies the descriptive fields (action, entityName, details,
+  // metadata, ...), never identity or timestamps. Never store raw sensitive
+  // values in `metadata` — only field names, reasons, and other non-sensitive
+  // descriptors.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id BIGSERIAL PRIMARY KEY,
+      event_id TEXT NOT NULL UNIQUE,
+      organisation TEXT NOT NULL,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      username TEXT,
+      role TEXT,
+      action TEXT NOT NULL,
+      resource_type TEXT,
+      resource_id TEXT,
+      entity_name TEXT,
+      project_name TEXT,
+      details TEXT,
+      api_name TEXT,
+      environment TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      request_id TEXT,
+      result TEXT NOT NULL DEFAULT 'success' CHECK (result IN ('success','failure')),
+      severity TEXT NOT NULL DEFAULT 'info' CHECK (severity IN ('info','warning','critical')),
+      metadata JSONB NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_logs_org_created ON audit_logs (organisation, created_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_logs_org_action ON audit_logs (organisation, action);`);
 
   console.log('Database schema ready.');
 }

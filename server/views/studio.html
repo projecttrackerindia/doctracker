@@ -170,10 +170,13 @@ svg{ display:block; }
   grid-template-columns:var(--sb-w, 272px) 1fr;
   grid-template-rows:3px 56px 1fr;
   height:100vh;
-  transition:grid-template-columns .2s ease;
+  transition:grid-template-columns .22s cubic-bezier(.4,0,.2,1);
 }
-.app.sb-collapsed{ --sb-w:0px; }
-.app.sb-collapsed .sidebar{ opacity:0; pointer-events:none; border-right-color:transparent; }
+/* Collapsed state keeps a slim 14px strip (not 0) so the expand handle stays
+   visibly reachable — a fully-vanished sidebar leaves no obvious way back. */
+.app.sb-collapsed{ --sb-w:14px; }
+.app.sb-collapsed .sidebar{ border-right-color:transparent; overflow:visible; }
+.app.sb-collapsed .sidebar>*:not(.sidebar-edge-toggle){ opacity:0; pointer-events:none; transition:opacity .12s ease; }
 .env-rail{
   grid-column:1/3; grid-row:1; height:3px; width:100%;
   background:linear-gradient(90deg, var(--env-accent, var(--accent)), transparent 140%);
@@ -319,13 +322,36 @@ kbd{
    SIDEBAR
    ============================================================ */
 .sidebar{
-  grid-column:1; grid-row:3;
+  grid-column:1; grid-row:3; position:relative;
   border-right:1px solid var(--border); background:var(--bg-elevated);
   overflow-y:auto; display:flex; flex-direction:column; min-height:0;
   transition:opacity .15s ease, border-color .2s ease;
 }
 .icon-btn.sidebar-toggle{ font-size:16px; }
 .icon-btn.sidebar-toggle[aria-expanded="false"]{ color:var(--accent); }
+
+/* ---------- Sidebar edge collapse/expand handle ----------
+   A small control integrated into the sidebar's own right border (not a
+   generic hamburger in the topbar) — visible on hover/focus when expanded,
+   always visible (poking out of the 14px collapsed strip) when collapsed,
+   so there's always an obvious way back regardless of state. */
+.sidebar-edge-toggle{
+  position:absolute; top:50%; right:-11px; transform:translateY(-50%);
+  width:22px; height:44px; z-index:32;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--bg-elevated); color:var(--text-faint);
+  border:1px solid var(--border); border-radius:0 10px 10px 0; border-left:none;
+  cursor:pointer; opacity:0;
+  transition:opacity .15s ease, color .15s ease, background-color .15s ease, box-shadow .15s ease;
+}
+.sidebar:hover .sidebar-edge-toggle,
+.sidebar-edge-toggle:focus-visible{ opacity:1; }
+.sidebar-edge-toggle:hover{ color:var(--accent); background:var(--surface-hover); box-shadow:2px 0 10px -4px rgba(0,0,0,.35); }
+.sidebar-edge-toggle svg{ width:12px; height:12px; transition:transform .22s ease; pointer-events:none; }
+.app.sb-collapsed .sidebar-edge-toggle{
+  opacity:1; right:auto; left:0; border-radius:0 10px 10px 0;
+}
+@media (max-width:820px){ .sidebar-edge-toggle{ display:none; } } /* mobile uses the drawer + topbar button instead */
 
 .sidebar-search{ padding:10px 12px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--bg-elevated); z-index:2; }
 .sidebar-search-wrap{ position:relative; display:flex; align-items:center; }
@@ -1084,7 +1110,10 @@ pre.code-block{
   .main-wrap{ grid-column:1; }
   .inspector-split{ grid-template-columns:1fr; }
 }
-.sidebar-toggle{ display:inline-flex; }
+/* Desktop collapse/expand now lives on the sidebar's own edge handle; the
+   topbar hamburger button is kept only for the mobile drawer (see the
+   max-width:820px rule above, which forces it back on with !important). */
+.sidebar-toggle{ display:none; }
 
 /* ============================================================
    MODALS
@@ -1541,6 +1570,9 @@ pre.json-raw{ max-height:360px; margin:0; }
       <button id="btnAuditLog" title="Audit log — see who changed what, when">
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-2px;"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>Audit Log
       </button>
+      <button id="btnSecurityCenter" title="Security — PII masking rules, browser storage inventory" style="display:none;">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-2px;"><path d="M12 2l8 4v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6l8-4z"></path></svg>Security
+      </button>
       <button class="icon" id="btnTheme" title="Toggle theme">◐</button>
       <input type="file" id="fileInput" accept=".json,.yaml,.yml">
       <button id="btnAuthor" title="Your profile — name, and the role that controls which actions and environments you can reach">
@@ -1560,6 +1592,9 @@ pre.json-raw{ max-height:360px; margin:0; }
   </button>
 
   <div class="sidebar" id="sidebar">
+    <button type="button" class="sidebar-edge-toggle" id="btnSidebarEdgeToggle" aria-expanded="true" aria-controls="sidebar" title="Collapse sidebar (Ctrl/Cmd+B)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 6 9 12 15 18"></polyline></svg>
+    </button>
     <div class="sidebar-search">
       <div class="sidebar-search-wrap">
         <span class="sidebar-search-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.2" y2="16.2"></line></svg></span>
@@ -1746,6 +1781,22 @@ pre.json-raw{ max-height:360px; margin:0; }
       <div class="right">
         <button type="button" id="confirmModalCancel">Cancel</button>
         <button type="button" class="danger" id="confirmModalOk">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="piiRevealModal">
+  <div class="modal" style="width:420px;">
+    <h2>Reveal sensitive value?</h2>
+    <div class="modal-sub" style="margin-bottom:14px;">This action will be recorded in the audit log.</div>
+    <label style="display:block; font-size:12px; font-weight:600; margin-bottom:6px; color:var(--text-soft);">Reason</label>
+    <textarea id="piiRevealReason" rows="2" placeholder="e.g. Troubleshooting a customer issue" style="width:100%; resize:vertical; margin-bottom:6px; font:inherit;"></textarea>
+    <div style="font-size:11px; color:var(--text-faint); margin-bottom:18px;" id="piiRevealTimeoutNote"></div>
+    <div class="modal-actions" style="justify-content:flex-end;">
+      <div class="right">
+        <button type="button" id="piiRevealCancel">Cancel</button>
+        <button type="button" class="primary" id="piiRevealOk">Reveal</button>
       </div>
     </div>
   </div>
@@ -2438,6 +2489,158 @@ function maskSecretValue(val){
   const midLen = Math.max(5, Math.min(9, s.length - head.length - tail.length));
   return head + '*'.repeat(midLen) + tail;
 }
+
+/* ============================================================================
+   CENTRALIZED PII MASKING ENGINE
+   Single source of truth for "is this field sensitive, and how should its
+   example value be shown" — every parameter table (query/path/header/body,
+   request AND response) and the PDF/print export route through this, instead
+   of each render site rolling its own regex. Previously only header rows were
+   masked here (isSensitiveHeaderName/maskSecretValue above); everything else —
+   a "mobileNumber" or "aadhaar" body/query param, for instance — rendered its
+   example value in plain text. That gap is what this closes.
+
+   Detection = admin-defined rules (from the server, org-wide) ∪ built-in
+   field-name rules ∪ value-shape pattern detection ∪ the legacy header-secret
+   check. Fails CLOSED: until the org's rule set has loaded from the server,
+   the built-ins + patterns still apply, so a slow/broken fetch never means
+   raw values get shown by default (spec: never reveal on config failure). */
+const PII_BUILTIN_FIELDS = [
+  { test:/^(mobile|mobilenumber|mobileno|phone|phonenumber|contactnumber)$/, category:'PII', strategy:'last4' },
+  { test:/^(email|emailaddress|emailid)$/, category:'PII', strategy:'email' },
+  { test:/^(pan|pannumber)$/, category:'SENSITIVE_PII', strategy:'last2' },
+  { test:/^(aadhaar|aadhar|aadhaarnumber|aadharnumber|uidai)$/, category:'SENSITIVE_PII', strategy:'last4' },
+  { test:/^(accountnumber|accountno|acctno|bankaccount|bankaccountnumber)$/, category:'FINANCIAL', strategy:'last4' },
+  { test:/^(cardnumber|cardno|ccnumber|debitcard|creditcard|creditcardnumber)$/, category:'FINANCIAL', strategy:'last4' },
+  { test:/^(customername|fullname|firstname|lastname|contactname|accountholdername)$/, category:'PII', strategy:'partial' },
+  { test:/^(dob|dateofbirth|birthdate)$/, category:'PII', strategy:'full' },
+  { test:/^(address|addressline1|addressline2|residentialaddress|billingaddress)$/, category:'PII', strategy:'full' },
+  { test:/^(passport|passportnumber)$/, category:'SENSITIVE_PII', strategy:'last2' },
+  { test:/^(ifsc|ifsccode)$/, category:'FINANCIAL', strategy:'last4' },
+  { test:/^(upi|upiid|vpa)$/, category:'FINANCIAL', strategy:'partial' },
+];
+// Value-shape detection catches sensitive-looking examples even when the field
+// name gives no hint at all (spec: "field name + data pattern + rules").
+const PII_PATTERNS = [
+  { test:v=>/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(v), category:'SENSITIVE_PII', strategy:'last2' },                    // PAN
+  { test:v=>/^\d{12}$/.test(v.replace(/\s/g,'')), category:'SENSITIVE_PII', strategy:'last4' },                 // Aadhaar-shaped
+  { test:v=>{ const d=v.replace(/\D/g,''); return /^[6-9]\d{9}$/.test(d) && d.length===10; }, category:'PII', strategy:'last4' }, // Indian mobile
+  { test:v=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), category:'PII', strategy:'email' },
+  { test:v=>/^\d{13,19}$/.test(v.replace(/[\s-]/g,'')), category:'FINANCIAL', strategy:'last4' },               // card/account-shaped
+];
+const PII_DEFAULT_SETTINGS = { automaticProtection:true, revealTimeoutSeconds:60, environmentPolicy:{}, surfaces:{} };
+// Populated by loadPiiConfig() from GET /api/pii. Until that resolves (or if it
+// fails), stays at this "protective defaults" shape — see fail-closed note above.
+let PII_CONFIG = { rules:[], settings:{ ...PII_DEFAULT_SETTINGS }, loaded:false };
+
+function normFieldKey(name){ return String(name||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+
+function piiRuleForField(name){
+  const raw = String(name||'');
+  const key = normFieldKey(raw);
+  if(!key) return null;
+  const envId = (state.env || 'DEV');
+  const custom = (PII_CONFIG.rules||[]).find(r=>{
+    if(r.enabled===false) return false;
+    if(Array.isArray(r.environments) && r.environments.length && !r.environments.includes(envId)) return false;
+    if(r.matchMode==='regex'){ try{ return new RegExp(r.fieldName,'i').test(raw); }catch(e){ return false; } }
+    if(r.matchMode==='nested') return normFieldKey(String(r.fieldName||'').split(/[.\[]/).pop()) === key;
+    if(r.matchMode==='exact') return r.fieldName === raw;
+    return normFieldKey(r.fieldName) === key;
+  });
+  if(custom) return { category:custom.category, strategy:custom.maskingStrategy, maskChar:custom.maskChar||'*', source:'admin', fieldName:raw };
+  const builtin = PII_BUILTIN_FIELDS.find(f=>f.test.test(key));
+  if(builtin) return { ...builtin, source:'builtin', fieldName:raw };
+  return null;
+}
+function piiRuleForValue(value){
+  const v = String(value==null?'':value).trim();
+  if(!v || v.length>40) return null; // long free-text values are never pattern-matched (avoid false positives)
+  const hit = PII_PATTERNS.find(p=>{ try{ return p.test(v); }catch(e){ return false; } });
+  return hit ? { ...hit, source:'pattern' } : null;
+}
+// Resolves the rule for a name+value pair, folding in the pre-existing
+// header-secret keyword check so callers only need one function.
+function piiRuleFor(name, value){
+  return piiRuleForField(name) || piiRuleForValue(value) ||
+    (isSensitiveHeaderName(name) ? { category:'AUTHENTICATION_SECRET', strategy:'secret', source:'legacy-header' } : null);
+}
+function isSensitiveField(name, value){ return !!piiRuleFor(name, value); }
+function maskByStrategy(value, rule){
+  const s = String(value==null?'':value);
+  if(!s) return s;
+  const mc = (rule && rule.maskChar) || '*';
+  switch((rule && rule.strategy) || 'partial'){
+    case 'full': return mc.repeat(Math.min(s.length,10));
+    case 'last4': { const n=Math.min(4,s.length-1); return n<=0 ? mc.repeat(s.length) : mc.repeat(Math.max(4,s.length-n))+s.slice(-n); }
+    case 'last2': { const n=Math.min(2,s.length-1); return n<=0 ? mc.repeat(s.length) : mc.repeat(Math.max(4,s.length-n))+s.slice(-n); }
+    case 'first2last2': return s.length<=4 ? mc.repeat(s.length) : s.slice(0,2)+mc.repeat(Math.max(4,s.length-4))+s.slice(-2);
+    case 'email': { const at=s.indexOf('@'); if(at<1) return maskSecretValue(s); return s[0]+mc.repeat(6)+s.slice(at); }
+    case 'secret': return maskSecretValue(s);
+    case 'partial': default: return s.length<=4 ? mc.repeat(s.length) : s[0]+mc.repeat(Math.max(4,s.length-2))+s.slice(-1);
+  }
+}
+// The one function every render path should call for a scalar example value.
+function displayValueFor(name, value){
+  if(value==null || value==='') return value;
+  const rule = piiRuleFor(name, value);
+  if(!rule) return value;
+  return sensitiveRevealed() ? value : maskByStrategy(value, rule);
+}
+// Recursively masks a JSON example (request/response body) on a clone —
+// never mutates the author's real stored example — honoring the same
+// field rules at any nesting depth, including arrays.
+function maskJsonExampleDeep(obj){
+  if(sensitiveRevealed()) return obj;
+  const walk = (node)=>{
+    if(Array.isArray(node)) return node.map(walk);
+    if(node && typeof node === 'object'){
+      const out = {};
+      Object.keys(node).forEach(k=>{
+        const v = node[k];
+        out[k] = (v && typeof v === 'object') ? walk(v) : displayValueFor(k, v);
+      });
+      return out;
+    }
+    return node;
+  };
+  try{ return walk(JSON.parse(JSON.stringify(obj))); }catch(e){ return obj; }
+}
+// Convenience wrapper for the many places a body example is stored/displayed
+// as a raw JSON *string* (the doc viewer's JSON tabs, the render view, the PDF
+// export). Parses, masks recursively, re-stringifies with the same 2-space
+// indent the app already uses everywhere else. Non-JSON bodies (can't safely
+// find field names in free text) are returned unchanged — that's the one
+// known gap, called out in the security summary rather than silently assumed away.
+function maskedJsonString(rawStr){
+  if(rawStr == null || rawStr === '') return rawStr;
+  if(sensitiveRevealed()) return rawStr;
+  const parsed = tryParseJson(rawStr);
+  if(!parsed.ok) return rawStr;
+  try{ return JSON.stringify(maskJsonExampleDeep(parsed.value), null, 2); }catch(e){ return rawStr; }
+}
+async function loadPiiConfig(){
+  try{
+    const res = await fetch('/api/pii', { credentials:'same-origin' });
+    if(!res.ok) throw new Error('status '+res.status);
+    const data = await res.json();
+    PII_CONFIG = { rules: Array.isArray(data.rules)?data.rules:[], settings: { ...PII_DEFAULT_SETTINGS, ...(data.settings||{}) }, loaded:true };
+  }catch(e){
+    console.error('PII config fetch failed — continuing with built-in rules only (fail closed).', e);
+    PII_CONFIG = { rules:[], settings:{ ...PII_DEFAULT_SETTINGS }, loaded:false };
+  }
+}
+async function piiApi(method, path, body){
+  const res = await fetch('/api/pii'+path, {
+    method, credentials:'same-origin',
+    headers: body ? { 'Content-Type':'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || ('Request failed ('+res.status+')'));
+  return data;
+}
+
 // One env-variable token per environment, e.g. "{{SIT-DNS}}" — shown in place of the
 // resolved host wherever a request URL is displayed, so the real host never appears in
 // the UI unless the viewer has explicitly revealed it (Admin role only).
@@ -2445,9 +2648,19 @@ function envVarToken(envId){ return `{{${envId}-DNS}}`; }
 function sensitiveRevealed(){ return canRevealSensitive() && !!state.sensitiveRevealed; }
 function toggleSensitiveRevealed(){
   if(!canRevealSensitive()){ toast('Only the Admin role can reveal sensitive values'); return; }
-  state.sensitiveRevealed = !state.sensitiveRevealed;
-  renderMain();
-  renderRail();
+  if(state.sensitiveRevealed){
+    state.sensitiveRevealed = false;
+    if(_piiRemaskTimer){ clearTimeout(_piiRemaskTimer); _piiRemaskTimer = null; }
+    renderMain(); renderRail();
+    return;
+  }
+  requestSensitiveReveal('Endpoint doc — sensitive values', ()=>{
+    state.sensitiveRevealed = true;
+    renderMain(); renderRail();
+  }, ()=>{
+    state.sensitiveRevealed = false;
+    renderMain(); renderRail();
+  });
 }
 const ENV_COLOR_PALETTE = ['#8a97b3','#35b8c9','#8b7cf6','#e0a83e','#ef5c6e','#c4529a','#4fb477','#5c8fef','#d97fb0','#7fae4f'];
 function hexToRgb(hex){
@@ -2465,29 +2678,49 @@ function envBgColor(envId){
 }
 
 // ---------- Audit log: who changed what, when ----------
-// Kept in its own localStorage key (separate from the workspace blob) so it
-// survives backup/export cycles independently and keeps growing across sessions.
-// Audit log is shared per-organisation too — populated by loadState() from the server.
-function saveAuditLog(){
-  apiSend('PUT', '/audit-log', { auditLog: state.auditLog })
-    .catch(e=>{ console.error('Save audit log failed', e); });
+// Written server-side only. logAudit()/logSecurityEvent() update the local
+// in-memory list optimistically (so the UI reflects the action instantly)
+// and POST the event to /api/audit/events, which derives actor identity,
+// timestamp, IP, and user-agent from the authenticated session — never from
+// this payload. See server/auditService.js.
+function postAuditEvent(fields){
+  fetch('/api/audit/events', {
+    method:'POST', credentials:'same-origin',
+    headers:{ 'Content-Type':'application/json' },
+    body: JSON.stringify(fields),
+  }).catch(e=>console.error('Audit log write failed', e));
 }
-// action: 'created' | 'updated' | 'deleted' | 'imported'
+// action: 'created' | 'updated' | 'deleted' | 'imported' (existing entity-CRUD vocabulary, unchanged)
 // entityType: 'endpoint' | 'project' | 'environment' | 'profile' | 'document' | 'workspace'
 function logAudit(action, entityType, entityName, details, projectName){
   const entry = {
-    id: uid(),
-    ts: new Date().toISOString(),
+    id: uid(), ts: new Date().toISOString(),
     actor: (state.authorName || '').trim() || 'Unknown',
     action, entityType,
-    entityName: entityName || '',
-    projectName: projectName || '',
-    details: details || '',
+    entityName: entityName || '', projectName: projectName || '', details: details || '',
+    role: state.authorRole || '', severity: 'info', result: 'success',
   };
   state.auditLog = state.auditLog || [];
   state.auditLog.unshift(entry);
   if(state.auditLog.length > AUDIT_LOG_CAP) state.auditLog.length = AUDIT_LOG_CAP;
-  saveAuditLog();
+  postAuditEvent({ action, entityType, entityName, projectName, details });
+}
+// Security-specific events (spec's uppercase vocabulary: PII_REVEAL, ADMIN_SETTING_CHANGED,
+// PII_MASK_RULE_CREATED/UPDATED/DELETED, ...). Same table, same server-side identity — just
+// a distinct helper so call sites read clearly and can pass severity/environment/metadata.
+// NEVER pass a raw sensitive value in `metadata` — field names and reasons only.
+function logSecurityEvent(action, { entityType, entityName, details, environment, severity, metadata } = {}){
+  const entry = {
+    id: uid(), ts: new Date().toISOString(),
+    actor: (state.authorName || '').trim() || 'Unknown',
+    action, entityType: entityType || 'security',
+    entityName: entityName || '', projectName: '', details: details || '',
+    role: state.authorRole || '', severity: severity || 'warning', result: 'success',
+  };
+  state.auditLog = state.auditLog || [];
+  state.auditLog.unshift(entry);
+  if(state.auditLog.length > AUDIT_LOG_CAP) state.auditLog.length = AUDIT_LOG_CAP;
+  postAuditEvent({ action, entityType: entityType || 'security', entityName, details, environment, severity, metadata });
 }
 
 // ---------- Request flow direction: built-in presets + user-defined custom ones ----------
@@ -2816,7 +3049,6 @@ async function loadState(){
     Object.values(state.projects).forEach(ensureProjectDefaults);
     state.requestHistory = ws.requestHistory || {};
     state.environments = (Array.isArray(ws.environments) && ws.environments.length) ? ws.environments.map(migrateEnvironment) : [];
-    state.auditLog = Array.isArray(ws.auditLog) ? ws.auditLog : [];
     state.customFlowDirections = Array.isArray(ws.customFlowDirections) ? ws.customFlowDirections : [];
     state.envTableStatus = 'ready';
   }catch(e){
@@ -2824,11 +3056,25 @@ async function loadState(){
     state.projects = {};
     state.requestHistory = {};
     state.environments = [];
-    state.auditLog = [];
     state.customFlowDirections = [];
     state.envTableStatus = 'error';
     toast('Could not load your workspace from the server — check your connection and reload.');
   }
+
+  // Audit log now comes from the authoritative audit_logs table (GET /api/audit/events),
+  // not the old client-writable workspace blob.
+  try{
+    const res = await fetch('/api/audit/events', { credentials:'same-origin' });
+    const data = await res.json();
+    state.auditLog = Array.isArray(data.entries) ? data.entries : [];
+  }catch(e){
+    console.error('Failed to load audit log from server', e);
+    state.auditLog = [];
+  }
+
+  // PII masking config — fails closed (see loadPiiConfig) so a failed fetch
+  // still leaves built-in field/pattern rules in effect.
+  await loadPiiConfig();
 
   const theme = localStorage.getItem(THEME_KEY);
   state.theme = theme === 'light' ? 'light' : 'dark';
@@ -2912,9 +3158,16 @@ function isMobileLayout(){ return window.matchMedia('(max-width:820px)').matches
 function applySidebarCollapsed(){
   const app = document.getElementById('app');
   const btn = document.getElementById('btnSidebarToggle');
-  app.classList.toggle('sb-collapsed', !!state.sidebarCollapsed);
-  btn.setAttribute('aria-expanded', String(!state.sidebarCollapsed));
-  btn.title = state.sidebarCollapsed ? 'Show sidebar (Ctrl/Cmd+B)' : 'Hide sidebar (Ctrl/Cmd+B)';
+  const edgeBtn = document.getElementById('btnSidebarEdgeToggle');
+  const collapsed = !!state.sidebarCollapsed;
+  app.classList.toggle('sb-collapsed', collapsed);
+  btn.setAttribute('aria-expanded', String(!collapsed));
+  btn.title = collapsed ? 'Show sidebar (Ctrl/Cmd+B)' : 'Hide sidebar (Ctrl/Cmd+B)';
+  if(edgeBtn){
+    edgeBtn.setAttribute('aria-expanded', String(!collapsed));
+    edgeBtn.title = collapsed ? 'Expand sidebar (Ctrl/Cmd+B)' : 'Collapse sidebar (Ctrl/Cmd+B)';
+    edgeBtn.querySelector('svg').style.transform = collapsed ? 'rotate(180deg)' : 'rotate(0deg)';
+  }
 }
 
 function toggleSidebar(){
@@ -3396,7 +3649,8 @@ function headerList(proj, ep){
   const hdrs = ep.headers || (ep.parameters||[]).filter(p=>p.in==='header');
   hdrs.forEach(p=>{
     let val = p.example || `<${p.name}>`;
-    if(p.example && isSensitiveHeaderName(p.name) && !reveal) val = maskSecretValue(p.example);
+    const rule = p.example ? piiRuleFor(p.name, p.example) : null;
+    if(rule && !reveal) val = maskByStrategy(p.example, rule);
     headers.push([p.name, val]);
   });
   return headers;
@@ -3411,7 +3665,9 @@ function curlSample(proj, ep){
     lines.push(`  --header "${k}: ${v}"${isLast ? '' : ' \\'}`);
   });
   if(ep.requestBody && ep.requestBody.example){
-    lines.push(`  --data-raw '${ep.requestBody.example.replace(/'/g, "'\\''")}'`);
+    // Body PII is masked exactly like every other render surface (maskedJsonString) —
+    // a code sample is still a place raw customer data could otherwise leak.
+    lines.push(`  --data-raw '${maskedJsonString(ep.requestBody.example).replace(/'/g, "'\\''")}'`);
   }
   return lines.join('\n');
 }
@@ -4310,6 +4566,12 @@ function renderMain(){
     return;
   }
 
+  if(state.selected.type === 'security'){
+    if(!isAdmin()){ state.selected = { type:'home' }; renderControlCenter(main); return; }
+    renderSecurityCenter(main);
+    return;
+  }
+
   if(state.selected.type === 'overview'){
     renderProjectOverview(main, state.selected.projectId);
     return;
@@ -4418,9 +4680,289 @@ function renderControlCenter(main){
   });
 }
 
+/* ==================== SECTION:SECURITY CENTER (Admin only) ====================
+   Three tabs: a computed summary card, admin-managed PII/masking rules, and a
+   REAL runtime scan of this browser's own storage — not a hardcoded "all
+   clear" dashboard. See scanClientStorage() below: it actually enumerates
+   localStorage/sessionStorage/cookies/IndexedDB/Cache API at render time. */
+
+// Known-good keys this app itself writes, with an honest description of what
+// each holds — anything NOT in this list gets flagged for investigation
+// (and anything with a token/secret/password/session-shaped name gets flagged
+// CRITICAL automatically, whether we recognize it or not).
+const STORAGE_KEY_KNOWLEDGE = {
+  apiStudio_theme: { purpose:'UI theme preference (light/dark) — not app data', classification:'PUBLIC', risk:'Low' },
+  apiStudio_env: { purpose:'Last-selected environment tab — not app data', classification:'INTERNAL', risk:'Low' },
+  apiStudio_authorName: { purpose:'Legacy pre-login display name (ignored once signed in)', classification:'INTERNAL', risk:'Low' },
+  apiStudio_authorRole: { purpose:'Legacy pre-login display role (ignored once signed in — the real role always comes from the server session)', classification:'INTERNAL', risk:'Low' },
+  apiStudio_profileColor: { purpose:'Avatar color preference — not app data', classification:'PUBLIC', risk:'Low' },
+  apiStudio_sidebarCollapsed: { purpose:'Sidebar collapsed/expanded UI state', classification:'PUBLIC', risk:'Low' },
+  apiStudio_migratedToServer_v1: { purpose:'One-time flag: has this browser\'s old local data been migrated to Postgres yet', classification:'INTERNAL', risk:'Low' },
+  apiStudio_workspace_v1: { purpose:'Pre-Postgres workspace cache — should be empty post-migration; if present, migration may not have completed for this browser', classification:'CONFIDENTIAL', risk:'Medium' },
+  apiStudio_auditLog: { purpose:'Pre-Postgres audit log cache — should be empty post-migration (audit is now server-authoritative)', classification:'CONFIDENTIAL', risk:'Medium' },
+};
+function classifyStorageKey(mechanism, key, rawValue){
+  const known = STORAGE_KEY_KNOWLEDGE[key];
+  const looksSensitive = !known && /token|secret|password|passwd|auth|session|credential|apikey/i.test(key||'');
+  let sizeBytes = null;
+  try{ if(rawValue!=null) sizeBytes = new Blob([String(rawValue)]).size; }catch(e){}
+  return {
+    mechanism, key,
+    purpose: known ? known.purpose : (looksSensitive ? 'Unrecognized key with a sensitive-looking name — investigate' : 'Unrecognized key — not written by this app\'s known code paths'),
+    classification: known ? known.classification : (looksSensitive ? 'CRITICAL' : 'UNKNOWN'),
+    risk: known ? known.risk : (looksSensitive ? 'Critical' : 'Unknown'),
+    sizeBytes,
+  };
+}
+// Actually enumerates this browser's storage right now — nothing here is
+// pre-computed or assumed. httpOnly cookies (like the real session cookie)
+// are correctly invisible to document.cookie, which is the desired/secure
+// outcome, not a scan gap.
+async function scanClientStorage(){
+  const rows = [];
+  try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); rows.push(classifyStorageKey('localStorage', k, localStorage.getItem(k))); } }catch(e){}
+  try{ for(let i=0;i<sessionStorage.length;i++){ const k=sessionStorage.key(i); rows.push(classifyStorageKey('sessionStorage', k, sessionStorage.getItem(k))); } }catch(e){}
+  try{
+    document.cookie.split(';').map(s=>s.trim()).filter(Boolean).forEach(pair=>{
+      const eq = pair.indexOf('=');
+      const k = eq>-1 ? pair.slice(0,eq) : pair;
+      rows.push(classifyStorageKey('Cookie', k, eq>-1 ? pair.slice(eq+1) : ''));
+    });
+  }catch(e){}
+  try{ if(window.indexedDB && indexedDB.databases){ (await indexedDB.databases()).forEach(d=> rows.push(classifyStorageKey('IndexedDB', d.name || '(unnamed)', null))); } }catch(e){}
+  try{ if(window.caches && caches.keys){ (await caches.keys()).forEach(n=> rows.push(classifyStorageKey('Cache API', n, null))); } }catch(e){}
+  return rows;
+}
+
+const PII_CATEGORY_OPTIONS = ['PUBLIC','INTERNAL','CONFIDENTIAL','PII','SENSITIVE_PII','FINANCIAL','AUTHENTICATION_SECRET'];
+const PII_STRATEGY_OPTIONS = [
+  { id:'partial', label:'Partial (first + last char)' }, { id:'last4', label:'Keep last 4' },
+  { id:'last2', label:'Keep last 2' }, { id:'first2last2', label:'Keep first 2 + last 2' },
+  { id:'email', label:'Email (first char + domain)' }, { id:'full', label:'Full mask' }, { id:'secret', label:'Secret token style' },
+];
+const PII_SURFACE_OPTIONS = [
+  { id:'params', label:'Parameter tables (query/path/body)' }, { id:'headers', label:'Header examples' },
+  { id:'body', label:'JSON body examples & code samples' }, { id:'pdfExport', label:'PDF export' },
+];
+
+function renderSecurityCenter(main){
+  const tab = state.securityTab || 'summary';
+  const settings = PII_CONFIG.settings || {};
+  main.innerHTML = `
+    <div class="crumb">Security</div>
+    <div class="cc-hero">
+      <h1>Security &amp; data protection</h1>
+      <div class="cc-hero-sub">PII masking rules, authorized-reveal auditing, and what this app actually persists in your browser.</div>
+    </div>
+    <div class="resp-tabs" style="margin-bottom:18px;">
+      <button type="button" class="resp-tab ${tab==='summary'?'active':''}" data-sec-tab="summary">Summary</button>
+      <button type="button" class="resp-tab ${tab==='pii'?'active':''}" data-sec-tab="pii">PII &amp; Data Masking</button>
+      <button type="button" class="resp-tab ${tab==='storage'?'active':''}" data-sec-tab="storage">Data Storage</button>
+    </div>
+    <div id="secTabBody"></div>
+  `;
+  main.querySelectorAll('[data-sec-tab]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      state.securityTab = btn.getAttribute('data-sec-tab');
+      renderSecurityCenter(main);
+    });
+  });
+  const body = document.getElementById('secTabBody');
+  if(tab === 'summary') renderSecuritySummaryTab(body);
+  else if(tab === 'pii') renderPiiRulesTab(body);
+  else renderStorageScanTab(body);
+}
+
+function renderSecuritySummaryTab(body){
+  const settings = PII_CONFIG.settings || {};
+  const lastScan = state._lastStorageScan;
+  const riskyCount = lastScan ? lastScan.filter(r=>r.risk==='Critical' || r.risk==='High').length : null;
+  const row = (label, value, ok)=>`<tr><td>${label}</td><td style="text-align:right;"><span style="color:${ok?'var(--post)':'var(--put)'};font-weight:700;">${ok?'● ':'○ '}${value}</span></td></tr>`;
+  body.innerHTML = `
+    <div class="section" style="max-width:640px;">
+      <div class="section-title">Security status</div>
+      <table class="data-table"><tbody>
+        ${row('PII protection', settings.automaticProtection===false?'Disabled':'Enabled', settings.automaticProtection!==false)}
+        ${row('Automatic field detection', settings.automaticProtection===false?'Off':'On', settings.automaticProtection!==false)}
+        ${row('Production masking policy', (settings.environmentPolicy&&settings.environmentPolicy.PROD)||'strict', true)}
+        ${row('Audit storage', 'PostgreSQL (server-authoritative)', true)}
+        ${row('PII reveal auditing', 'Enabled — requires reason, auto-remasks after '+(settings.revealTimeoutSeconds||60)+'s', true)}
+        ${row('Browser sensitive storage', riskyCount===null ? 'Not yet scanned' : (riskyCount+' risk'+(riskyCount===1?'':'s')+' detected'), riskyCount===0)}
+      </tbody></table>
+      <div style="margin-top:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <button type="button" class="primary" id="btnRunScanFromSummary">Run security scan</button>
+        ${state._lastStorageScanAt ? `<span style="font-size:11px;color:var(--text-faint);">Last scan: ${new Date(state._lastStorageScanAt).toLocaleString()}</span>` : ''}
+      </div>
+      ${riskyCount ? `<div style="margin-top:10px;font-size:12px;color:var(--delete);">⚠ ${riskyCount} browser storage risk${riskyCount===1?'':'s'} detected — see the Data Storage tab for details.</div>` : ''}
+    </div>`;
+  document.getElementById('btnRunScanFromSummary').addEventListener('click', async ()=>{
+    state._lastStorageScan = await scanClientStorage();
+    state._lastStorageScanAt = new Date().toISOString();
+    renderSecuritySummaryTab(body);
+  });
+}
+
+function renderStorageScanTab(body){
+  body.innerHTML = `<div class="section"><div class="section-title">Data storage inventory</div>
+    <div style="font-size:12px;color:var(--text-faint);margin-bottom:12px;">Scans this browser's actual localStorage, sessionStorage, cookies, IndexedDB, and Cache API right now — this is a live read, not a hardcoded list.</div>
+    <div id="storageScanBody"><button type="button" class="primary" id="btnRunScan">Run security scan</button></div>
+  </div>`;
+  const scanBody = document.getElementById('storageScanBody');
+  const renderRows = (rows)=>{
+    const riskColor = r=> r==='Critical'?'var(--delete)': r==='High'?'var(--put)': r==='Medium'?'#e0a83e': r==='Unknown'?'var(--text-faint)':'var(--post)';
+    scanBody.innerHTML = !rows.length ? `<div class="empty-field">No client-side storage detected.</div>` : `
+      <table class="data-table"><thead><tr><th>Storage</th><th>Key / Name</th><th>Purpose</th><th>Classification</th><th>Risk</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr>
+        <td><span class="al-entity-type">${escapeHtml(r.mechanism)}</span></td>
+        <td class="mono">${escapeHtml(r.key)}</td>
+        <td style="color:var(--text-dim);">${escapeHtml(r.purpose)}</td>
+        <td class="mono">${escapeHtml(r.classification)}</td>
+        <td><span style="color:${riskColor(r.risk)};font-weight:700;">${escapeHtml(r.risk)}</span></td>
+      </tr>`).join('')}</tbody></table>
+      <div style="margin-top:12px;"><button type="button" id="btnRescan">Re-run scan</button></div>`;
+    const rescan = document.getElementById('btnRescan');
+    if(rescan) rescan.addEventListener('click', runScan);
+  };
+  async function runScan(){
+    scanBody.innerHTML = `<div class="empty-field">Scanning…</div>`;
+    const rows = await scanClientStorage();
+    state._lastStorageScan = rows;
+    state._lastStorageScanAt = new Date().toISOString();
+    renderRows(rows);
+  }
+  document.getElementById('btnRunScan') && document.getElementById('btnRunScan').addEventListener('click', runScan);
+  if(state._lastStorageScan) renderRows(state._lastStorageScan);
+}
+
+function renderPiiRulesTab(body){
+  const s = PII_CONFIG.settings || {};
+  const rules = PII_CONFIG.rules || [];
+  body.innerHTML = `
+    <div class="section" style="margin-bottom:20px;">
+      <div class="section-title">Automatic protection</div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px;">
+        <input type="checkbox" id="piiAutoToggle" ${s.automaticProtection!==false?'checked':''}>
+        Automatically detect &amp; mask PII by field name and value pattern (not just admin-defined rules below)
+      </label>
+      <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Reveal auto-remask timeout (seconds)</label>
+      <input type="number" id="piiTimeoutInput" value="${s.revealTimeoutSeconds||60}" min="10" max="3600" style="width:100px;">
+      <div style="margin-top:14px;"><button type="button" class="primary" id="btnSavePiiSettings">Save settings</button></div>
+    </div>
+    <div class="section">
+      <div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>Sensitive fields</span>
+        <button type="button" id="btnAddRule">+ Add sensitive field</button>
+      </div>
+      <table class="data-table"><thead><tr><th>Field</th><th>Category</th><th>Masking</th><th>Status</th><th></th></tr></thead>
+        <tbody>${rules.length ? rules.map(r=>`<tr>
+          <td class="mono">${escapeHtml(r.fieldName)}</td>
+          <td>${escapeHtml(r.category)}</td>
+          <td>${escapeHtml((PII_STRATEGY_OPTIONS.find(o=>o.id===r.maskingStrategy)||{}).label || r.maskingStrategy)}</td>
+          <td><span style="color:${r.enabled?'var(--post)':'var(--text-faint)'};font-weight:700;">${r.enabled?'● Active':'○ Disabled'}</span></td>
+          <td style="text-align:right;white-space:nowrap;">
+            <button type="button" class="icon-btn" data-edit-rule="${r.id}" title="Edit">✎</button>
+            <button type="button" class="icon-btn" data-delete-rule="${r.id}" title="Delete">🗑</button>
+          </td>
+        </tr>`).join('') : `<tr><td colspan="5" class="empty-field" style="padding:16px;">No admin-defined rules yet — built-in detection (mobile, email, PAN, Aadhaar, account/card numbers, etc.) still applies.</td></tr>`}</tbody>
+      </table>
+    </div>
+    <div id="piiRuleFormWrap"></div>
+  `;
+  document.getElementById('btnSavePiiSettings').addEventListener('click', async ()=>{
+    try{
+      const next = await piiApi('PUT','/settings', {
+        automaticProtection: document.getElementById('piiAutoToggle').checked,
+        revealTimeoutSeconds: parseInt(document.getElementById('piiTimeoutInput').value,10) || 60,
+        environmentPolicy: s.environmentPolicy, surfaces: s.surfaces,
+      });
+      PII_CONFIG.settings = next.settings;
+      logSecurityEvent('ADMIN_SETTING_CHANGED', { entityType:'pii_settings', details:'Updated PII & data masking settings', severity:'warning' });
+      toast('Settings saved');
+      renderPiiRulesTab(body);
+    }catch(e){ toast(e.message || 'Could not save settings'); }
+  });
+  document.getElementById('btnAddRule').addEventListener('click', ()=> openPiiRuleForm(body, null));
+  body.querySelectorAll('[data-edit-rule]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openPiiRuleForm(body, rules.find(r=>String(r.id)===btn.getAttribute('data-edit-rule'))));
+  });
+  body.querySelectorAll('[data-delete-rule]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const id = btn.getAttribute('data-delete-rule');
+      const ok = await openConfirmModal({ title:'Delete this rule?', message:'This sensitive-field rule will stop being masked by admin configuration (built-in detection may still catch it).', confirmLabel:'Delete' });
+      if(!ok) return;
+      try{
+        await piiApi('DELETE', '/rules/'+id);
+        PII_CONFIG.rules = PII_CONFIG.rules.filter(r=>String(r.id)!==id);
+        toast('Rule deleted');
+        renderPiiRulesTab(body);
+      }catch(e){ toast(e.message || 'Could not delete rule'); }
+    });
+  });
+}
+
+function openPiiRuleForm(body, existing){
+  const wrap = document.getElementById('piiRuleFormWrap');
+  const envOpts = environments();
+  wrap.innerHTML = `
+    <div class="section" style="margin-top:16px;border-color:var(--accent);">
+      <div class="section-title">${existing ? 'Edit sensitive field' : 'Add sensitive field'}</div>
+      <label style="display:block;font-size:12px;font-weight:600;margin:8px 0 4px;">Field name</label>
+      <input type="text" id="rfName" value="${existing ? escapeHtml(existing.fieldName) : ''}" placeholder="e.g. mobileNumber" style="width:100%;max-width:320px;">
+      <label style="display:block;font-size:12px;font-weight:600;margin:12px 0 4px;">Matching</label>
+      <select id="rfMatch" style="max-width:320px;">
+        ${['case_insensitive','exact','nested','regex'].map(m=>`<option value="${m}" ${existing&&existing.matchMode===m?'selected':''}>${m==='case_insensitive'?'Case insensitive':m==='exact'?'Exact':m==='nested'?'Nested JSON path (a.b.c)':'Regex'}</option>`).join('')}
+      </select>
+      <label style="display:block;font-size:12px;font-weight:600;margin:12px 0 4px;">Category</label>
+      <select id="rfCategory" style="max-width:320px;">${PII_CATEGORY_OPTIONS.map(c=>`<option value="${c}" ${existing&&existing.category===c?'selected':''}>${c}</option>`).join('')}</select>
+      <label style="display:block;font-size:12px;font-weight:600;margin:12px 0 4px;">Masking strategy</label>
+      <select id="rfStrategy" style="max-width:320px;">${PII_STRATEGY_OPTIONS.map(o=>`<option value="${o.id}" ${existing&&existing.maskingStrategy===o.id?'selected':''}>${o.label}</option>`).join('')}</select>
+      <label style="display:block;font-size:12px;font-weight:600;margin:12px 0 4px;">Apply to</label>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:6px;">
+        ${PII_SURFACE_OPTIONS.map(o=>`<label style="font-size:12px;display:flex;align-items:center;gap:5px;"><input type="checkbox" data-rf-apply="${o.id}" ${(!existing || (existing.applyTo||[]).includes(o.id))?'checked':''}>${o.label}</label>`).join('')}
+      </div>
+      <label style="display:block;font-size:12px;font-weight:600;margin:12px 0 4px;">Environments</label>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:6px;">
+        ${envOpts.map(e=>`<label style="font-size:12px;display:flex;align-items:center;gap:5px;"><input type="checkbox" data-rf-env="${e.id}" ${(!existing || (existing.environments||[]).includes(e.id))?'checked':''}>${e.label}</label>`).join('')}
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:12px 0;">
+        <input type="checkbox" id="rfEnabled" ${!existing || existing.enabled ? 'checked' : ''}> Enabled
+      </label>
+      <div class="modal-actions" style="justify-content:flex-end;">
+        <div class="right">
+          <button type="button" id="rfCancel">Cancel</button>
+          <button type="button" class="primary" id="rfSave">${existing?'Save changes':'Save rule'}</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('rfCancel').addEventListener('click', ()=>{ wrap.innerHTML=''; });
+  document.getElementById('rfSave').addEventListener('click', async ()=>{
+    const fieldName = document.getElementById('rfName').value.trim();
+    if(!fieldName){ toast('Field name is required'); return; }
+    const payload = {
+      fieldName,
+      matchMode: document.getElementById('rfMatch').value,
+      category: document.getElementById('rfCategory').value,
+      maskingStrategy: document.getElementById('rfStrategy').value,
+      applyTo: Array.from(wrap.querySelectorAll('[data-rf-apply]:checked')).map(el=>el.getAttribute('data-rf-apply')),
+      environments: Array.from(wrap.querySelectorAll('[data-rf-env]:checked')).map(el=>el.getAttribute('data-rf-env')),
+      enabled: document.getElementById('rfEnabled').checked,
+      charsToKeep: 4,
+    };
+    try{
+      let result;
+      if(existing) result = await piiApi('PUT', '/rules/'+existing.id, payload);
+      else result = await piiApi('POST', '/rules', payload);
+      if(existing) PII_CONFIG.rules = PII_CONFIG.rules.map(r=> r.id===existing.id ? result.rule : r);
+      else PII_CONFIG.rules = [...PII_CONFIG.rules, result.rule];
+      toast(existing ? 'Rule updated' : 'Rule added');
+      wrap.innerHTML = '';
+      renderPiiRulesTab(document.getElementById('secTabBody'));
+    }catch(e){ toast(e.message || 'Could not save rule'); }
+  });
+}
+
 function renderErrorCatalog(main){
   main.innerHTML = `
-    <div class="crumb">Error Catalog</div>
     <div class="cc-hero">
       <h1>Standard error codes</h1>
       <div class="cc-hero-sub">A shared reference so every API in this workspace returns consistent, predictable error codes.</div>
@@ -4880,8 +5422,14 @@ function bindEnvTableEvents(container){
       ev.stopPropagation();
       const id = btn.getAttribute('data-env-reveal');
       if(!canRevealSensitive()){ toast('Only the Admin role can reveal endpoint values'); return; }
-      if(state.envUrlRevealed[id]) delete state.envUrlRevealed[id]; else state.envUrlRevealed[id] = true;
-      renderEnvTableSection();
+      if(state.envUrlRevealed[id]){ delete state.envUrlRevealed[id]; renderEnvTableSection(); return; }
+      requestSensitiveReveal(`Environment URL — ${id}`, ()=>{
+        state.envUrlRevealed[id] = true;
+        renderEnvTableSection();
+      }, ()=>{
+        delete state.envUrlRevealed[id];
+        renderEnvTableSection();
+      });
     });
   });
 
@@ -5601,10 +6149,16 @@ function paramSection(title, params, variant){
     tintStyle = ` style="--pt-accent:var(${colorVar}); --pt-bg:var(${bgVar});"`;
   }
   const revealed = sensitiveRevealed();
-  const anySensitive = variant === 'header' && params.some(p=>p.example && isSensitiveHeaderName(p.name));
-  const rows = params.map(p=>{
-    const masked = variant === 'header' && p.example && isSensitiveHeaderName(p.name) && !revealed;
-    const displayVal = p.example ? (masked ? maskSecretValue(p.example) : p.example) : '';
+  // Every row goes through the centralized PII engine now — field name +
+  // value pattern + admin-defined rules — not just header rows against a
+  // fixed secret-keyword list. A "mobileNumber" query/body param is caught
+  // here exactly the same way a CLIENT-SECRET header is.
+  const rules = params.map(p=> p.example ? piiRuleFor(p.name, p.example) : null);
+  const anySensitive = rules.some(Boolean);
+  const rows = params.map((p,i)=>{
+    const rule = rules[i];
+    const masked = !!rule && !revealed;
+    const displayVal = p.example ? (masked ? maskByStrategy(p.example, rule) : p.example) : '';
     return `<tr>
     <td><span class="pname" style="${boldNames?'font-weight:800;color:var(--text);':''}">${escapeHtml(p.name)}</span>${p.required?'<span class="req-star">*</span>':''}</td>
     <td><span class="ptype">${escapeHtml(p.type)}</span></td>
@@ -5792,13 +6346,13 @@ function renderEndpointDoc(main, proj, ep){
             <span>Request JSON${reqExampleList.length>1 ? ' — pick an example' : ''}</span>
             ${reqExampleList.length>1 ? `<select class="render-example-select" id="docReqExampleSelect">${reqExampleList.map((ex,i)=>`<option value="${i}">${escapeHtml(ex.label)}</option>`).join('')}</select>` : ''}
           </div>
-          <div class="code-wrap"><pre class="code-block" id="docReqJsonBlock">${escapeHtml(reqExampleList[0].value)}</pre><button class="copy-btn" data-copy-block="reqbody">Copy</button></div>`;
-        let current = reqExampleList[0].value;
+          <div class="code-wrap"><pre class="code-block" id="docReqJsonBlock">${escapeHtml(maskedJsonString(reqExampleList[0].value))}</pre><button class="copy-btn" data-copy-block="reqbody">Copy</button></div>`;
+        let current = maskedJsonString(reqExampleList[0].value);
         const cp = panel.querySelector('[data-copy-block="reqbody"]');
         if(cp) cp.addEventListener('click', (ev)=>copyToClipboard(current, ev.currentTarget));
         const sel = panel.querySelector('#docReqExampleSelect');
         if(sel) sel.addEventListener('change', ()=>{
-          current = reqExampleList[parseInt(sel.value,10)].value;
+          current = maskedJsonString(reqExampleList[parseInt(sel.value,10)].value);
           panel.querySelector('#docReqJsonBlock').textContent = current;
         });
       } else {
@@ -5832,13 +6386,13 @@ function renderEndpointDoc(main, proj, ep){
             <span>Response JSON${respExampleList.length>1 ? ' — pick an example' : ''}</span>
             ${respExampleList.length>1 ? `<select class="render-example-select" id="docRespExampleSelect-${idx}">${respExampleList.map((ex,i)=>`<option value="${i}">${escapeHtml(ex.label)}</option>`).join('')}</select>` : ''}
           </div>
-          <div class="code-wrap"><pre class="code-block" id="docRespJsonBlock-${idx}">${escapeHtml(respExampleList[0].value)}</pre><button class="copy-btn" data-copy-resp="${idx}">Copy</button></div>`;
-        let current = respExampleList[0].value;
+          <div class="code-wrap"><pre class="code-block" id="docRespJsonBlock-${idx}">${escapeHtml(maskedJsonString(respExampleList[0].value))}</pre><button class="copy-btn" data-copy-resp="${idx}">Copy</button></div>`;
+        let current = maskedJsonString(respExampleList[0].value);
         const cp = panel.querySelector(`[data-copy-resp="${idx}"]`);
         if(cp) cp.addEventListener('click', (ev)=>copyToClipboard(current, ev.currentTarget));
         const sel = panel.querySelector(`#docRespExampleSelect-${idx}`);
         if(sel) sel.addEventListener('change', ()=>{
-          current = respExampleList[parseInt(sel.value,10)].value;
+          current = maskedJsonString(respExampleList[parseInt(sel.value,10)].value);
           panel.querySelector(`#docRespJsonBlock-${idx}`).textContent = current;
         });
       } else {
@@ -5947,6 +6501,45 @@ document.getElementById('confirmModalOk').addEventListener('click', ()=> closeCo
 document.getElementById('confirmModal').addEventListener('click', (e)=>{
   if(e.target.id === 'confirmModal') closeConfirmModal(false);
 });
+
+// ---------- Authorized reveal: reason prompt + audit event + auto-remask ----------
+// Every "eye" toggle in the app (env URLs, header secrets, code-sample rail)
+// funnels through this so revealing is never a silent client-side flip: it's
+// gated on the Admin role (canRevealSensitive), requires a reason, is written
+// to the server-authoritative audit log, and auto-remasks after the org's
+// configured timeout rather than staying revealed indefinitely.
+let _piiRevealResolve = null;
+function openPiiRevealModal(){
+  const secs = (PII_CONFIG.settings && PII_CONFIG.settings.revealTimeoutSeconds) || 60;
+  document.getElementById('piiRevealReason').value = '';
+  document.getElementById('piiRevealTimeoutNote').textContent = `Value will automatically re-mask after ${secs} seconds.`;
+  document.getElementById('piiRevealModal').classList.add('show');
+  setTimeout(()=> document.getElementById('piiRevealReason').focus(), 30);
+  return new Promise(resolve=>{ _piiRevealResolve = resolve; });
+}
+function closePiiRevealModal(reason){
+  document.getElementById('piiRevealModal').classList.remove('show');
+  if(_piiRevealResolve){ _piiRevealResolve(reason); _piiRevealResolve = null; }
+}
+document.getElementById('piiRevealCancel').addEventListener('click', ()=> closePiiRevealModal(null));
+document.getElementById('piiRevealOk').addEventListener('click', ()=>{
+  closePiiRevealModal(document.getElementById('piiRevealReason').value.trim() || '(no reason given)');
+});
+document.getElementById('piiRevealModal').addEventListener('click', (e)=>{
+  if(e.target.id === 'piiRevealModal') closePiiRevealModal(null);
+});
+let _piiRemaskTimer = null;
+// context: short human label of what's being revealed, e.g. "CLIENT-SECRET header"
+async function requestSensitiveReveal(context, onGranted, onAutoRemask){
+  if(!canRevealSensitive()){ toast('Only the Admin role can reveal sensitive values'); return; }
+  const reason = await openPiiRevealModal();
+  if(reason === null) return; // cancelled
+  logSecurityEvent('PII_REVEAL', { entityType:'security', entityName: context, severity:'warning', metadata:{ field: context, reason } });
+  onGranted();
+  if(_piiRemaskTimer) clearTimeout(_piiRemaskTimer);
+  const secs = (PII_CONFIG.settings && PII_CONFIG.settings.revealTimeoutSeconds) || 60;
+  _piiRemaskTimer = setTimeout(()=>{ if(onAutoRemask) onAutoRemask(); }, secs*1000);
+}
 
 document.getElementById('credentialModalDone').addEventListener('click', closeCredentialModal);
 document.getElementById('credentialModalCopy').addEventListener('click', (e)=>{
@@ -7066,15 +7659,15 @@ function wireRenderSheet(proj, ep){
                  <button class="copy-btn" style="position:static;" id="renderCopyBody">Copy</button>
                </div>
              </div>
-             <pre class="code-block" id="reqJsonBlock">${escapeHtml(list[0].value)}</pre>
+             <pre class="code-block" id="reqJsonBlock">${escapeHtml(maskedJsonString(list[0].value))}</pre>
            </div>`
         : `<div class="render-empty">No request JSON documented.</div>`;
-      let current = list[0] ? list[0].value : '';
+      let current = list[0] ? maskedJsonString(list[0].value) : '';
       const cp = document.getElementById('renderCopyBody');
       if(cp) cp.addEventListener('click', (e)=>copyToClipboard(current, e.currentTarget));
       const sel = document.getElementById('reqExampleSelect');
       if(sel) sel.addEventListener('change', ()=>{
-        current = list[parseInt(sel.value,10)].value;
+        current = maskedJsonString(list[parseInt(sel.value,10)].value);
         document.getElementById('reqJsonBlock').textContent = current;
       });
     } else {
@@ -7114,19 +7707,19 @@ function wireRenderSheet(proj, ep){
                     ${r.example ? '<button class="copy-btn" style="position:static;" id="renderCopyResp">Copy</button>' : ''}
                   </div>
                 </div>
-                <pre class="code-block" id="respJsonBlock">${r.example ? escapeHtml(list[0].value) : '<span class="render-empty">No example body.</span>'}</pre>
+                <pre class="code-block" id="respJsonBlock">${r.example ? escapeHtml(maskedJsonString(list[0].value)) : '<span class="render-empty">No example body.</span>'}</pre>
               </div>`;
             })()}`;
       panel.querySelectorAll('[data-rtab]').forEach(b=>{
         b.addEventListener('click', ()=>{ activeTab = b.getAttribute('data-rtab'); renderTab(); });
       });
       const respList = [{ value: r.example || '' }, ...((r.examples)||[]).map(ex=>({ value: ex.value }))];
-      let currentResp = respList[0] ? respList[0].value : '';
+      let currentResp = respList[0] ? maskedJsonString(respList[0].value) : '';
       const cp = document.getElementById('renderCopyResp');
       if(cp) cp.addEventListener('click', (e)=>copyToClipboard(currentResp, e.currentTarget));
       const respSel = document.getElementById('respExampleSelect');
       if(respSel) respSel.addEventListener('change', ()=>{
-        currentResp = respList[parseInt(respSel.value,10)].value;
+        currentResp = maskedJsonString(respList[parseInt(respSel.value,10)].value);
         document.getElementById('respJsonBlock').textContent = currentResp;
       });
     }
@@ -7153,6 +7746,12 @@ function auditActionMeta(action){
   if(action === 'updated')  return { label:'Updated',  color:'#e0a83e', bg:'rgba(224,168,62,.14)'  };
   if(action === 'deleted')  return { label:'Deleted',  color:'#ef5c6e', bg:'rgba(239,92,110,.14)'  };
   if(action === 'imported') return { label:'Imported', color:'#4fa3f7', bg:'rgba(79,163,247,.14)'  };
+  if(action === 'PII_REVEAL') return { label:'PII Reveal', color:'#ef5c6e', bg:'rgba(239,92,110,.14)' };
+  if(action.startsWith('PII_MASK_RULE_')) return { label: action.replace('PII_MASK_RULE_','Rule ').replace('_',' ').toLowerCase().replace(/^\w/,c=>c.toUpperCase()), color:'#b389f0', bg:'rgba(179,137,240,.14)' };
+  if(action === 'ADMIN_SETTING_CHANGED') return { label:'Admin Setting', color:'#b389f0', bg:'rgba(179,137,240,.14)' };
+  if(action === 'LEGACY_AUDIT_IMPORTED') return { label:'Legacy Import', color:'#8a97b3', bg:'rgba(138,151,179,.14)' };
+  if(action.startsWith('LOGIN')) return { label:'Login', color:'#35c491', bg:'rgba(53,196,145,.14)' };
+  if(action.startsWith('LOGOUT')) return { label:'Logout', color:'#8a97b3', bg:'rgba(138,151,179,.14)' };
   return { label: action, color:'#8a97b3', bg:'rgba(138,151,179,.14)' };
 }
 function buildAuditLogHtml(){
@@ -7164,10 +7763,10 @@ function buildAuditLogHtml(){
     const dt = new Date(e.ts);
     const when = isNaN(dt.getTime()) ? '' : dt.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) + ', ' + dt.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit',second:'2-digit'});
     const tsMs = isNaN(dt.getTime()) ? '' : dt.getTime();
-    return `<tr data-search="${escapeHtml((e.actor+' '+e.entityType+' '+e.entityName+' '+e.projectName+' '+e.details+' '+meta.label).toLowerCase())}" data-action="${escapeHtml(e.action)}" data-entity="${escapeHtml(e.entityType)}" data-actor="${escapeHtml(e.actor)}" data-ts="${tsMs}">
+    return `<tr data-search="${escapeHtml((e.actor+' '+e.entityType+' '+e.entityName+' '+e.projectName+' '+e.details+' '+meta.label+' '+(e.role||'')+' '+(e.severity||'')).toLowerCase())}" data-action="${escapeHtml(e.action)}" data-entity="${escapeHtml(e.entityType)}" data-actor="${escapeHtml(e.actor)}" data-ts="${tsMs}">
       <td class="al-when"><span class="al-when-main">${when.split(',')[0]}</span><span class="al-when-sub">${when.split(',').slice(1).join(',').trim()}</span></td>
-      <td><span class="al-actor"><span class="al-avatar">${escapeHtml((e.actor||'?').slice(0,1).toUpperCase())}</span>${escapeHtml(e.actor)}</span></td>
-      <td><span class="al-badge" style="color:${meta.color};background:${meta.bg};">${meta.label}</span></td>
+      <td><span class="al-actor"><span class="al-avatar">${escapeHtml((e.actor||'?').slice(0,1).toUpperCase())}</span>${escapeHtml(e.actor)}${e.role ? `<span style="margin-left:6px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-faint);background:var(--surface-2);padding:2px 6px;border-radius:5px;">${escapeHtml(e.role)}</span>` : ''}</span></td>
+      <td><span class="al-badge" style="color:${meta.color};background:${meta.bg};">${e.severity==='critical'?'⛔ ':e.severity==='warning'?'⚠ ':''}${meta.label}</span></td>
       <td><span class="al-entity-type">${escapeHtml(e.entityType)}</span></td>
       <td class="al-entity-name">${escapeHtml(e.entityName || '—')}</td>
       <td class="al-project">${escapeHtml(e.projectName || '—')}</td>
@@ -7643,7 +8242,7 @@ function buildExportPdfEndpointSection(proj, ep, index){
 
     ${allParams.length ? `<div class="pdf-atom">${paramSection('Path &amp; query parameters', allParams)}</div>` : ''}
     ${headerParams.length ? `<div class="pdf-atom">${paramSection('Headers', headerParams, 'header')}</div>` : ''}
-    ${hasReqBody ? `<div class="pdf-atom"><div class="pdf-code-card"><div class="pdf-code-head">Example request body</div><pre class="pdf-code">${escapeHtml(ep.requestBody.example)}</pre></div></div>` : ''}
+    ${hasReqBody ? `<div class="pdf-atom"><div class="pdf-code-card"><div class="pdf-code-head">Example request body</div><pre class="pdf-code">${escapeHtml(maskedJsonString(ep.requestBody.example))}</pre></div></div>` : ''}
 
     <div class="pdf-atom pdf-atom-tight"><div class="pdf-section-title">Responses</div></div>
     ${responses.length ? responses.map(r=>{
@@ -7655,7 +8254,7 @@ function buildExportPdfEndpointSection(proj, ep, index){
             <span class="pdf-resp-desc">${escapeHtml(r.description || '')}</span>
           </div>
           ${r.fields && r.fields.length ? paramSection('Response fields', r.fields, r.code) : ''}
-          ${r.example ? `<div class="pdf-code-card"><div class="pdf-code-head">Example response</div><pre class="pdf-code">${escapeHtml(r.example)}</pre></div>` : ''}
+          ${r.example ? `<div class="pdf-code-card"><div class="pdf-code-head">Example response</div><pre class="pdf-code">${escapeHtml(maskedJsonString(r.example))}</pre></div>` : ''}
         </div>
       </div>`;
     }).join('') : '<div class="pdf-atom pdf-atom-tight"><div class="pdf-empty">No responses documented.</div></div>'}
@@ -7776,6 +8375,11 @@ document.getElementById('fileInput').addEventListener('change', (e)=>{
   e.target.value = '';
 });
 document.getElementById('btnAuditLog').addEventListener('click', openAuditLogTab);
+document.getElementById('btnSecurityCenter').addEventListener('click', ()=>{
+  state.selected = { type:'security' };
+  state.securityTab = state.securityTab || 'summary';
+  renderMain();
+});
 document.getElementById('btnFab').addEventListener('click', ()=>{
   if(!canEdit()){ toast(`Your role (${roleMeta(state.authorRole).label}) is read-only`); return; }
   openManualModal();
@@ -7979,6 +8583,7 @@ document.addEventListener('keydown', (e)=>{
 
 /* ---------- Sidebar / rail chrome toggles ---------- */
 document.getElementById('btnSidebarToggle').addEventListener('click', toggleSidebar);
+document.getElementById('btnSidebarEdgeToggle').addEventListener('click', toggleSidebar);
 
 /* ---------- Environment dropdown (delegated — #envSwitcher itself persists across re-renders) ---------- */
 document.getElementById('envSwitcher').addEventListener('click', (e)=>{
@@ -8067,6 +8672,7 @@ document.getElementById('railScrim').addEventListener('click', ()=>{
 (async function boot(){
   await loadState();
   renderAuthorLabel();
+  document.getElementById('btnSecurityCenter').style.display = isAdmin() ? '' : 'none';
   renderAll();
 })();
 </script>
