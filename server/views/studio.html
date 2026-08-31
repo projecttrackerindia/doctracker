@@ -1246,6 +1246,37 @@ pre.code-block{
 .env-settings-summary .bar{ flex:1; height:4px; border-radius:99px; background:var(--surface-2); overflow:hidden; }
 .env-settings-summary .bar-fill{ height:100%; background:var(--get); border-radius:99px; transition:width .2s ease; }
 
+/* ---------- Release Pipeline (Project settings ▸ Release Pipeline) ---------- */
+.rp-pipeline{ display:flex; align-items:stretch; flex-wrap:wrap; gap:0; }
+.rp-stage{ display:flex; align-items:center; }
+.rp-stage-card{
+  background:var(--surface); border:1px solid var(--border); border-top:3px solid var(--rp-accent, var(--border-strong));
+  border-radius:11px; padding:13px 16px; min-width:150px;
+}
+.rp-stage-label{ font-family:var(--mono); font-size:12px; font-weight:800; color:var(--text); letter-spacing:.3px; display:flex; align-items:center; gap:7px; margin-bottom:6px; }
+.rp-draft-pill{ font-family:var(--sans); font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--accent); background:var(--accent-soft); padding:2px 7px; border-radius:999px; }
+.rp-stage-version{ font-size:13px; font-weight:700; color:var(--text); margin-bottom:4px; }
+.rp-stage-meta{ font-size:10.5px; color:var(--text-faint); line-height:1.4; max-width:180px; }
+.rp-connector{ display:flex; flex-direction:column; align-items:center; gap:6px; padding:0 14px; color:var(--text-faint); }
+.rp-promote-btn{
+  font-size:10.5px; font-weight:700; white-space:nowrap; padding:6px 11px; border-radius:999px;
+  background:var(--surface-2); border:1px solid var(--border); color:var(--text-dim); cursor:pointer;
+}
+.rp-promote-btn:hover:not(:disabled){ border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
+.rp-promote-btn:disabled{ opacity:.45; cursor:not-allowed; }
+.rp-mirrors{ margin-top:18px; padding-top:16px; border-top:1px dashed var(--border); }
+.rp-mirror-card{
+  background:var(--surface); border:1px solid var(--border); border-radius:11px; padding:13px 16px; max-width:260px;
+}
+.rp-mirror-label{ font-family:var(--mono); font-size:12px; font-weight:800; color:var(--text); display:flex; align-items:center; gap:7px; margin-bottom:6px; }
+.rp-mirror-pill{ font-family:var(--sans); font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--text-faint); background:var(--surface-2); padding:2px 7px; border-radius:999px; }
+@media (max-width:700px){
+  .rp-pipeline{ flex-direction:column; align-items:stretch; }
+  .rp-stage{ flex-direction:column; }
+  .rp-connector{ flex-direction:row; padding:8px 0; }
+  .rp-connector svg{ transform:rotate(90deg); }
+}
+
 /* ---------- Your Profile — environment management (add/delete global environments) ---------- */
 /* ---------- Endpoint table (Environment / Endpoint / Access / Color / Actions) ---------- */
 .env-table-toolbar{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:12px; }
@@ -2186,6 +2217,7 @@ pre.json-raw{ max-height:360px; margin:0; }
     <div class="modal-tabs">
       <div class="modal-tab active" data-mtab="general">General</div>
       <div class="modal-tab" data-mtab="envs">Environments</div>
+      <div class="modal-tab" data-mtab="release">Release Pipeline</div>
       <div class="modal-tab" data-mtab="auth">Auth</div>
       <div class="modal-tab" data-mtab="docs">Documents</div>
     </div>
@@ -2278,6 +2310,10 @@ pre.json-raw{ max-height:360px; margin:0; }
       <div class="hint" style="margin-top:0;">Base URL used for this project in each environment. Powers the code samples and request URL shown for every endpoint.</div>
       <div class="env-settings-summary" id="envSettingsSummary"></div>
       <div id="envInputs" class="env-settings-grid"></div>
+    </div>
+    <div class="modal-pane" data-mpane="release">
+      <div class="hint" style="margin-top:0;">Changes are made in the first environment (the live draft) and move forward one stage at a time. Each stage keeps its own frozen, versioned copy until it's promoted again.</div>
+      <div id="releasePipelineBody">Loading…</div>
     </div>
     <div class="modal-pane" data-mpane="auth">
       <div class="field">
@@ -7738,6 +7774,87 @@ function renderEnvSettingsCards(proj){
   updateEnvSettingsSummary();
 }
 
+/* ---------- Release Pipeline (Project settings ▸ Release Pipeline) ----------
+   Server-authoritative: the pipeline order and the "DR mirrors the last
+   stage" behavior are computed on the server from this org's own environment
+   list (see GET/POST /api/workspace/projects/:id/versions|promote in
+   server/routes/workspace.js) — the client only renders what it's told and
+   never invents a target stage to promote into. Promotion is Admin-only;
+   this whole modal is already gated to Admins via openProjectModal(), so no
+   extra role check is needed here. */
+async function renderReleasePipeline(proj){
+  const body = document.getElementById('releasePipelineBody');
+  body.innerHTML = `<div class="al-loading" style="padding:30px 0;text-align:center;color:var(--text-faint);font-size:13px;">Loading pipeline status…</div>`;
+  let data;
+  try{ data = await apiGet(`/projects/${encodeURIComponent(proj.id)}/versions`); }
+  catch(e){
+    body.innerHTML = `<div class="al-loading" style="padding:30px 0;text-align:center;color:var(--text-faint);font-size:13px;">Could not load release pipeline status.</div>`;
+    return;
+  }
+
+  const stageHtml = data.stages.map((s, idx)=>{
+    const isDraft = s.isDraftStage;
+    const versionLabel = isDraft ? data.draftLabel : (s.versionLabel || '— nothing promoted yet');
+    const promotedInfo = !isDraft && s.promotedAt
+      ? `Promoted by ${escapeHtml(s.promotedBy || 'unknown')} · ${new Date(s.promotedAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}`
+      : (isDraft ? 'Always the live, editable draft' : 'Nothing promoted here yet');
+    const next = data.stages[idx+1];
+    const canPromote = !!next; // last pipeline stage has no "next" — no button
+    const sourceHasContent = isDraft || s.version != null; // can't promote out of an empty stage
+    return `
+      <div class="rp-stage" style="--rp-accent:${escapeHtml(s.color || 'var(--accent)')};">
+        <div class="rp-stage-card">
+          <div class="rp-stage-label">${escapeHtml(s.label)}${isDraft ? ' <span class="rp-draft-pill">draft</span>' : ''}</div>
+          <div class="rp-stage-version mono">${escapeHtml(versionLabel)}</div>
+          <div class="rp-stage-meta">${promotedInfo}</div>
+        </div>
+        ${canPromote ? `
+          <div class="rp-connector">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            <button type="button" class="rp-promote-btn" data-promote-from="${escapeHtml(s.environmentId)}" data-promote-to-label="${escapeHtml(next.label)}" ${sourceHasContent ? '' : 'disabled title="Nothing to promote yet"'}>
+              Promote to ${escapeHtml(next.label)}
+            </button>
+          </div>
+        ` : ''}
+      </div>`;
+  }).join('');
+
+  const mirrorHtml = data.mirrors.length ? data.mirrors.map(m=>`
+    <div class="rp-mirror-card">
+      <div class="rp-mirror-label">${escapeHtml(m.label)} <span class="rp-mirror-pill">auto-mirror</span></div>
+      <div class="rp-stage-version mono">${escapeHtml(m.versionLabel || '— not mirrored yet')}</div>
+      <div class="rp-stage-meta">Automatically kept in sync with the last pipeline stage — no separate promotion needed.</div>
+    </div>`).join('') : '';
+
+  body.innerHTML = `
+    <div class="rp-pipeline">${stageHtml}</div>
+    ${mirrorHtml ? `<div class="rp-mirrors">${mirrorHtml}</div>` : ''}
+  `;
+
+  body.querySelectorAll('[data-promote-from]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const fromEnvironmentId = btn.getAttribute('data-promote-from');
+      const toLabel = btn.getAttribute('data-promote-to-label');
+      const ok = await openConfirmModal({
+        title: `Promote to ${toLabel}?`,
+        message: `This freezes the current content and makes it live in ${toLabel}. Anyone viewing ${toLabel} will see this exact version until it's promoted again.`,
+        confirmLabel: 'Promote',
+      });
+      if(!ok) return;
+      btn.disabled = true; btn.textContent = 'Promoting…';
+      try{
+        const result = await apiSend('POST', `/projects/${encodeURIComponent(proj.id)}/promote`, { fromEnvironmentId });
+        toast(`Promoted to ${result.toEnvironmentLabel} — ${result.versionLabel}` + (result.mirrored ? ` · ${result.mirrored.label} auto-mirrored` : ''));
+        logAudit('updated', 'project', proj.name, `Promoted to ${result.toEnvironmentLabel} (${result.versionLabel})`);
+        renderReleasePipeline(proj);
+      }catch(e){
+        toast(e.message || 'Could not promote.');
+        renderReleasePipeline(proj);
+      }
+    });
+  });
+}
+
 function populateFlowDirectionSelect(selectedId){
   const sel = document.getElementById('pgFlowDirection');
   const dirs = allFlowDirections();
@@ -7884,6 +8001,7 @@ function openProjectModal(projectId, initialTab){
 
   renderEnvSettingsCards(proj);
   renderProjectDocsList(proj);
+  renderReleasePipeline(proj);
 
   const tab = initialTab || 'general';
   document.querySelectorAll('.modal-tab').forEach(t=>t.classList.remove('active'));

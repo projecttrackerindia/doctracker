@@ -203,6 +203,37 @@ async function initDb() {
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS request_history_enc TEXT;`);
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS request_history_key_version INTEGER;`);
 
+  // ---- Environment release pipeline ----
+  // `release_version` is the project-wide "cut number" (displayed as 1.0.N) —
+  // it increments once each time a new draft is promoted out of the first
+  // (Dev) stage. Moving that same release further down the pipeline
+  // (SIT -> UAT -> Staging -> Production) carries the version forward
+  // unchanged, same as a real release moving through environments.
+  await pool.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS release_version INTEGER NOT NULL DEFAULT 0;`);
+
+  // One row per (project, environment) = the environment's CURRENTLY pinned
+  // snapshot — overwritten on each promotion, not an unbounded history table.
+  // environment_id is a free-text org-configured id (see org_workspace.environments),
+  // not a foreign key, since environments live in that JSONB list rather than
+  // a normalized table. Encrypted the same way as projects.data — see
+  // server/crypto.js and the encrypt/decryptProjectData helpers in
+  // server/routes/workspace.js.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_env_versions (
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      environment_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      data_enc TEXT NOT NULL,
+      data_key_version INTEGER NOT NULL,
+      source_environment_id TEXT,
+      promoted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      promoted_by_username TEXT,
+      auto_mirrored BOOLEAN NOT NULL DEFAULT false,
+      promoted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (project_id, environment_id)
+    );
+  `);
+
   console.log('Database schema ready.');
 }
 

@@ -167,6 +167,8 @@ tbody tr.al-hidden{ display:none; }
     if(action === 'PII_REVEAL') return { label:'PII Reveal', color:'#ef5c6e', bg:'rgba(239,92,110,.14)' };
     if(action === 'ENCRYPTION_KEY_ROTATED') return { label:'Key Rotated', color:'#ef5c6e', bg:'rgba(239,92,110,.14)' };
     if(action === 'ENCRYPTION_REENCRYPT_RUN') return { label:'Re-encrypted', color:'#b389f0', bg:'rgba(179,137,240,.14)' };
+    if(action === 'PROJECT_PROMOTED') return { label:'Promoted', color:'#35c491', bg:'rgba(53,196,145,.14)' };
+    if(action === 'PROJECT_ENV_MIRRORED') return { label:'Auto-mirrored', color:'#4fa3f7', bg:'rgba(79,163,247,.14)' };
     if(typeof action==='string' && action.startsWith('PII_MASK_RULE_')) return { label: action.replace('PII_MASK_RULE_','Rule ').replace('_',' ').toLowerCase().replace(/^\w/,c=>c.toUpperCase()), color:'#b389f0', bg:'rgba(179,137,240,.14)' };
     if(action === 'ADMIN_SETTING_CHANGED') return { label:'Admin Setting', color:'#b389f0', bg:'rgba(179,137,240,.14)' };
     if(action === 'LEGACY_AUDIT_IMPORTED') return { label:'Legacy Import', color:'#8a97b3', bg:'rgba(138,151,179,.14)' };

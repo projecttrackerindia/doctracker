@@ -472,6 +472,228 @@ router.post('/migrate', async (req, res) => {
   }
 });
 
+// ============================================================================
+// Environment release pipeline: Dev (live draft) -> SIT -> UAT -> Staging ->
+// Production, each non-Dev stage holding a frozen, versioned snapshot until
+// explicitly promoted forward. Promotion is Admin-only.
+//
+// The pipeline order comes from the org's OWN environments list (org_workspace
+// .environments — user-configurable, see the environment settings UI), not a
+// hardcoded list, since orgs can rename/reorder/add environments freely. One
+// convention: an environment labeled "DR" (case-insensitive) is never a
+// manual pipeline stage — it always auto-mirrors whatever's currently in the
+// pipeline's last stage (Production, by default) the moment that stage is
+// promoted to, with no separate "Promote" click.
+// ============================================================================
+
+function isAdminUser(req) {
+  return req.authUser.role === 'admin';
+}
+
+async function getOrgEnvironments(org) {
+  const { rows } = await pool.query(
+    `SELECT environments, environments_enc FROM org_workspace WHERE organisation = $1`,
+    [org]
+  );
+  const ws = rows[0] || {};
+  const list = decryptOrgBlob(ws.environments_enc, ws.environments, org, 'environments', []);
+  return Array.isArray(list) ? list : [];
+}
+
+// The pipeline is every configured environment EXCEPT ones labeled "DR" —
+// those mirror the last pipeline stage automatically instead of being
+// manually promoted to. Stage 0 is always the live draft (projects.data),
+// never a project_env_versions row.
+function pipelineStages(allEnvironments) {
+  return allEnvironments.filter((e) => String(e.label || '').trim().toUpperCase() !== 'DR');
+}
+
+// GET /api/workspace/projects/:id/versions — read-only status of every stage
+// for this project. Any org member who can see the project may view it;
+// promoting is Admin-only (enforced in the POST route below).
+router.get('/projects/:id/versions', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, owner_id, organisation, release_version FROM projects WHERE id = $1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Project not found.' });
+    const project = rows[0];
+    if (project.organisation !== req.authUser.organisation) return res.status(404).json({ error: 'Project not found.' });
+
+    const allEnvs = await getOrgEnvironments(project.organisation);
+    const stages = pipelineStages(allEnvs);
+    const drEnvs = allEnvs.filter((e) => String(e.label || '').trim().toUpperCase() === 'DR');
+
+    const { rows: versionRows } = await pool.query(
+      `SELECT environment_id, version, source_environment_id, promoted_by_username, auto_mirrored, promoted_at
+       FROM project_env_versions WHERE project_id = $1`,
+      [req.params.id]
+    );
+    const byEnv = new Map(versionRows.map((r) => [r.environment_id, r]));
+
+    res.json({
+      releaseVersion: project.release_version,
+      draftLabel: `1.0.${project.release_version} (draft)`,
+      stages: stages.map((env, idx) => {
+        const v = byEnv.get(env.id);
+        return {
+          environmentId: env.id,
+          label: env.label,
+          color: env.color,
+          isDraftStage: idx === 0,
+          version: v ? v.version : null,
+          versionLabel: v ? `1.0.${v.version}` : null,
+          promotedBy: v ? v.promoted_by_username : null,
+          promotedAt: v ? v.promoted_at : null,
+          sourceEnvironmentId: v ? v.source_environment_id : null,
+        };
+      }),
+      mirrors: drEnvs.map((env) => {
+        const v = byEnv.get(env.id);
+        return {
+          environmentId: env.id,
+          label: env.label,
+          version: v ? v.version : null,
+          versionLabel: v ? `1.0.${v.version}` : null,
+          mirrorsEnvironmentId: v ? v.source_environment_id : null,
+          promotedAt: v ? v.promoted_at : null,
+        };
+      }),
+    });
+  } catch (err) {
+    console.error('GET project versions failed:', err);
+    res.status(500).json({ error: 'Could not load release pipeline status.' });
+  }
+});
+
+// POST /api/workspace/projects/:id/promote — { fromEnvironmentId }. Promotes
+// that stage's current content into the NEXT stage in the pipeline (server-
+// derived from the org's environment list — the client can't specify an
+// arbitrary target, so stages can't be skipped). Admin-only.
+router.post('/projects/:id/promote', async (req, res) => {
+  if (!isAdminUser(req)) return res.status(403).json({ error: 'Only Admins can promote a project between environments.' });
+  const fromEnvironmentId = req.body?.fromEnvironmentId;
+  if (!fromEnvironmentId) return res.status(400).json({ error: 'fromEnvironmentId is required.' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: projRows } = await client.query(
+      `SELECT id, organisation, data, data_enc, release_version FROM projects WHERE id = $1 FOR UPDATE`,
+      [req.params.id]
+    );
+    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Project not found.' });
+    }
+    const project = projRows[0];
+
+    const allEnvs = await getOrgEnvironments(project.organisation);
+    const stages = pipelineStages(allEnvs);
+    const fromIdx = stages.findIndex((e) => e.id === fromEnvironmentId);
+    if (fromIdx < 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Unknown source environment.' });
+    }
+    const targetStage = stages[fromIdx + 1];
+    if (!targetStage) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `${stages[fromIdx].label} is already the last stage in the pipeline.` });
+    }
+
+    let sourceData, newReleaseVersion;
+    if (fromIdx === 0) {
+      // Promoting out of the draft stage: cut a brand-new release.
+      sourceData = decryptProjectData(project);
+      newReleaseVersion = project.release_version + 1;
+      await client.query(`UPDATE projects SET release_version = $1 WHERE id = $2`, [newReleaseVersion, project.id]);
+    } else {
+      // Promoting an already-cut release further down the pipeline: carry
+      // the same version forward unchanged, just copy the snapshot along.
+      const { rows: srcRows } = await client.query(
+        `SELECT version, data_enc FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
+        [project.id, fromEnvironmentId]
+      );
+      if (!srcRows.length) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `Nothing has been promoted to ${stages[fromIdx].label} yet.` });
+      }
+      sourceData = JSON.parse(dataCrypto.decryptField(srcRows[0].data_enc, `project-env:${project.id}:${fromEnvironmentId}`));
+      newReleaseVersion = srcRows[0].version;
+    }
+
+    const targetEnc = dataCrypto.encryptField(JSON.stringify(sourceData), `project-env:${project.id}:${targetStage.id}`);
+    await client.query(
+      `INSERT INTO project_env_versions
+         (project_id, environment_id, version, data_enc, data_key_version, source_environment_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, now())
+       ON CONFLICT (project_id, environment_id) DO UPDATE SET
+         version = EXCLUDED.version, data_enc = EXCLUDED.data_enc, data_key_version = EXCLUDED.data_key_version,
+         source_environment_id = EXCLUDED.source_environment_id, promoted_by = EXCLUDED.promoted_by,
+         promoted_by_username = EXCLUDED.promoted_by_username, auto_mirrored = false, promoted_at = now()`,
+      [project.id, targetStage.id, newReleaseVersion, targetEnc, dataCrypto.currentKeyVersion(), fromEnvironmentId, req.authUser.sub, req.authUser.username]
+    );
+
+    let mirrored = null;
+    const isLastStage = fromIdx + 1 === stages.length - 1;
+    if (isLastStage) {
+      const drEnv = allEnvs.find((e) => String(e.label || '').trim().toUpperCase() === 'DR');
+      if (drEnv) {
+        const mirrorEnc = dataCrypto.encryptField(JSON.stringify(sourceData), `project-env:${project.id}:${drEnv.id}`);
+        await client.query(
+          `INSERT INTO project_env_versions
+             (project_id, environment_id, version, data_enc, data_key_version, source_environment_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, now())
+           ON CONFLICT (project_id, environment_id) DO UPDATE SET
+             version = EXCLUDED.version, data_enc = EXCLUDED.data_enc, data_key_version = EXCLUDED.data_key_version,
+             source_environment_id = EXCLUDED.source_environment_id, promoted_by = EXCLUDED.promoted_by,
+             promoted_by_username = EXCLUDED.promoted_by_username, auto_mirrored = true, promoted_at = now()`,
+          [project.id, drEnv.id, newReleaseVersion, mirrorEnc, dataCrypto.currentKeyVersion(), targetStage.id, req.authUser.sub, req.authUser.username]
+        );
+        mirrored = { environmentId: drEnv.id, label: drEnv.label };
+      }
+    }
+
+    await client.query('COMMIT');
+
+    await recordAuditEvent(req.authUser, req, {
+      action: 'PROJECT_PROMOTED',
+      resourceType: 'project',
+      resourceId: project.id,
+      entityName: stages[fromIdx].label + ' → ' + targetStage.label,
+      details: `Promoted "${project.id}" from ${stages[fromIdx].label} to ${targetStage.label} — v1.0.${newReleaseVersion}.`,
+      severity: 'info',
+      metadata: { fromEnvironmentId, toEnvironmentId: targetStage.id, version: newReleaseVersion },
+    });
+    if (mirrored) {
+      await recordAuditEvent(req.authUser, req, {
+        action: 'PROJECT_ENV_MIRRORED',
+        resourceType: 'project',
+        resourceId: project.id,
+        entityName: mirrored.label,
+        details: `${mirrored.label} auto-mirrored ${targetStage.label} — v1.0.${newReleaseVersion}.`,
+        severity: 'info',
+        metadata: { mirroredFrom: targetStage.id, version: newReleaseVersion },
+      });
+    }
+
+    res.json({
+      ok: true,
+      toEnvironmentId: targetStage.id,
+      toEnvironmentLabel: targetStage.label,
+      versionLabel: `1.0.${newReleaseVersion}`,
+      mirrored,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('POST promote failed:', err);
+    res.status(500).json({ error: 'Could not promote project.' });
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = router;
 module.exports.MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_BYTES;
 module.exports.reencryptOrganisation = reencryptOrganisation;
