@@ -775,6 +775,73 @@ function diffEndpointLists(fromEps, toEps) {
   return { added, removed, modified };
 }
 
+// Shared by the diff and snapshot routes below: resolves one pipeline
+// stage's endpoint data — the live draft for stage 0, otherwise whatever
+// (if anything) has been promoted into that stage's frozen copy.
+async function loadStageData(project, envId, stageIdx) {
+  if (stageIdx === 0) return decryptProjectData(project);
+  const { rows } = await pool.query(
+    `SELECT data_enc FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
+    [project.id, envId]
+  );
+  if (!rows.length) return { endpoints: [] };
+  return JSON.parse(dataCrypto.decryptField(rows[0].data_enc, `project-env:${project.id}:${envId}`));
+}
+
+// GET /api/workspace/projects/:id/snapshot?environmentId=X — read-only view
+// of exactly what's live in one pipeline stage (the frozen promoted copy,
+// or the live draft for stage 0). This is what the studio UI renders when
+// someone switches the environment switcher away from the draft stage —
+// browsing SIT/UAT/Staging/Production/etc. shows what was actually promoted
+// there, not the still-being-edited draft.
+router.get('/projects/:id/snapshot', async (req, res) => {
+  try {
+    const envKey = req.query.environmentId;
+    if (!envKey) return res.status(400).json({ error: 'environmentId is required.' });
+
+    const { rows } = await pool.query(
+      `SELECT id, organisation, data, data_enc, release_version FROM projects WHERE id = $1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Project not found.' });
+    const project = rows[0];
+    if (project.organisation !== req.authUser.organisation) return res.status(404).json({ error: 'Project not found.' });
+
+    const allEnvs = await getOrgEnvironments(project.organisation);
+    const stages = pipelineStages(allEnvs);
+    const idx = stages.findIndex((e) => e.id === envKey);
+    if (idx < 0) return res.status(400).json({ error: 'Unknown environment.' });
+
+    const isDraft = idx === 0;
+    let versionLabel = null, promotedAt = null, promotedBy = null;
+    if (!isDraft) {
+      const { rows: vRows } = await pool.query(
+        `SELECT version, promoted_at, promoted_by_username FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
+        [project.id, envKey]
+      );
+      if (vRows.length) {
+        versionLabel = `1.0.${vRows[0].version}`;
+        promotedAt = vRows[0].promoted_at;
+        promotedBy = vRows[0].promoted_by_username;
+      }
+    }
+
+    const stageData = await loadStageData(project, envKey, idx);
+    res.json({
+      environmentId: envKey,
+      label: stages[idx].label,
+      isDraft,
+      versionLabel: isDraft ? `1.0.${project.release_version} (draft)` : versionLabel,
+      promotedAt,
+      promotedBy,
+      endpoints: stageData.endpoints || [],
+    });
+  } catch (err) {
+    console.error('GET project snapshot failed:', err);
+    res.status(500).json({ error: 'Could not load environment snapshot.' });
+  }
+});
+
 // GET /api/workspace/projects/:id/diff?from=<environmentId>&to=<environmentId>
 // Any org member who can see the project may view a diff (same visibility as
 // GET /versions); only POST /promote itself is Admin-gated.
@@ -798,17 +865,10 @@ router.get('/projects/:id/diff', async (req, res) => {
       return res.status(400).json({ error: 'Unknown environment.' });
     }
 
-    const loadStageData = async (envId) => {
-      if (stageById.get(envId).idx === 0) return decryptProjectData(project);
-      const { rows: vRows } = await pool.query(
-        `SELECT data_enc FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
-        [project.id, envId]
-      );
-      if (!vRows.length) return { endpoints: [] };
-      return JSON.parse(dataCrypto.decryptField(vRows[0].data_enc, `project-env:${project.id}:${envId}`));
-    };
-
-    const [fromData, toData] = await Promise.all([loadStageData(fromKey), loadStageData(toKey)]);
+    const [fromData, toData] = await Promise.all([
+      loadStageData(project, fromKey, stageById.get(fromKey).idx),
+      loadStageData(project, toKey, stageById.get(toKey).idx),
+    ]);
     const diff = diffEndpointLists(fromData.endpoints || [], toData.endpoints || []);
     const fromIdx = stageById.get(fromKey).idx, toIdx = stageById.get(toKey).idx;
 

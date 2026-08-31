@@ -1329,6 +1329,18 @@ pre.code-block{
   .rp-diffbar-swap{ align-self:center; transform:rotate(90deg); }
 }
 
+/* Read-only banner shown on overview/endpoint pages while browsing a
+   non-draft environment (SIT/UAT/Staging/Production/DR) — the content shown
+   is that stage's frozen promoted snapshot, not the live draft. */
+.rp-envbanner{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:16px; padding:9px 14px;
+  border-radius:10px; border:1px solid var(--env-accent, var(--border)); background:var(--env-accent-bg, var(--surface-2));
+}
+.rp-envbanner-ic{ font-size:13px; flex-shrink:0; }
+.rp-envbanner-txt{ font-size:12px; font-weight:600; color:var(--text); flex:1; min-width:0; }
+.rp-envbanner-v{ font-family:var(--mono); font-weight:700; color:var(--text); margin-left:6px; }
+.rp-envbanner-hint{ font-size:11px; color:var(--text-faint); flex-shrink:0; }
+
 /* ---------- Your Profile — environment management (add/delete global environments) ---------- */
 /* ---------- Endpoint table (Environment / Endpoint / Access / Color / Actions) ---------- */
 .env-table-toolbar{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:12px; }
@@ -3380,6 +3392,68 @@ function findEndpoint(epId){
 function projectHasEndpoint(epId){
   return allProjects().some(p=>p.endpoints.some(e=>e.id===epId));
 }
+
+// ----------------------------------------------------------------------------
+// Environment-scoped viewing. `proj.endpoints` is always the LIVE DRAFT —
+// editing (openManualModal/saveManualEndpoint/duplicate/delete/etc.) reads
+// and writes it directly, regardless of which environment is selected in the
+// topbar. But *browsing* (sidebar list, overview, endpoint detail, PDF/doc
+// export) needs to reflect whichever environment is actually selected: an
+// endpoint added in Dev shouldn't show up in SIT/UAT/Production until it's
+// been promoted through the Release Pipeline. viewEndpoints()/findEndpointForView()
+// below are what every read/render path should call instead of proj.endpoints
+// directly; snapshots are fetched from GET /projects/:id/snapshot and cached
+// per project+environment for the life of the page.
+// ----------------------------------------------------------------------------
+function draftEnvId(){
+  const stages = environments().filter(e=>String(e.label||'').trim().toUpperCase()!=='DR');
+  return stages.length ? stages[0].id : null;
+}
+function isViewingDraftEnv(){ return state.env === draftEnvId(); }
+
+const _snapshotCache = {}; // `${projId}::${envId}` -> { status:'loading'|'ready'|'error', endpoints, versionLabel, promotedAt, promotedBy, isDraft }
+function snapshotEntry(projId){
+  const key = projId + '::' + state.env;
+  const entry = _snapshotCache[key];
+  if(entry) return entry;
+  _snapshotCache[key] = { status:'loading' };
+  apiGet(`/projects/${encodeURIComponent(projId)}/snapshot?environmentId=${encodeURIComponent(state.env)}`)
+    .then(res=>{
+      _snapshotCache[key] = { status:'ready', ...res };
+      renderAll();
+      // If the PDF export modal is open for this project waiting on this same
+      // snapshot, refresh its endpoint list now that it's arrived.
+      if(projId === pdfExportProjectId && document.getElementById('pdfExportModal')?.classList.contains('show')){
+        openExportPdfModal(projId);
+      }
+    })
+    .catch(()=>{ _snapshotCache[key] = { status:'error' }; renderAll(); });
+  return _snapshotCache[key];
+}
+// The list of endpoints to actually render for `proj` given the currently
+// selected environment — the live draft when Dev is selected, otherwise
+// whatever's frozen in that stage's snapshot (empty array while it loads).
+function viewEndpoints(proj){
+  if(isViewingDraftEnv()) return proj.endpoints;
+  const entry = snapshotEntry(proj.id);
+  return entry.status === 'ready' ? (entry.endpoints || []) : [];
+}
+function invalidateSnapshotCache(projId){
+  Object.keys(_snapshotCache).forEach(key=>{
+    if(key.startsWith(projId + '::')) delete _snapshotCache[key];
+  });
+}
+function findEndpointForView(epId){
+  if(isViewingDraftEnv()) return findEndpoint(epId);
+  for(const proj of allProjects()){
+    const ep = viewEndpoints(proj).find(e=>e.id===epId);
+    if(ep) return { proj, ep };
+  }
+  return null;
+}
+// Endpoint mutation is only ever meaningful against the live draft — gate
+// every create/edit/duplicate/delete entry point on this alongside canEdit().
+function canEditHere(){ return canEdit() && isViewingDraftEnv(); }
 /* ==================== SECTION:SPEC-PARSE ==================== */
 
 /* ---------- Persistence + migration from the old single-project-basePath format ---------- */
@@ -3590,12 +3664,14 @@ function setAuthorRole(roleId){
   toast(`Role set to ${roleMeta(roleId).label}`);
 }
 
-// Everything gated purely by role — hide the create FAB and disable the environment
-// options a Viewer/Developer shouldn't reach. This is a UI convenience, not a security
-// boundary (there's no backend here to enforce it against).
+// Gated by role AND by which environment is selected — hide the create FAB
+// outside the draft stage the same way Edit/Duplicate are hidden on an
+// endpoint's own page, since non-draft stages are frozen promoted snapshots.
+// This is a UI convenience, not a security boundary (there's no backend here
+// to enforce it against).
 function applyRoleGatedUI(){
   const fab = document.getElementById('btnFab');
-  if(fab) fab.style.display = canEdit() ? '' : 'none';
+  if(fab) fab.style.display = canEditHere() ? '' : 'none';
 }
 
 function ensureEndpointDefaults(ep){
@@ -3656,6 +3732,7 @@ function toggleProjectVisibility(projId){
 }
 
 function toggleEndpointVisibility(epId){
+  if(!canEditHere()){ toast(isViewingDraftEnv() ? `Your role (${roleMeta(state.authorRole).label}) is read-only` : `Switch to ${envMeta(draftEnvId()).label} to make changes`); return; }
   const found = findEndpoint(epId);
   if(!found || found.proj._readonly) return;
   const { proj, ep } = found;
@@ -4471,6 +4548,7 @@ function selectEnvironment(envId){
   state.env = envId;
   saveEnv();
   applyEnvAccent();
+  applyRoleGatedUI();
   renderEnvSwitcher();
   renderMain();
   renderRail();
@@ -4510,8 +4588,9 @@ function renderSidebar(){
   }
 
   list.innerHTML = projects.map(proj=>{
+    const epsForView = viewEndpoints(proj);
     const groups = {};
-    proj.endpoints.forEach(ep=>{
+    epsForView.forEach(ep=>{
       const hay = (ep.path + ' ' + (ep.summary||'') + ' ' + ep.method).toLowerCase();
       if(filter && !hay.includes(filter)) return;
       (groups[ep.tag] = groups[ep.tag] || []).push(ep);
@@ -4520,7 +4599,7 @@ function renderSidebar(){
     const hasEpMatches = Object.keys(groups).length > 0;
     if(filter && !hasEpMatches && !projMatches) return '';
 
-    const groupsToShow = (filter && !hasEpMatches && projMatches) ? groupByTag(proj.endpoints) : groups;
+    const groupsToShow = (filter && !hasEpMatches && projMatches) ? groupByTag(epsForView) : groups;
     const isOpen = proj._open !== false;
 
     const overviewActive = state.selected && state.selected.type==='overview' && state.selected.projectId===proj.id;
@@ -4534,7 +4613,7 @@ function renderSidebar(){
             <span class="ep-path">${escapeHtml(ep.path)}</span>
           </div>`).join('')}
       </div>`;
-    }).join('');
+    }).join('') || (!isViewingDraftEnv() && !filter ? `<div class="tag-group"><div class="empty-sidebar" style="padding:10px 8px;font-size:11.5px;">${snapshotEntry(proj.id).status==='loading' ? 'Loading…' : `Nothing promoted to ${escapeHtml(envMeta(state.env).label)} yet.`}</div></div>` : '');
 
     const initials = (proj.name||'?').trim().split(/\s+/).slice(0,2).map(w=>w[0]).join('').toUpperCase() || '?';
     const accent = PROFILE_COLORS[hashStr(proj.name||'') % PROFILE_COLORS.length];
@@ -4549,7 +4628,7 @@ function renderSidebar(){
           <span class="txt">${escapeHtml(proj.name)}</span>
         </div>
         <div class="project-actions">
-          <span class="project-count">${proj.endpoints.length}</span>
+          <span class="project-count">${epsForView.length}</span>
           <span class="icon-btn" data-settings="${proj.id}" title="Project settings"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="20" y2="18"></line><circle cx="9" cy="6" r="1.8" fill="var(--surface)"></circle><circle cx="16" cy="12" r="1.8" fill="var(--surface)"></circle><circle cx="9" cy="18" r="1.8" fill="var(--surface)"></circle></svg></span>
           <span class="icon-btn del" data-del="${proj.id}" title="Delete API"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg></span>
         </div>
@@ -4903,7 +4982,7 @@ function renderMain(){
     </div>`;
     document.getElementById('btnImport2').addEventListener('click', ()=>document.getElementById('fileInput').click());
     document.getElementById('btnAddManual2').addEventListener('click', ()=>{
-      if(!canEdit()){ toast(`Your role (${roleMeta(state.authorRole).label}) is read-only`); return; }
+      if(!canEditHere()){ toast(isViewingDraftEnv() ? `Your role (${roleMeta(state.authorRole).label}) is read-only` : `Switch to ${envMeta(draftEnvId()).label} to make changes`); return; }
       openManualModal();
     });
     return;
@@ -4935,7 +5014,7 @@ function renderMain(){
     return;
   }
 
-  const found = findEndpoint(state.selected.id);
+  const found = findEndpointForView(state.selected.id);
   if(!found){ state.selected = null; renderMain(); return; }
   renderEndpointDoc(main, found.proj, found.ep);
 }
@@ -6688,10 +6767,13 @@ function renderProjectOverview(main, projectId){
   if(!proj){ state.selected = null; renderMain(); return; }
   const env = envMeta(state.env);
   const baseUrl = proj.environments[state.env];
+  const viewingDraft = isViewingDraftEnv();
+  const epsForView = viewEndpoints(proj);
+  const snap = viewingDraft ? null : snapshotEntry(proj.id);
 
-  const totalEndpoints = proj.endpoints.length;
+  const totalEndpoints = epsForView.length;
   const envsConfigured = environments().filter(e=>proj.environments[e.id]).length;
-  const tagCount = new Set(proj.endpoints.map(e=>e.tag || 'General')).size;
+  const tagCount = new Set(epsForView.map(e=>e.tag || 'General')).size;
 
   const flowPreset = resolveFlowDirection(proj);
   const direction = flowPreset.pattern;
@@ -6720,6 +6802,17 @@ function renderProjectOverview(main, projectId){
 
   main.innerHTML = `
     <div class="crumb">${escapeHtml(proj.name)} <span class="sep">/</span> Overview</div>
+
+    ${!viewingDraft ? `
+    <div class="rp-envbanner">
+      <span class="rp-envbanner-ic">👁</span>
+      <span class="rp-envbanner-txt">
+        ${snap && snap.status==='ready'
+          ? `Viewing ${escapeHtml(env.label)} — read-only<span class="rp-envbanner-v">${escapeHtml(snap.versionLabel || 'nothing promoted yet')}</span>${snap.promotedBy ? ` · promoted by ${escapeHtml(snap.promotedBy)}` : ''}${snap.promotedAt ? ` · ${escapeHtml(new Date(snap.promotedAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}))}` : ''}`
+          : (snap && snap.status==='error' ? `Could not load the ${escapeHtml(env.label)} snapshot.` : `Loading ${escapeHtml(env.label)} snapshot…`)}
+      </span>
+      <span class="rp-envbanner-hint">Switch to ${escapeHtml(envMeta(draftEnvId()).label)} to make changes</span>
+    </div>` : ''}
 
     <div class="overview-hero">
       <div class="overview-hero-badge"><span class="dot"></span>API Studio · ${escapeHtml(env.label)} environment</div>
@@ -6807,11 +6900,11 @@ function renderProjectOverview(main, projectId){
 
     <div class="section">
       <div class="section-title">Endpoints <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— added &amp; last-modified history</span></div>
-      ${proj.endpoints.length ? `
+      ${epsForView.length ? `
       <table class="data-table">
         <thead><tr><th>Endpoint</th><th>Added</th><th>Last modified</th></tr></thead>
         <tbody>
-          ${proj.endpoints.map(ep=>`
+          ${epsForView.map(ep=>`
             <tr class="ep-history-row" data-open-ep="${ep.id}" style="cursor:pointer;">
               <td>
                 <span class="badge ${methodClass(ep.method)}" style="margin-right:8px;">${escapeHtml(ep.method)}</span>
@@ -6827,7 +6920,7 @@ function renderProjectOverview(main, projectId){
               </td>
             </tr>`).join('')}
         </tbody>
-      </table>` : `<div class="empty-field">No endpoints in this project yet.</div>`}
+      </table>` : `<div class="empty-field">${viewingDraft ? 'No endpoints in this project yet.' : `Nothing promoted to ${escapeHtml(env.label)} yet.`}</div>`}
     </div>
 
     <div class="section">
@@ -7001,6 +7094,12 @@ function renderEndpointDoc(main, proj, ep){
 
   main.innerHTML = `
     <div class="crumb">${escapeHtml(proj.name)} <span class="sep">/</span> ${escapeHtml(ep.tag)} <span class="env-chip">${envMeta(state.env).label}</span></div>
+    ${!isViewingDraftEnv() ? `
+    <div class="rp-envbanner">
+      <span class="rp-envbanner-ic">👁</span>
+      <span class="rp-envbanner-txt">Viewing ${escapeHtml(envMeta(state.env).label)} — read-only</span>
+      <span class="rp-envbanner-hint">Switch to ${escapeHtml(envMeta(draftEnvId()).label)} to make changes</span>
+    </div>` : ''}
     <div class="doc-header">
       <div class="path-row">
         <span class="badge badge-lg ${methodClass(ep.method)}">${ep.method}</span>
@@ -7014,9 +7113,9 @@ function renderEndpointDoc(main, proj, ep){
             <div class="ep-actions-panel" id="epActionsPanel" role="menu">
               <button type="button" class="ep-actions-item" id="btnViewCode" role="menuitem"><span class="item-label">View</span><span class="item-sub">cURL &amp; Swagger</span></button>
               <div class="ep-actions-divider"></div>
-              <button type="button" class="ep-actions-item" id="btnEditEp" role="menuitem"${canEdit()?'':' disabled title="Your role is read-only"'}>Edit</button>
-              <button type="button" class="ep-actions-item" id="btnDuplicateEp" role="menuitem"${canEdit()?'':' disabled title="Your role is read-only"'}>Duplicate</button>
-              ${proj._readonly ? '' : `
+              <button type="button" class="ep-actions-item" id="btnEditEp" role="menuitem"${canEditHere()?'':` disabled title="${canEdit() ? `Switch to ${escapeHtml(envMeta(draftEnvId()).label)} to edit` : 'Your role is read-only'}"`}>Edit</button>
+              <button type="button" class="ep-actions-item" id="btnDuplicateEp" role="menuitem"${canEditHere()?'':` disabled title="${canEdit() ? `Switch to ${escapeHtml(envMeta(draftEnvId()).label)} to edit` : 'Your role is read-only'}"`}>Duplicate</button>
+              ${proj._readonly || !isViewingDraftEnv() ? '' : `
               <div class="ep-actions-divider"></div>
               <button type="button" class="ep-actions-item" data-toggle-ep-visibility="${ep.id}" role="menuitem">
                 <span class="item-label">
@@ -7060,11 +7159,11 @@ function renderEndpointDoc(main, proj, ep){
   });
   document.getElementById('btnEditEp').addEventListener('click', ()=>{
     document.getElementById('epActionsDD').classList.remove('open');
-    if(canEdit()) openManualModal(ep.id);
+    if(canEditHere()) openManualModal(ep.id);
   });
   document.getElementById('btnDuplicateEp').addEventListener('click', ()=>{
     document.getElementById('epActionsDD').classList.remove('open');
-    if(canEdit()) duplicateEndpoint(ep.id);
+    if(canEditHere()) duplicateEndpoint(ep.id);
   });
   main.querySelectorAll('[data-header-reveal]').forEach(btn=>{
     btn.addEventListener('click', ()=> toggleSensitiveRevealed());
@@ -7150,6 +7249,7 @@ function renderEndpointDoc(main, proj, ep){
 }
 
 function duplicateEndpoint(epId){
+  if(!canEditHere()){ toast(isViewingDraftEnv() ? `Your role (${roleMeta(state.authorRole).label}) is read-only` : `Switch to ${envMeta(draftEnvId()).label} to make changes`); return; }
   const found = findEndpoint(epId);
   if(!found) return;
   const copy = JSON.parse(JSON.stringify(found.ep));
@@ -7172,7 +7272,7 @@ function renderRail(){
     return;
   }
 
-  const found = findEndpoint(state.selected.id);
+  const found = findEndpointForView(state.selected.id);
   if(!found){ inner.innerHTML = ''; return; }
   const { proj, ep } = found;
   const hasBaseUrl = !!proj.environments[state.env];
@@ -7624,6 +7724,7 @@ document.getElementById('addReqExample').addEventListener('click', ()=>{
 let editingEndpointId = null;
 
 function openManualModal(epId){
+  if(!canEditHere()){ toast(isViewingDraftEnv() ? `Your role (${roleMeta(state.authorRole).label}) is read-only` : `Switch to ${envMeta(draftEnvId()).label} to make changes`); return; }
   editingEndpointId = epId || null;
   const title = document.getElementById('epModalTitle');
   const deleteBtn = document.getElementById('mDelete');
@@ -7992,9 +8093,11 @@ function renderReleaseDiffPanel(panel, proj, diff){
       mergeBtn.disabled = true; mergeBtn.textContent = 'Merging…';
       try{
         const result = await apiSend('POST', `/projects/${encodeURIComponent(proj.id)}/promote`, { fromEnvironmentId: diff.from.environmentId });
+        invalidateSnapshotCache(proj.id);
         toast(`Merged into ${result.toEnvironmentLabel} — ${result.versionLabel}` + (result.mirrored ? ` · ${result.mirrored.label} auto-mirrored` : ''));
         logAudit('updated', 'project', proj.name, `Promoted to ${result.toEnvironmentLabel} (${result.versionLabel})`);
         renderReleasePipeline(proj);
+        renderRail();
       }catch(e){
         toast(e.message || 'Could not merge.');
         renderReleasePipeline(proj);
@@ -8970,10 +9073,11 @@ function openExportPdfModal(projectId){
   pdfExportProjectId = projectId;
   document.getElementById('projActionsDD') && document.getElementById('projActionsDD').classList.remove('open');
 
-  const groups = groupByTag(proj.endpoints);
+  const epsForExport = viewEndpoints(proj);
+  const groups = groupByTag(epsForExport);
   const listEl = document.getElementById('pdfEpList');
-  if(!proj.endpoints.length){
-    listEl.innerHTML = `<div class="pdf-ep-empty">This project has no endpoints yet — add one before exporting.</div>`;
+  if(!epsForExport.length){
+    listEl.innerHTML = `<div class="pdf-ep-empty">${isViewingDraftEnv() ? 'This project has no endpoints yet — add one before exporting.' : `Nothing's been promoted to ${escapeHtml(envMeta(state.env).label)} yet — switch environments or promote endpoints first.`}</div>`;
   } else {
     listEl.innerHTML = Object.keys(groups).map(tag=>`
       <div class="pdf-ep-group" data-pdf-group="${escapeHtml(tag)}">
@@ -8989,7 +9093,7 @@ function openExportPdfModal(projectId){
   }
 
   const envLabel = envMeta(state.env).label;
-  document.getElementById('pdfExportSubtitle').textContent = `${proj.endpoints.length} endpoint${proj.endpoints.length===1?'':'s'} in ${proj.name} — everything renders exactly as it looks in the ${envLabel} environment.`;
+  document.getElementById('pdfExportSubtitle').textContent = `${epsForExport.length} endpoint${epsForExport.length===1?'':'s'} in ${proj.name} — everything renders exactly as it looks in the ${envLabel} environment.`;
   document.getElementById('pdfEnvHint').textContent = `Exporting from the ${envLabel} environment as ${state.authorName || 'you'}.`;
   document.getElementById('pdfMaskHint').innerHTML = canRevealSensitive()
     ? `${ICON_LOCK} Secure values follow your current reveal setting — ${sensitiveRevealed() ? 'currently shown' : 'currently masked'} in the PDF too.`
@@ -9033,7 +9137,7 @@ async function generateProjectPdf(){
   if(!proj) return;
   const selectedIds = Array.from(document.querySelectorAll('.pdf-ep-check:checked')).map(c=>c.value);
   if(!selectedIds.length){ toast('Select at least one endpoint to export.'); return; }
-  const endpoints = proj.endpoints.filter(ep=>selectedIds.includes(ep.id));
+  const endpoints = viewEndpoints(proj).filter(ep=>selectedIds.includes(ep.id));
   const opts = {
     includeOverview: document.getElementById('pdfIncludeOverview').checked,
     includeNotes: document.getElementById('pdfIncludeNotes').checked,
@@ -9319,7 +9423,7 @@ document.getElementById('btnSecurityCenter').addEventListener('click', ()=>{
   renderMain();
 });
 document.getElementById('btnFab').addEventListener('click', ()=>{
-  if(!canEdit()){ toast(`Your role (${roleMeta(state.authorRole).label}) is read-only`); return; }
+  if(!canEditHere()){ toast(isViewingDraftEnv() ? `Your role (${roleMeta(state.authorRole).label}) is read-only` : `Switch to ${envMeta(draftEnvId()).label} to make changes`); return; }
   openManualModal();
 });
 
