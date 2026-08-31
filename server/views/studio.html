@@ -1729,6 +1729,31 @@ pre.json-raw{ max-height:360px; margin:0; }
 .sec-preview-box .from{ color:var(--text-faint); }
 .sec-preview-box .to{ color:var(--post); font-weight:700; }
 .sec-field-input.invalid{ border-color:var(--delete) !important; }
+/* Base styling for every plain text/number input and select inside the
+   Security Center (rule drawer + protection settings) — these previously
+   had no rule at all in the stylesheet and fell back to the browser's
+   unstyled default control, clashing with the themed inputs used
+   everywhere else in the app (see .esc-body input, .env-table-toolbar
+   select for the pattern this follows). */
+.sec-field-input,
+.sec-drawer-body input[type="text"],
+.sec-drawer-body input[type="number"],
+.sec-drawer-body select,
+.sec-card input[type="number"]{
+  width:100%; box-sizing:border-box; font-family:inherit; font-size:12.5px;
+  background:var(--bg-elevated); border:1px solid var(--border); color:var(--text);
+  padding:8px 10px; border-radius:8px; transition:border-color .15s ease;
+}
+.sec-drawer-body select{ cursor:pointer; }
+.sec-field-input:focus,
+.sec-drawer-body input[type="text"]:focus,
+.sec-drawer-body input[type="number"]:focus,
+.sec-drawer-body select:focus,
+.sec-card input[type="number"]:focus{
+  outline:none; border-color:var(--accent);
+}
+.sec-field-input::placeholder,
+.sec-drawer-body input::placeholder{ color:var(--text-faint); }
 
 /* Slide-over drawer for adding/editing a rule. */
 .sec-drawer-scrim{
