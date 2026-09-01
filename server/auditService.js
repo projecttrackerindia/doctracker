@@ -79,6 +79,7 @@ function toClientShape(row) {
     environment: row.environment || '',
     severity: row.severity || 'info',
     result: row.result || 'success',
+    ip: row.ip_address || '',
   };
 }
 

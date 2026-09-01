@@ -4,6 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Audit Log — API Studio</title>
+<script nonce="__CSP_NONCE__">
+// Apply the theme before first paint (same localStorage key the Studio and
+// editor tabs use) so this tab never flashes dark when the rest of the app
+// is set to light, or vice versa. Runs synchronously, ahead of the stylesheet.
+(function(){
+  var t = localStorage.getItem('apiStudio_theme');
+  document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+})();
+</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 :root{
@@ -13,10 +22,25 @@
   --get:#4fa3f7; --post:#35c491; --put:#e0a83e; --patch:#b389f0; --delete:#ef5c6e;
   --sans:'Inter', system-ui, sans-serif; --mono:'JetBrains Mono', ui-monospace, monospace;
 }
+/* Same light palette as the Studio and editor tabs, so all three never look
+   like different products. */
+[data-theme="light"]{
+  --bg:#f5f6fa; --bg-elevated:#ffffff; --surface:#ffffff; --surface-2:#f1f3f8; --surface-hover:#e9ecf4;
+  --border:#e1e5ee; --border-strong:#ccd3e2; --text:#12151f; --text-dim:#5a6479; --text-faint:#8993a8;
+  --accent:#4a5fe0; --accent-soft:rgba(74,95,224,.09);
+  --get:#1f6fd6; --post:#1c8f66; --put:#a06f10; --patch:#7a4fd1; --delete:#d13750;
+}
 *{ box-sizing:border-box; }
+html{ color-scheme:dark; }
+html[data-theme="light"]{ color-scheme:light; }
 body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); -webkit-font-smoothing:antialiased; }
 a{ color:inherit; }
-.al-wrap{ max-width:1280px; margin:0 auto; padding:28px 28px 60px; }
+.al-wrap{ max-width:1600px; margin:0 auto; padding:28px clamp(20px,4vw,56px) 60px; }
+.al-theme-toggle{
+  display:flex; align-items:center; justify-content:center; width:36px; height:36px; flex-shrink:0;
+  background:var(--surface); border:1px solid var(--border); border-radius:8px; color:var(--text-dim); font-size:14px; cursor:pointer;
+}
+.al-theme-toggle:hover{ background:var(--surface-hover); color:var(--text); }
 .al-header{ display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px; flex-wrap:wrap; }
 .al-title{ display:flex; align-items:center; gap:12px; }
 .al-title .mark{ width:38px; height:38px; border-radius:10px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; font-weight:800; font-family:var(--mono); font-size:15px; }
@@ -41,7 +65,7 @@ a{ color:inherit; }
 .al-date-range .al-date-label{ font-size:10.5px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.4px; white-space:nowrap; }
 .al-date-range input[type="date"]{
   background:var(--bg-elevated); border:1px solid var(--border); color:var(--text); font-size:12px;
-  padding:7px 9px; border-radius:8px; font-family:var(--sans); color-scheme:dark;
+  padding:7px 9px; border-radius:8px; font-family:var(--sans);
 }
 .al-date-range input[type="date"]:focus{ outline:none; border-color:var(--accent); }
 .al-date-sep{ color:var(--text-faint); font-size:11px; }
@@ -75,11 +99,12 @@ tbody tr.al-hidden{ display:none; }
 .al-entity-name{ font-family:var(--mono); font-size:12px; color:var(--text); max-width:220px; }
 .al-project{ color:var(--text-dim); max-width:150px; }
 .al-details{ color:var(--text-dim); max-width:320px; }
+.al-ip{ color:var(--text-faint); font-family:var(--mono); font-size:11px; white-space:nowrap; }
 .al-empty{ padding:60px 20px; text-align:center; color:var(--text-faint); font-size:13px; }
 .al-loading{ padding:60px 20px; text-align:center; color:var(--text-faint); font-size:13px; }
 ::selection{ background:var(--accent-soft); }
 @media (max-width:900px){
-  .al-details, .al-project{ display:none; }
+  .al-details, .al-project, .al-ip{ display:none; }
 }
 </style>
 </head>
@@ -93,7 +118,10 @@ tbody tr.al-hidden{ display:none; }
         <div class="sub" id="alSub">API Studio · every create, edit, and delete — who did it, and when</div>
       </div>
     </div>
-    <a class="al-back" id="alBackLink" href="/dashboard.html">← Back to dashboard</a>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <a class="al-back" id="alBackLink" href="/dashboard.html">← Back to dashboard</a>
+      <button type="button" class="al-theme-toggle" id="btnTheme" title="Switch theme">◐</button>
+    </div>
   </div>
 
   <div class="al-kpis" id="alKpis">
@@ -131,8 +159,8 @@ tbody tr.al-hidden{ display:none; }
 
   <div class="al-table-wrap">
     <table>
-      <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Type</th><th>Entity</th><th>Project</th><th>Details</th></tr></thead>
-      <tbody id="alBody"><tr><td colspan="7" class="al-loading">Loading audit log…</td></tr></tbody>
+      <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Type</th><th>Entity</th><th>Project</th><th>Details</th><th>IP address</th></tr></thead>
+      <tbody id="alBody"><tr><td colspan="8" class="al-loading">Loading audit log…</td></tr></tbody>
     </table>
     <div class="al-empty hidden" id="alEmpty">No changes recorded yet — this log fills in as endpoints, projects, environments, and documents are created, edited, or deleted.</div>
   </div>
@@ -184,6 +212,20 @@ tbody tr.al-hidden{ display:none; }
   const pathMatch = window.location.pathname.match(/^\/([^/]+)\/auditlog\/?$/);
   if(pathMatch) backLink.href = '/' + pathMatch[1] + '/dashboard.html';
 
+  const THEME_KEY = 'apiStudio_theme';
+  const btnTheme = document.getElementById('btnTheme');
+  function applyTheme(theme){
+    document.documentElement.setAttribute('data-theme', theme);
+    btnTheme.textContent = theme === 'dark' ? '◐' : '◑';
+    btnTheme.title = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+  }
+  applyTheme(localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark');
+  btnTheme.addEventListener('click', ()=>{
+    const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    localStorage.setItem(THEME_KEY, next);
+    applyTheme(next);
+  });
+
   const els = {
     search: document.getElementById('alSearch'),
     action: document.getElementById('alActionFilter'),
@@ -210,7 +252,7 @@ tbody tr.al-hidden{ display:none; }
     const when = isNaN(dt.getTime()) ? '' : dt.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) + ', ' + dt.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit',second:'2-digit'});
     const tsMs = isNaN(dt.getTime()) ? '' : dt.getTime();
     const tr = document.createElement('tr');
-    tr.dataset.search = (e.actor+' '+e.entityType+' '+e.entityName+' '+e.projectName+' '+e.details+' '+meta.label+' '+(e.role||'')+' '+(e.severity||'')).toLowerCase();
+    tr.dataset.search = (e.actor+' '+e.entityType+' '+e.entityName+' '+e.projectName+' '+e.details+' '+meta.label+' '+(e.role||'')+' '+(e.severity||'')+' '+(e.ip||'')).toLowerCase();
     tr.dataset.action = e.action || '';
     tr.dataset.entity = e.entityType || '';
     tr.dataset.actor = e.actor || '';
@@ -223,6 +265,7 @@ tbody tr.al-hidden{ display:none; }
       <td class="al-entity-name">${escapeHtml(e.entityName || '—')}</td>
       <td class="al-project">${escapeHtml(e.projectName || '—')}</td>
       <td class="al-details">${escapeHtml(e.details || '')}</td>
+      <td class="al-ip">${escapeHtml(e.ip || '—')}</td>
     `;
     return tr;
   }
@@ -282,7 +325,7 @@ tbody tr.al-hidden{ display:none; }
       const data = await res.json();
       entries = Array.isArray(data.entries) ? data.entries : [];
     }catch(err){
-      els.body.innerHTML = '<tr><td colspan="7" class="al-loading">Could not load the audit log. Refresh to try again.</td></tr>';
+      els.body.innerHTML = '<tr><td colspan="8" class="al-loading">Could not load the audit log. Refresh to try again.</td></tr>';
       return;
     }
     rows = entries;
