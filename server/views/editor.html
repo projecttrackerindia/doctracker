@@ -53,19 +53,27 @@ button{ cursor:pointer; }
 .banner button{ margin-left:auto; background:none; border:1px solid currentColor; border-radius:6px; padding:4px 10px; font-size:11.5px; color:inherit; }
 
 /* ---------- Layout ---------- */
-.wrap{ max-width:900px; margin:0 auto; padding:20px 20px 120px; }
+.wrap{ max-width:1600px; margin:0 auto; padding:20px clamp(20px,4vw,56px) 150px; }
 .card{
   background:var(--surface); border:1px solid var(--border); border-radius:12px;
-  padding:16px 18px; margin-bottom:16px;
+  padding:18px 22px; margin-bottom:16px;
 }
 .card-head{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
 .card-title{ font-weight:700; font-size:13px; flex:1; }
+.drag-handle{
+  display:flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:6px;
+  color:var(--text-faint); cursor:grab; flex-shrink:0; letter-spacing:-2px; font-size:14px; user-select:none;
+}
+.drag-handle:hover{ color:var(--text-dim); background:var(--surface-hover); }
+.card.dragging{ opacity:.4; }
+.card.drag-over-top{ box-shadow: inset 0 2px 0 0 var(--accent); }
+.card.drag-over-bottom{ box-shadow: inset 0 -2px 0 0 var(--accent); }
 .card-kill{
   display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:6px;
   color:var(--text-faint); border:none; background:none; font-size:13px;
 }
 .card-kill:hover{ color:var(--danger); background:var(--danger-soft); }
-.field-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.field-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(230px,1fr)); gap:12px 16px; }
 .field{ display:flex; flex-direction:column; gap:5px; }
 .field.span2{ grid-column:1 / -1; }
 .field label{ font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint); font-weight:700; }
@@ -104,22 +112,33 @@ button{ cursor:pointer; }
 .add-row-btn{ margin-top:8px; background:none; border:1px dashed var(--border-strong); color:var(--text-dim); border-radius:7px; padding:6px 12px; font-size:12px; }
 .add-row-btn:hover{ border-color:var(--accent); color:var(--accent); }
 
-/* Add-block control */
-.add-block{ position:relative; display:inline-block; margin-top:4px; }
+/* Add-block control — floating, same treatment as the studio's "+ New endpoint" FAB */
+.add-block{ position:fixed; right:24px; bottom:92px; z-index:45; }
 .add-block-btn{
-  background:var(--surface); border:1px solid var(--border-strong); color:var(--text);
-  border-radius:8px; padding:9px 16px; font-size:12.5px; font-weight:600;
+  display:flex; align-items:center; gap:9px;
+  height:52px; padding:0 20px 0 18px; border-radius:999px;
+  background:var(--accent); color:var(--accent-ink); border:1px solid var(--accent);
+  font-size:13.5px; font-weight:700; letter-spacing:.1px;
+  box-shadow:0 8px 24px -6px rgba(0,0,0,.5), 0 2px 8px -2px var(--accent-soft);
+  cursor:pointer; transition:transform .12s ease, filter .12s ease, box-shadow .12s ease;
 }
-.add-block-btn:hover{ border-color:var(--accent); color:var(--accent); }
+.add-block-btn:hover{ filter:brightness(1.08); transform:translateY(-1px); box-shadow:0 10px 28px -6px rgba(0,0,0,.55), 0 2px 10px -2px var(--accent-soft); border-color:var(--accent); color:var(--accent-ink); }
+.add-block-btn:active{ transform:translateY(0); }
+.add-block-plus{ display:flex; align-items:center; justify-content:center; width:18px; height:18px; flex-shrink:0; }
 .add-block-menu{
-  position:absolute; bottom:calc(100% + 6px); left:0; background:var(--surface-2); border:1px solid var(--border-strong);
-  border-radius:9px; box-shadow:0 10px 30px rgba(0,0,0,.4); min-width:200px; padding:6px; display:none; z-index:10;
+  position:absolute; bottom:calc(100% + 10px); right:0; background:var(--surface-2); border:1px solid var(--border-strong);
+  border-radius:9px; box-shadow:0 10px 30px rgba(0,0,0,.4); min-width:220px; padding:6px; display:none; z-index:10;
 }
 .add-block-menu.open{ display:block; }
 .add-block-menu button{ display:flex; flex-direction:column; align-items:flex-start; width:100%; text-align:left; background:none; border:none; color:var(--text); padding:8px 10px; border-radius:6px; font-size:12.5px; }
 .add-block-menu button:hover{ background:var(--surface-hover); }
 .add-block-menu button:disabled{ opacity:.35; cursor:not-allowed; }
 .add-block-menu button .sub{ font-size:10.5px; color:var(--text-faint); }
+@media (max-width:640px){
+  .add-block{ right:16px; bottom:82px; }
+  .add-block-btn{ height:48px; padding:0 16px 0 14px; }
+  .add-block-label{ display:none; }
+}
 
 /* Footer action bar */
 .footer-bar{
@@ -185,14 +204,6 @@ button{ cursor:pointer; }
         <label>Path</label>
         <input type="text" id="fPath" placeholder="/api/v1/create">
       </div>
-      <div class="field span2">
-        <label>Summary</label>
-        <input type="text" id="fSummary" placeholder="One-line summary of what this endpoint does">
-      </div>
-      <div class="field span2">
-        <label>Description</label>
-        <textarea id="fDescription" placeholder="Markdown supported — full explanation, flow, notes…"></textarea>
-      </div>
       <div class="field">
         <label>Tag / category</label>
         <input type="text" id="fTag" placeholder="e.g. PAYMENT">
@@ -218,16 +229,20 @@ button{ cursor:pointer; }
   <!-- Dynamic blocks render here -->
   <div id="blocksContainer"></div>
 
-  <div class="add-block">
-    <button class="add-block-btn" id="addBlockBtn">+ Add block</button>
-    <div class="add-block-menu" id="addBlockMenu">
-      <button data-block="parameters" id="menuParameters"><span>Parameters</span><span class="sub">Query / path parameters table</span></button>
-      <button data-block="headers" id="menuHeaders"><span>Headers</span><span class="sub">Request header table</span></button>
-      <button data-block="requestBody" id="menuRequestBody"><span>Request body (JSON)</span><span class="sub">Paste JSON or build it manually</span></button>
-      <button data-block="response"><span>Response</span><span class="sub">Add another status code / example</span></button>
-    </div>
-  </div>
+</div>
 
+<div class="add-block">
+  <button class="add-block-btn" id="addBlockBtn">
+    <span class="add-block-plus"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></span>
+    <span class="add-block-label">Add block</span>
+  </button>
+  <div class="add-block-menu" id="addBlockMenu">
+    <button data-block="summary" id="menuSummary"><span>Summary &amp; description</span><span class="sub">One-line summary + full markdown description</span></button>
+    <button data-block="parameters" id="menuParameters"><span>Parameters</span><span class="sub">Query / path parameters table</span></button>
+    <button data-block="headers" id="menuHeaders"><span>Headers</span><span class="sub">Request header table</span></button>
+    <button data-block="requestBody" id="menuRequestBody"><span>Request body (JSON)</span><span class="sub">Paste JSON or build it manually</span></button>
+    <button data-block="response"><span>Response</span><span class="sub">Add another status code / example</span></button>
+  </div>
 </div>
 
 <div class="footer-bar">
@@ -437,13 +452,14 @@ function updateTopBar(proj, ep){
 function fillFormFromEndpoint(proj, ep){
   document.getElementById('fMethod').value = ep.method || 'GET';
   document.getElementById('fPath').value = ep.path || '';
-  document.getElementById('fSummary').value = ep.summary || '';
-  document.getElementById('fDescription').value = ep.description || '';
   document.getElementById('fTag').value = ep.tag || '';
   document.getElementById('fVersion').value = ep.version || '';
   document.getElementById('fContentType').value = ep.contentType || 'application/json';
   document.getElementById('fVisibility').value = ep.visibility === 'public' ? 'public' : 'private';
 
+  if(ep.summary || ep.description){
+    addBlock('summary', { summary: ep.summary || '', description: ep.description || '' });
+  }
   if((ep.parameters||[]).length){
     addBlock('parameters', { rows: ep.parameters.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'' })) });
   }
@@ -466,13 +482,17 @@ function fillFormFromEndpoint(proj, ep){
 }
 
 /* ==================== Blocks ==================== */
+const SINGLETON_BLOCKS = ['summary','parameters','headers','requestBody'];
 function addBlock(type, data){
-  if((type==='parameters' || type==='headers' || type==='requestBody') && blocks.some(b=>b.type===type)) return; // singleton blocks
+  if(SINGLETON_BLOCKS.includes(type) && blocks.some(b=>b.type===type)) return; // singleton blocks
   const block = Object.assign({ id: uid(), type }, data || {});
+  if(type==='summary'){ block.summary = block.summary || ''; block.description = block.description || ''; }
   if(type==='parameters' || type==='headers'){ block.rows = block.rows || []; }
   if(type==='requestBody'){ block.example = block.example || ''; block.fields = block.fields || []; }
   if(type==='response'){ block.code = block.code || 200; block.description = block.description || ''; block.example = block.example || ''; block.fields = block.fields || []; }
-  blocks.push(block);
+  // Summary & description reads best pinned right under Basic info, ahead of
+  // parameters/headers/body/response — insert it first regardless of click order.
+  if(type==='summary') blocks.unshift(block); else blocks.push(block);
   return block;
 }
 function removeBlock(id){
@@ -527,29 +547,47 @@ function jsonPasteHtml(block, fieldKey){
     </div>`;
 }
 
+const DRAG_HANDLE = `<span class="drag-handle" data-drag-handle title="Drag to reorder">⠿</span>`;
+
 function renderBlockHtml(block){
+  if(block.type==='summary'){
+    return `<div class="card" data-block="${block.id}" draggable="true">
+      <div class="card-head">${DRAG_HANDLE}<div class="card-title">Summary &amp; description</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
+      <div class="field-grid">
+        <div class="field span2">
+          <label>Summary</label>
+          <input type="text" data-f="summary" value="${escapeHtml(block.summary)}" placeholder="One-line summary of what this endpoint does">
+        </div>
+        <div class="field span2">
+          <label>Description</label>
+          <textarea data-f="description" placeholder="Markdown supported — full explanation, flow, notes…">${escapeHtml(block.description)}</textarea>
+        </div>
+      </div>
+    </div>`;
+  }
   if(block.type==='parameters'){
-    return `<div class="card" data-block="${block.id}">
-      <div class="card-head"><div class="card-title">Parameters</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
+    return `<div class="card" data-block="${block.id}" draggable="true">
+      <div class="card-head">${DRAG_HANDLE}<div class="card-title">Parameters</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
       ${rowsTableHtml(block, false)}
     </div>`;
   }
   if(block.type==='headers'){
-    return `<div class="card" data-block="${block.id}">
-      <div class="card-head"><div class="card-title">Headers</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
+    return `<div class="card" data-block="${block.id}" draggable="true">
+      <div class="card-head">${DRAG_HANDLE}<div class="card-title">Headers</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
       ${rowsTableHtml(block, true)}
     </div>`;
   }
   if(block.type==='requestBody'){
-    return `<div class="card" data-block="${block.id}">
-      <div class="card-head"><div class="card-title">Request body (JSON)</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
+    return `<div class="card" data-block="${block.id}" draggable="true">
+      <div class="card-head">${DRAG_HANDLE}<div class="card-title">Request body (JSON)</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
       ${jsonPasteHtml(block, 'requestBody')}
       ${block.fields.length ? rowsTableHtml({ id:block.id, rows:block.fields }, false) : `<div class="hint">No fields yet — paste JSON above, or add rows once inferred.</div>`}
     </div>`;
   }
   if(block.type==='response'){
-    return `<div class="card" data-block="${block.id}">
+    return `<div class="card" data-block="${block.id}" draggable="true">
       <div class="card-head">
+        ${DRAG_HANDLE}
         <div class="card-title">Response</div>
         <button type="button" class="card-kill" data-kill="${block.id}" title="Remove response">✕</button>
       </div>
@@ -614,6 +652,12 @@ function bindBlockEvents(container){
         input.addEventListener('input', ()=>{ block[key] = input.value; });
       });
     }
+    if(block.type==='summary'){
+      cardEl.querySelectorAll('[data-f="summary"], [data-f="description"]').forEach(input=>{
+        const key = input.getAttribute('data-f');
+        input.addEventListener('input', ()=>{ block[key] = input.value; });
+      });
+    }
   });
   container.querySelectorAll('[data-paste-target]').forEach(ta=>{
     ta.addEventListener('input', ()=>{
@@ -639,10 +683,67 @@ function bindBlockEvents(container){
       }
     });
   });
+  bindBlockDragAndDrop(container);
+}
+
+/* ==================== Drag-and-drop block reordering ====================
+   Blocks (Summary, Parameters, Headers, Request body, Response...) can be
+   reordered by dragging the ⠿ handle in a card's header — no need to delete
+   an accidentally-added block and rebuild it, just drag it to where it
+   belongs. Native HTML5 DnD; drag only starts from the handle so clicking
+   inside inputs/textareas still works normally. */
+let dragAllowed = false;
+let draggedBlockId = null;
+function bindBlockDragAndDrop(container){
+  container.querySelectorAll('[data-drag-handle]').forEach(handle=>{
+    handle.addEventListener('mousedown', ()=>{ dragAllowed = true; });
+  });
+  container.querySelectorAll('[data-block]').forEach(cardEl=>{
+    cardEl.addEventListener('dragstart', (e)=>{
+      if(!dragAllowed){ e.preventDefault(); return; }
+      draggedBlockId = cardEl.getAttribute('data-block');
+      e.dataTransfer.effectAllowed = 'move';
+      try{ e.dataTransfer.setData('text/plain', draggedBlockId); }catch(err){}
+      requestAnimationFrame(()=> cardEl.classList.add('dragging'));
+    });
+    cardEl.addEventListener('dragend', ()=>{
+      dragAllowed = false;
+      draggedBlockId = null;
+      container.querySelectorAll('.card').forEach(c=>c.classList.remove('dragging','drag-over-top','drag-over-bottom'));
+    });
+    cardEl.addEventListener('dragover', (e)=>{
+      if(!draggedBlockId || draggedBlockId === cardEl.getAttribute('data-block')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const rect = cardEl.getBoundingClientRect();
+      const before = (e.clientY - rect.top) < rect.height / 2;
+      cardEl.classList.toggle('drag-over-top', before);
+      cardEl.classList.toggle('drag-over-bottom', !before);
+    });
+    cardEl.addEventListener('dragleave', ()=>{
+      cardEl.classList.remove('drag-over-top','drag-over-bottom');
+    });
+    cardEl.addEventListener('drop', (e)=>{
+      e.preventDefault();
+      const targetId = cardEl.getAttribute('data-block');
+      const before = cardEl.classList.contains('drag-over-top');
+      cardEl.classList.remove('drag-over-top','drag-over-bottom');
+      if(!draggedBlockId || draggedBlockId === targetId) return;
+      const fromIdx = blocks.findIndex(b=>b.id===draggedBlockId);
+      if(fromIdx < 0) return;
+      const [moved] = blocks.splice(fromIdx, 1);
+      let toIdx = blocks.findIndex(b=>b.id===targetId);
+      if(toIdx < 0) toIdx = blocks.length;
+      blocks.splice(before ? toIdx : toIdx + 1, 0, moved);
+      renderBlocks();
+    });
+  });
+  document.addEventListener('mouseup', ()=>{ dragAllowed = false; }, { once:true });
 }
 
 /* ==================== Add-block menu ==================== */
 function updateAddMenuAvailability(){
+  document.getElementById('menuSummary').disabled = blocks.some(b=>b.type==='summary');
   document.getElementById('menuParameters').disabled = blocks.some(b=>b.type==='parameters');
   document.getElementById('menuHeaders').disabled = blocks.some(b=>b.type==='headers');
   document.getElementById('menuRequestBody').disabled = blocks.some(b=>b.type==='requestBody');
@@ -668,6 +769,7 @@ function gatherEndpointFromForm(){
   const cleanRows = rows => (rows||[]).filter(r=>r.name.trim()).map(r=>({ name:r.name.trim(), type:r.type, required:!!r.required, example:r.example||'', description:r.description||'' }));
   const path = document.getElementById('fPath').value.trim() || '/untitled';
   const pathParamNames = new Set([...path.matchAll(/\{([^}]+)\}/g)].map(m=>m[1]));
+  const summaryBlock = blocks.find(b=>b.type==='summary');
   const paramsBlock = blocks.find(b=>b.type==='parameters');
   const headersBlock = blocks.find(b=>b.type==='headers');
   const bodyBlock = blocks.find(b=>b.type==='requestBody');
@@ -680,8 +782,8 @@ function gatherEndpointFromForm(){
     tag: document.getElementById('fTag').value.trim() || 'General',
     version: document.getElementById('fVersion').value.trim(),
     contentType: document.getElementById('fContentType').value.trim() || 'application/json',
-    summary: document.getElementById('fSummary').value.trim(),
-    description: document.getElementById('fDescription').value.trim(),
+    summary: (summaryBlock && summaryBlock.summary || '').trim(),
+    description: (summaryBlock && summaryBlock.description || '').trim(),
     parameters: cleanRows(paramsBlock && paramsBlock.rows).map(p=>({ ...p, in: pathParamNames.has(p.name) ? 'path' : 'query' })),
     headers: cleanRows(headersBlock && headersBlock.rows),
     requestBody: (bodyBlock && (bodyBlock.example.trim() || (bodyBlock.fields||[]).length))
