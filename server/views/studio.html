@@ -433,12 +433,24 @@ kbd{
 .icon-btn:hover{ color:var(--accent); background:var(--surface-hover); }
 .icon-btn.del:hover{ color:var(--danger); background:var(--danger-soft); }
 
-.tag-group{ display:none; }
+.tag-group{ display:none; margin-left:4px; }
 .project.open .tag-group{ display:block; }
-.tag-label{
-  padding:11px 16px 6px 20px; font-size:9.5px; text-transform:uppercase;
-  letter-spacing:.8px; color:var(--text-faint); font-weight:700;
+.tag-head{
+  display:flex; align-items:center; gap:6px; margin:2px 6px 0; padding:9px 8px 9px 10px;
+  cursor:pointer; user-select:none; border-radius:7px; transition:background-color .12s ease;
 }
+.tag-head:hover{ background:var(--surface-hover); }
+.tag-caret{ color:var(--text-faint); font-size:8px; transition:transform .15s ease; flex-shrink:0; width:10px; text-align:center; }
+.tag-group.open .tag-caret{ transform:rotate(90deg); }
+.tag-label{
+  font-size:9.5px; text-transform:uppercase; letter-spacing:.8px; color:var(--text-faint); font-weight:700; flex:1;
+}
+.tag-count{
+  font-size:9.5px; font-family:var(--mono); font-weight:700; color:var(--text-faint);
+  background:var(--surface-2); border-radius:999px; padding:1px 7px; flex-shrink:0;
+}
+.tag-body{ display:none; margin-left:22px; padding-left:11px; border-left:1px solid var(--border); }
+.tag-group.open .tag-body{ display:block; }
 .ep{
   display:flex; align-items:center; gap:9px; margin:1px 8px; padding:7px 10px 7px 12px; cursor:pointer;
   border-radius:7px; position:relative; transition:background-color .12s ease;
@@ -4616,18 +4628,26 @@ function renderSidebar(){
     const canDeleteHere = canEditHere();
 
     const overviewActive = state.selected && state.selected.type==='overview' && state.selected.projectId===proj.id;
+    const closedTags = proj._closedTags || {};
     const tagsHtml = Object.keys(groupsToShow).sort().map(tag=>{
       const eps = groupsToShow[tag].slice().sort((a,b)=>(orderIndex.get(a.id)??0)-(orderIndex.get(b.id)??0));
-      return `<div class="tag-group">
-        <div class="tag-label">${escapeHtml(tag)}</div>
-        ${eps.map(ep=>`
-          <div class="ep ${state.selected && state.selected.type==='endpoint' && state.selected.id===ep.id ? 'active':''}" data-ep="${ep.id}">
-            <span class="badge ${methodClass(ep.method)}">${ep.method}</span>
-            <span class="ep-path">${escapeHtml(ep.path)}</span>
-            ${canDeleteHere ? `<span class="icon-btn ep-del" data-ep-del="${ep.id}" title="Delete endpoint" role="button" tabindex="0"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg></span>` : ''}
-          </div>`).join('')}
+      const tagOpen = filter ? true : !closedTags[tag]; // search always shows matches, regardless of collapsed state
+      return `<div class="tag-group ${tagOpen?'open':''}" data-tag-name="${escapeHtml(tag)}">
+        <div class="tag-head" data-tag-toggle="${proj.id}" data-tag-name="${escapeHtml(tag)}">
+          <span class="tag-caret">▶</span>
+          <span class="tag-label">${escapeHtml(tag)}</span>
+          <span class="tag-count">${eps.length}</span>
+        </div>
+        <div class="tag-body">
+          ${eps.map(ep=>`
+            <div class="ep ${state.selected && state.selected.type==='endpoint' && state.selected.id===ep.id ? 'active':''}" data-ep="${ep.id}">
+              <span class="badge ${methodClass(ep.method)}">${ep.method}</span>
+              <span class="ep-path">${escapeHtml(ep.path)}</span>
+              ${canDeleteHere ? `<span class="icon-btn ep-del" data-ep-del="${ep.id}" title="Delete endpoint" role="button" tabindex="0"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg></span>` : ''}
+            </div>`).join('')}
+        </div>
       </div>`;
-    }).join('') || (!isViewingDraftEnv() && !filter ? `<div class="tag-group"><div class="empty-sidebar" style="padding:10px 8px;font-size:11.5px;">${snapshotEntry(proj.id).status==='loading' ? 'Loading…' : `Nothing promoted to ${escapeHtml(envMeta(state.env).label)} yet.`}</div></div>` : '');
+    }).join('') || (!isViewingDraftEnv() && !filter ? `<div class="tag-group open"><div class="empty-sidebar" style="padding:10px 8px;font-size:11.5px;">${snapshotEntry(proj.id).status==='loading' ? 'Loading…' : `Nothing promoted to ${escapeHtml(envMeta(state.env).label)} yet.`}</div></div>` : '');
 
     const initials = (proj.name||'?').trim().split(/\s+/).slice(0,2).map(w=>w[0]).join('').toUpperCase() || '?';
     const accent = PROFILE_COLORS[hashStr(proj.name||'') % PROFILE_COLORS.length];
@@ -4658,6 +4678,19 @@ function renderSidebar(){
     el.addEventListener('click', ()=>{
       const id = el.getAttribute('data-toggle');
       state.projects[id]._open = !(state.projects[id]._open !== false);
+      saveState();
+      renderSidebar();
+    });
+  });
+  list.querySelectorAll('[data-tag-toggle]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const projId = el.getAttribute('data-tag-toggle');
+      const tag = el.getAttribute('data-tag-name');
+      const proj = state.projects[projId];
+      if(!proj) return;
+      proj._closedTags = proj._closedTags || {};
+      if(proj._closedTags[tag]) delete proj._closedTags[tag]; else proj._closedTags[tag] = true;
       saveState();
       renderSidebar();
     });
