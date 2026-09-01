@@ -1,5 +1,5 @@
 const express = require('express');
-const rateLimit = require('express-rate-limit');
+const { createRateLimiter } = require('../rateLimitStore');
 const { pool } = require('../db');
 const { authenticate } = require('../middleware/authGuard');
 const { recordAuditEvent, toClientShape } = require('../auditService');
@@ -9,7 +9,7 @@ router.use(authenticate);
 
 // Generous but bounded — this endpoint is called once per user action (endpoint
 // saved, PII revealed, etc.), not per keystroke, so normal use never gets close.
-const writeLimiter = rateLimit({
+const writeLimiter = createRateLimiter({
   windowMs: 60 * 1000,
   max: 60,
   standardHeaders: true,

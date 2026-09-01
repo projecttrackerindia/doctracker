@@ -6,7 +6,6 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
-const jwt = require('jsonwebtoken');
 
 const { initDb } = require('./db');
 const dataCrypto = require('./crypto');
@@ -16,6 +15,7 @@ const workspaceRoutes = require('./routes/workspace');
 const auditRoutes = require('./routes/audit');
 const piiRoutes = require('./routes/pii');
 const securityRoutes = require('./routes/security');
+const { verifySession } = require('./middleware/authGuard');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -51,7 +51,27 @@ app.use(
     },
   })
 );
-app.use(cors({ origin: true, credentials: true }));
+// CORS: previously `origin: true` reflected whatever Origin header a request
+// sent, and combined with `credentials: true` that meant ANY website could
+// make a credentialed (cookie-bearing) request to this API from a visitor's
+// browser. Restrict it to an explicit allow-list instead — set
+// ALLOWED_ORIGINS (comma-separated) if this API is ever called cross-origin
+// (e.g. a separate marketing site, a local dev frontend on another port).
+// Requests with no Origin header at all (same-origin page loads, curl,
+// server-to-server) are always allowed through, same as before.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      callback(null, false);
+    },
+    credentials: true,
+  })
+);
 app.use(cookieParser());
 
 // Workspace payloads carry base64-encoded document attachments, so they need a
@@ -70,13 +90,19 @@ app.use('/api/security', securityRoutes);
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 // ---- Auth guard for the studio app ----
-function requireAuth(req, res, next) {
-  const token = req.cookies?.[COOKIE_NAME];
-  if (!token) return res.redirect('/login.html');
+// Same DB-backed check as the API's authenticate() middleware (see
+// middleware/authGuard.js) — a page load re-validates the account/role/
+// tokenVersion fresh from the database instead of trusting the JWT payload
+// verbatim, so a revoked session (role change, password reset, deleted
+// account) bounces to the login page immediately instead of on next expiry.
+async function requireAuth(req, res, next) {
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    const authUser = await verifySession(req.cookies?.[COOKIE_NAME]);
+    if (!authUser) return res.redirect('/login.html');
+    req.user = authUser;
     next();
-  } catch {
+  } catch (err) {
+    console.error('requireAuth() failed:', err);
     res.redirect('/login.html');
   }
 }

@@ -37,6 +37,14 @@ async function initDb() {
     END $$;
   `);
 
+  // Session revocation counter. Embedded in every JWT as `tokenVersion` and
+  // checked against this column on every authenticated request (see
+  // middleware/authGuard.js). Bumping it (role change, password reset, or a
+  // future "sign out everywhere") instantly invalidates every session token
+  // already issued for that user, even though JWTs themselves are stateless
+  // and would otherwise keep working, unmodified, until their 7-day expiry.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1;`);
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(email));
   `);
@@ -68,6 +76,16 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects (owner_id);`);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_projects_org_public ON projects (organisation) WHERE visibility = 'public';
+  `);
+
+  // Denormalized flag, kept in sync on every write (see workspace.js), so
+  // GET /api/workspace can filter out other people's fully-private projects
+  // in SQL instead of fetching + decrypting every project in the
+  // organisation just to throw most of them away afterwards.
+  await pool.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS has_public_endpoint BOOLEAN NOT NULL DEFAULT false;`);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_projects_org_visible ON projects (organisation)
+      WHERE visibility = 'public' OR has_public_endpoint;
   `);
 
   // Shared, organisation-wide workspace extras that previously lived in their

@@ -1,5 +1,5 @@
 const express = require('express');
-const rateLimit = require('express-rate-limit');
+const { createRateLimiter } = require('../rateLimitStore');
 const { authenticate, requireAdmin } = require('../middleware/authGuard');
 const { recordAuditEvent } = require('../auditService');
 const dataCrypto = require('../crypto');
@@ -11,7 +11,7 @@ router.use(requireAdmin); // everything under /api/security is Admin-only
 
 // Rotation is rare and deliberate — this just guards against mis-clicks/abuse,
 // not against a legitimate "we think it's compromised, rotate now" moment.
-const rotateLimiter = rateLimit({
+const rotateLimiter = createRateLimiter({
   windowMs: 60 * 1000,
   max: 5,
   standardHeaders: true,
@@ -52,20 +52,38 @@ router.post('/encryption/rotate', rotateLimiter, async (req, res) => {
       metadata: { newVersion },
     });
 
-    let reencrypted = null;
+    // Re-encryption of a whole organisation's projects can take a while for a
+    // large org — previously this was awaited here, inside the request, which
+    // held the HTTP connection open for the full duration and risked hitting
+    // a proxy/client timeout. It's now fired in the background: the response
+    // goes back immediately with reencrypting:true, and a follow-up audit
+    // entry records completion (or failure) once the walk actually finishes.
     if (reencryptNow) {
-      reencrypted = await reencryptOrganisation(req.authUser.organisation);
-      await recordAuditEvent(req.authUser, req, {
-        action: 'ENCRYPTION_REENCRYPT_RUN',
-        resourceType: 'encryption_key',
-        resourceId: String(newVersion),
-        details: `Re-encrypted ${reencrypted.projects} project(s) and org workspace data under key v${newVersion}.`,
-        severity: 'warning',
-        metadata: reencrypted,
-      });
+      reencryptOrganisation(req.authUser.organisation)
+        .then((result) =>
+          recordAuditEvent(req.authUser, req, {
+            action: 'ENCRYPTION_REENCRYPT_RUN',
+            resourceType: 'encryption_key',
+            resourceId: String(newVersion),
+            details: `Re-encrypted ${result.projects} project(s) and org workspace data under key v${newVersion}.`,
+            severity: 'warning',
+            metadata: result,
+          })
+        )
+        .catch((err) => {
+          console.error(`Background re-encryption for ${req.authUser.organisation} failed:`, err);
+          return recordAuditEvent(req.authUser, req, {
+            action: 'ENCRYPTION_REENCRYPT_RUN',
+            resourceType: 'encryption_key',
+            resourceId: String(newVersion),
+            details: `Re-encryption under key v${newVersion} failed and did not complete: ${err.message}`,
+            severity: 'critical',
+            result: 'failure',
+          });
+        });
     }
 
-    res.json({ ok: true, activeVersion: newVersion, reencrypted });
+    res.json({ ok: true, activeVersion: newVersion, reencrypting: reencryptNow });
   } catch (err) {
     console.error('POST /api/security/encryption/rotate failed:', err);
     res.status(500).json({ error: 'Could not rotate encryption key.' });

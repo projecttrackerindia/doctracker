@@ -1,6 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const rateLimit = require('express-rate-limit');
+const { createRateLimiter } = require('../rateLimitStore');
 const { pool } = require('../db');
 const { authenticate, requireAdmin } = require('../middleware/authGuard');
 const {
@@ -16,7 +16,7 @@ const router = express.Router();
 // Every route here is Admin-only and mutates account state, so it gets its
 // own (slightly more generous than login's) rate limit rather than sharing
 // the login/register limiter.
-const adminActionLimiter = rateLimit({
+const adminActionLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   max: 60,
   standardHeaders: true,
@@ -133,9 +133,13 @@ router.patch('/:id/role', async (req, res) => {
       permsToStore = permsCheck.value;
     }
     // Switching away from 'custom' clears any stored permissions rather than leaving stale data behind.
-
+    // Bumping token_version invalidates every session token already issued to
+    // this user — otherwise their existing (up to 7-day-old) cookie would
+    // keep granting the OLD role/permissions until it naturally expired,
+    // since the JWT itself never gets rewritten mid-flight. See
+    // middleware/authGuard.js's verifySession().
     const result = await pool.query(
-      `UPDATE users SET role = $1, custom_permissions = $2 WHERE id = $3 RETURNING ${SAFE_COLUMNS}`,
+      `UPDATE users SET role = $1, custom_permissions = $2, token_version = token_version + 1 WHERE id = $3 RETURNING ${SAFE_COLUMNS}`,
       [roleCheck.value, permsToStore ? JSON.stringify(permsToStore) : null, user.id]
     );
     res.json({ user: result.rows[0] });
@@ -153,7 +157,10 @@ router.post('/:id/reset-password', async (req, res) => {
 
     const temporaryPassword = generateTemporaryPassword();
     const passwordHash = await bcrypt.hash(temporaryPassword, 12);
-    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, user.id]);
+    // Also bumps token_version — a password reset should sign the user out
+    // of any existing session everywhere, not just require the new password
+    // on their next un-forced request.
+    await pool.query('UPDATE users SET password_hash = $1, token_version = token_version + 1 WHERE id = $2', [passwordHash, user.id]);
 
     res.json({ user, temporaryPassword });
   } catch (err) {

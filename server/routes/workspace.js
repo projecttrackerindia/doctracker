@@ -9,9 +9,40 @@ router.use(authenticate);
 
 const MAX_PROJECTS_PER_SAVE = 200;
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // hard server-side cap per file (base64 dataUrl length)
+const MAX_PROJECT_ATTACHMENT_BYTES = 40 * 1024 * 1024; // hard server-side cap for a project's attachments combined
 
 function isPlainObject(v) {
   return v && typeof v === 'object' && !Array.isArray(v);
+}
+
+// MAX_ATTACHMENT_BYTES was previously defined but never actually checked
+// anywhere — the only real limit in force was the 25mb express.json() body
+// cap on the whole request. This enforces both the per-file and
+// per-project totals server-side. Returns an error string, or null if the
+// project's attachments are within bounds.
+function attachmentSizeError(projectData) {
+  const attachments = Array.isArray(projectData && projectData.attachments) ? projectData.attachments : [];
+  let total = 0;
+  for (const att of attachments) {
+    const len = att && typeof att.dataUrl === 'string' ? att.dataUrl.length : 0;
+    if (len > MAX_ATTACHMENT_BYTES) {
+      return `Attachment "${(att && att.name) || 'file'}" is too large (max ${Math.floor(MAX_ATTACHMENT_BYTES / (1024 * 1024))}MB per file).`;
+    }
+    total += len;
+  }
+  if (total > MAX_PROJECT_ATTACHMENT_BYTES) {
+    return `This project's attachments total ${Math.round(total / (1024 * 1024))}MB, over the ${Math.floor(MAX_PROJECT_ATTACHMENT_BYTES / (1024 * 1024))}MB per-project limit.`;
+  }
+  return null;
+}
+
+// Kept in sync with `projects.has_public_endpoint` on every write, so
+// GET /api/workspace can filter fully-private projects out in SQL instead of
+// fetching + decrypting every project in the organisation. See db.js for the
+// column/index and the comment on the GET /api/workspace query below.
+function computeHasPublicEndpoint(projectData) {
+  return Array.isArray(projectData && projectData.endpoints)
+    && projectData.endpoints.some((ep) => ep && ep.visibility === 'public');
 }
 
 // ----------------------------------------------------------------------------
@@ -62,50 +93,56 @@ function decryptOrgBlob(encValue, legacyValue, org, purpose, fallback) {
 // whatever the CURRENT active key is. Used right after an Admin rotates the
 // key and wants existing data moved off the old key immediately rather than
 // waiting for it to be upgraded lazily on next save (see routes/security.js).
+//
+// Previously this ran as ONE transaction holding `FOR UPDATE` locks across
+// every project row in the organisation for the whole duration, and
+// routes/security.js awaited it synchronously inside the HTTP request —
+// for an organisation with a lot of projects this could block every other
+// save to that org for a long time and risk the request itself timing out.
+// Now each row is re-encrypted in its own single-statement update (so a
+// lock is only ever held for that one row, for that one statement), and
+// the WHERE clause only applies the update if the row's key version hasn't
+// already moved on since we read it — if a normal save (or a concurrent
+// call to this same function) touched the row in between, we just skip it
+// rather than clobber a newer write with stale re-encrypted content.
+// security.js now calls this in the background instead of awaiting it.
 async function reencryptOrganisation(organisation) {
-  const client = await pool.connect();
   let projectsTouched = 0;
-  try {
-    await client.query('BEGIN');
-    const { rows: projectRows } = await client.query(
-      `SELECT id, data, data_enc FROM projects WHERE organisation = $1 FOR UPDATE`,
-      [organisation]
+  const { rows: projectRows } = await pool.query(
+    `SELECT id, data, data_enc, data_key_version FROM projects WHERE organisation = $1`,
+    [organisation]
+  );
+  for (const row of projectRows) {
+    const plain = decryptProjectData(row);
+    const { legacyPlaceholder, enc, version } = encryptProjectData(plain, row.id);
+    const result = await pool.query(
+      `UPDATE projects SET data = $1::jsonb, data_enc = $2, data_key_version = $3
+       WHERE id = $4 AND data_key_version IS NOT DISTINCT FROM $5`,
+      [legacyPlaceholder, enc, version, row.id, row.data_key_version]
     );
-    for (const row of projectRows) {
-      const plain = decryptProjectData(row);
-      const { legacyPlaceholder, enc, version } = encryptProjectData(plain, row.id);
-      await client.query(
-        `UPDATE projects SET data = $1::jsonb, data_enc = $2, data_key_version = $3 WHERE id = $4`,
-        [legacyPlaceholder, enc, version, row.id]
-      );
-      projectsTouched++;
-    }
+    if (result.rowCount) projectsTouched++;
+  }
 
-    const { rows: wsRows } = await client.query(
-      `SELECT environments, environments_enc, request_history, request_history_enc
-       FROM org_workspace WHERE organisation = $1 FOR UPDATE`,
-      [organisation]
+  const { rows: wsRows } = await pool.query(
+    `SELECT environments, environments_enc, request_history, request_history_enc, environments_key_version, request_history_key_version
+     FROM org_workspace WHERE organisation = $1`,
+    [organisation]
+  );
+  if (wsRows.length) {
+    const ws = wsRows[0];
+    const envPlain = decryptOrgBlob(ws.environments_enc, ws.environments, organisation, 'environments', []);
+    const histPlain = decryptOrgBlob(ws.request_history_enc, ws.request_history, organisation, 'request_history', {});
+    const envEnc = encryptOrgBlob(envPlain, organisation, 'environments');
+    const histEnc = encryptOrgBlob(histPlain, organisation, 'request_history');
+    await pool.query(
+      `UPDATE org_workspace SET
+         environments = '[]'::jsonb, environments_enc = $1, environments_key_version = $2,
+         request_history = '{}'::jsonb, request_history_enc = $3, request_history_key_version = $4
+       WHERE organisation = $5
+         AND environments_key_version IS NOT DISTINCT FROM $6
+         AND request_history_key_version IS NOT DISTINCT FROM $7`,
+      [envEnc.enc, envEnc.version, histEnc.enc, histEnc.version, organisation, ws.environments_key_version, ws.request_history_key_version]
     );
-    if (wsRows.length) {
-      const ws = wsRows[0];
-      const envPlain = decryptOrgBlob(ws.environments_enc, ws.environments, organisation, 'environments', []);
-      const histPlain = decryptOrgBlob(ws.request_history_enc, ws.request_history, organisation, 'request_history', {});
-      const envEnc = encryptOrgBlob(envPlain, organisation, 'environments');
-      const histEnc = encryptOrgBlob(histPlain, organisation, 'request_history');
-      await client.query(
-        `UPDATE org_workspace SET
-           environments = '[]'::jsonb, environments_enc = $1, environments_key_version = $2,
-           request_history = '{}'::jsonb, request_history_enc = $3, request_history_key_version = $4
-         WHERE organisation = $5`,
-        [envEnc.enc, envEnc.version, histEnc.enc, histEnc.version, organisation]
-      );
-    }
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
   }
   return { projects: projectsTouched, orgWorkspace: true };
 }
@@ -136,25 +173,25 @@ router.get('/', async (req, res) => {
     const userId = req.authUser.sub;
     const org = req.authUser.organisation;
 
-    // `data` is encrypted, so we can no longer ask Postgres to peek inside it
-    // with a jsonb path EXISTS check — we fetch every candidate row (own, or
-    // same-organisation) and decide public/private visibility in the app
-    // after decrypting, in projectForViewer() below.
+    // `data` is encrypted, so we can't ask Postgres to peek inside it with a
+    // jsonb path EXISTS check — but `has_public_endpoint` is a plaintext
+    // column kept in sync on every write (see computeHasPublicEndpoint()),
+    // so the WHERE clause itself now excludes every fully-private project
+    // that isn't the caller's own, instead of fetching and decrypting all of
+    // them just to discard most in projectForViewer() afterwards. This is
+    // the fix for GET /api/workspace decrypting an org's entire project set
+    // on every dashboard load.
     const { rows } = await pool.query(
       `SELECT id, owner_id, organisation, visibility, name, data, data_enc
        FROM projects
-       WHERE owner_id = $1 OR organisation = $2`,
+       WHERE owner_id = $1
+          OR (organisation = $2 AND (visibility = 'public' OR has_public_endpoint))`,
       [userId, org]
     );
 
     const projects = {};
     rows.forEach((row) => {
       const data = decryptProjectData(row);
-      const isOwner = row.owner_id === userId;
-      if (!isOwner) {
-        const hasPublicEndpoint = Array.isArray(data.endpoints) && data.endpoints.some((ep) => ep && ep.visibility === 'public');
-        if (row.visibility !== 'public' && !hasPublicEndpoint) return; // not owner, nothing public — skip entirely
-      }
       projects[row.id] = projectForViewer(row, userId, data);
     });
 
@@ -213,19 +250,28 @@ router.put('/projects', async (req, res) => {
       const visibility = proj.visibility === 'public' ? 'public' : 'private';
       const name = typeof proj.name === 'string' && proj.name.trim() ? proj.name.trim() : 'Untitled API';
       const dataToStore = { ...proj, id };
+
+      const sizeError = attachmentSizeError(dataToStore);
+      if (sizeError) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: sizeError, projectId: id });
+      }
+
+      const hasPublicEndpoint = computeHasPublicEndpoint(dataToStore);
       const { legacyPlaceholder, enc, version } = encryptProjectData(dataToStore, id);
       await client.query(
-        `INSERT INTO projects (id, owner_id, organisation, visibility, name, data, data_enc, data_key_version, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, now())
+        `INSERT INTO projects (id, owner_id, organisation, visibility, name, data, data_enc, data_key_version, has_public_endpoint, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, now())
          ON CONFLICT (id) DO UPDATE SET
            visibility = EXCLUDED.visibility,
            name = EXCLUDED.name,
            data = EXCLUDED.data,
            data_enc = EXCLUDED.data_enc,
            data_key_version = EXCLUDED.data_key_version,
+           has_public_endpoint = EXCLUDED.has_public_endpoint,
            updated_at = now()
          WHERE projects.owner_id = $2`,
-        [id, userId, org, visibility, name, legacyPlaceholder, enc, version]
+        [id, userId, org, visibility, name, legacyPlaceholder, enc, version, hasPublicEndpoint]
       );
       saved.push(id);
     }
@@ -379,12 +425,20 @@ router.post('/migrate', async (req, res) => {
       const name = typeof proj.name === 'string' && proj.name.trim() ? proj.name.trim() : 'Untitled API';
       const dataToStore = { ...proj, id, visibility: 'private' };
       (dataToStore.endpoints || []).forEach((ep) => { if (ep && !ep.visibility) ep.visibility = 'private'; });
+
+      const sizeError = attachmentSizeError(dataToStore);
+      if (sizeError) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: sizeError, projectId: oldId });
+      }
+
+      const hasPublicEndpoint = computeHasPublicEndpoint(dataToStore);
       const { legacyPlaceholder, enc, version } = encryptProjectData(dataToStore, id);
       await client.query(
-        `INSERT INTO projects (id, owner_id, organisation, visibility, name, data, data_enc, data_key_version)
-         VALUES ($1, $2, $3, 'private', $4, $5::jsonb, $6, $7)
+        `INSERT INTO projects (id, owner_id, organisation, visibility, name, data, data_enc, data_key_version, has_public_endpoint)
+         VALUES ($1, $2, $3, 'private', $4, $5::jsonb, $6, $7, $8)
          ON CONFLICT (id) DO NOTHING`,
-        [id, userId, org, name, legacyPlaceholder, enc, version]
+        [id, userId, org, name, legacyPlaceholder, enc, version, hasPublicEndpoint]
       );
       imported++;
     }

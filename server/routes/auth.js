@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const rateLimit = require('express-rate-limit');
+const { createRateLimiter } = require('../rateLimitStore');
 const { pool } = require('../db');
 const dataCrypto = require('../crypto');
 const {
@@ -14,7 +14,7 @@ const {
 
 const router = express.Router();
 
-const authLimiter = rateLimit({
+const authLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   max: 20,
   standardHeaders: true,
@@ -37,6 +37,7 @@ function signSession(user) {
       username: user.username,
       role: user.role,
       organisation: user.organisation,
+      tokenVersion: user.token_version || 1,
       customPermissions: user.role === 'custom' ? (user.custom_permissions || null) : undefined,
     },
     process.env.JWT_SECRET,
@@ -88,14 +89,15 @@ router.post('/register', authLimiter, async (req, res) => {
     const result = await pool.query(
       `INSERT INTO users (username, email, password_hash, organisation, role)
        VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, username, email, organisation, role, created_at`,
+       RETURNING id, username, email, organisation, role, token_version, created_at`,
       [usernameCheck.value, email.trim().toLowerCase(), passwordHash, orgCheck.value, roleCheck.value]
     );
 
     const user = result.rows[0];
     const token = signSession(user);
     res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
-    res.status(201).json({ user, orgToken: dataCrypto.encryptOrgToken(user.organisation) });
+    const { token_version, ...publicUser } = user; // never expose the revocation counter to the client
+    res.status(201).json({ user: publicUser, orgToken: dataCrypto.encryptOrgToken(user.organisation) });
   } catch (err) {
     console.error('Register error:', err);
     res.status(500).json({ error: 'Something went wrong creating your account. Please try again.' });
@@ -111,7 +113,7 @@ router.post('/login', authLimiter, async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT id, username, email, password_hash, organisation, role, custom_permissions
+      `SELECT id, username, email, password_hash, organisation, role, custom_permissions, token_version
        FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)`,
       [identifier.trim()]
     );

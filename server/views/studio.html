@@ -6067,7 +6067,11 @@ function renderEncryptionKeysTab(body){
           reason: document.getElementById('rotateReason').value.trim() || undefined,
           reencryptNow: document.getElementById('reencryptNowToggle').checked,
         });
-        toast(`Key rotated — now on v${result.activeVersion}` + (result.reencrypted ? ` · re-encrypted ${result.reencrypted.projects} project(s)` : ''));
+        // Re-encryption of existing data (when requested) now runs in the
+        // background on the server rather than blocking this request — the
+        // response confirms it started, not that it's finished. Completion
+        // shows up as its own audit log entry a moment later.
+        toast(`Key rotated — now on v${result.activeVersion}` + (result.reencrypting ? ' · re-encrypting your organisation\'s existing data in the background' : ''));
         renderEncryptionKeysTab(body);
       }catch(e){
         toast(e.message || 'Could not rotate the key');
