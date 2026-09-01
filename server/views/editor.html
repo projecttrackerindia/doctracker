@@ -4,6 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Endpoint Editor</title>
+<script nonce="__CSP_NONCE__">
+// Apply the theme before first paint (same localStorage key the main Studio
+// tab uses) so this tab never flashes dark when Studio is set to light, or
+// vice versa. Runs synchronously, ahead of the stylesheet below.
+(function(){
+  var t = localStorage.getItem('apiStudio_theme');
+  document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+})();
+</script>
 <style nonce="__CSP_NONCE__">
 :root{
   --bg:#0b0e14; --surface:#11151d; --surface-2:#161c26; --surface-hover:#1b2230;
@@ -15,8 +24,24 @@
   --ok:#38c793; --ok-soft:rgba(56,199,147,.14);
   --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
   --get:#38c793; --post:#6d8dff; --put:#e8a33d; --delete:#ef5a6f; --patch:#b988f0;
+  --glass-strong:rgba(17,21,29,.94);
+}
+/* Same light palette as the main Studio tab (server/views/studio.html
+   [data-theme="light"]) so the two never look like different products. */
+[data-theme="light"]{
+  --bg:#f5f6fa; --surface:#ffffff; --surface-2:#f1f3f8; --surface-hover:#e9ecf4;
+  --border:#e1e5ee; --border-strong:#ccd3e2;
+  --text:#12151f; --text-dim:#5a6479; --text-faint:#8993a8;
+  --accent:#4a5fe0; --accent-ink:#ffffff; --accent-soft:rgba(74,95,224,.09);
+  --danger:#d13750; --danger-soft:rgba(209,55,80,.10);
+  --warn:#a06f10; --warn-soft:rgba(160,111,16,.10);
+  --ok:#1c8f66; --ok-soft:rgba(28,143,102,.10);
+  --get:#1f6fd6; --post:#1c8f66; --put:#a06f10; --delete:#d13750; --patch:#7a4fd1;
+  --glass-strong:rgba(255,255,255,.86);
 }
 *{ box-sizing:border-box; }
+html{ color-scheme:dark; }
+html[data-theme="light"]{ color-scheme:light; }
 body{ margin:0; background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
 input,select,textarea,button{ font:inherit; color:inherit; }
 button{ cursor:pointer; }
@@ -25,7 +50,7 @@ button{ cursor:pointer; }
 /* ---------- Top bar ---------- */
 .topbar{
   position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:14px;
-  padding:12px 20px; background:rgba(17,21,29,.92); backdrop-filter:blur(10px);
+  padding:12px 20px; background:var(--glass-strong); backdrop-filter:blur(10px);
   border-bottom:1px solid var(--border);
 }
 .topbar .mark{ font-family:var(--mono); font-weight:800; color:var(--accent); }
@@ -37,6 +62,11 @@ button{ cursor:pointer; }
   background:var(--surface-2); border:1px solid var(--border); border-radius:999px; padding:5px 12px 5px 6px;
 }
 .user-dot{ width:20px; height:20px; border-radius:6px; background:var(--accent); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:800; }
+.theme-toggle{
+  display:flex; align-items:center; justify-content:center; width:30px; height:30px;
+  background:none; border:1px solid var(--border-strong); border-radius:8px; color:var(--text-dim); font-size:14px;
+}
+.theme-toggle:hover{ background:var(--surface-hover); color:var(--text); }
 
 /* ---------- Attribution strip ---------- */
 .attrib{
@@ -143,7 +173,7 @@ button{ cursor:pointer; }
 /* Footer action bar */
 .footer-bar{
   position:fixed; left:0; right:0; bottom:0; z-index:20; display:flex; align-items:center; gap:12px;
-  padding:12px 20px; background:rgba(17,21,29,.96); backdrop-filter:blur(10px); border-top:1px solid var(--border);
+  padding:12px 20px; background:var(--glass-strong); backdrop-filter:blur(10px); border-top:1px solid var(--border);
 }
 .footer-bar .spacer{ flex:1; }
 .footer-bar select{ background:var(--surface-2); border:1px solid var(--border-strong); border-radius:7px; padding:8px 10px; font-size:12.5px; }
@@ -170,6 +200,7 @@ button{ cursor:pointer; }
     <div class="topbar-sub" id="topSub">Not saved yet</div>
   </div>
   <div class="topbar-spacer"></div>
+  <button type="button" class="theme-toggle" id="btnTheme" title="Switch theme">◐</button>
   <div class="user-chip"><span class="user-dot" id="userDot">?</span><span id="userLabel">—</span></div>
 </div>
 
@@ -902,6 +933,31 @@ function showSavedBanner(visibility){
 
 document.getElementById('btnSave').addEventListener('click', ()=>performSave(false));
 document.getElementById('btnCloseTab').addEventListener('click', ()=>window.close());
+
+/* ==================== Theme ====================
+   Mirrors the main Studio tab's toggle (server/views/studio.html) and shares
+   its localStorage key, so switching here updates Studio too, and switching
+   there updates this tab live via the 'storage' event — the two never drift
+   out of sync while both are open. */
+function applyThemeButton(){
+  const btn = document.getElementById('btnTheme');
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  btn.textContent = isLight ? '◑' : '◐';
+  btn.title = isLight ? 'Switch to dark theme' : 'Switch to light theme';
+}
+function toggleTheme(){
+  const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('apiStudio_theme', next);
+  applyThemeButton();
+}
+document.getElementById('btnTheme').addEventListener('click', toggleTheme);
+window.addEventListener('storage', (e)=>{
+  if(e.key !== 'apiStudio_theme') return;
+  document.documentElement.setAttribute('data-theme', e.newValue === 'light' ? 'light' : 'dark');
+  applyThemeButton();
+});
+applyThemeButton();
 
 boot();
 </script>
