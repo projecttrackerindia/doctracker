@@ -433,37 +433,26 @@ kbd{
 .icon-btn:hover{ color:var(--accent); background:var(--surface-hover); }
 .icon-btn.del:hover{ color:var(--danger); background:var(--danger-soft); }
 
-.overview-wrap{ display:none; }
-.project.open .overview-wrap{ display:block; }
-
-/* Tag groups render as their own nested, collapsible "folders" under a
-   project — matching the VS Code-style explorer tree (project folder >
-   tag folder > endpoint files), each level with its own chevron. */
-.tag-group{ }
-.project:not(.open) .tag-group{ display:none; }
-.tag-head{
-  display:flex; align-items:center; gap:7px; margin:1px 8px; padding:6px 10px 6px 16px; cursor:pointer;
-  border-radius:7px; user-select:none; transition:background-color .12s ease;
-}
-.tag-head:hover{ background:var(--surface-hover); }
-.tag-caret{ color:var(--text-faint); flex-shrink:0; display:flex; transition:transform .15s; }
-.tag-group.open .tag-caret{ transform:rotate(90deg); }
-.tag-folder-ic{ color:var(--text-faint); flex-shrink:0; }
+.tag-group{ display:none; }
+.project.open .tag-group{ display:block; }
 .tag-label{
-  font-size:10.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--text-faint); font-weight:700;
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0;
+  padding:11px 16px 6px 20px; font-size:9.5px; text-transform:uppercase;
+  letter-spacing:.8px; color:var(--text-faint); font-weight:700;
 }
-.tag-count{ font-size:9.5px; font-family:var(--mono); font-weight:700; color:var(--text-faint); flex-shrink:0; }
-.tag-body{ display:none; padding-left:8px; border-left:1px solid var(--border); margin-left:20px; }
-.tag-group.open .tag-body{ display:block; }
 .ep{
   display:flex; align-items:center; gap:9px; margin:1px 8px; padding:7px 10px 7px 12px; cursor:pointer;
   border-radius:7px; position:relative; transition:background-color .12s ease;
 }
 .ep:hover{ background:var(--surface-hover); }
 .ep.active{ background:var(--accent-soft); }
-.ep-path{ font-family:var(--mono); font-size:11.5px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ep-path{ font-family:var(--mono); font-size:11.5px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
 .ep.active .ep-path{ color:var(--text); font-weight:500; }
+.ep-del{
+  flex-shrink:0; opacity:0; pointer-events:none; color:var(--text-faint);
+  transition:opacity .12s ease, color .12s ease, background-color .12s ease;
+}
+.ep:hover .ep-del, .ep-del:focus-visible{ opacity:1; pointer-events:auto; }
+.ep-del:hover, .ep-del:focus-visible{ color:var(--danger); background:var(--danger-soft); }
 .overview-row{
   display:flex; align-items:center; gap:8px; margin:1px 8px 6px; padding:7px 10px 7px 12px; cursor:pointer;
   border-radius:7px; font-size:11.5px; color:var(--text-dim); font-weight:500; transition:background-color .12s ease;
@@ -551,10 +540,10 @@ kbd{
   background:transparent; border:none; text-align:left; cursor:pointer;
 }
 .ep-actions-item:hover{ background:var(--surface-hover); color:var(--text); }
+.ep-actions-item.danger{ color:var(--danger); }
+.ep-actions-item.danger:hover{ background:var(--danger-soft); color:var(--danger); }
 .ep-actions-item:disabled{ opacity:.4; cursor:not-allowed; }
 .ep-actions-item:disabled:hover{ background:transparent; color:var(--text-dim); }
-.ep-actions-item.danger{ color:var(--danger); }
-.ep-actions-item.danger:hover:not(:disabled){ background:var(--danger-soft); color:var(--danger); }
 .ep-actions-item .item-label{
   display:flex; align-items:center; gap:8px; flex:1 1 auto; min-width:0;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -3423,16 +3412,6 @@ function projectHasEndpoint(epId){
 // below are what every read/render path should call instead of proj.endpoints
 // directly; snapshots are fetched from GET /projects/:id/snapshot and cached
 // per project+environment for the life of the page.
-//
-// Fetching is deliberately kept OUT of the render path except as a last
-// resort (see snapshotEntry below): a render function that kicks off a
-// fetch and later triggers its own follow-up renderAll() from a promise
-// callback means a *second*, fully-decoupled re-render can land at any
-// point after the original click — including in the middle of someone
-// opening a dropdown — silently resetting it and making the UI feel
-// "stuck". selectEnvironment() instead prefetches everything the next
-// render will need and awaits it first, so switching environments is one
-// clean render pass, not two.
 // ----------------------------------------------------------------------------
 function draftEnvId(){
   const stages = environments().filter(e=>String(e.label||'').trim().toUpperCase()!=='DR');
@@ -3441,37 +3420,22 @@ function draftEnvId(){
 function isViewingDraftEnv(){ return state.env === draftEnvId(); }
 
 const _snapshotCache = {}; // `${projId}::${envId}` -> { status:'loading'|'ready'|'error', endpoints, versionLabel, promotedAt, promotedBy, isDraft }
-// Pure fetch+cache — no rendering side effects. Safe to await from anywhere.
-function fetchSnapshot(projId, envId){
-  const key = projId + '::' + envId;
-  if(_snapshotCache[key] && _snapshotCache[key].status !== 'error') return Promise.resolve(_snapshotCache[key]);
-  _snapshotCache[key] = { status:'loading' };
-  return apiGet(`/projects/${encodeURIComponent(projId)}/snapshot?environmentId=${encodeURIComponent(envId)}`)
-    .then(res=>{ _snapshotCache[key] = { status:'ready', ...res }; return _snapshotCache[key]; })
-    .catch(()=>{ _snapshotCache[key] = { status:'error' }; return _snapshotCache[key]; });
-}
-// Synchronous cache read for use inside render functions. If the entry isn't
-// cached yet this is a narrow fallback path (e.g. a sidebar project folder
-// expanded for the first time while already on a non-draft environment,
-// without having gone through selectEnvironment's prefetch) — it kicks off
-// the fetch and, on arrival, does the smallest possible targeted re-render
-// instead of a full renderAll(), and only if the person hasn't since
-// switched away from this project/environment.
 function snapshotEntry(projId){
   const key = projId + '::' + state.env;
   const entry = _snapshotCache[key];
   if(entry) return entry;
-  const envAtRequest = state.env;
   _snapshotCache[key] = { status:'loading' };
-  fetchSnapshot(projId, envAtRequest).then(()=>{
-    if(state.env !== envAtRequest) return; // env changed again before this landed — stale, skip
-    renderSidebar();
-    renderMain();
-    renderRail();
-    if(projId === pdfExportProjectId && document.getElementById('pdfExportModal')?.classList.contains('show')){
-      openExportPdfModal(projId);
-    }
-  });
+  apiGet(`/projects/${encodeURIComponent(projId)}/snapshot?environmentId=${encodeURIComponent(state.env)}`)
+    .then(res=>{
+      _snapshotCache[key] = { status:'ready', ...res };
+      renderAll();
+      // If the PDF export modal is open for this project waiting on this same
+      // snapshot, refresh its endpoint list now that it's arrived.
+      if(projId === pdfExportProjectId && document.getElementById('pdfExportModal')?.classList.contains('show')){
+        openExportPdfModal(projId);
+      }
+    })
+    .catch(()=>{ _snapshotCache[key] = { status:'error' }; renderAll(); });
   return _snapshotCache[key];
 }
 // The list of endpoints to actually render for `proj` given the currently
@@ -4583,7 +4547,7 @@ function openEnvDropdown(){
   const sel = dd.querySelector('.env-dd-opt.sel') || dd.querySelector('.env-dd-opt');
   if(sel) sel.classList.add('kbd-focus');
 }
-async function selectEnvironment(envId){
+function selectEnvironment(envId){
   if(!envIds().includes(envId)) return;
   if(!roleAllowsEnv(envId)){
     toast(`Your role (${roleMeta(state.authorRole).label}) doesn't have access to ${envMeta(envId).label}`);
@@ -4594,25 +4558,6 @@ async function selectEnvironment(envId){
   applyEnvAccent();
   applyRoleGatedUI();
   renderEnvSwitcher();
-
-  // Prefetch whatever the next render will need — the currently selected
-  // project and every expanded sidebar folder — so switching environments
-  // is one clean render pass rather than a quick (possibly empty) render
-  // followed by a second, disconnected one once data arrives.
-  if(envId !== draftEnvId()){
-    const relevantProjectIds = new Set(allProjects().filter(p=>p._open !== false).map(p=>p.id));
-    if(state.selected){
-      if(state.selected.type === 'overview') relevantProjectIds.add(state.selected.projectId);
-      else if(state.selected.type === 'endpoint'){
-        const found = findEndpoint(state.selected.id);
-        if(found) relevantProjectIds.add(found.proj.id);
-      }
-    }
-    await Promise.all([...relevantProjectIds].map(id=>fetchSnapshot(id, envId)));
-    if(state.env !== envId) return; // switched again before this landed
-  }
-
-  renderSidebar();
   renderMain();
   renderRail();
 }
@@ -4652,6 +4597,10 @@ function renderSidebar(){
 
   list.innerHTML = projects.map(proj=>{
     const epsForView = viewEndpoints(proj);
+    // Preserve the order endpoints were added in (like a real API collection)
+    // — only the tag/category labels below are alphabetized, not the endpoints
+    // inside them, so "Endpoint 1, Endpoint 2…" doesn't get silently reshuffled.
+    const orderIndex = new Map(epsForView.map((ep,i)=>[ep.id,i]));
     const groups = {};
     epsForView.forEach(ep=>{
       const hay = (ep.path + ' ' + (ep.summary||'') + ' ' + ep.method).toLowerCase();
@@ -4664,31 +4613,21 @@ function renderSidebar(){
 
     const groupsToShow = (filter && !hasEpMatches && projMatches) ? groupByTag(epsForView) : groups;
     const isOpen = proj._open !== false;
-    const forceTagsOpen = !!filter; // search results shouldn't hide behind a collapsed tag
+    const canDeleteHere = canEditHere();
 
     const overviewActive = state.selected && state.selected.type==='overview' && state.selected.projectId===proj.id;
     const tagsHtml = Object.keys(groupsToShow).sort().map(tag=>{
-      const eps = groupsToShow[tag].slice().sort((a,b)=>a.path.localeCompare(b.path));
-      const tagOpen = forceTagsOpen || !(proj._collapsedTags && proj._collapsedTags[tag]);
-      const tagKey = escapeHtml(tag).replace(/"/g,'&quot;');
-      return `<div class="tag-group ${tagOpen?'open':''}">
-        <div class="tag-head" data-tag-toggle="${proj.id}" data-tag-name="${tagKey}">
-          <span class="tag-caret">
-            <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
-          </span>
-          <svg class="tag-folder-ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>
-          <span class="tag-label">${escapeHtml(tag)}</span>
-          <span class="tag-count">${eps.length}</span>
-        </div>
-        <div class="tag-body">
-          ${eps.map(ep=>`
-            <div class="ep ${state.selected && state.selected.type==='endpoint' && state.selected.id===ep.id ? 'active':''}" data-ep="${ep.id}">
-              <span class="badge ${methodClass(ep.method)}">${ep.method}</span>
-              <span class="ep-path">${escapeHtml(ep.path)}</span>
-            </div>`).join('')}
-        </div>
+      const eps = groupsToShow[tag].slice().sort((a,b)=>(orderIndex.get(a.id)??0)-(orderIndex.get(b.id)??0));
+      return `<div class="tag-group">
+        <div class="tag-label">${escapeHtml(tag)}</div>
+        ${eps.map(ep=>`
+          <div class="ep ${state.selected && state.selected.type==='endpoint' && state.selected.id===ep.id ? 'active':''}" data-ep="${ep.id}">
+            <span class="badge ${methodClass(ep.method)}">${ep.method}</span>
+            <span class="ep-path">${escapeHtml(ep.path)}</span>
+            ${canDeleteHere ? `<span class="icon-btn ep-del" data-ep-del="${ep.id}" title="Delete endpoint" role="button" tabindex="0"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg></span>` : ''}
+          </div>`).join('')}
       </div>`;
-    }).join('') || (!isViewingDraftEnv() && !filter ? `<div class="tag-group open"><div class="tag-body"><div class="empty-sidebar" style="padding:10px 8px;font-size:11.5px;">${snapshotEntry(proj.id).status==='loading' ? 'Loading…' : `Nothing promoted to ${escapeHtml(envMeta(state.env).label)} yet.`}</div></div></div>` : '');
+    }).join('') || (!isViewingDraftEnv() && !filter ? `<div class="tag-group"><div class="empty-sidebar" style="padding:10px 8px;font-size:11.5px;">${snapshotEntry(proj.id).status==='loading' ? 'Loading…' : `Nothing promoted to ${escapeHtml(envMeta(state.env).label)} yet.`}</div></div>` : '');
 
     const initials = (proj.name||'?').trim().split(/\s+/).slice(0,2).map(w=>w[0]).join('').toUpperCase() || '?';
     const accent = PROFILE_COLORS[hashStr(proj.name||'') % PROFILE_COLORS.length];
@@ -4708,7 +4647,7 @@ function renderSidebar(){
           <span class="icon-btn del" data-del="${proj.id}" title="Delete API"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg></span>
         </div>
       </div>
-      <div class="overview-wrap" style="display:${isOpen?'block':'none'};">
+      <div class="tag-group" style="display:${isOpen?'block':'none'};">
         <div class="overview-row ${overviewActive?'active':''}" data-overview="${proj.id}">▸ Overview</div>
       </div>
       ${tagsHtml}
@@ -4719,19 +4658,6 @@ function renderSidebar(){
     el.addEventListener('click', ()=>{
       const id = el.getAttribute('data-toggle');
       state.projects[id]._open = !(state.projects[id]._open !== false);
-      saveState();
-      renderSidebar();
-    });
-  });
-  list.querySelectorAll('[data-tag-toggle]').forEach(el=>{
-    el.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      const id = el.getAttribute('data-tag-toggle');
-      const tag = el.getAttribute('data-tag-name');
-      const proj = state.projects[id];
-      if(!proj) return;
-      proj._collapsedTags = proj._collapsedTags || {};
-      proj._collapsedTags[tag] = !proj._collapsedTags[tag];
       saveState();
       renderSidebar();
     });
@@ -4776,6 +4702,15 @@ function renderSidebar(){
       state.selected = { type:'endpoint', id: el.getAttribute('data-ep') };
       renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
       closeMobileSidebar();
+    });
+  });
+  list.querySelectorAll('[data-ep-del]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      deleteEndpointById(el.getAttribute('data-ep-del'));
+    });
+    el.addEventListener('keydown', (e)=>{
+      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); e.stopPropagation(); deleteEndpointById(el.getAttribute('data-ep-del')); }
     });
   });
 }
@@ -5071,7 +5006,7 @@ function renderMain(){
     document.getElementById('btnImport2').addEventListener('click', ()=>document.getElementById('fileInput').click());
     document.getElementById('btnAddManual2').addEventListener('click', ()=>{
       if(!canEditHere()){ toast(isViewingDraftEnv() ? `Your role (${roleMeta(state.authorRole).label}) is read-only` : `Switch to ${envMeta(draftEnvId()).label} to make changes`); return; }
-      openManualModal();
+      openEditorTab(null, null);
     });
     return;
   }
@@ -6392,6 +6327,7 @@ function bindEnvTableEvents(container){
       reorderEnvironments(draggedId, targetId, placeAfter);
       draggedId = null;
       toast('Environment order updated');
+      renderEnvSwitcher();
       renderEnvTableSection();
     });
   });
@@ -6435,6 +6371,7 @@ async function handleEnvRowAction(act, id, el){
   if(act==='top' || act==='bottom'){
     moveEnvironment(id, act);
     envRowMenu = { id:null, mode:'menu' };
+    renderEnvSwitcher();
     renderEnvTableSection();
     toast(`Moved "${env ? env.label : ''}" to the ${act}`);
     return;
@@ -7203,6 +7140,8 @@ function renderEndpointDoc(main, proj, ep){
               <div class="ep-actions-divider"></div>
               <button type="button" class="ep-actions-item" id="btnEditEp" role="menuitem"${canEditHere()?'':` disabled title="${canEdit() ? `Switch to ${escapeHtml(envMeta(draftEnvId()).label)} to edit` : 'Your role is read-only'}"`}>Edit</button>
               <button type="button" class="ep-actions-item" id="btnDuplicateEp" role="menuitem"${canEditHere()?'':` disabled title="${canEdit() ? `Switch to ${escapeHtml(envMeta(draftEnvId()).label)} to edit` : 'Your role is read-only'}"`}>Duplicate</button>
+              <div class="ep-actions-divider"></div>
+              <button type="button" class="ep-actions-item danger" id="btnDeleteEp" role="menuitem"${canEditHere()?'':` disabled title="${canEdit() ? `Switch to ${escapeHtml(envMeta(draftEnvId()).label)} to edit` : 'Your role is read-only'}"`}>Delete endpoint</button>
               ${proj._readonly || !isViewingDraftEnv() ? '' : `
               <div class="ep-actions-divider"></div>
               <button type="button" class="ep-actions-item" data-toggle-ep-visibility="${ep.id}" role="menuitem">
@@ -7213,10 +7152,6 @@ function renderEndpointDoc(main, proj, ep){
                   <span>${ep.visibility==='public' ? 'Make private' : 'Make public'}</span>
                 </span>
                 <span class="item-sub">${ep.visibility==='public' ? 'Only you' : 'Your organisation'}</span>
-              </button>
-              <div class="ep-actions-divider"></div>
-              <button type="button" class="ep-actions-item danger" id="btnDeleteEp" role="menuitem"${canEditHere()?'':` disabled title="${canEdit() ? `Switch to ${escapeHtml(envMeta(draftEnvId()).label)} to edit` : 'Your role is read-only'}"`}>
-                <span class="item-label"><span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg></span><span>Delete</span></span>
               </button>`}
             </div>
           </div>
@@ -7251,19 +7186,16 @@ function renderEndpointDoc(main, proj, ep){
   });
   document.getElementById('btnEditEp').addEventListener('click', ()=>{
     document.getElementById('epActionsDD').classList.remove('open');
-    if(canEditHere()) openManualModal(ep.id);
+    if(canEditHere()) openEditorTab(proj, ep);
   });
   document.getElementById('btnDuplicateEp').addEventListener('click', ()=>{
     document.getElementById('epActionsDD').classList.remove('open');
     if(canEditHere()) duplicateEndpoint(ep.id);
   });
-  const btnDeleteEp = document.getElementById('btnDeleteEp');
-  if(btnDeleteEp){
-    btnDeleteEp.addEventListener('click', ()=>{
-      document.getElementById('epActionsDD').classList.remove('open');
-      if(canEditHere()) deleteEndpoint(ep.id);
-    });
-  }
+  document.getElementById('btnDeleteEp').addEventListener('click', ()=>{
+    document.getElementById('epActionsDD').classList.remove('open');
+    if(canEditHere()) deleteEndpointById(ep.id);
+  });
   main.querySelectorAll('[data-header-reveal]').forEach(btn=>{
     btn.addEventListener('click', ()=> toggleSensitiveRevealed());
   });
@@ -7944,40 +7876,35 @@ function saveManualEndpoint(){
   toast('Endpoint saved');
 }
 
-function removeEndpointFromProject(found){
-  found.proj.endpoints = found.proj.endpoints.filter(e=>e.id!==found.ep.id);
+// Shared by: the sidebar's per-endpoint delete icon, the endpoint page's
+// Actions ▾ dropdown, and the edit modal's own "Delete endpoint" button.
+async function deleteEndpointById(epId){
+  if(!epId) return false;
+  const found = findEndpoint(epId);
+  if(!found) return false;
+  if(found.proj._readonly){ toast("You can only view this project — it's public content from someone else in your organisation."); return false; }
+  const ok = await openConfirmModal({
+    title: 'Delete this endpoint?',
+    message: `${found.ep.method} ${found.ep.path} and its documentation will be permanently removed.`,
+    confirmLabel: 'Delete endpoint',
+  });
+  if(!ok) return false;
+  found.proj.endpoints = found.proj.endpoints.filter(e=>e.id!==epId);
   found.proj.updatedAt = new Date().toISOString();
-  if(state.selected && state.selected.type==='endpoint' && state.selected.id===found.ep.id){
+  if(state.selected && state.selected.type==='endpoint' && state.selected.id===epId){
     state.selected = { type:'overview', projectId: found.proj.id };
   }
   logAudit('deleted', 'endpoint', `${found.ep.method} ${found.ep.path}`, `Deleted endpoint ${found.ep.method} ${found.ep.path}`, found.proj.name);
   saveState();
   renderAll();
   toast('Endpoint deleted');
+  return true;
 }
-async function deleteEndpoint(epId){
-  const found = findEndpoint(epId);
-  if(!found) return;
-  const ok = await openConfirmModal({
-    title: 'Delete this endpoint?',
-    message: `${found.ep.method} ${found.ep.path} and its documentation will be permanently removed.`,
-    confirmLabel: 'Delete endpoint',
-  });
-  if(!ok) return;
-  removeEndpointFromProject(found);
-}
+
 async function deleteEndpointFromModal(){
   if(!editingEndpointId) return;
-  const found = findEndpoint(editingEndpointId);
-  if(!found) return;
-  const ok = await openConfirmModal({
-    title: 'Delete this endpoint?',
-    message: `${found.ep.method} ${found.ep.path} and its documentation will be permanently removed.`,
-    confirmLabel: 'Delete endpoint',
-  });
-  if(!ok) return;
-  closeManualModal();
-  removeEndpointFromProject(found);
+  const deleted = await deleteEndpointById(editingEndpointId);
+  if(deleted) closeManualModal();
 }
 
 /* ---------- Project settings modal ---------- */
@@ -8210,8 +8137,6 @@ function renderReleaseDiffPanel(panel, proj, diff){
         toast(`Merged into ${result.toEnvironmentLabel} — ${result.versionLabel}` + (result.mirrored ? ` · ${result.mirrored.label} auto-mirrored` : ''));
         logAudit('updated', 'project', proj.name, `Promoted to ${result.toEnvironmentLabel} (${result.versionLabel})`);
         renderReleasePipeline(proj);
-        renderSidebar();
-        renderMain();
         renderRail();
       }catch(e){
         toast(e.message || 'Could not merge.');
@@ -9171,6 +9096,37 @@ function openAuditLogTab(){
   if(!w){ toast('Please allow popups to open the audit log in a new tab.'); }
 }
 
+/* ---------- Endpoint editor: opens as its own tab (server/views/editor.html) ----------
+   Same session cookie, same org-token URL scheme as the audit log above — see
+   server.js. Slugs identify the project/endpoint for readability/bookmarking
+   only; the editor re-resolves them against /api/workspace itself. */
+function slugify(str){
+  return String(str||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'x';
+}
+function endpointSlugFor(ep){ return slugify((ep.method||'get') + '-' + (ep.path||'')); }
+function buildEditorUrl(proj, ep){
+  if(!proj) return `/${ORG_TOKEN}/edit.studio`;
+  if(!ep) return `/${ORG_TOKEN}/${slugify(proj.name)}/edit.studio`;
+  return `/${ORG_TOKEN}/${slugify(proj.name)}/${endpointSlugFor(ep)}/edit.studio`;
+}
+function openEditorTab(proj, ep){
+  const w = window.open(buildEditorUrl(proj, ep), '_blank');
+  if(!w){ toast('Please allow popups to open the endpoint editor in a new tab.'); }
+}
+// The editor tab broadcasts on save so this tab can pick up the change without
+// a manual refresh, whether it was a brand-new endpoint or an edit to one
+// already open here.
+if('BroadcastChannel' in window){
+  const editorSyncChannel = new BroadcastChannel('api-studio-sync');
+  editorSyncChannel.addEventListener('message', (e)=>{
+    if(!e.data || e.data.type !== 'endpoint-saved') return;
+    loadState().then(()=>{
+      renderAll();
+      toast('Endpoint updated in another tab — refreshed.');
+    });
+  });
+}
+
 /* ==================== SECTION:EXPORT-AS-PDF ====================
    Two-step flow: (1) pdfExportModal lets the person pick which endpoints to
    include, (2) buildExportPdfContentHtml() renders those endpoints into an
@@ -9539,7 +9495,7 @@ document.getElementById('btnSecurityCenter').addEventListener('click', ()=>{
 });
 document.getElementById('btnFab').addEventListener('click', ()=>{
   if(!canEditHere()){ toast(isViewingDraftEnv() ? `Your role (${roleMeta(state.authorRole).label}) is read-only` : `Switch to ${envMeta(draftEnvId()).label} to make changes`); return; }
-  openManualModal();
+  openEditorTab(currentProjectForEnvContext(), null);
 });
 
 // When adding a NEW endpoint and the typed project name matches an existing

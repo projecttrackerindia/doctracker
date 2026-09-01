@@ -83,6 +83,7 @@ function requireAuth(req, res, next) {
 
 const studioTemplate = fs.readFileSync(path.join(__dirname, 'views', 'studio.html'), 'utf8');
 const auditLogTemplate = fs.readFileSync(path.join(__dirname, 'views', 'auditlog.html'), 'utf8');
+const editorTemplate = fs.readFileSync(path.join(__dirname, 'views', 'editor.html'), 'utf8');
 
 // The organisation name never appears in a URL in the clear — every tenant-
 // scoped page is addressed as /<encrypted-org-token>/whatever instead of
@@ -142,6 +143,58 @@ app.get('/:orgToken/auditlog', requireAuth, (req, res) => {
   const html = auditLogTemplate.replace(/__CSP_NONCE__/g, res.locals.cspNonce);
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
+});
+
+// The blank-canvas endpoint editor (server/views/editor.html) — opens in its
+// own tab from studio.html, authenticated by the same session cookie (cookies
+// aren't tab-scoped, so no extra login step is needed). It never decodes the
+// project/endpoint slugs server-side: like the rest of this app, project and
+// endpoint data is an opaque encrypted blob per-organisation, so resolving a
+// slug to an actual project/endpoint happens client-side against the same
+// GET /api/workspace payload the main studio page already uses. The slugs in
+// the URL are for readability/bookmarking only — never trusted for access;
+// the session cookie is what actually gates what the editor can load or save.
+function renderEditor(req, res, { projectSlug = '', endpointSlug = '' } = {}) {
+  const authUser = {
+    id: req.user.sub,
+    username: req.user.username,
+    organisation: req.user.organisation,
+    role: req.user.role,
+    ...(req.user.role === 'custom' ? { customPermissions: req.user.customPermissions || null } : {}),
+  };
+  const html = editorTemplate
+    .replace(/__CSP_NONCE__/g, res.locals.cspNonce)
+    .replace('__AUTH_USER_JSON__', JSON.stringify(authUser))
+    .replace(/__ORG_TOKEN__/g, tokenForUser(req.user))
+    .replace('__PROJECT_SLUG__', JSON.stringify(projectSlug))
+    .replace('__ENDPOINT_SLUG__', JSON.stringify(endpointSlug));
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+}
+
+// Brand new endpoint, brand new project: /{orgToken}/edit.studio
+app.get('/:orgToken/edit.studio', requireAuth, (req, res) => {
+  const org = dataCrypto.decryptOrgToken(req.params.orgToken);
+  if (org !== req.user.organisation) return res.redirect(`/${tokenForUser(req.user)}/edit.studio`);
+  renderEditor(req, res, {});
+});
+
+// New endpoint inside an existing project: /{orgToken}/{projectSlug}/edit.studio
+app.get('/:orgToken/:projectSlug/edit.studio', requireAuth, (req, res) => {
+  const org = dataCrypto.decryptOrgToken(req.params.orgToken);
+  if (org !== req.user.organisation) {
+    return res.redirect(`/${tokenForUser(req.user)}/${req.params.projectSlug}/edit.studio`);
+  }
+  renderEditor(req, res, { projectSlug: req.params.projectSlug });
+});
+
+// Editing an existing endpoint: /{orgToken}/{projectSlug}/{endpointSlug}/edit.studio
+app.get('/:orgToken/:projectSlug/:endpointSlug/edit.studio', requireAuth, (req, res) => {
+  const org = dataCrypto.decryptOrgToken(req.params.orgToken);
+  if (org !== req.user.organisation) {
+    return res.redirect(`/${tokenForUser(req.user)}/${req.params.projectSlug}/${req.params.endpointSlug}/edit.studio`);
+  }
+  renderEditor(req, res, { projectSlug: req.params.projectSlug, endpointSlug: req.params.endpointSlug });
 });
 
 app.use(express.static(path.join(__dirname, '..', 'public')));

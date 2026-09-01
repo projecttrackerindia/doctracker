@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Endpoint Editor</title>
+<style nonce="__CSP_NONCE__">
+:root{
+  --bg:#0b0e14; --surface:#11151d; --surface-2:#161c26; --surface-hover:#1b2230;
+  --border:#232b39; --border-strong:#2c3646;
+  --text:#e8ecf3; --text-dim:#a9b3c4; --text-faint:#6c7789;
+  --accent:#6d8dff; --accent-ink:#0b0e14; --accent-soft:rgba(109,141,255,.15);
+  --danger:#ef5a6f; --danger-soft:rgba(239,90,111,.14);
+  --warn:#e8a33d; --warn-soft:rgba(232,163,61,.14);
+  --ok:#38c793; --ok-soft:rgba(56,199,147,.14);
+  --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  --get:#38c793; --post:#6d8dff; --put:#e8a33d; --delete:#ef5a6f; --patch:#b988f0;
+}
+*{ box-sizing:border-box; }
+body{ margin:0; background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
+input,select,textarea,button{ font:inherit; color:inherit; }
+button{ cursor:pointer; }
+.hidden{ display:none !important; }
+
+/* ---------- Top bar ---------- */
+.topbar{
+  position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:14px;
+  padding:12px 20px; background:rgba(17,21,29,.92); backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border);
+}
+.topbar .mark{ font-family:var(--mono); font-weight:800; color:var(--accent); }
+.topbar-title{ font-weight:700; font-size:13.5px; }
+.topbar-sub{ font-size:11.5px; color:var(--text-faint); font-family:var(--mono); }
+.topbar-spacer{ flex:1; }
+.user-chip{
+  display:flex; align-items:center; gap:7px; font-size:12px; color:var(--text-dim);
+  background:var(--surface-2); border:1px solid var(--border); border-radius:999px; padding:5px 12px 5px 6px;
+}
+.user-dot{ width:20px; height:20px; border-radius:6px; background:var(--accent); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:800; }
+
+/* ---------- Attribution strip ---------- */
+.attrib{
+  display:flex; flex-wrap:wrap; gap:18px; padding:10px 20px; background:var(--surface-2);
+  border-bottom:1px solid var(--border); font-size:11.5px; color:var(--text-dim);
+}
+.attrib b{ color:var(--text); font-weight:600; }
+.attrib .chip{ display:flex; align-items:center; gap:6px; }
+.attrib .dot{ width:6px; height:6px; border-radius:50%; background:var(--text-faint); }
+
+.banner{ margin:14px 20px 0; padding:10px 14px; border-radius:8px; font-size:12.5px; display:flex; align-items:center; gap:10px; }
+.banner.warn{ background:var(--warn-soft); color:var(--warn); border:1px solid rgba(232,163,61,.35); }
+.banner.ok{ background:var(--ok-soft); color:var(--ok); border:1px solid rgba(56,199,147,.35); }
+.banner button{ margin-left:auto; background:none; border:1px solid currentColor; border-radius:6px; padding:4px 10px; font-size:11.5px; color:inherit; }
+
+/* ---------- Layout ---------- */
+.wrap{ max-width:900px; margin:0 auto; padding:20px 20px 120px; }
+.card{
+  background:var(--surface); border:1px solid var(--border); border-radius:12px;
+  padding:16px 18px; margin-bottom:16px;
+}
+.card-head{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+.card-title{ font-weight:700; font-size:13px; flex:1; }
+.card-kill{
+  display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:6px;
+  color:var(--text-faint); border:none; background:none; font-size:13px;
+}
+.card-kill:hover{ color:var(--danger); background:var(--danger-soft); }
+.field-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.field{ display:flex; flex-direction:column; gap:5px; }
+.field.span2{ grid-column:1 / -1; }
+.field label{ font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint); font-weight:700; }
+.field input, .field select, .field textarea{
+  background:var(--surface-2); border:1px solid var(--border-strong); border-radius:7px;
+  padding:8px 10px; font-size:13px; width:100%;
+}
+.field textarea{ resize:vertical; min-height:56px; font-family:var(--mono); font-size:12px; }
+.field input:focus, .field select:focus, .field textarea:focus{ outline:none; border-color:var(--accent); }
+.hint{ font-size:11px; color:var(--text-faint); }
+
+.badge{ font-family:var(--mono); font-size:10.5px; font-weight:800; padding:2px 7px; border-radius:5px; text-transform:uppercase; }
+.badge.get{ color:var(--get); background:rgba(56,199,147,.14); }
+.badge.post{ color:var(--post); background:rgba(109,141,255,.14); }
+.badge.put{ color:var(--put); background:rgba(232,163,61,.14); }
+.badge.delete{ color:var(--delete); background:rgba(239,90,111,.14); }
+.badge.patch{ color:var(--patch); background:rgba(185,136,240,.14); }
+
+/* JSON paste box */
+.json-paste{
+  background:var(--surface-2); border:1px dashed var(--border-strong); border-radius:8px; padding:10px; margin-bottom:12px;
+}
+.json-paste textarea{ width:100%; min-height:74px; background:var(--bg); border:1px solid var(--border-strong); border-radius:6px; padding:8px; font-family:var(--mono); font-size:12px; color:var(--text); }
+.json-paste-actions{ display:flex; align-items:center; gap:8px; margin-top:8px; }
+.json-paste-actions .err{ color:var(--danger); font-size:11.5px; }
+
+/* Rows table */
+.rows-table{ width:100%; border-collapse:collapse; }
+.rows-table th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint); padding:0 8px 6px; font-weight:700; }
+.rows-table td{ padding:4px 6px; vertical-align:middle; }
+.rows-table input, .rows-table select{ background:var(--surface-2); border:1px solid var(--border-strong); border-radius:6px; padding:6px 8px; font-size:12.5px; width:100%; }
+.rows-table input[type="checkbox"]{ width:auto; }
+.row-del{ background:none; border:none; color:var(--text-faint); padding:5px; border-radius:5px; }
+.row-del:hover{ color:var(--danger); background:var(--danger-soft); }
+.add-row-btn{ margin-top:8px; background:none; border:1px dashed var(--border-strong); color:var(--text-dim); border-radius:7px; padding:6px 12px; font-size:12px; }
+.add-row-btn:hover{ border-color:var(--accent); color:var(--accent); }
+
+/* Add-block control */
+.add-block{ position:relative; display:inline-block; margin-top:4px; }
+.add-block-btn{
+  background:var(--surface); border:1px solid var(--border-strong); color:var(--text);
+  border-radius:8px; padding:9px 16px; font-size:12.5px; font-weight:600;
+}
+.add-block-btn:hover{ border-color:var(--accent); color:var(--accent); }
+.add-block-menu{
+  position:absolute; bottom:calc(100% + 6px); left:0; background:var(--surface-2); border:1px solid var(--border-strong);
+  border-radius:9px; box-shadow:0 10px 30px rgba(0,0,0,.4); min-width:200px; padding:6px; display:none; z-index:10;
+}
+.add-block-menu.open{ display:block; }
+.add-block-menu button{ display:flex; flex-direction:column; align-items:flex-start; width:100%; text-align:left; background:none; border:none; color:var(--text); padding:8px 10px; border-radius:6px; font-size:12.5px; }
+.add-block-menu button:hover{ background:var(--surface-hover); }
+.add-block-menu button:disabled{ opacity:.35; cursor:not-allowed; }
+.add-block-menu button .sub{ font-size:10.5px; color:var(--text-faint); }
+
+/* Footer action bar */
+.footer-bar{
+  position:fixed; left:0; right:0; bottom:0; z-index:20; display:flex; align-items:center; gap:12px;
+  padding:12px 20px; background:rgba(17,21,29,.96); backdrop-filter:blur(10px); border-top:1px solid var(--border);
+}
+.footer-bar .spacer{ flex:1; }
+.footer-bar select{ background:var(--surface-2); border:1px solid var(--border-strong); border-radius:7px; padding:8px 10px; font-size:12.5px; }
+.btn-primary{ background:var(--accent); color:var(--accent-ink); border:none; border-radius:8px; padding:9px 18px; font-weight:700; font-size:12.5px; }
+.btn-primary:hover{ filter:brightness(1.08); }
+.btn-primary:disabled{ opacity:.5; cursor:not-allowed; }
+.btn-ghost{ background:none; border:1px solid var(--border-strong); color:var(--text-dim); border-radius:8px; padding:9px 16px; font-size:12.5px; }
+.btn-ghost:hover{ border-color:var(--accent); color:var(--accent); }
+
+#toast{
+  position:fixed; bottom:70px; left:50%; transform:translateX(-50%) translateY(12px); opacity:0; pointer-events:none;
+  background:var(--surface-2); border:1px solid var(--border-strong); color:var(--text); padding:9px 16px; border-radius:8px;
+  font-size:12.5px; transition:opacity .15s ease, transform .15s ease; z-index:60;
+}
+#toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="mark">{ }</span>
+  <div>
+    <div class="topbar-title" id="topTitle">New endpoint</div>
+    <div class="topbar-sub" id="topSub">Not saved yet</div>
+  </div>
+  <div class="topbar-spacer"></div>
+  <div class="user-chip"><span class="user-dot" id="userDot">?</span><span id="userLabel">—</span></div>
+</div>
+
+<div class="attrib" id="attribStrip"></div>
+<div id="conflictBanner" class="banner warn hidden">
+  <span id="conflictMsg"></span>
+  <button id="conflictReload">Reload latest</button>
+  <button id="conflictForce">Save anyway</button>
+</div>
+<div id="savedBanner" class="banner ok hidden">
+  <span id="savedMsg"></span>
+</div>
+
+<div class="wrap">
+
+  <!-- Basic info — always present, not a removable block -->
+  <div class="card">
+    <div class="card-head"><div class="card-title">Basic info</div></div>
+    <div class="field-grid">
+      <div class="field span2">
+        <label>Project / API name</label>
+        <input type="text" id="fProject" list="projectNames" placeholder="e.g. Razor Pay">
+        <datalist id="projectNames"></datalist>
+      </div>
+      <div class="field">
+        <label>Method</label>
+        <select id="fMethod">
+          <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Path</label>
+        <input type="text" id="fPath" placeholder="/api/v1/create">
+      </div>
+      <div class="field span2">
+        <label>Summary</label>
+        <input type="text" id="fSummary" placeholder="One-line summary of what this endpoint does">
+      </div>
+      <div class="field span2">
+        <label>Description</label>
+        <textarea id="fDescription" placeholder="Markdown supported — full explanation, flow, notes…"></textarea>
+      </div>
+      <div class="field">
+        <label>Tag / category</label>
+        <input type="text" id="fTag" placeholder="e.g. PAYMENT">
+      </div>
+      <div class="field">
+        <label>Version</label>
+        <input type="text" id="fVersion" placeholder="e.g. v1">
+      </div>
+      <div class="field">
+        <label>Content type</label>
+        <input type="text" id="fContentType" value="application/json">
+      </div>
+      <div class="field">
+        <label>Visibility</label>
+        <select id="fVisibility">
+          <option value="private">Private — only you</option>
+          <option value="public">Public — your organisation</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dynamic blocks render here -->
+  <div id="blocksContainer"></div>
+
+  <div class="add-block">
+    <button class="add-block-btn" id="addBlockBtn">+ Add block</button>
+    <div class="add-block-menu" id="addBlockMenu">
+      <button data-block="parameters" id="menuParameters"><span>Parameters</span><span class="sub">Query / path parameters table</span></button>
+      <button data-block="headers" id="menuHeaders"><span>Headers</span><span class="sub">Request header table</span></button>
+      <button data-block="requestBody" id="menuRequestBody"><span>Request body (JSON)</span><span class="sub">Paste JSON or build it manually</span></button>
+      <button data-block="response"><span>Response</span><span class="sub">Add another status code / example</span></button>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer-bar">
+  <span class="hint" id="footerHint">Saves to the endpoint's live draft.</span>
+  <div class="spacer"></div>
+  <button class="btn-ghost" id="btnCloseTab">Close</button>
+  <button class="btn-primary" id="btnSave">Save endpoint</button>
+</div>
+
+<div id="toast"></div>
+
+<script nonce="__CSP_NONCE__">
+/* ==================== Injected from server (see server.js) ==================== */
+const AUTH_USER = __AUTH_USER_JSON__;
+const ORG_TOKEN = '__ORG_TOKEN__';
+const INITIAL_PROJECT_SLUG = __PROJECT_SLUG__;
+const INITIAL_ENDPOINT_SLUG = __ENDPOINT_SLUG__;
+
+/* ==================== Small utilities (mirrors studio.html) ==================== */
+function uid(){ return Math.random().toString(36).slice(2,10); }
+function escapeHtml(str){
+  if(str === undefined || str === null) return '';
+  return String(str).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+function slugify(str){
+  return String(str||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'x';
+}
+function endpointSlug(method, path){ return slugify((method||'get') + '-' + (path||'')); }
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(()=>t.classList.remove('show'), 2800);
+}
+function methodClass(m){ return (m||'get').toLowerCase(); }
+async function apiGet(path){
+  const res = await fetch('/api/workspace' + path, { credentials:'same-origin' });
+  if(!res.ok) throw new Error('Request failed: ' + res.status);
+  return res.json();
+}
+async function apiSend(method, path, body){
+  const res = await fetch('/api/workspace' + path, {
+    method, credentials:'same-origin', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body),
+  });
+  if(!res.ok) throw new Error('Request failed: ' + res.status);
+  return res.json();
+}
+function postAuditEvent(fields){
+  fetch('/api/audit/events', { method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'}, body: JSON.stringify(fields) })
+    .catch(e=>console.error('Audit log write failed', e));
+}
+// Same channel name any tab of this app can listen on to know workspace data changed elsewhere.
+const syncChannel = ('BroadcastChannel' in window) ? new BroadcastChannel('api-studio-sync') : null;
+
+/* ==================== Type inference from pasted JSON ==================== */
+const PARAM_TYPES = ['String','Integer','Number','Boolean','Object','Array'];
+function inferType(value){
+  if(value === null || value === undefined) return 'String';
+  if(Array.isArray(value)) return 'Array';
+  if(typeof value === 'boolean') return 'Boolean';
+  if(typeof value === 'number') return Number.isInteger(value) ? 'Integer' : 'Number';
+  if(typeof value === 'object') return 'Object';
+  return 'String';
+}
+function exampleFor(value){
+  if(value === null || value === undefined) return '';
+  if(typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+// Flattens one level deep into editable rows; nested objects/arrays keep their
+// raw JSON as the "example" so nothing is lost, without forcing a full recursive
+// tree UI for a first version of this editor.
+function inferFieldsFromJson(obj){
+  if(!obj || typeof obj !== 'object' || Array.isArray(obj)) return [];
+  return Object.keys(obj).map(key=>({
+    id: uid(), name:key, type: inferType(obj[key]), required:true,
+    example: exampleFor(obj[key]), description:'',
+  }));
+}
+
+/* ==================== Application state ==================== */
+let workspace = null;          // last-fetched { projects, environments, ... }
+let projectId = null;          // resolved existing project id, or null = new project
+let endpointId = null;         // resolved existing endpoint id, or null = new endpoint
+let loadedUpdatedAt = null;    // endpoint.updatedAt at load time, for conflict detection
+let saving = false;
+
+const blocks = [];             // [{type:'parameters'|'headers'|'requestBody'|'response', id, ...data}]
+
+function findProjectBySlug(slug){
+  if(!slug) return null;
+  const list = Object.values(workspace.projects || {});
+  return list.find(p=>slugify(p.name) === slug) || null;
+}
+function findEndpointBySlug(proj, slug){
+  if(!proj || !slug) return null;
+  return (proj.endpoints||[]).find(ep=>endpointSlug(ep.method, ep.path) === slug) || null;
+}
+
+function userInitials(name){
+  const w = (name||'?').trim().split(/\s+/).slice(0,2);
+  return (w.map(x=>x[0]).join('') || '?').toUpperCase();
+}
+
+async function boot(){
+  document.getElementById('userLabel').textContent = AUTH_USER.username || 'Unknown';
+  document.getElementById('userDot').textContent = userInitials(AUTH_USER.username);
+
+  try{
+    workspace = await apiGet('');
+  }catch(e){
+    console.error(e);
+    toast('Could not load your workspace — check your connection and reload.');
+    workspace = { projects:{} };
+  }
+
+  // Populate the project name datalist for autocomplete.
+  const dl = document.getElementById('projectNames');
+  dl.innerHTML = Object.values(workspace.projects||{}).map(p=>`<option value="${escapeHtml(p.name)}">`).join('');
+
+  const proj = findProjectBySlug(INITIAL_PROJECT_SLUG);
+  const ep = proj ? findEndpointBySlug(proj, INITIAL_ENDPOINT_SLUG) : null;
+
+  if(proj){
+    projectId = proj.id;
+    document.getElementById('fProject').value = proj.name;
+  }
+
+  if(ep){
+    endpointId = ep.id;
+    loadedUpdatedAt = ep.updatedAt || null;
+    fillFormFromEndpoint(proj, ep);
+  } else {
+    // Brand new endpoint — start from one empty response block, same default
+    // shape the rest of the app expects an endpoint to have.
+    addBlock('response', { code:200, description:'', example:'', fields:[] });
+  }
+
+  renderAttribution(proj, ep);
+  renderBlocks();
+  updateTopBar(proj, ep);
+}
+
+function renderAttribution(proj, ep){
+  const strip = document.getElementById('attribStrip');
+  const chips = [];
+  chips.push(`<span class="chip">Editing as <b>${escapeHtml(AUTH_USER.username||'Unknown')}</b></span>`);
+  if(ep && ep.createdAt){
+    chips.push(`<span class="chip"><span class="dot"></span>Created by <b>${escapeHtml(ep.createdBy||'Unknown')}</b> · ${escapeHtml(formatDateTime(ep.createdAt))}</span>`);
+  }
+  if(ep && ep.updatedAt){
+    chips.push(`<span class="chip"><span class="dot"></span>Last modified by <b>${escapeHtml(ep.updatedBy||'Unknown')}</b> · ${escapeHtml(formatDateTime(ep.updatedAt))}</span>`);
+  }
+  if(proj && !ep){
+    chips.push(`<span class="chip"><span class="dot"></span>Adding to existing project <b>${escapeHtml(proj.name)}</b></span>`);
+  }
+  strip.innerHTML = chips.join('');
+}
+
+function formatDateTime(iso){
+  try{ return new Date(iso).toLocaleString(); }catch(e){ return iso; }
+}
+
+function updateTopBar(proj, ep){
+  const title = document.getElementById('topTitle');
+  const sub = document.getElementById('topSub');
+  if(ep){
+    title.textContent = `${ep.method} ${ep.path}`;
+    sub.textContent = `${proj.name} · editing existing endpoint`;
+  } else if(proj){
+    title.textContent = 'New endpoint';
+    sub.textContent = `${proj.name} · new endpoint in existing project`;
+  } else {
+    title.textContent = 'New endpoint';
+    sub.textContent = 'New project';
+  }
+}
+
+/* ==================== Fill form from an existing endpoint ==================== */
+function fillFormFromEndpoint(proj, ep){
+  document.getElementById('fMethod').value = ep.method || 'GET';
+  document.getElementById('fPath').value = ep.path || '';
+  document.getElementById('fSummary').value = ep.summary || '';
+  document.getElementById('fDescription').value = ep.description || '';
+  document.getElementById('fTag').value = ep.tag || '';
+  document.getElementById('fVersion').value = ep.version || '';
+  document.getElementById('fContentType').value = ep.contentType || 'application/json';
+  document.getElementById('fVisibility').value = ep.visibility === 'public' ? 'public' : 'private';
+
+  if((ep.parameters||[]).length){
+    addBlock('parameters', { rows: ep.parameters.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'' })) });
+  }
+  if((ep.headers||[]).length){
+    addBlock('headers', { rows: ep.headers.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'' })) });
+  }
+  if(ep.requestBody && (ep.requestBody.example || (ep.requestBody.fields||[]).length)){
+    addBlock('requestBody', {
+      example: ep.requestBody.example || '',
+      fields: (ep.requestBody.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+    });
+  }
+  const responses = (ep.responses && ep.responses.length) ? ep.responses : [{ code:200, description:'', example:'', fields:[] }];
+  responses.forEach(r=>{
+    addBlock('response', {
+      code: r.code || 200, description: r.description || '', example: r.example || '',
+      fields: (r.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+    });
+  });
+}
+
+/* ==================== Blocks ==================== */
+function addBlock(type, data){
+  if((type==='parameters' || type==='headers' || type==='requestBody') && blocks.some(b=>b.type===type)) return; // singleton blocks
+  const block = Object.assign({ id: uid(), type }, data || {});
+  if(type==='parameters' || type==='headers'){ block.rows = block.rows || []; }
+  if(type==='requestBody'){ block.example = block.example || ''; block.fields = block.fields || []; }
+  if(type==='response'){ block.code = block.code || 200; block.description = block.description || ''; block.example = block.example || ''; block.fields = block.fields || []; }
+  blocks.push(block);
+  return block;
+}
+function removeBlock(id){
+  const idx = blocks.findIndex(b=>b.id===id);
+  if(idx>=0) blocks.splice(idx,1);
+  renderBlocks();
+}
+function blockById(id){ return blocks.find(b=>b.id===id); }
+
+function renderBlocks(){
+  const container = document.getElementById('blocksContainer');
+  container.innerHTML = blocks.map(renderBlockHtml).join('');
+  bindBlockEvents(container);
+  updateAddMenuAvailability();
+}
+
+function rowsTableHtml(block, isHeaderStyle){
+  const rows = block.rows;
+  return `
+    <table class="rows-table">
+      <thead><tr>
+        <th style="width:20%;">Name</th><th style="width:14%;">Type</th><th style="width:8%;">Req.</th>
+        <th style="width:22%;">Example</th><th>Description</th><th style="width:28px;"></th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(r=>`
+          <tr data-row="${r.id}">
+            <td><input type="text" data-f="name" value="${escapeHtml(r.name)}" placeholder="${isHeaderStyle?'X-Request-Id':'orderId'}"></td>
+            <td><select data-f="type">${PARAM_TYPES.map(t=>`<option ${t===r.type?'selected':''}>${t}</option>`).join('')}</select></td>
+            <td style="text-align:center;"><input type="checkbox" data-f="required" ${r.required?'checked':''}></td>
+            <td><input type="text" data-f="example" value="${escapeHtml(r.example)}" placeholder="e.g. 12345"></td>
+            <td><input type="text" data-f="description" value="${escapeHtml(r.description)}" placeholder="What this is for"></td>
+            <td><button type="button" class="row-del" data-del-row="${r.id}" title="Remove row">✕</button></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+    <button type="button" class="add-row-btn" data-add-row="${block.id}">+ Add row</button>
+  `;
+}
+
+function jsonPasteHtml(block, fieldKey){
+  return `
+    <div class="json-paste">
+      <div class="hint" style="margin-bottom:6px;">Paste a JSON example — fields below will be filled in automatically (type, example value, key names).</div>
+      <textarea data-paste-target="${fieldKey}" placeholder='{ "amount": 500, "currency": "INR", "notes": { "orderId": "abc" } }'>${escapeHtml(block.example||'')}</textarea>
+      <div class="json-paste-actions">
+        <button type="button" class="add-row-btn" data-infer="${block.id}">Infer fields from JSON</button>
+        <span class="err hidden" data-json-err="${block.id}"></span>
+      </div>
+    </div>`;
+}
+
+function renderBlockHtml(block){
+  if(block.type==='parameters'){
+    return `<div class="card" data-block="${block.id}">
+      <div class="card-head"><div class="card-title">Parameters</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
+      ${rowsTableHtml(block, false)}
+    </div>`;
+  }
+  if(block.type==='headers'){
+    return `<div class="card" data-block="${block.id}">
+      <div class="card-head"><div class="card-title">Headers</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
+      ${rowsTableHtml(block, true)}
+    </div>`;
+  }
+  if(block.type==='requestBody'){
+    return `<div class="card" data-block="${block.id}">
+      <div class="card-head"><div class="card-title">Request body (JSON)</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
+      ${jsonPasteHtml(block, 'requestBody')}
+      ${block.fields.length ? rowsTableHtml({ id:block.id, rows:block.fields }, false) : `<div class="hint">No fields yet — paste JSON above, or add rows once inferred.</div>`}
+    </div>`;
+  }
+  if(block.type==='response'){
+    return `<div class="card" data-block="${block.id}">
+      <div class="card-head">
+        <div class="card-title">Response</div>
+        <button type="button" class="card-kill" data-kill="${block.id}" title="Remove response">✕</button>
+      </div>
+      <div class="field-grid" style="margin-bottom:12px;">
+        <div class="field">
+          <label>Status code</label>
+          <input type="text" data-f="code" value="${escapeHtml(block.code)}" placeholder="200">
+        </div>
+        <div class="field">
+          <label>Description</label>
+          <input type="text" data-f="description" value="${escapeHtml(block.description)}" placeholder="e.g. Order created successfully">
+        </div>
+      </div>
+      ${jsonPasteHtml(block, 'response')}
+      ${block.fields.length ? rowsTableHtml({ id:block.id, rows:block.fields }, false) : `<div class="hint">No fields yet — paste a JSON example above, or add rows once inferred.</div>`}
+    </div>`;
+  }
+  return '';
+}
+
+function bindBlockEvents(container){
+  container.querySelectorAll('[data-kill]').forEach(btn=>{
+    btn.addEventListener('click', ()=> removeBlock(btn.getAttribute('data-kill')));
+  });
+  container.querySelectorAll('[data-add-row]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const block = blockById(btn.getAttribute('data-add-row'));
+      const rows = block.type==='parameters'||block.type==='headers' ? block.rows : block.fields;
+      rows.push({ id:uid(), name:'', type:'String', required:false, example:'', description:'' });
+      renderBlocks();
+    });
+  });
+  container.querySelectorAll('[data-del-row]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const rowId = btn.getAttribute('data-del-row');
+      blocks.forEach(b=>{
+        const rows = b.type==='parameters'||b.type==='headers' ? b.rows : (b.fields||null);
+        if(rows){ const i = rows.findIndex(r=>r.id===rowId); if(i>=0) rows.splice(i,1); }
+      });
+      renderBlocks();
+    });
+  });
+  container.querySelectorAll('[data-block]').forEach(cardEl=>{
+    const block = blockById(cardEl.getAttribute('data-block'));
+    if(!block) return;
+    cardEl.querySelectorAll('tr[data-row]').forEach(rowEl=>{
+      const rowId = rowEl.getAttribute('data-row');
+      const rows = block.type==='parameters'||block.type==='headers' ? block.rows : block.fields;
+      const row = rows.find(r=>r.id===rowId);
+      if(!row) return;
+      rowEl.querySelectorAll('[data-f]').forEach(input=>{
+        const key = input.getAttribute('data-f');
+        const evt = input.type==='checkbox' ? 'change' : 'input';
+        input.addEventListener(evt, ()=>{
+          row[key] = input.type==='checkbox' ? input.checked : input.value;
+        });
+      });
+    });
+    if(block.type==='response'){
+      cardEl.querySelectorAll('[data-f="code"], [data-f="description"]').forEach(input=>{
+        const key = input.getAttribute('data-f');
+        input.addEventListener('input', ()=>{ block[key] = input.value; });
+      });
+    }
+  });
+  container.querySelectorAll('[data-paste-target]').forEach(ta=>{
+    ta.addEventListener('input', ()=>{
+      const block = blocks.find(b=>b.id===ta.closest('[data-block]').getAttribute('data-block'));
+      if(block) block.example = ta.value;
+    });
+  });
+  container.querySelectorAll('[data-infer]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const block = blockById(btn.getAttribute('data-infer'));
+      const errEl = container.querySelector(`[data-json-err="${block.id}"]`);
+      errEl.classList.add('hidden');
+      try{
+        const parsed = JSON.parse(block.example || '{}');
+        const fields = inferFieldsFromJson(parsed);
+        if(!fields.length){ errEl.textContent = 'That JSON has no top-level keys to infer.'; errEl.classList.remove('hidden'); return; }
+        block.fields = fields;
+        renderBlocks();
+        toast(`Inferred ${fields.length} field${fields.length===1?'':'s'} from JSON`);
+      }catch(e){
+        errEl.textContent = "Couldn't parse that as JSON — check for a missing comma or quote.";
+        errEl.classList.remove('hidden');
+      }
+    });
+  });
+}
+
+/* ==================== Add-block menu ==================== */
+function updateAddMenuAvailability(){
+  document.getElementById('menuParameters').disabled = blocks.some(b=>b.type==='parameters');
+  document.getElementById('menuHeaders').disabled = blocks.some(b=>b.type==='headers');
+  document.getElementById('menuRequestBody').disabled = blocks.some(b=>b.type==='requestBody');
+}
+document.getElementById('addBlockBtn').addEventListener('click', (e)=>{
+  e.stopPropagation();
+  document.getElementById('addBlockMenu').classList.toggle('open');
+});
+document.getElementById('addBlockMenu').addEventListener('click', (e)=>{
+  const btn = e.target.closest('[data-block]');
+  if(!btn || btn.disabled) return;
+  addBlock(btn.getAttribute('data-block'), {});
+  document.getElementById('addBlockMenu').classList.remove('open');
+  renderBlocks();
+});
+document.addEventListener('click', (e)=>{
+  const menu = document.getElementById('addBlockMenu');
+  if(menu.classList.contains('open') && !e.target.closest('.add-block')) menu.classList.remove('open');
+});
+
+/* ==================== Save / publish ==================== */
+function gatherEndpointFromForm(){
+  const cleanRows = rows => (rows||[]).filter(r=>r.name.trim()).map(r=>({ name:r.name.trim(), type:r.type, required:!!r.required, example:r.example||'', description:r.description||'' }));
+  const path = document.getElementById('fPath').value.trim() || '/untitled';
+  const pathParamNames = new Set([...path.matchAll(/\{([^}]+)\}/g)].map(m=>m[1]));
+  const paramsBlock = blocks.find(b=>b.type==='parameters');
+  const headersBlock = blocks.find(b=>b.type==='headers');
+  const bodyBlock = blocks.find(b=>b.type==='requestBody');
+  const responseBlocks = blocks.filter(b=>b.type==='response');
+
+  return {
+    method: document.getElementById('fMethod').value,
+    path,
+    visibility: document.getElementById('fVisibility').value === 'public' ? 'public' : 'private',
+    tag: document.getElementById('fTag').value.trim() || 'General',
+    version: document.getElementById('fVersion').value.trim(),
+    contentType: document.getElementById('fContentType').value.trim() || 'application/json',
+    summary: document.getElementById('fSummary').value.trim(),
+    description: document.getElementById('fDescription').value.trim(),
+    parameters: cleanRows(paramsBlock && paramsBlock.rows).map(p=>({ ...p, in: pathParamNames.has(p.name) ? 'path' : 'query' })),
+    headers: cleanRows(headersBlock && headersBlock.rows),
+    requestBody: (bodyBlock && (bodyBlock.example.trim() || (bodyBlock.fields||[]).length))
+      ? { example: bodyBlock.example.trim(), fields: cleanRows(bodyBlock.fields), examples: [] }
+      : null,
+    responses: responseBlocks.map(r=>({
+      code: parseInt(r.code,10) || 200,
+      description: r.description || '',
+      fields: cleanRows(r.fields),
+      example: r.example || '',
+      examples: [],
+    })),
+  };
+}
+
+function blankProjectStub(name){
+  return {
+    id: uid(), name, description:'', visibility:'private', environments:{}, auth:{ type:'', headerName:'', description:'' },
+    notes:'', lifecycle:'DEVELOPMENT', owner:'', team:'', requestFlowDirection:'1-way',
+    termsOfService:'', contact:{name:'',email:''}, license:{name:'',url:''},
+    createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), endpoints:[], attachments:[], _open:true,
+  };
+}
+
+async function performSave(force){
+  const projectName = document.getElementById('fProject').value.trim();
+  if(!projectName){ toast('Project / API name is required.'); return; }
+  if(!document.getElementById('fPath').value.trim()){ toast('Path is required.'); return; }
+  if(saving) return;
+  saving = true;
+  document.getElementById('btnSave').disabled = true;
+
+  try{
+    // Always re-fetch right before saving — this is the conflict check: if the
+    // endpoint changed underneath us (another tab, another teammate) since we
+    // opened it, we surface that instead of silently overwriting it.
+    const fresh = await apiGet('');
+    let proj = Object.values(fresh.projects||{}).find(p=> projectId ? p.id===projectId : p.name.toLowerCase()===projectName.toLowerCase());
+
+    if(proj && endpointId && !force){
+      const liveEp = (proj.endpoints||[]).find(e=>e.id===endpointId);
+      if(liveEp && loadedUpdatedAt && liveEp.updatedAt && liveEp.updatedAt !== loadedUpdatedAt){
+        showConflict(liveEp);
+        saving = false;
+        document.getElementById('btnSave').disabled = false;
+        return;
+      }
+    }
+
+    if(!proj){ proj = blankProjectStub(projectName); }
+    if(proj._readonly){ toast("You can only view this project — it's public content from someone else in your organisation."); saving=false; document.getElementById('btnSave').disabled=false; return; }
+
+    const now = new Date().toISOString();
+    const fields = gatherEndpointFromForm();
+    const actor = AUTH_USER.username || 'Unknown';
+    let savedEpId = endpointId;
+
+    const existingIdx = endpointId ? (proj.endpoints||[]).findIndex(e=>e.id===endpointId) : -1;
+    if(existingIdx >= 0){
+      const prevEp = proj.endpoints[existingIdx];
+      proj.endpoints[existingIdx] = { ...prevEp, ...fields, id: prevEp.id, createdAt: prevEp.createdAt, createdBy: prevEp.createdBy, updatedAt: now, updatedBy: actor };
+      postAuditEvent({ action:'updated', entityType:'endpoint', entityName:`${fields.method} ${fields.path}`, projectName: proj.name, details:`Edited endpoint ${fields.method} ${fields.path} via editor tab` });
+    } else {
+      const newEp = { id: uid(), ...fields, createdAt: now, createdBy: actor, updatedAt: now, updatedBy: actor };
+      proj.endpoints = proj.endpoints || [];
+      proj.endpoints.push(newEp);
+      savedEpId = newEp.id;
+      postAuditEvent({ action:'created', entityType:'endpoint', entityName:`${fields.method} ${fields.path}`, projectName: proj.name, details:`Added endpoint ${fields.method} ${fields.path} via editor tab` });
+    }
+    proj.updatedAt = now;
+
+    await apiSend('PUT', '/projects', { projects: { [proj.id]: proj } });
+
+    projectId = proj.id;
+    endpointId = savedEpId;
+    loadedUpdatedAt = now;
+
+    if(syncChannel) syncChannel.postMessage({ type:'endpoint-saved', projectId: proj.id, endpointId: savedEpId, at: now });
+
+    const newUrl = `/${ORG_TOKEN}/${slugify(proj.name)}/${endpointSlug(fields.method, fields.path)}/edit.studio`;
+    window.history.replaceState(null, '', newUrl);
+
+    hideConflict();
+    const savedEp = proj.endpoints.find(e=>e.id===savedEpId);
+    renderAttribution(proj, savedEp);
+    updateTopBar(proj, savedEp);
+    showSavedBanner(fields.visibility);
+    toast(fields.visibility === 'public' ? 'Published' : 'Saved as private');
+  }catch(e){
+    console.error(e);
+    toast('Could not save — check your connection and try again.');
+  }finally{
+    saving = false;
+    document.getElementById('btnSave').disabled = false;
+  }
+}
+
+function showConflict(liveEp){
+  document.getElementById('conflictMsg').textContent =
+    `This endpoint was changed by ${liveEp.updatedBy || 'someone else'} at ${formatDateTime(liveEp.updatedAt)} since you opened it.`;
+  document.getElementById('conflictBanner').classList.remove('hidden');
+}
+function hideConflict(){ document.getElementById('conflictBanner').classList.add('hidden'); }
+document.getElementById('conflictReload').addEventListener('click', ()=>window.location.reload());
+document.getElementById('conflictForce').addEventListener('click', ()=>performSave(true));
+
+function showSavedBanner(visibility){
+  const banner = document.getElementById('savedBanner');
+  document.getElementById('savedMsg').textContent = visibility === 'public'
+    ? 'Published — visible to your organisation on this endpoint\u2019s page.'
+    : 'Saved as private — only visible to you.';
+  banner.classList.remove('hidden');
+  clearTimeout(banner._timer);
+  banner._timer = setTimeout(()=>banner.classList.add('hidden'), 5000);
+}
+
+document.getElementById('btnSave').addEventListener('click', ()=>performSave(false));
+document.getElementById('btnCloseTab').addEventListener('click', ()=>window.close());
+
+boot();
+</script>
+</body>
+</html>
