@@ -93,8 +93,9 @@ button{ cursor:pointer; }
 .json-paste-actions .err{ color:var(--danger); font-size:11.5px; }
 
 /* Rows table */
-.rows-table{ width:100%; border-collapse:collapse; }
-.rows-table th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint); padding:0 8px 6px; font-weight:700; }
+.rows-table-wrap{ overflow-x:auto; margin:0 -2px; }
+.rows-table{ width:100%; min-width:640px; border-collapse:collapse; }
+.rows-table th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint); padding:0 8px 6px; font-weight:700; white-space:nowrap; }
 .rows-table td{ padding:4px 6px; vertical-align:middle; }
 .rows-table input, .rows-table select{ background:var(--surface-2); border:1px solid var(--border-strong); border-radius:6px; padding:6px 8px; font-size:12.5px; width:100%; }
 .rows-table input[type="checkbox"]{ width:auto; }
@@ -297,15 +298,41 @@ function exampleFor(value){
   if(typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }
-// Flattens one level deep into editable rows; nested objects/arrays keep their
-// raw JSON as the "example" so nothing is lost, without forcing a full recursive
-// tree UI for a first version of this editor.
+// Recursively flattens pasted JSON into one row per actual key/value pair —
+// nested objects walk into dotted paths (e.g. "response.responseInfo.status")
+// and arrays walk into their first element (e.g. "items[0].id") rather than
+// collapsing straight to a single opaque "Object"/"Array" row. Empty objects/
+// arrays still get one row each so nothing pasted is silently dropped.
 function inferFieldsFromJson(obj){
-  if(!obj || typeof obj !== 'object' || Array.isArray(obj)) return [];
-  return Object.keys(obj).map(key=>({
-    id: uid(), name:key, type: inferType(obj[key]), required:true,
-    example: exampleFor(obj[key]), description:'',
-  }));
+  const rows = [];
+  function walk(value, path){
+    if(Array.isArray(value)){
+      if(value.length === 0){
+        rows.push({ id:uid(), name:path, type:'Array', required:true, example:'[]', description:'' });
+        return;
+      }
+      const first = value[0];
+      if(first && typeof first === 'object'){
+        walk(first, `${path}[0]`);
+      } else {
+        rows.push({ id:uid(), name:path, type:'Array', required:true, example: exampleFor(value), description:'' });
+      }
+      return;
+    }
+    if(value && typeof value === 'object'){
+      const keys = Object.keys(value);
+      if(keys.length === 0){
+        rows.push({ id:uid(), name:path, type:'Object', required:true, example:'{}', description:'' });
+        return;
+      }
+      keys.forEach(k=> walk(value[k], path ? `${path}.${k}` : k));
+      return;
+    }
+    rows.push({ id:uid(), name:path, type: inferType(value), required:true, example: exampleFor(value), description:'' });
+  }
+  if(!obj || typeof obj !== 'object') return rows;
+  Object.keys(obj).forEach(key=> walk(obj[key], key));
+  return rows;
 }
 
 /* ==================== Application state ==================== */
@@ -465,10 +492,11 @@ function renderBlocks(){
 function rowsTableHtml(block, isHeaderStyle){
   const rows = block.rows;
   return `
+    <div class="rows-table-wrap">
     <table class="rows-table">
       <thead><tr>
-        <th style="width:20%;">Name</th><th style="width:14%;">Type</th><th style="width:8%;">Req.</th>
-        <th style="width:22%;">Example</th><th>Description</th><th style="width:28px;"></th>
+        <th style="width:18%;">Name</th><th style="width:12%;">Type</th><th style="width:7%;">Req.</th>
+        <th style="width:20%;">Example</th><th style="width:auto;">Description</th><th style="width:28px;"></th>
       </tr></thead>
       <tbody>
         ${rows.map(r=>`
@@ -482,6 +510,7 @@ function rowsTableHtml(block, isHeaderStyle){
           </tr>`).join('')}
       </tbody>
     </table>
+    </div>
     <button type="button" class="add-row-btn" data-add-row="${block.id}">+ Add row</button>
   `;
 }
