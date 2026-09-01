@@ -19,6 +19,24 @@ const writeLimiter = rateLimit({
 
 const MAX_RETURNED = 1000; // matches the client's in-memory AUDIT_LOG_CAP
 
+// Client-writable action vocabulary. Any authenticated user can call this
+// endpoint directly (not just through the UI), so `action` must be checked
+// against a known set rather than trusted as free text — otherwise anyone
+// could write cosmetically-misleading audit entries (fake action names).
+// Server-only actions (key rotation, PII rule changes, project promotion,
+// etc.) are written by other routes calling recordAuditEvent() directly and
+// are intentionally NOT in this list — this endpoint should never accept
+// them from a client.
+const ALLOWED_CLIENT_ACTIONS = new Set([
+  'created',
+  'updated',
+  'deleted',
+  'exported',
+  'imported',
+  'ADMIN_SETTING_CHANGED',
+  'PII_REVEAL',
+]);
+
 // POST /api/audit/events — append one event. Identity (user/role/org), the
 // timestamp, IP, and user-agent all come from the verified session/request,
 // never from the request body — see recordAuditEvent().
@@ -26,6 +44,9 @@ router.post('/events', writeLimiter, async (req, res) => {
   const body = req.body || {};
   if (!body.action || typeof body.action !== 'string') {
     return res.status(400).json({ error: 'action is required.' });
+  }
+  if (!ALLOWED_CLIENT_ACTIONS.has(body.action)) {
+    return res.status(400).json({ error: 'Unknown action.' });
   }
   try {
     const eventId = await recordAuditEvent(req.authUser, req, {

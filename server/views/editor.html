@@ -200,6 +200,7 @@ button{ cursor:pointer; }
     <div class="topbar-sub" id="topSub">Not saved yet</div>
   </div>
   <div class="topbar-spacer"></div>
+  <button type="button" class="btn-primary" id="btnSave">Publish</button>
   <button type="button" class="theme-toggle" id="btnTheme" title="Switch theme">◐</button>
   <div class="user-chip"><span class="user-dot" id="userDot">?</span><span id="userLabel">—</span></div>
 </div>
@@ -279,8 +280,6 @@ button{ cursor:pointer; }
 <div class="footer-bar">
   <span class="hint" id="footerHint">Saves to the endpoint's live draft.</span>
   <div class="spacer"></div>
-  <button class="btn-ghost" id="btnCloseTab">Close</button>
-  <button class="btn-primary" id="btnSave">Save endpoint</button>
 </div>
 
 <div id="toast"></div>
@@ -513,7 +512,10 @@ function fillFormFromEndpoint(proj, ep){
 }
 
 /* ==================== Blocks ==================== */
-const SINGLETON_BLOCKS = ['summary','parameters','headers','requestBody'];
+// 'summary' intentionally excluded — Summary & description is a freeform,
+// custom block, so people can add another one whenever they want instead of
+// being capped at one.
+const SINGLETON_BLOCKS = ['parameters','headers','requestBody'];
 function addBlock(type, data){
   if(SINGLETON_BLOCKS.includes(type) && blocks.some(b=>b.type===type)) return; // singleton blocks
   const block = Object.assign({ id: uid(), type }, data || {});
@@ -774,7 +776,7 @@ function bindBlockDragAndDrop(container){
 
 /* ==================== Add-block menu ==================== */
 function updateAddMenuAvailability(){
-  document.getElementById('menuSummary').disabled = blocks.some(b=>b.type==='summary');
+  // Summary & description is never disabled — see SINGLETON_BLOCKS note above.
   document.getElementById('menuParameters').disabled = blocks.some(b=>b.type==='parameters');
   document.getElementById('menuHeaders').disabled = blocks.some(b=>b.type==='headers');
   document.getElementById('menuRequestBody').disabled = blocks.some(b=>b.type==='requestBody');
@@ -932,7 +934,6 @@ function showSavedBanner(visibility){
 }
 
 document.getElementById('btnSave').addEventListener('click', ()=>performSave(false));
-document.getElementById('btnCloseTab').addEventListener('click', ()=>window.close());
 
 /* ==================== Theme ====================
    Mirrors the main Studio tab's toggle (server/views/studio.html) and shares
