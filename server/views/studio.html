@@ -4570,6 +4570,16 @@ function selectEnvironment(envId){
   applyEnvAccent();
   applyRoleGatedUI();
   renderEnvSwitcher();
+  // renderSidebar() was missing here, so the endpoint tree kept showing
+  // whichever environment was rendered last (e.g. SIT's promoted endpoints)
+  // until something else happened to trigger a full renderAll() — like a
+  // manual page reload. renderSidebar() calls viewEndpoints() per project,
+  // which is already environment-aware (draft vs. snapshotEntry(proj.id) for
+  // state.env), so calling it here is enough to make the switch immediate:
+  // it shows "Loading…" / "Nothing promoted" right away instead of stale
+  // endpoints from the previous environment, then fills in once the new
+  // environment's snapshot resolves.
+  renderSidebar();
   renderMain();
   renderRail();
 }
@@ -7022,6 +7032,14 @@ function renderProjectOverview(main, projectId){
       state.selected = { type:'endpoint', id: row.getAttribute('data-open-ep') };
       renderAll();
     });
+  });
+  // Auth request/response parameter tables on this page go through the same
+  // centralized PII engine as the endpoint doc page (paramSection() renders the
+  // eye icon whenever a row is sensitive) — but this page never wired the click
+  // through, so the button rendered but did nothing. Bind it the same way
+  // renderEndpointDoc() does, so reveal + the 60s auto-remask timeout work here too.
+  main.querySelectorAll('[data-header-reveal]').forEach(btn=>{
+    btn.addEventListener('click', ()=> toggleSensitiveRevealed());
   });
   const notesArea = document.getElementById('projNotes');
   notesArea.addEventListener('blur', ()=>{
