@@ -172,9 +172,17 @@ svg{ display:block; }
 }
 .tb-icon-btn:hover{ background:var(--surface-2); color:var(--text); }
 .tb-icon-btn.active{ background:var(--accent-soft); color:var(--accent); }
-.tb-group{ display:flex; align-items:center; border:1px solid var(--border); border-radius:9px; overflow:hidden; }
+/* Undo/Redo (and any other icon button) had no :disabled treatment, so a
+   disabled button still rendered at full opacity with a pointer cursor and
+   still lit up on hover — it looked clickable and "broken" rather than
+   simply unavailable, which is most visible right after opening a diagram
+   when both Undo and Redo start disabled. */
+.tb-icon-btn:disabled{ opacity:.32; cursor:not-allowed; }
+.tb-icon-btn:disabled:hover{ background:none; color:var(--text-dim); }
+.tb-group{ display:flex; align-items:center; background:var(--surface-2); border:1px solid var(--border); border-radius:9px; overflow:hidden; }
+.tb-group .tb-icon-btn:hover{ background:var(--surface-3, rgba(255,255,255,.06)); }
 .tb-group-btn{ border-radius:0; }
-.tb-group-div{ width:1px; height:18px; background:var(--border); }
+.tb-group-div{ width:1px; height:18px; background:var(--border); flex:none; }
 
 .btn-publish{
   display:flex; align-items:center; gap:7px; padding:8px 16px; border-radius:10px;
@@ -691,24 +699,17 @@ const syncChannel = ('BroadcastChannel' in window) ? new BroadcastChannel('api-s
    the same approach draw.io / Lucidchart use for their shape libraries.
    Brand colour is used to identify the platform; the glyph never
    reproduces a company's trademarked logo mark. */
-// SVGNS/svgEl_ must be defined before the icon library below, since every
-// icon badge's gradient is created eagerly via ensureGradient() -> svgEl_()
-// while ICON_DEFS is being built. They used to live further down the file
-// (in the "Rendering" section); building ICON_DEFS before that point meant
-// svgEl_() referenced the not-yet-initialized `const SVGNS` and threw a
-// ReferenceError on every single icon, silently swallowed by the try/catch
-// in ensureGradient — so no gradient was ever actually inserted into <defs>,
-// and every "colour" badge across the whole app (palette AND canvas) quietly
-// fell back to a flat, colourless rect. Moving the declarations up here
-// fixes the gradients everywhere in one place instead of patching each call
-// site.
+// SVGNS/svgEl_ are used throughout rendering (canvas nodes, edges, handles),
+// so they need to be defined before the icon library below runs. They used
+// to live further down the file (in the "Rendering" section); building
+// ICON_DEFS before that point meant early code could reference the
+// not-yet-initialized `const SVGNS` and throw. Declared here once instead.
 const SVGNS = 'http://www.w3.org/2000/svg';
 function svgEl_(tag, attrs){
   const el = document.createElementNS(SVGNS, tag);
   for(const k in attrs) el.setAttribute(k, attrs[k]);
   return el;
 }
-const _gradCache = {};
 function shadeColor(hex, percent){
   hex = hex.replace('#','');
   if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
@@ -717,29 +718,37 @@ function shadeColor(hex, percent){
   r=Math.max(0,Math.min(255,r)); g=Math.max(0,Math.min(255,g)); b=Math.max(0,Math.min(255,b));
   return '#' + (0x1000000 + r*0x10000 + g*0x100 + b).toString(16).slice(1);
 }
-function ensureGradient(hex){
-  if(_gradCache[hex]) return _gradCache[hex];
-  const id = 'grad_' + hex.replace('#','');
-  try{
-    const defsEl = document.querySelector('#dgSvg defs');
-    if(defsEl && !document.getElementById(id)){
-      const lg = svgEl_('linearGradient', { id, x1:'12%', y1:'6%', x2:'88%', y2:'96%' });
-      lg.appendChild(svgEl_('stop', { offset:'0%', 'stop-color': shadeColor(hex, 16) }));
-      lg.appendChild(svgEl_('stop', { offset:'100%', 'stop-color': shadeColor(hex, -20) }));
-      defsEl.appendChild(lg);
-    }
-  }catch(e){ /* defs not ready yet — fall back to flat colour below */ }
-  _gradCache[hex] = id;
-  return id;
-}
-/** Wrap a white-line glyph in a gradient badge. shape: 'square' | 'circle'. */
+/** Wrap a white-line glyph in a gradient badge. shape: 'square' | 'circle'.
+ * The gradient (and the drop-shadow filter) used to be referenced by id —
+ * `url(#grad_XXXXX)` / `url(#iconSoftShadow)` — pointing at defs that only
+ * exist in THIS document's own <svg id="dgSvg"> (see ensureGradient above
+ * and the <filter id="iconSoftShadow"> in the canvas markup). That's fine as
+ * long as the returned string is only ever rendered inside this same page,
+ * but every one of these strings also gets copied verbatim into other
+ * documents — the Overview page preview, the published diagram snapshot,
+ * PDF/SVG export — where those ids don't exist. A dangling filter reference
+ * doesn't just lose the shadow, it can make the whole element fail to
+ * render per the SVG spec, which is why badges showed up nearly invisible
+ * outside the editor. Embedding a small local <defs> in every single badge
+ * makes each one fully self-contained and portable, at the cost of a few
+ * duplicate (but identical, so harmless) ids when the same color repeats. */
 function badge(hex, shape, glyph){
-  const gid = ensureGradient(hex);
+  const gid = 'grad_' + hex.replace('#','') + '_' + shape;
+  const fid = 'shadow_' + hex.replace('#','') + '_' + shape;
   const fillRef = `url(#${gid})`;
   const shapeEl = shape === 'circle'
     ? `<circle cx="16" cy="16" r="15" fill="${fillRef}"></circle><circle cx="16" cy="16" r="15" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1"></circle>`
     : `<rect x="1" y="1" width="30" height="30" rx="9" fill="${fillRef}"></rect><rect x="1" y="1" width="30" height="30" rx="9" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1"></rect>`;
-  return `<svg viewBox="0 0 32 32" style="filter:url(#iconSoftShadow)">${shapeEl}<g fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${glyph}</g></svg>`;
+  const defs = `<defs>
+      <linearGradient id="${gid}" x1="12%" y1="6%" x2="88%" y2="96%">
+        <stop offset="0%" stop-color="${shadeColor(hex, 16)}"></stop>
+        <stop offset="100%" stop-color="${shadeColor(hex, -20)}"></stop>
+      </linearGradient>
+      <filter id="${fid}" x="-40%" y="-40%" width="180%" height="180%">
+        <feDropShadow dx="0" dy="1.5" stdDeviation="1.6" flood-color="#000" flood-opacity="0.35"></feDropShadow>
+      </filter>
+    </defs>`;
+  return `<svg viewBox="0 0 32 32" style="filter:url(#${fid})">${defs}${shapeEl}<g fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${glyph}</g></svg>`;
 }
 /** Small brand-letter badge, used only where no clean universal pictogram exists. */
 function monogramSvg(text, bg, shape){
@@ -2075,32 +2084,38 @@ function updateCiSaveEnabled(){
 // size (~34px) in the editor, so there's no reason to carry megabytes of
 // pixels through the server and every future page load. SVGs pass through
 // untouched since they're already tiny and resolution-independent.
+//
+// Reads the file as a data: URL rather than a blob: URL for the <img> we
+// decode it through — this page's CSP only allows img-src 'self' and data:,
+// not blob:, so a blob: URL here would silently fail to load and land in
+// onerror ("Could not read that image.") on every single upload.
 const CUSTOM_ICON_TARGET_PX = 128;
 function fileToProcessedDataUrl(file){
   return new Promise((resolve, reject)=>{
     if(file.size > 5 * 1024 * 1024) return reject(new Error('That file is too large to even read in (max 5MB before compression).'));
+    const reader = new FileReader();
+    reader.onerror = ()=>reject(new Error('Could not read that file.'));
     if(file.type === 'image/svg+xml'){
-      const reader = new FileReader();
       reader.onload = ()=>resolve(reader.result);
-      reader.onerror = ()=>reject(new Error('Could not read that file.'));
       reader.readAsDataURL(file);
       return;
     }
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = ()=>{
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, CUSTOM_ICON_TARGET_PX / Math.max(img.width, img.height));
-      const w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
-      const canvas = document.createElement('canvas');
-      canvas.width = w; canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, w, h);
-      // PNG keeps transparency (most logos need it); quality param is ignored for PNG but harmless.
-      resolve(canvas.toDataURL('image/png', 0.92));
+    reader.onload = ()=>{
+      const img = new Image();
+      img.onload = ()=>{
+        const scale = Math.min(1, CUSTOM_ICON_TARGET_PX / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        // PNG keeps transparency (most logos need it); quality param is ignored for PNG but harmless.
+        resolve(canvas.toDataURL('image/png', 0.92));
+      };
+      img.onerror = ()=>reject(new Error('Could not read that image.'));
+      img.src = reader.result; // data: URL — always allowed by this page's CSP
     };
-    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error('Could not read that image.')); };
-    img.src = url;
+    reader.readAsDataURL(file);
   });
 }
 

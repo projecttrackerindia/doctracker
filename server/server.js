@@ -45,7 +45,13 @@ app.use(
         styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
         fontSrc: ["'self'", 'https://fonts.gstatic.com'],
         scriptSrc: ["'self'", 'https://cdnjs.cloudflare.com', (req, res) => `'nonce-${res.locals.cspNonce}'`],
-        imgSrc: ["'self'", 'data:'],
+        // 'blob:' is needed alongside 'data:': the custom-icon uploader reads
+        // files as data: URLs, but PNG export (exportPng in
+        // architecture-studio.html) renders the diagram SVG through a
+        // blob: URL Image before rasterizing it to canvas. Without 'blob:'
+        // here that <img>'s src is silently blocked and PNG export fails
+        // with "Could not render export — try SVG instead."
+        imgSrc: ["'self'", 'data:', 'blob:'],
         connectSrc: ["'self'"],
       },
     },
