@@ -333,18 +333,25 @@ svg{ display:block; }
 .node-card .card-sub{ fill:var(--text-faint); font-family:var(--mono); }
 .node-icon-bg{ opacity:.14; }
 
-.frame-node rect{ fill:rgba(255,255,255,.015); stroke:var(--border-strong); stroke-width:1.4; stroke-dasharray:7 6; }
-.frame-node.selected rect{ stroke:var(--accent); }
+.frame-node rect{ fill:rgba(120,140,255,.05); stroke:var(--border-strong); stroke-width:1.4; stroke-dasharray:7 6; cursor:grab; transition:fill .12s, stroke .12s; }
+.frame-node:hover rect{ fill:rgba(120,140,255,.09); stroke:var(--border-strong); }
+.frame-node.selected rect{ stroke:var(--accent); fill:rgba(34,229,255,.06); }
+.frame-node.group-target rect{ stroke:var(--accent); stroke-width:2; fill:var(--accent-soft-strong); }
 .frame-node .frame-label{ fill:var(--text-dim); font-family:var(--mono); font-weight:600; letter-spacing:.4px; }
-.frame-node .frame-tag{ fill:var(--surface); }
+.frame-node .frame-tag{ fill:var(--surface); cursor:grab; }
+.frame-node .frame-tag:active{ cursor:grabbing; }
 
-.text-node rect.hit{ fill:transparent; }
+.text-node rect.hit{ fill:transparent; cursor:grab; }
 .text-node.selected rect.hit{ stroke:var(--accent); stroke-width:1.2; stroke-dasharray:4 4; fill:var(--accent-soft); }
 .text-node text{ fill:var(--text-dim); font-family:var(--sans); }
 
 .handle{ fill:var(--surface-solid); stroke:var(--accent); stroke-width:1.4; opacity:0; transition:opacity .12s; cursor:crosshair; }
-.node-card:hover .handle, .node-card.selected .handle{ opacity:1; }
+.node-card:hover .handle, .node-card.selected .handle,
+.frame-node:hover .handle, .frame-node.selected .handle,
+.text-node:hover .handle, .text-node.selected .handle{ opacity:1; }
 .handle:hover{ fill:var(--accent); }
+.resize-handle{ cursor:nwse-resize; }
+.resize-handle:hover{ fill:var(--accent); stroke:var(--accent-ink); }
 
 .edge-path{ fill:none; stroke:var(--text-faint); stroke-width:1.8; }
 .edge-hit{ fill:none; stroke:transparent; stroke-width:14; cursor:pointer; }
@@ -498,6 +505,9 @@ svg{ display:block; }
           <marker id="arrowHeadSel" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" class="edge-arrow selected"></path>
           </marker>
+          <filter id="iconSoftShadow" x="-40%" y="-40%" width="180%" height="180%">
+            <feDropShadow dx="0" dy="1.5" stdDeviation="1.6" flood-color="#000" flood-opacity="0.35"></feDropShadow>
+          </filter>
         </defs>
         <rect id="gridBgRect" x="-20000" y="-20000" width="40000" height="40000" fill="url(#gridDots)"></rect>
         <rect id="gridBgRect2" x="-20000" y="-20000" width="40000" height="40000" fill="url(#gridDotsStrong)"></rect>
@@ -632,59 +642,140 @@ function userInitials(name){
 const syncChannel = ('BroadcastChannel' in window) ? new BroadcastChannel('api-studio-sync') : null;
 
 /* ==================== Icon library ====================
-   Two families, deliberately: (1) plain pictorial glyphs for universal
-   concepts (server, database, cloud, browser, shield…) — nobody owns the
-   idea of a database cylinder; and (2) colour+monogram "chips" for named
-   platforms (S3, Salesforce, Kafka…) — the platform's brand colour plus a
-   short mark, not a traced copy of anyone's actual logo artwork. Same
-   approach draw.io / Lucidchart-style tools use for their shape libraries. */
+   Every icon renders as a premium gradient "badge" (rounded square or
+   circle, soft drop shadow, subtle inner rim-light) with a crisp white
+   pictogram on top — the same visual language used across every category
+   so the whole palette reads as one polished, professional icon set.
+   Icons are original pictograms (bucket, cylinder, chip, cluster of
+   nodes…) rather than traced copies of any vendor's actual logo artwork —
+   the same approach draw.io / Lucidchart use for their shape libraries.
+   Brand colour is used to identify the platform; the glyph never
+   reproduces a company's trademarked logo mark. */
+// SVGNS/svgEl_ must be defined before the icon library below, since every
+// icon badge's gradient is created eagerly via ensureGradient() -> svgEl_()
+// while ICON_DEFS is being built. They used to live further down the file
+// (in the "Rendering" section); building ICON_DEFS before that point meant
+// svgEl_() referenced the not-yet-initialized `const SVGNS` and threw a
+// ReferenceError on every single icon, silently swallowed by the try/catch
+// in ensureGradient — so no gradient was ever actually inserted into <defs>,
+// and every "colour" badge across the whole app (palette AND canvas) quietly
+// fell back to a flat, colourless rect. Moving the declarations up here
+// fixes the gradients everywhere in one place instead of patching each call
+// site.
+const SVGNS = 'http://www.w3.org/2000/svg';
+function svgEl_(tag, attrs){
+  const el = document.createElementNS(SVGNS, tag);
+  for(const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+const _gradCache = {};
+function shadeColor(hex, percent){
+  hex = hex.replace('#','');
+  if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+  const num = parseInt(hex,16);
+  let r=(num>>16)+Math.round(2.55*percent), g=((num>>8)&0xff)+Math.round(2.55*percent), b=(num&0xff)+Math.round(2.55*percent);
+  r=Math.max(0,Math.min(255,r)); g=Math.max(0,Math.min(255,g)); b=Math.max(0,Math.min(255,b));
+  return '#' + (0x1000000 + r*0x10000 + g*0x100 + b).toString(16).slice(1);
+}
+function ensureGradient(hex){
+  if(_gradCache[hex]) return _gradCache[hex];
+  const id = 'grad_' + hex.replace('#','');
+  try{
+    const defsEl = document.querySelector('#dgSvg defs');
+    if(defsEl && !document.getElementById(id)){
+      const lg = svgEl_('linearGradient', { id, x1:'12%', y1:'6%', x2:'88%', y2:'96%' });
+      lg.appendChild(svgEl_('stop', { offset:'0%', 'stop-color': shadeColor(hex, 16) }));
+      lg.appendChild(svgEl_('stop', { offset:'100%', 'stop-color': shadeColor(hex, -20) }));
+      defsEl.appendChild(lg);
+    }
+  }catch(e){ /* defs not ready yet — fall back to flat colour below */ }
+  _gradCache[hex] = id;
+  return id;
+}
+/** Wrap a white-line glyph in a gradient badge. shape: 'square' | 'circle'. */
+function badge(hex, shape, glyph){
+  const gid = ensureGradient(hex);
+  const fillRef = `url(#${gid})`;
+  const shapeEl = shape === 'circle'
+    ? `<circle cx="16" cy="16" r="15" fill="${fillRef}"></circle><circle cx="16" cy="16" r="15" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1"></circle>`
+    : `<rect x="1" y="1" width="30" height="30" rx="9" fill="${fillRef}"></rect><rect x="1" y="1" width="30" height="30" rx="9" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1"></rect>`;
+  return `<svg viewBox="0 0 32 32" style="filter:url(#iconSoftShadow)">${shapeEl}<g fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${glyph}</g></svg>`;
+}
+/** Small brand-letter badge, used only where no clean universal pictogram exists. */
 function monogramSvg(text, bg, shape){
-  const isCircle = shape === 'circle';
-  const shapeEl = isCircle
-    ? `<circle cx="16" cy="16" r="14" fill="${bg}"></circle>`
-    : `<rect x="2" y="2" width="28" height="28" rx="8" fill="${bg}"></rect>`;
   const size = text.length > 2 ? 9.5 : (text.length > 1 ? 11.5 : 14);
-  return `<svg viewBox="0 0 32 32">${shapeEl}<text x="16" y="16" text-anchor="middle" dominant-baseline="central" font-family="Space Grotesk, Inter, sans-serif" font-weight="700" font-size="${size}" fill="#04141a">${text}</text></svg>`;
+  return badge(bg, shape, `<text x="16" y="16.5" text-anchor="middle" dominant-baseline="central" font-family="Space Grotesk, Inter, sans-serif" font-weight="700" font-size="${size}" stroke="none" fill="#fff">${text}</text>`);
 }
 const ICON_DEFS = [
   // ---- Client & Users ----
-  { id:'client', name:'Browser / Client', cat:'Client & Users', color:'#64b5f6', svg:`<svg viewBox="0 0 32 32"><rect x="2" y="5" width="28" height="22" rx="3" fill="none" stroke="#64b5f6" stroke-width="2"></rect><rect x="2" y="5" width="28" height="6" rx="3" fill="#64b5f6" opacity=".35"></rect><circle cx="6.5" cy="8" r="1" fill="#64b5f6"></circle><circle cx="9.5" cy="8" r="1" fill="#64b5f6"></circle></svg>` },
-  { id:'mobile', name:'Mobile App', cat:'Client & Users', color:'#7c8fee', svg:`<svg viewBox="0 0 32 32"><rect x="9" y="2" width="14" height="28" rx="3.5" fill="none" stroke="#7c8fee" stroke-width="2"></rect><rect x="14" y="25" width="4" height="2" rx="1" fill="#7c8fee"></rect></svg>` },
-  { id:'user', name:'User', cat:'Client & Users', color:'#9aa3c0', svg:`<svg viewBox="0 0 32 32"><circle cx="16" cy="11" r="6" fill="none" stroke="#9aa3c0" stroke-width="2"></circle><path d="M5 28c1.5-6.5 6.5-10 11-10s9.5 3.5 11 10" fill="none" stroke="#9aa3c0" stroke-width="2" stroke-linecap="round"></path></svg>` },
+  { id:'client', name:'Browser / Client', cat:'Client & Users', color:'#4a90d9', svg: badge('#4a90d9','square',
+    `<rect x="6" y="8" width="20" height="16" rx="2.5"></rect><path d="M6 12.5h20"></path><circle cx="9.3" cy="10.3" r=".9" fill="#fff" stroke="none"></circle><circle cx="12" cy="10.3" r=".9" fill="#fff" stroke="none"></circle>`) },
+  { id:'mobile', name:'Mobile App', cat:'Client & Users', color:'#7c8fee', svg: badge('#7c8fee','square',
+    `<rect x="10" y="5" width="12" height="22" rx="2.6"></rect><path d="M14 24h4" stroke-width="2"></path>`) },
+  { id:'user', name:'User', cat:'Client & Users', color:'#9aa3c0', svg: badge('#9aa3c0','circle',
+    `<circle cx="16" cy="12.5" r="4.6"></circle><path d="M7.5 25c1.3-5.2 4.8-8 8.5-8s7.2 2.8 8.5 8"></path>`) },
   // ---- Compute ----
-  { id:'server', name:'Server', cat:'Compute', color:'#8fa3c9', svg:`<svg viewBox="0 0 32 32"><rect x="4" y="4" width="24" height="8" rx="2" fill="none" stroke="#8fa3c9" stroke-width="2"></rect><rect x="4" y="14" width="24" height="8" rx="2" fill="none" stroke="#8fa3c9" stroke-width="2"></rect><rect x="4" y="24" width="24" height="4" rx="1.4" fill="none" stroke="#8fa3c9" stroke-width="2"></rect><circle cx="9" cy="8" r="1.3" fill="#8fa3c9"></circle><circle cx="9" cy="18" r="1.3" fill="#8fa3c9"></circle></svg>` },
-  { id:'vm', name:'Virtual Machine', cat:'Compute', color:'#ff9900', svg: monogramSvg('VM', '#ff9900', 'square') },
-  { id:'lambda', name:'Function (Lambda)', cat:'Compute', color:'#a855f7', svg: monogramSvg('λ', '#a855f7', 'circle') },
-  { id:'container', name:'Container', cat:'Compute', color:'#2496ed', svg:`<svg viewBox="0 0 32 32"><rect x="4" y="10" width="24" height="16" rx="2.5" fill="none" stroke="#2496ed" stroke-width="2"></rect><path d="M4 10l4-6h16l4 6" fill="none" stroke="#2496ed" stroke-width="2" stroke-linejoin="round"></path><line x1="10" y1="16" x2="10" y2="20" stroke="#2496ed" stroke-width="2"></line><line x1="16" y1="16" x2="16" y2="20" stroke="#2496ed" stroke-width="2"></line><line x1="22" y1="16" x2="22" y2="20" stroke="#2496ed" stroke-width="2"></line></svg>` },
-  { id:'k8s', name:'Kubernetes Cluster', cat:'Compute', color:'#326ce5', svg: monogramSvg('K8s', '#326ce5', 'circle') },
+  { id:'server', name:'Server', cat:'Compute', color:'#5b7fd6', svg: badge('#5b7fd6','square',
+    `<rect x="6" y="6" width="20" height="7" rx="1.8"></rect><rect x="6" y="15" width="20" height="7" rx="1.8"></rect><circle cx="10" cy="9.5" r="1" fill="#fff" stroke="none"></circle><circle cx="10" cy="18.5" r="1" fill="#fff" stroke="none"></circle><path d="M9 26h14" stroke-width="1.6"></path>`) },
+  { id:'vm', name:'Virtual Machine', cat:'Compute', color:'#ff9900', svg: badge('#ff9900','square',
+    `<rect x="6" y="7" width="20" height="14" rx="2"></rect><path d="M13 25h6M16 21v4" stroke-width="1.6"></path><path d="M12.5 12l3 2.6-3 2.6" stroke-width="1.6"></path>`) },
+  { id:'lambda', name:'Function (Lambda)', cat:'Compute', color:'#a855f7', svg: badge('#a855f7','circle',
+    `<path d="M11 23l4.4-16M15.4 7l7 16M13.6 16h3" stroke-width="2"></path>`) },
+  { id:'container', name:'Container', cat:'Compute', color:'#2496ed', svg: badge('#2496ed','square',
+    `<rect x="5" y="12" width="22" height="13" rx="2"></rect><path d="M5 12l3.5-5h15l3.5 5" stroke-linejoin="round"></path><path d="M11 16.5v4M16 16.5v4M21 16.5v4"></path>`) },
+  { id:'k8s', name:'Kubernetes Cluster', cat:'Compute', color:'#326ce5', svg: badge('#326ce5','circle',
+    `<circle cx="16" cy="8.5" r="2"></circle><circle cx="24" cy="20.5" r="2"></circle><circle cx="8" cy="20.5" r="2"></circle><path d="M16 10.5v6M16 16.5l7 4M16 16.5l-7 4" stroke-width="1.6"></path>`) },
   // ---- Storage & Database ----
-  { id:'s3', name:'Object Storage (S3)', cat:'Storage & Database', color:'#ff9900', svg: monogramSvg('S3', '#ff9900', 'square') },
-  { id:'sql', name:'SQL Database', cat:'Storage & Database', color:'#4a90d9', svg:`<svg viewBox="0 0 32 32"><ellipse cx="16" cy="7" rx="12" ry="4.2" fill="none" stroke="#4a90d9" stroke-width="2"></ellipse><path d="M4 7v18c0 2.3 5.4 4.2 12 4.2s12-1.9 12-4.2V7" fill="none" stroke="#4a90d9" stroke-width="2"></path><path d="M4 16c0 2.3 5.4 4.2 12 4.2s12-1.9 12-4.2" fill="none" stroke="#4a90d9" stroke-width="2"></path></svg>` },
-  { id:'nosql', name:'NoSQL Database', cat:'Storage & Database', color:'#22c1a4', svg: monogramSvg('NoSQL', '#22c1a4', 'square') },
-  { id:'cache', name:'Cache (Redis)', cat:'Storage & Database', color:'#e03131', svg: monogramSvg('R', '#e03131', 'circle') },
-  { id:'warehouse', name:'Data Warehouse', cat:'Storage & Database', color:'#7048e8', svg: monogramSvg('DW', '#7048e8', 'square') },
+  { id:'s3', name:'Object Storage (S3)', cat:'Storage & Database', color:'#ff9900', svg: badge('#ff9900','square',
+    `<path d="M8 9h16l-1.6 15a2 2 0 0 1-2 1.8h-8.8a2 2 0 0 1-2-1.8z" stroke-linejoin="round"></path><path d="M6.5 9h19" stroke-width="2"></path><path d="M16 13.5v6M13 17l3 3 3-3" stroke-width="1.6"></path>`) },
+  { id:'sql', name:'SQL Database', cat:'Storage & Database', color:'#4a90d9', svg: badge('#4a90d9','square',
+    `<ellipse cx="16" cy="9.5" rx="10" ry="3.6"></ellipse><path d="M6 9.5v13c0 2 4.5 3.6 10 3.6s10-1.6 10-3.6v-13"></path><path d="M6 16.5c0 2 4.5 3.6 10 3.6s10-1.6 10-3.6" stroke-width="1.6"></path>`) },
+  { id:'nosql', name:'NoSQL Database', cat:'Storage & Database', color:'#22c1a4', svg: badge('#22c1a4','square',
+    `<path d="M12 6c-2.5 1.6-2.5 4.4 0 6-2.5 1.6-2.5 4.4 0 6-2.5 1.6-2.5 4.4 0 6" stroke-width="2"></path><path d="M20 6c2.5 1.6 2.5 4.4 0 6 2.5 1.6 2.5 4.4 0 6-2.5 1.6-2.5 4.4 0 6" stroke-width="2"></path>`) },
+  { id:'cache', name:'Cache (Redis)', cat:'Storage & Database', color:'#e03131', svg: badge('#e03131','circle',
+    `<circle cx="16" cy="16" r="10.2" stroke-width="1.6"></circle><path d="M17.6 8.5l-6.2 9h4.4l-1.4 6 6.6-9.4h-4.6z" fill="#fff" stroke="none"></path>`) },
+  { id:'warehouse', name:'Data Warehouse', cat:'Storage & Database', color:'#7048e8', svg: badge('#7048e8','square',
+    `<path d="M6 14l10-7 10 7" stroke-linejoin="round"></path><rect x="8" y="14" width="16" height="11" rx="1.4"></rect><path d="M13 25v-6h6v6" stroke-width="1.6"></path>`) },
   // ---- Integration & Messaging ----
-  { id:'gateway', name:'API Gateway', cat:'Integration & Messaging', color:'#22e5ff', svg:`<svg viewBox="0 0 32 32"><path d="M16 2l12 7v14l-12 7-12-7V9z" fill="none" stroke="#22e5ff" stroke-width="2" stroke-linejoin="round"></path><path d="M9 12h14M9 16h14M9 20h14" stroke="#22e5ff" stroke-width="1.6" stroke-linecap="round"></path></svg>` },
-  { id:'mulesoft', name:'Integration Flow', cat:'Integration & Messaging', color:'#00a1e0', svg: monogramSvg('Mule', '#00a1e0', 'circle') },
-  { id:'queue', name:'Message Queue', cat:'Integration & Messaging', color:'#ffb84d', svg: monogramSvg('MQ', '#ffb84d', 'square') },
-  { id:'kafka', name:'Event Stream (Kafka)', cat:'Integration & Messaging', color:'#8574c7', svg: monogramSvg('K', '#8574c7', 'circle') },
-  { id:'webhook', name:'Webhook', cat:'Integration & Messaging', color:'#37b24d', svg:`<svg viewBox="0 0 32 32"><circle cx="8" cy="24" r="3.4" fill="none" stroke="#37b24d" stroke-width="2"></circle><circle cx="24" cy="10" r="3.4" fill="none" stroke="#37b24d" stroke-width="2"></circle><circle cx="24" cy="24" r="3.4" fill="none" stroke="#37b24d" stroke-width="2"></circle><path d="M10.8 22.3L21.2 11.7M11 24h10" fill="none" stroke="#37b24d" stroke-width="2" stroke-linecap="round"></path></svg>` },
-  { id:'loadbalancer', name:'Load Balancer', cat:'Integration & Messaging', color:'#4dabf7', svg:`<svg viewBox="0 0 32 32"><circle cx="6" cy="16" r="3.2" fill="none" stroke="#4dabf7" stroke-width="2"></circle><circle cx="26" cy="6" r="3" fill="none" stroke="#4dabf7" stroke-width="2"></circle><circle cx="26" cy="16" r="3" fill="none" stroke="#4dabf7" stroke-width="2"></circle><circle cx="26" cy="26" r="3" fill="none" stroke="#4dabf7" stroke-width="2"></circle><path d="M9 16h5M16 16l7-9M16 16h7M16 16l7 9" fill="none" stroke="#4dabf7" stroke-width="1.8"></path></svg>` },
+  { id:'gateway', name:'API Gateway', cat:'Integration & Messaging', color:'#22b8cf', svg: badge('#22b8cf','square',
+    `<path d="M16 5l9.5 5.5v11L16 27l-9.5-5.5v-11z" stroke-linejoin="round"></path><path d="M10.5 13h11M10.5 16h11M10.5 19h11" stroke-width="1.5"></path>`) },
+  { id:'mulesoft', name:'Integration Flow', cat:'Integration & Messaging', color:'#00a1e0', svg: badge('#00a1e0','circle',
+    `<circle cx="8" cy="16" r="2.4"></circle><circle cx="23" cy="9" r="2.4"></circle><circle cx="23" cy="23" r="2.4"></circle><path d="M10.3 15.2L20.8 10M10.3 16.8L20.8 22" stroke-width="1.6"></path>`) },
+  { id:'queue', name:'Message Queue', cat:'Integration & Messaging', color:'#ffb84d', svg: badge('#ffb84d','square',
+    `<rect x="6" y="8" width="20" height="4.5" rx="1.4"></rect><rect x="6" y="14" width="20" height="4.5" rx="1.4"></rect><rect x="6" y="20" width="14" height="4.5" rx="1.4"></rect>`) },
+  { id:'kafka', name:'Event Stream (Kafka)', cat:'Integration & Messaging', color:'#8574c7', svg: badge('#8574c7','circle',
+    `<path d="M6 12c3-3 6 3 9 0s6 3 9 0" stroke-width="1.8"></path><path d="M6 17c3-3 6 3 9 0s6 3 9 0" stroke-width="1.8"></path><path d="M6 22c3-3 6 3 9 0s6 3 9 0" stroke-width="1.8"></path>`) },
+  { id:'webhook', name:'Webhook', cat:'Integration & Messaging', color:'#37b24d', svg: badge('#37b24d','square',
+    `<circle cx="9" cy="23" r="3"></circle><circle cx="23" cy="10" r="3"></circle><circle cx="23" cy="23" r="3"></circle><path d="M11.5 21.3L20.5 11.7M11.7 23h9" stroke-width="1.8"></path>`) },
+  { id:'loadbalancer', name:'Load Balancer', cat:'Integration & Messaging', color:'#4dabf7', svg: badge('#4dabf7','circle',
+    `<circle cx="7" cy="16" r="2.6"></circle><circle cx="25" cy="7" r="2.4"></circle><circle cx="25" cy="16" r="2.4"></circle><circle cx="25" cy="25" r="2.4"></circle><path d="M9.4 16h5M16 16l6-8M16 16h6M16 16l6 8" stroke-width="1.6"></path>`) },
   // ---- SaaS & Platforms ----
-  { id:'salesforce', name:'Salesforce', cat:'SaaS & Platforms', color:'#00a1e0', svg:`<svg viewBox="0 0 32 32"><path d="M9 20a5 5 0 0 1-.4-10 6 6 0 0 1 11-2.2 4.6 4.6 0 0 1 6.2 4.3 4.4 4.4 0 0 1-1 8h-15.8z" fill="#00a1e0"></path><text x="16" y="21" text-anchor="middle" font-family="Space Grotesk, Inter, sans-serif" font-weight="700" font-size="8.5" fill="#04141a">SF</text></svg>` },
-  { id:'slack', name:'Slack', cat:'SaaS & Platforms', color:'#e01e5a', svg:`<svg viewBox="0 0 32 32"><rect x="13" y="3" width="6" height="12" rx="3" fill="#36c5f0"></rect><rect x="17" y="17" width="12" height="6" rx="3" fill="#2eb67d"></rect><rect x="13" y="17" width="6" height="12" rx="3" fill="#ecb22e"></rect><rect x="3" y="13" width="12" height="6" rx="3" fill="#e01e5a"></rect></svg>` },
-  { id:'stripe', name:'Stripe', cat:'SaaS & Platforms', color:'#635bff', svg: monogramSvg('S', '#635bff', 'square') },
-  { id:'twilio', name:'Twilio', cat:'SaaS & Platforms', color:'#f22f46', svg: monogramSvg('T', '#f22f46', 'circle') },
-  { id:'email', name:'Email / SES', cat:'SaaS & Platforms', color:'#ffa94d', svg:`<svg viewBox="0 0 32 32"><rect x="3" y="7" width="26" height="18" rx="2.5" fill="none" stroke="#ffa94d" stroke-width="2"></rect><path d="M4 8l12 10L28 8" fill="none" stroke="#ffa94d" stroke-width="2" stroke-linejoin="round"></path></svg>` },
+  { id:'salesforce', name:'Salesforce', cat:'SaaS & Platforms', color:'#00a1e0', svg: badge('#00a1e0','circle',
+    `<path d="M9 21a4.6 4.6 0 0 1-.4-9.2 5.6 5.6 0 0 1 10.2-2 4.2 4.2 0 0 1 5.7 4 4 4 0 0 1-.9 7.2z" stroke-linejoin="round"></path>`) },
+  { id:'slack', name:'Slack', cat:'SaaS & Platforms', color:'#e01e5a', svg: badge('#e01e5a','square',
+    `<path d="M11 8a2.4 2.4 0 1 1 2.4-2.4V8z" fill="#fff" stroke="none"></path><rect x="7.5" y="9.5" width="9" height="9" rx="4.4"></rect><path d="M23 15a2.4 2.4 0 1 1 2.4 2.4H23z" fill="#fff" stroke="none"></path><circle cx="20" cy="18.5" r="2" fill="#fff" stroke="none"></circle>`) },
+  { id:'stripe', name:'Stripe', cat:'SaaS & Platforms', color:'#635bff', svg: badge('#635bff','square',
+    `<rect x="5" y="9" width="22" height="15" rx="2.4"></rect><path d="M5 13.5h22" stroke-width="2"></path><rect x="8.5" y="18" width="6" height="2.4" rx="1" fill="#fff" stroke="none"></rect>`) },
+  { id:'twilio', name:'Twilio', cat:'SaaS & Platforms', color:'#f22f46', svg: badge('#f22f46','circle',
+    `<path d="M8 22V13a5 5 0 0 1 5-5h6a5 5 0 0 1 5 5v4a5 5 0 0 1-5 5h-8z" stroke-linejoin="round"></path><path d="M11 25l3-3" stroke-width="1.6"></path>`) },
+  { id:'email', name:'Email / SES', cat:'SaaS & Platforms', color:'#ffa94d', svg: badge('#ffa94d','square',
+    `<rect x="5" y="9" width="22" height="15" rx="2.2"></rect><path d="M5.5 10l10.5 9L26.5 10" stroke-linejoin="round"></path>`) },
   // ---- Networking & Security ----
-  { id:'cdn', name:'CDN', cat:'Networking & Security', color:'#22e5ff', svg:`<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="12" fill="none" stroke="#22e5ff" stroke-width="2"></circle><ellipse cx="16" cy="16" rx="5" ry="12" fill="none" stroke="#22e5ff" stroke-width="1.6"></ellipse><path d="M4 16h24M6 9h20M6 23h20" stroke="#22e5ff" stroke-width="1.6"></path></svg>` },
-  { id:'firewall', name:'Firewall', cat:'Networking & Security', color:'#ff5d78', svg:`<svg viewBox="0 0 32 32"><g fill="none" stroke="#ff5d78" stroke-width="2"><rect x="3" y="6" width="9" height="6"></rect><rect x="13" y="6" width="9" height="6"></rect><rect x="23" y="6" width="6" height="6"></rect><rect x="8" y="13" width="9" height="6"></rect><rect x="18" y="13" width="9" height="6"></rect><rect x="3" y="13" width="4" height="6"></rect><rect x="3" y="20" width="9" height="6"></rect><rect x="13" y="20" width="9" height="6"></rect><rect x="23" y="20" width="6" height="6"></rect></g></svg>` },
-  { id:'vpn', name:'VPN / Shield', cat:'Networking & Security', color:'#33e6a8', svg:`<svg viewBox="0 0 32 32"><path d="M16 3l11 4v8c0 8-5 13-11 14-6-1-11-6-11-14V7z" fill="none" stroke="#33e6a8" stroke-width="2" stroke-linejoin="round"></path><path d="M11.5 16.2l3 3 6-6.4" fill="none" stroke="#33e6a8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>` },
-  { id:'dns', name:'DNS', cat:'Networking & Security', color:'#a855f7', svg: monogramSvg('DNS', '#a855f7', 'square') },
+  { id:'cdn', name:'CDN', cat:'Networking & Security', color:'#22b8cf', svg: badge('#22b8cf','circle',
+    `<circle cx="16" cy="16" r="10.5"></circle><ellipse cx="16" cy="16" rx="4.4" ry="10.5"></ellipse><path d="M5.6 16h20.8M7 10h18M7 22h18" stroke-width="1.4"></path>`) },
+  { id:'firewall', name:'Firewall', cat:'Networking & Security', color:'#ff5d78', svg: badge('#ff5d78','square',
+    `<g stroke-width="1.6"><rect x="5" y="7" width="8" height="5.5"></rect><rect x="13" y="7" width="8" height="5.5"></rect><rect x="21" y="7" width="6" height="5.5"></rect><rect x="9" y="12.5" width="8" height="5.5"></rect><rect x="17" y="12.5" width="8" height="5.5"></rect><rect x="5" y="12.5" width="4" height="5.5"></rect><rect x="5" y="18" width="8" height="5.5"></rect><rect x="13" y="18" width="8" height="5.5"></rect><rect x="21" y="18" width="6" height="5.5"></rect></g>`) },
+  { id:'vpn', name:'VPN / Shield', cat:'Networking & Security', color:'#33e6a8', svg: badge('#33e6a8','circle',
+    `<path d="M16 6l8 3v6c0 6-3.4 9.8-8 11-4.6-1.2-8-5-8-11V9z" stroke-linejoin="round"></path><path d="M12.3 16.4l2.6 2.6 5-5.4" stroke-linecap="round" stroke-linejoin="round"></path>`) },
+  { id:'dns', name:'DNS', cat:'Networking & Security', color:'#a855f7', svg: badge('#a855f7','square',
+    `<circle cx="16" cy="16" r="10.5"></circle><path d="M5.5 16h21M16 5.5c3 3 3 18 0 21-3-3-3-18 0-21" stroke-width="1.4"></path>`) },
   // ---- Generic shapes ----
-  { id:'cloud', name:'Cloud (generic)', cat:'Generic', color:'#9aa3c0', svg:`<svg viewBox="0 0 32 32"><path d="M9 22a5.5 5.5 0 0 1-.6-11 7 7 0 0 1 13.2-3 5.3 5.3 0 0 1 7.2 5 5 5 0 0 1-1.4 9z" fill="none" stroke="#9aa3c0" stroke-width="2" stroke-linejoin="round"></path></svg>` },
-  { id:'process', name:'Process', cat:'Generic', color:'#6d8dff', svg:`<svg viewBox="0 0 32 32"><rect x="4" y="10" width="24" height="12" rx="3" fill="none" stroke="#6d8dff" stroke-width="2"></rect></svg>` },
-  { id:'decision', name:'Decision', cat:'Generic', color:'#ffc45c', svg:`<svg viewBox="0 0 32 32"><path d="M16 3l13 13-13 13-13-13z" fill="none" stroke="#ffc45c" stroke-width="2" stroke-linejoin="round"></path></svg>` },
+  { id:'cloud', name:'Cloud (generic)', cat:'Generic', color:'#9aa3c0', svg: badge('#9aa3c0','circle',
+    `<path d="M9 22a5.5 5.5 0 0 1-.6-11 7 7 0 0 1 13.2-3 5.3 5.3 0 0 1 7.2 5 5 5 0 0 1-1.4 9z" stroke-linejoin="round"></path>`) },
+  { id:'process', name:'Process', cat:'Generic', color:'#6d8dff', svg: badge('#6d8dff','square',
+    `<rect x="6" y="11" width="20" height="10" rx="2.6"></rect>`) },
+  { id:'decision', name:'Decision', cat:'Generic', color:'#ffc45c', svg: badge('#ffc45c','square',
+    `<path d="M16 6l10 10-10 10-10-10z" stroke-linejoin="round"></path>`) },
 ];
 const CATEGORY_ORDER = ['Client & Users','Compute','Storage & Database','Integration & Messaging','SaaS & Platforms','Networking & Security','Generic'];
 const ICONS_BY_ID = {}; ICON_DEFS.forEach(i=>ICONS_BY_ID[i.id]=i);
@@ -722,18 +813,40 @@ function defaultSize(kind){
 function makeIconNode(iconId, x, y){
   const size = defaultSize('icon');
   const def = ICONS_BY_ID[iconId] || ICON_DEFS[0];
-  return { id: uid(), kind:'icon', icon: iconId, label: def.name, x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h };
+  return { id: uid(), kind:'icon', icon: iconId, label: def.name, x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h, parentId: null };
 }
 function makeFrameNode(x, y){
   const size = defaultSize('frame');
-  return { id: uid(), kind:'frame', label:'Group', x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h };
+  return { id: uid(), kind:'frame', label:'Group', x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h, parentId: null };
 }
 function makeTextNode(x, y){
   const size = defaultSize('text');
-  return { id: uid(), kind:'text', label:'Text note', x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h };
+  return { id: uid(), kind:'text', label:'Text note', x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h, parentId: null };
 }
 function nodeById(id){ return state.nodes.find(n=>n.id===id); }
 function edgeById(id){ return state.edges.find(e=>e.id===id); }
+
+/* ---- Group containment: frames are real containers. A non-frame node
+   whose centre point sits inside a frame's bounds "belongs" to it via
+   parentId, so dragging the frame carries its members along. ---- */
+function frameContaining(node, excludeId){
+  const cx = node.x + node.w/2, cy = node.y + node.h/2;
+  let best = null;
+  state.nodes.forEach(f=>{
+    if(f.kind !== 'frame' || f.id === excludeId || f.id === node.id) return;
+    if(cx >= f.x && cx <= f.x+f.w && cy >= f.y && cy <= f.y+f.h){
+      if(!best || (f.w*f.h) < (best.w*best.h)) best = f; // prefer the smallest (innermost) frame on overlap
+    }
+  });
+  return best;
+}
+function childrenOf(frameId){ return state.nodes.filter(n=>n.parentId===frameId); }
+function recomputeContainment(nodeId){
+  const n = nodeById(nodeId);
+  if(!n || n.kind === 'frame') return;
+  const f = frameContaining(n);
+  n.parentId = f ? f.id : null;
+}
 
 function nodeAnchor(node, side){
   switch(side){
@@ -780,14 +893,9 @@ function pathMidpoint(p1, side1, p2, side2){
   return { x: midX, y: midY };
 }
 
-/* ==================== Rendering ==================== */
-const SVGNS = 'http://www.w3.org/2000/svg';
-function svgEl_(tag, attrs){
-  const el = document.createElementNS(SVGNS, tag);
-  for(const k in attrs) el.setAttribute(k, attrs[k]);
-  return el;
-}
-
+/* ==================== Rendering ====================
+   (SVGNS / svgEl_ now declared earlier, above the icon library — see the
+   comment there for why.) */
 function applyViewportTransform(){
   viewportEl.setAttribute('transform', `translate(${state.pan.x} ${state.pan.y}) scale(${state.zoom})`);
   document.getElementById('zoomLabel').textContent = Math.round(state.zoom*100) + '%';
@@ -802,7 +910,7 @@ function renderFrames(){
     g.appendChild(svgEl_('rect', { x:node.x, y:node.y, width:node.w, height:node.h, rx:14 }));
     const fo = document.createElementNS(SVGNS,'foreignObject');
     fo.setAttribute('x', node.x+10); fo.setAttribute('y', node.y-13); fo.setAttribute('width', Math.max(40,node.w-20)); fo.setAttribute('height', 26);
-    fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" class="frame-tag" style="display:inline-block;padding:2px 9px;border-radius:7px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:.4px;color:var(--text-dim);background:var(--surface);border:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;" contenteditable="true" spellcheck="false" data-role="label">${escapeHtml(node.label)}</div>`;
+    fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" class="frame-tag" title="Drag to move the group · double-click to rename" style="display:inline-block;padding:2px 9px;border-radius:7px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:.4px;color:var(--text-dim);background:var(--surface);border:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;user-select:none;" contenteditable="false" spellcheck="false" data-role="label">${escapeHtml(node.label)}</div>`;
     g.appendChild(fo);
     addResizeHandle(g, node);
     addNodeHandles(g, node, true);
@@ -812,19 +920,23 @@ function renderFrames(){
   });
 }
 
+// Connector handles float just OUTSIDE the shape's edge (not on top of the
+// border itself) so they never intercept a click meant to drag/select the
+// node — that overlap used to make frames feel "stuck" when you tried to
+// grab them right at the dashed border.
+const HANDLE_OFFSET = 10;
 function addNodeHandles(g, node, small){
   ['top','right','bottom','left'].forEach(side=>{
     const a = nodeAnchor(node, side);
-    const h = svgEl_('circle', { class:'handle', cx:a.x, cy:a.y, r: small?5:6, 'data-handle':side, 'data-id':node.id });
+    const off = { top:{x:0,y:-HANDLE_OFFSET}, bottom:{x:0,y:HANDLE_OFFSET}, left:{x:-HANDLE_OFFSET,y:0}, right:{x:HANDLE_OFFSET,y:0} }[side];
+    const h = svgEl_('circle', { class:'handle', cx:a.x+off.x, cy:a.y+off.y, r: small?5:6, 'data-handle':side, 'data-id':node.id });
+    h.setAttribute('title','Drag to connect');
     g.appendChild(h);
   });
 }
 function addResizeHandle(g, node){
-  const h = svgEl_('rect', { x:node.x+node.w-9, y:node.y+node.h-9, width:14, height:14, rx:3, class:'handle', 'data-resize':node.id, cursor:'nwse-resize' });
-  h.style.opacity = '0';
+  const h = svgEl_('rect', { x:node.x+node.w-7, y:node.y+node.h-7, width:14, height:14, rx:3, class:'handle resize-handle', 'data-resize':node.id, cursor:'nwse-resize' });
   g.appendChild(h);
-  g.addEventListener('mouseenter', ()=>{ h.style.opacity='1'; });
-  g.addEventListener('mouseleave', ()=>{ if(!isSelected('node',node.id)) h.style.opacity='0'; });
 }
 
 function renderNodes(){
@@ -837,7 +949,7 @@ function renderNodes(){
     fo.setAttribute('x', node.x); fo.setAttribute('y', node.y); fo.setAttribute('width', node.w); fo.setAttribute('height', node.h);
     fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:10px 8px;font-family:Inter,sans-serif;pointer-events:none;">
         <div style="width:34px;height:34px;pointer-events:none;">${def.svg}</div>
-        <div data-role="label" contenteditable="true" spellcheck="false" style="pointer-events:auto;text-align:center;font-size:11px;font-weight:600;color:var(--text);line-height:1.25;max-width:100%;outline:none;word-break:break-word;">${escapeHtml(node.label)}</div>
+        <div data-role="label" contenteditable="false" spellcheck="false" title="Double-click to rename" style="pointer-events:auto;text-align:center;font-size:11px;font-weight:600;color:var(--text);line-height:1.25;max-width:100%;outline:none;word-break:break-word;user-select:none;">${escapeHtml(node.label)}</div>
       </div>`;
     g.appendChild(fo);
     addNodeHandles(g, node, false);
@@ -851,7 +963,7 @@ function renderNodes(){
     const fo = document.createElementNS(SVGNS,'foreignObject');
     fo.setAttribute('x', node.x); fo.setAttribute('y', node.y); fo.setAttribute('width', node.w); fo.setAttribute('height', node.h);
     fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;display:flex;align-items:flex-start;padding:6px 8px;">
-        <div data-role="label" contenteditable="true" spellcheck="false" style="width:100%;font-size:12.5px;font-weight:500;color:var(--text-dim);line-height:1.4;outline:none;">${escapeHtml(node.label)}</div>
+        <div data-role="label" contenteditable="false" spellcheck="false" title="Double-click to edit" style="width:100%;font-size:12.5px;font-weight:500;color:var(--text-dim);line-height:1.4;outline:none;user-select:none;">${escapeHtml(node.label)}</div>
       </div>`;
     g.appendChild(fo);
     addResizeHandle(g, node);
@@ -985,8 +1097,12 @@ function selectedNodeIds(){ return [...state.selection].filter(k=>k.startsWith('
 function selectedEdgeIds(){ return [...state.selection].filter(k=>k.startsWith('e:')).map(k=>k.slice(2)); }
 
 function deleteSelection(){
+  commitActiveLabelEdit();
   const nids = new Set(selectedNodeIds());
   if(nids.size === 0 && selectedEdgeIds().length === 0) return;
+  // Deleting a group frame ungroups (not deletes) its members, so items
+  // inside a group are never silently destroyed along with it.
+  state.nodes.forEach(n=>{ if(n.parentId && nids.has(n.parentId)) n.parentId = null; });
   state.edges = state.edges.filter(e => !selectedEdgeIds().includes(e.id) && !nids.has(e.from) && !nids.has(e.to));
   state.nodes = state.nodes.filter(n => !nids.has(n.id));
   clearSelection();
@@ -994,6 +1110,7 @@ function deleteSelection(){
   pushHistory();
 }
 function duplicateSelection(){
+  commitActiveLabelEdit();
   const nids = selectedNodeIds();
   if(nids.length === 0) return;
   const idMap = {};
@@ -1005,6 +1122,9 @@ function duplicateSelection(){
     idMap[id] = copy.id;
     newNodes.push(copy);
   });
+  // If a duplicated node's parent frame was duplicated too, re-point it at
+  // the new frame copy so the group relationship carries over intact.
+  newNodes.forEach(n=>{ if(n.parentId && idMap[n.parentId]) n.parentId = idMap[n.parentId]; });
   state.nodes.push(...newNodes);
   const newEdges = [];
   state.edges.forEach(e=>{
@@ -1032,22 +1152,59 @@ function screenToCanvas(clientX, clientY){
   };
 }
 
+// Rename is opt-in via double-click; a single pointerdown on the label is
+// left to bubble so it can also act as a drag handle for the node/frame
+// (this is what lets you move a group by grabbing its "Group" tag).
+// While actively editing, clicks are kept local so text selection/caret
+// placement works normally instead of dragging the shape underneath.
 function wireLabelEditable(el, node){
   if(!el) return;
-  el.addEventListener('pointerdown', e=>e.stopPropagation());
-  el.addEventListener('mousedown', e=>e.stopPropagation());
+  const isEditing = ()=> el.getAttribute('contenteditable') === 'true';
+  el.addEventListener('pointerdown', e=>{ if(isEditing()) e.stopPropagation(); });
+  el.addEventListener('mousedown', e=>{ if(isEditing()) e.stopPropagation(); });
+  el.addEventListener('dblclick', e=>{
+    e.stopPropagation();
+    el.setAttribute('contenteditable','true');
+    el.focus();
+    const range = document.createRange(); range.selectNodeContents(el);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+  });
   el.addEventListener('input', ()=>{ node.label = el.textContent; markDirty(); scheduleAutosave(); });
-  el.addEventListener('blur', ()=>{ node.label = el.textContent.trim() || (node.kind==='text' ? 'Text note' : node.kind==='frame' ? 'Group' : 'Untitled'); el.textContent = node.label; pushHistory(); updateInspector(); });
+  el.addEventListener('blur', ()=>{
+    node.label = el.textContent.trim() || (node.kind==='text' ? 'Text note' : node.kind==='frame' ? 'Group' : 'Untitled');
+    el.textContent = node.label;
+    el.setAttribute('contenteditable','false');
+    pushHistory(); updateInspector();
+  });
   el.addEventListener('keydown', e=>{
+    e.stopPropagation();
     if(e.key === 'Enter' && node.kind !== 'text'){ e.preventDefault(); el.blur(); }
     if(e.key === 'Escape'){ el.blur(); }
   });
 }
+/** Blur any node label currently mid-rename, committing its text first.
+    Called before delete/duplicate/drag-start so a lingering edit caret
+    never swallows a keystroke or click meant for the canvas. */
+function commitActiveLabelEdit(){
+  const el = document.activeElement;
+  if(el && el.isContentEditable && el.dataset && el.dataset.role === 'label') el.blur();
+}
 
 function selectNodeFromEvent(e, node){
-  if(e.shiftKey) toggleSelection('node', node.id);
-  else if(!isSelected('node', node.id)) selectOnly('node', node.id);
-  render();
+  let changed = false;
+  if(e.shiftKey){ toggleSelection('node', node.id); changed = true; }
+  else if(!isSelected('node', node.id)){ selectOnly('node', node.id); changed = true; }
+  // Selection-driven re-render is deferred a frame rather than run inline
+  // inside this pointerdown handler. render() rebuilds the SVG subtree
+  // (innerHTML = ''), which — if done synchronously here — destroys the
+  // very element the browser is mid-way through processing a click on.
+  // With the node gone before mouseup, Chromium never fires 'click' or
+  // 'dblclick' for that press, silently breaking double-click-to-rename
+  // and making single clicks feel unresponsive. Pushing the rebuild to the
+  // next frame lets the native click/dblclick sequence complete against
+  // the original element first; the one-frame delay before the selection
+  // outline appears is imperceptible.
+  if(changed) requestAnimationFrame(render);
 }
 
 function wireNodeDrag(g, node){
@@ -1055,13 +1212,32 @@ function wireNodeDrag(g, node){
     if(e.target.dataset && (e.target.dataset.handle || e.target.dataset.resize)) return; // handled separately
     if(e.button !== 0) return;
     e.stopPropagation();
+    commitActiveLabelEdit();
     selectNodeFromEvent(e, node);
-    const ids = selectedNodeIds().length ? selectedNodeIds() : [node.id];
+    const directIds = selectedNodeIds().length ? selectedNodeIds() : [node.id];
+    // Dragging a group frame carries every node contained inside it along
+    // for the ride, so the group actually moves as one unit.
+    const expanded = new Set(directIds);
+    directIds.forEach(id=>{
+      const n = nodeById(id);
+      if(n && n.kind === 'frame') childrenOf(n.id).forEach(c=>expanded.add(c.id));
+    });
+    const ids = [...expanded];
     const start = screenToCanvas(e.clientX, e.clientY);
     const startPositions = {};
     ids.forEach(id=>{ const n = nodeById(id); if(n) startPositions[id] = { x:n.x, y:n.y }; });
-    ptr = { mode:'move-nodes', ids, start, startPositions, moved:false };
-    canvasWrap.setPointerCapture && canvasWrap.setPointerCapture(e.pointerId);
+    // Non-frame ids the user actually grabbed (not ones just carried along
+    // as a frame's children) — these are the ones re-tested against every
+    // frame's bounds once the drag ends, so dropping an icon into/out of a
+    // group's box re-parents it automatically.
+    const regroupIds = directIds.filter(id=>{ const n = nodeById(id); return n && n.kind !== 'frame'; });
+    ptr = { mode:'move-nodes', ids, start, startPositions, moved:false, regroupIds };
+    // Deliberately NOT using setPointerCapture here: drag tracking already
+    // works via the window-level pointermove/pointerup listeners below, and
+    // capturing onto canvasWrap would retarget the subsequent mouseup/click
+    // events there instead of the node — which silently breaks double-click
+    // (rename) on labels, since the browser's dblclick would never reach
+    // the label element that was actually clicked.
   });
 
   // connector handles
@@ -1104,7 +1280,7 @@ canvasWrap.addEventListener('pointerdown', (e)=>{
   }
   if(state.tool === 'text'){
     const n = makeTextNode(canvasPt.x, canvasPt.y);
-    state.nodes.push(n); selectOnly('node', n.id); render(); pushHistory();
+    state.nodes.push(n); recomputeContainment(n.id); selectOnly('node', n.id); render(); pushHistory();
     setTool('select');
     return;
   }
@@ -1129,6 +1305,15 @@ window.addEventListener('pointermove', (e)=>{
       if(n && p){ n.x = p.x + dx; n.y = p.y + dy; }
     });
     render();
+    // While dragging a single, non-frame node, highlight whichever frame
+    // it's currently hovering over so it's obvious it will join that group.
+    if(ptr.regroupIds.length === 1){
+      const n = nodeById(ptr.regroupIds[0]);
+      const target = n ? frameContaining(n) : null;
+      document.querySelectorAll('.frame-node').forEach(fg=>{
+        fg.classList.toggle('group-target', !!target && fg.dataset.id === target.id);
+      });
+    }
   } else if(ptr.mode === 'connect'){
     const cur = screenToCanvas(e.clientX, e.clientY);
     ptr.cur = cur;
@@ -1170,7 +1355,9 @@ function hoveredDropTarget(e){
 window.addEventListener('pointerup', (e)=>{
   if(!ptr) return;
   if(ptr.mode === 'move-nodes'){
-    if(ptr.moved) pushHistory();
+    document.querySelectorAll('.frame-node.group-target').forEach(fg=>fg.classList.remove('group-target'));
+    if(ptr.moved) ptr.regroupIds.forEach(recomputeContainment);
+    if(ptr.moved){ render(); pushHistory(); }
   } else if(ptr.mode === 'connect'){
     const temp = document.getElementById('tempEdgePath');
     if(temp) temp.remove();
@@ -1188,6 +1375,11 @@ window.addEventListener('pointerup', (e)=>{
     }
     render();
   } else if(ptr.mode === 'resize'){
+    const resized = nodeById(ptr.id);
+    if(resized && resized.kind === 'frame'){
+      // Growing/shrinking a frame can pull nodes in or push them out.
+      state.nodes.forEach(n=>{ if(n.kind !== 'frame') recomputeContainment(n.id); });
+    }
     pushHistory();
   } else if(ptr.mode === 'pan'){
     canvasWrap.classList.remove('panning');
@@ -1324,7 +1516,7 @@ function renderPalette(filter){
       const rect = svgEl.getBoundingClientRect();
       const pt = screenToCanvas(rect.left+rect.width/2, rect.top+rect.height/2);
       const n = makeIconNode(item.dataset.icon, pt.x, pt.y);
-      state.nodes.push(n); selectOnly('node', n.id); render(); pushHistory();
+      state.nodes.push(n); recomputeContainment(n.id); selectOnly('node', n.id); render(); pushHistory();
       toast(`Added ${ICONS_BY_ID[item.dataset.icon].name}`);
     });
   });
@@ -1346,6 +1538,7 @@ canvasWrap.addEventListener('drop', (e)=>{
   const pt = screenToCanvas(e.clientX, e.clientY);
   const n = makeIconNode(iconId, pt.x, pt.y);
   state.nodes.push(n);
+  recomputeContainment(n.id);
   selectOnly('node', n.id);
   render();
   pushHistory();
@@ -1401,6 +1594,7 @@ function updateInspector(){
     document.getElementById('inspIcon').innerHTML = node.kind === 'icon' ? (ICONS_BY_ID[node.icon]||{}).svg :
       (node.kind === 'frame' ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 2"><rect x="3" y="3" width="18" height="18" rx="2"></rect></svg>`
       : `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="7" x2="20" y2="7"></line><line x1="4" y1="12" x2="16" y2="12"></line><line x1="4" y1="17" x2="12" y2="17"></line></svg>`);
+    const members = node.kind === 'frame' ? childrenOf(node.id) : [];
     body.innerHTML = `
       <div class="insp-field">
         <label>Label</label>
@@ -1412,10 +1606,19 @@ function updateInspector(){
           ${SWATCHES.map(c=>`<div class="swatch${node.color===c?' active':''}" data-c="${c}" style="background:${c};"></div>`).join('')}
         </div>
       </div>
+      ${node.kind === 'frame' ? `
+      <div class="insp-field">
+        <label>Group contents</label>
+        <div style="font-size:12px;color:var(--text-dim);line-height:1.5;">
+          ${members.length ? `${members.length} item${members.length===1?'':'s'} — drag the frame or its tag to move them together.` : `Empty — drag components into the dashed area to add them.`}
+        </div>
+      </div>` : ''}
       <div class="insp-actions">
+        ${node.kind === 'frame' && members.length ? `<button class="insp-btn" id="inspSelectMembers">Select items</button>` : ''}
         <button class="insp-btn" id="inspDup">Duplicate</button>
         <button class="insp-btn danger" id="inspDel">Delete</button>
-      </div>`;
+      </div>
+      ${node.kind === 'frame' && members.length ? `<div class="insp-actions" style="margin-top:-6px;"><button class="insp-btn" id="inspUngroup">Ungroup (keep items)</button></div>` : ''}`;
     document.getElementById('inspLabel').addEventListener('input', (e)=>{ node.label = e.target.value; markDirty(); scheduleAutosave(); render(); });
     document.getElementById('inspLabel').addEventListener('blur', pushHistory);
     document.getElementById('inspLabel').addEventListener('keydown', e=>{ if(e.key==='Enter') e.target.blur(); });
@@ -1424,6 +1627,18 @@ function updateInspector(){
     });
     document.getElementById('inspDup').addEventListener('click', duplicateSelection);
     document.getElementById('inspDel').addEventListener('click', deleteSelection);
+    const selectMembersBtn = document.getElementById('inspSelectMembers');
+    if(selectMembersBtn) selectMembersBtn.addEventListener('click', ()=>{
+      state.selection.clear();
+      childrenOf(node.id).forEach(c=>addToSelection('node', c.id));
+      render();
+    });
+    const ungroupBtn = document.getElementById('inspUngroup');
+    if(ungroupBtn) ungroupBtn.addEventListener('click', ()=>{
+      childrenOf(node.id).forEach(c=>c.parentId=null);
+      render(); pushHistory();
+      toast('Ungrouped — items stayed in place.');
+    });
     return;
   }
 
@@ -1472,9 +1687,13 @@ canvasWrap.addEventListener('contextmenu', (e)=>{
     clearSelection(); render();
   }
   const hasSel = state.selection.size > 0;
+  const singleFrame = selectedNodeIds().length === 1 && nodeById(selectedNodeIds()[0]) && nodeById(selectedNodeIds()[0]).kind === 'frame'
+    ? nodeById(selectedNodeIds()[0]) : null;
+  const frameHasMembers = singleFrame && childrenOf(singleFrame.id).length > 0;
   ctxMenu.innerHTML = `
     <button class="ctx-item" id="ctxDup" ${hasSel?'':'disabled'}>Duplicate<span class="k">⌘D</span></button>
     <button class="ctx-item danger" id="ctxDel" ${hasSel?'':'disabled'}>Delete<span class="k">Del</span></button>
+    ${frameHasMembers ? `<div class="ctx-sep"></div><button class="ctx-item" id="ctxUngroup">Ungroup (keep items)</button>` : ''}
     <div class="ctx-sep"></div>
     <button class="ctx-item" id="ctxFit">Fit to screen</button>
   `;
@@ -1484,6 +1703,12 @@ canvasWrap.addEventListener('contextmenu', (e)=>{
   document.getElementById('ctxDup').addEventListener('click', duplicateSelection);
   document.getElementById('ctxDel').addEventListener('click', deleteSelection);
   document.getElementById('ctxFit').addEventListener('click', fitToScreen);
+  const ctxUngroup = document.getElementById('ctxUngroup');
+  if(ctxUngroup) ctxUngroup.addEventListener('click', ()=>{
+    childrenOf(singleFrame.id).forEach(c=>c.parentId=null);
+    render(); pushHistory();
+    toast('Ungrouped — items stayed in place.');
+  });
 });
 
 /* ==================== Theme toggle ==================== */
