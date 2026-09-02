@@ -334,6 +334,20 @@ svg{ display:block; }
 }
 .ft-sep{ width:1px; height:20px; background:var(--border); margin:0 3px; }
 
+/* Shape tool flyout — a small popover of the 4 basic shapes, opened from
+   the "Shape" button in the floating toolbar rather than cluttering the
+   toolbar itself with 4 separate always-visible buttons. */
+.tb-flyout-wrap{ position:relative; }
+.shape-flyout{
+  position:absolute; top:calc(100% + 8px); left:50%; transform:translateX(-50%);
+  display:flex; gap:3px; padding:5px; border-radius:11px;
+  background:var(--surface-solid); border:1px solid var(--border); box-shadow:var(--shadow-panel);
+  z-index:20;
+}
+.shape-flyout button{ width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--text-dim); }
+.shape-flyout button:hover{ background:var(--surface-2); color:var(--text); }
+.shape-flyout button.active{ background:var(--accent-soft); color:var(--accent); }
+
 /* zoom controls bottom-left */
 .zoom-controls{
   position:absolute; left:14px; bottom:14px; z-index:15; display:flex; align-items:center; gap:2px;
@@ -341,6 +355,12 @@ svg{ display:block; }
   border:1px solid var(--border); box-shadow:var(--shadow-panel); font-family:var(--mono);
 }
 .zoom-controls .zlabel{ font-size:11px; color:var(--text-dim); padding:0 6px; min-width:42px; text-align:center; }
+
+/* Align & distribute strip shown in the inspector when 2+ items are
+   selected — grouped 3-and-3 (horizontal / vertical) plus distribute. */
+.align-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+.align-btn{ height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--text-dim); border:1px solid var(--border); background:var(--surface-2); }
+.align-btn:hover{ background:var(--surface-hover); color:var(--text); }
 
 .canvas-hint-empty{
   position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none;
@@ -421,10 +441,30 @@ svg{ display:block; }
 .text-node.selected rect.hit{ stroke:var(--accent); stroke-width:1.2; stroke-dasharray:4 4; fill:var(--accent-soft); }
 .text-node text{ fill:var(--text-dim); font-family:var(--sans); }
 
+/* Freeform shape elements (rectangle / ellipse / diamond / cylinder) —
+   a lightweight whiteboard-style element independent of the icon library. */
+.shape-node .shape-bg{ cursor:grab; transition:filter .12s, stroke .12s; }
+.shape-node:hover .shape-bg{ filter:brightness(1.08); }
+.shape-node.selected .shape-bg{ stroke:var(--accent) !important; stroke-width:2 !important; filter:drop-shadow(0 0 12px rgba(34,229,255,.4)); }
+
+/* Locked nodes: dimmed handles + a distinct "can't touch this" cursor so
+   an accidental drag on a finished part of the diagram is a visible no-op
+   rather than a silent failure to move. */
+.node-locked{ cursor:default !important; }
+.node-locked .card-bg, .node-locked.frame-node rect, .node-locked .shape-bg, .node-locked rect.hit{ cursor:default !important; }
+.node-locked:hover .handle, .node-locked .handle{ opacity:0 !important; pointer-events:none; }
+.lock-badge{ pointer-events:none; }
+
+/* Small dot shown on a node's card when it has a notes/description field
+   filled in, so the extra context is discoverable without opening the
+   inspector for every single component. */
+.notes-dot{ fill:var(--warn); stroke:var(--surface-solid); stroke-width:1.2; }
+
 .handle{ fill:var(--surface-solid); stroke:var(--accent); stroke-width:1.4; opacity:0; transition:opacity .12s; cursor:crosshair; }
 .node-card:hover .handle, .node-card.selected .handle,
 .frame-node:hover .handle, .frame-node.selected .handle,
-.text-node:hover .handle, .text-node.selected .handle{ opacity:1; }
+.text-node:hover .handle, .text-node.selected .handle,
+.shape-node:hover .handle, .shape-node.selected .handle{ opacity:1; }
 .handle:hover{ fill:var(--accent); }
 .resize-handle{ cursor:nwse-resize; }
 .resize-handle:hover{ fill:var(--accent); stroke:var(--accent-ink); }
@@ -439,9 +479,19 @@ svg{ display:block; }
 .edge-arrow{ fill:var(--text-faint); }
 .edge-path.selected + .edge-arrow, .edge-arrow.selected{ fill:var(--accent); }
 
+/* Manual waypoint handle for elbow connectors — a draggable bend point
+   distinct from the round connect handles (diamond vs. circle) so the two
+   affordances never get visually confused on a selected edge. */
+.waypoint-handle{ fill:var(--surface-solid); stroke:var(--accent-2); stroke-width:1.4; cursor:move; opacity:0; transition:opacity .12s; }
+.edge-group:hover .waypoint-handle, .edge-group.wp-visible .waypoint-handle{ opacity:1; }
+.waypoint-handle:hover{ fill:var(--accent-2); }
+
 .marquee{ fill:rgba(34,229,255,.08); stroke:var(--accent); stroke-width:1; stroke-dasharray:4 3; }
 
 .temp-edge{ stroke:var(--accent); stroke-width:2; stroke-dasharray:5 4; fill:none; }
+
+/* Alignment guide lines shown while dragging with snapping enabled */
+.snap-guide{ stroke:var(--accent-2); stroke-width:1; stroke-dasharray:4 3; pointer-events:none; }
 
 /* grid pattern dot color driven by CSS var via currentColor trick */
 #gridDots circle{ fill:var(--grid-dot); }
@@ -626,6 +676,25 @@ svg{ display:block; }
         <button type="button" class="tb-icon-btn" id="toolFrame" title="Add group frame (F)">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="3 2.5"><rect x="3.5" y="3.5" width="17" height="17" rx="2"></rect></svg>
         </button>
+        <div class="tb-flyout-wrap">
+          <button type="button" class="tb-icon-btn" id="toolShape" title="Add shape (R)">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="10" height="7" rx="1.5"></rect><circle cx="17.5" cy="16" r="4"></circle></svg>
+          </button>
+          <div class="shape-flyout hidden" id="shapeFlyout">
+            <button type="button" data-shape="rectangle" title="Rectangle" class="active">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3.5" y="6" width="17" height="12" rx="2"></rect></svg>
+            </button>
+            <button type="button" data-shape="ellipse" title="Ellipse">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="12" rx="8.5" ry="6.5"></ellipse></svg>
+            </button>
+            <button type="button" data-shape="diamond" title="Diamond">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l9 9-9 9-9-9z"></path></svg>
+            </button>
+            <button type="button" data-shape="cylinder" title="Cylinder">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5.5" rx="7.5" ry="2.5"></ellipse><path d="M4.5 5.5v13a7.5 2.5 0 0 0 15 0v-13"></path></svg>
+            </button>
+          </div>
+        </div>
         <div class="ft-sep"></div>
         <button type="button" class="tb-icon-btn" id="btnDuplicate" title="Duplicate (Ctrl+D)">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path></svg>
@@ -637,6 +706,10 @@ svg{ display:block; }
 
       <!-- zoom controls -->
       <div class="zoom-controls">
+        <button type="button" class="tb-icon-btn active" id="btnSnap" title="Snap to grid (on)">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a5 5 0 0 1 5 5c0 3.5-5 10-5 10s-5-6.5-5-10a5 5 0 0 1 5-5z"></path><path d="M9.5 7a2.5 2.5 0 0 0 5 0"></path></svg>
+        </button>
+        <div class="ft-sep"></div>
         <button type="button" class="tb-icon-btn" id="zoomOut" title="Zoom out">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
         </button>
@@ -918,6 +991,35 @@ const ICON_DEFS = [
     `<rect x="5" y="7" width="22" height="18" rx="2.4" stroke-dasharray="3 2.4"></rect><path d="M12 14h8M12 18h8" stroke-width="1.6"></path>`) },
   { id:'datastore', name:'Generic Data Store', cat:'Generic', color:'#748ffc', svg: badge('#748ffc','circle',
     `<path d="M6 12v10c0 1.7 4.5 3 10 3s10-1.3 10-3V12" ></path><ellipse cx="16" cy="12" rx="10" ry="3.4"></ellipse>`) },
+  // ---- Added: previously-overloaded and missing pictograms ----
+  // These give a few common components their own distinct glyph instead of
+  // sharing one (e.g. a message broker no longer looks identical to a plain
+  // queue), plus cover categories that had no icon at all (GraphQL, gRPC,
+  // WAF, service mesh, IaC, multi-region, blob storage, ingress, flags).
+  { id:'broker', name:'Message Broker (RabbitMQ/SQS)', cat:'Integration & Messaging', color:'#ff8a3d', svg: badge('#ff8a3d','circle',
+    `<circle cx="16" cy="16" r="3.6"></circle><circle cx="16" cy="7" r="2.2"></circle><circle cx="7" cy="21" r="2.2"></circle><circle cx="25" cy="21" r="2.2"></circle><path d="M16 12.4V9.2M13.6 18.2L8.7 19.6M18.4 18.2l4.9 1.4" stroke-width="1.5"></path>`) },
+  { id:'graphql', name:'GraphQL API', cat:'Integration & Messaging', color:'#e535ab', svg: badge('#e535ab','circle',
+    `<path d="M16 6l8.7 5v10L16 26l-8.7-5V11z" stroke-linejoin="round"></path><circle cx="16" cy="16" r="1.7" fill="#fff" stroke="none"></circle><circle cx="16" cy="6" r="1.5" fill="#fff" stroke="none"></circle><circle cx="24.7" cy="21" r="1.5" fill="#fff" stroke="none"></circle><circle cx="7.3" cy="21" r="1.5" fill="#fff" stroke="none"></circle>`) },
+  { id:'grpc', name:'gRPC Service', cat:'Integration & Messaging', color:'#4a90d9', svg: badge('#4a90d9','circle',
+    `<circle cx="16" cy="16" r="10.2"></circle><path d="M11 13.5h7M18 13.5l-2.4-2.4M18 13.5l-2.4 2.4" stroke-width="1.6"></path><path d="M21 18.5h-7M14 18.5l2.4-2.4M14 18.5l2.4 2.4" stroke-width="1.6"></path>`) },
+  { id:'ingress', name:'Ingress Controller', cat:'Integration & Messaging', color:'#37b24d', svg: badge('#37b24d','square',
+    `<path d="M6 8h20l-6.5 9v8h-7v-8z" stroke-linejoin="round"></path>`) },
+  { id:'elasticsearch', name:'Search Engine (Elasticsearch)', cat:'Data & Analytics', color:'#fec514', svg: badge('#fec514','square',
+    `<path d="M16 6l10 5-10 5-10-5z" stroke-linejoin="round"></path><path d="M6 16l10 5 10-5" stroke-width="1.6"></path><path d="M6 21l10 5 10-5" stroke-width="1.6"></path>`) },
+  { id:'secretsvault', name:'Secrets Vault', cat:'Networking & Security', color:'#20c997', svg: badge('#20c997','square',
+    `<rect x="6" y="6" width="20" height="20" rx="4"></rect><circle cx="16" cy="16" r="5"></circle><path d="M16 13.2v3.2l2.3 1.3" stroke-width="1.5"></path>`) },
+  { id:'waf', name:'Web App Firewall', cat:'Networking & Security', color:'#ff5d78', svg: badge('#ff5d78','square',
+    `<path d="M16 6l8 3v6c0 6-3.4 9.8-8 11-4.6-1.2-8-5-8-11V9z" stroke-linejoin="round"></path><path d="M10.5 15h11M10.5 18.5h11" stroke-width="1.5"></path>`) },
+  { id:'multiregion', name:'Multi-Region / DR', cat:'Networking & Security', color:'#4dabf7', svg: badge('#4dabf7','circle',
+    `<circle cx="16" cy="16" r="10.2"></circle><path d="M5.8 16h20.4M16 5.8c2.8 2.8 2.8 17.4 0 20.2-2.8-2.8-2.8-17.4 0-20.2" stroke-width="1.3"></path><circle cx="10.5" cy="11.5" r="1.7" fill="#fff" stroke="none"></circle><circle cx="21.5" cy="20.5" r="1.7" fill="#fff" stroke="none"></circle>`) },
+  { id:'servicemesh', name:'Service Mesh', cat:'DevOps & Monitoring', color:'#0ca8a0', svg: badge('#0ca8a0','circle',
+    `<circle cx="8" cy="9" r="2"></circle><circle cx="24" cy="9" r="2"></circle><circle cx="8" cy="23" r="2"></circle><circle cx="24" cy="23" r="2"></circle><circle cx="16" cy="16" r="2.3"></circle><path d="M9.5 10.3L14.2 14.5M22.5 10.3L17.8 14.5M9.5 21.7L14.2 17.5M22.5 21.7L17.8 17.5" stroke-width="1.4"></path>`) },
+  { id:'terraform', name:'Infrastructure as Code', cat:'DevOps & Monitoring', color:'#7b42f6', svg: badge('#7b42f6','square',
+    `<rect x="6" y="14.5" width="8.5" height="8.5" rx="1.4"></rect><rect x="17.5" y="14.5" width="8.5" height="8.5" rx="1.4"></rect><rect x="11.75" y="5" width="8.5" height="8.5" rx="1.4"></rect>`) },
+  { id:'featureflag', name:'Feature Flags', cat:'DevOps & Monitoring', color:'#f76707', svg: badge('#f76707','square',
+    `<path d="M9 5v22" stroke-width="2"></path><path d="M9 6.5h13l-3.5 5L22 16.5H9z" stroke-linejoin="round"></path>`) },
+  { id:'blobstorage', name:'Blob Storage (GCS/Azure)', cat:'Storage & Database', color:'#0f9d58', svg: badge('#0f9d58','circle',
+    `<path d="M16 6c5 4.2 8 9 8 12.6A8 8 0 1 1 8 18.6C8 15 11 10.2 16 6z"></path>`) },
 ];
 const CATEGORY_ORDER = ['Custom','Client & Users','Compute','Storage & Database','Integration & Messaging','SaaS & Platforms','Networking & Security','DevOps & Monitoring','Data & Analytics','Generic'];
 const ICONS_BY_ID = {}; ICON_DEFS.forEach(i=>ICONS_BY_ID[i.id]=i);
@@ -963,6 +1065,13 @@ let suppressHistory = false;
 let localDirty = false;
 let saving = false;
 
+/* ---- Selection/layout productivity state ---- */
+const GRID_SIZE = 10;                 // px, used by snap-to-grid
+let snapToGrid = true;                // toggled from the toolbar magnet button
+let currentShapeType = 'rectangle';   // which basic shape the Shape tool places next
+let clipboard = null;                 // { nodes:[...], edges:[...] } from Ctrl+C, pasted with Ctrl+V
+function snapVal(v){ return snapToGrid ? Math.round(v / GRID_SIZE) * GRID_SIZE : v; }
+
 const svgEl = document.getElementById('dgSvg');
 const viewportEl = document.getElementById('viewport');
 const layerFrames = document.getElementById('layerFrames');
@@ -970,9 +1079,16 @@ const layerEdges = document.getElementById('layerEdges');
 const layerNodes = document.getElementById('layerNodes');
 const layerOverlay = document.getElementById('layerOverlay');
 
-function defaultSize(kind){
+const SHAPE_DEFS = {
+  rectangle: { name:'Rectangle', w:160, h:92 },
+  ellipse:   { name:'Ellipse',   w:150, h:100 },
+  diamond:   { name:'Diamond',   w:150, h:112 },
+  cylinder:  { name:'Cylinder',  w:120, h:118 },
+};
+function defaultSize(kind, sub){
   if(kind==='frame') return { w:320, h:220 };
   if(kind==='text') return { w:180, h:56 };
+  if(kind==='shape') return { w:(SHAPE_DEFS[sub]||SHAPE_DEFS.rectangle).w, h:(SHAPE_DEFS[sub]||SHAPE_DEFS.rectangle).h };
   return { w:132, h:92 };
 }
 function makeIconNode(iconId, x, y){
@@ -982,11 +1098,39 @@ function makeIconNode(iconId, x, y){
 }
 function makeFrameNode(x, y){
   const size = defaultSize('frame');
-  return { id: uid(), kind:'frame', label:'Group', x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h, parentId: null };
+  return { id: uid(), kind:'frame', label:'Group', x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h, parentId: null, frameStyle:'dashed' };
 }
 function makeTextNode(x, y){
   const size = defaultSize('text');
   return { id: uid(), kind:'text', label:'Text note', x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h, parentId: null };
+}
+function makeShapeNode(shapeType, x, y){
+  const def = SHAPE_DEFS[shapeType] || SHAPE_DEFS.rectangle;
+  const size = defaultSize('shape', shapeType);
+  return { id: uid(), kind:'shape', shapeType: SHAPE_DEFS[shapeType] ? shapeType : 'rectangle', label: def.name, x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h, parentId: null, fill:'soft' };
+}
+// Builds the actual geometry element for a freeform shape node at the given
+// box — kept separate from styling (fill/stroke) so the same geometry can
+// be reused for on-canvas rendering and for export.
+function shapeGeometryEl(shapeType, x, y, w, h, attrs){
+  if(shapeType === 'ellipse'){
+    return svgEl_('ellipse', Object.assign({ cx:x+w/2, cy:y+h/2, rx:w/2, ry:h/2 }, attrs));
+  }
+  if(shapeType === 'diamond'){
+    const pts = `${x+w/2},${y} ${x+w},${y+h/2} ${x+w/2},${y+h} ${x},${y+h/2}`;
+    return svgEl_('polygon', Object.assign({ points: pts }, attrs));
+  }
+  if(shapeType === 'cylinder'){
+    const rx = w/2, ry = Math.min(16, h*0.16);
+    const d = `M ${x} ${y+ry} `
+      + `A ${rx} ${ry} 0 0 1 ${x+w} ${y+ry} `
+      + `L ${x+w} ${y+h-ry} `
+      + `A ${rx} ${ry} 0 0 1 ${x} ${y+h-ry} `
+      + `Z `
+      + `M ${x} ${y+ry} A ${rx} ${ry} 0 0 0 ${x+w} ${y+ry}`;
+    return svgEl_('path', Object.assign({ d }, attrs));
+  }
+  return svgEl_('rect', Object.assign({ x, y, width:w, height:h, rx:10 }, attrs));
 }
 function nodeById(id){ return state.nodes.find(n=>n.id===id); }
 function edgeById(id){ return state.edges.find(e=>e.id===id); }
@@ -1043,15 +1187,38 @@ function roundedPolylinePath(pts, r){
   d += `L ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
   return d;
 }
-function elbowPath(p1, side1, p2, side2){
-  const midX = (p1.x+p2.x)/2, midY = (p1.y+p2.y)/2;
+// `wp` is an optional manual waypoint override: { axis:'x'|'y', value }.
+// It only applies to the two-bend cases (both anchors on horizontal, or
+// both on vertical, sides) since those are the only ones with a free
+// coordinate to drag — single-bend routes are already fully determined by
+// the two anchor points, so there's nothing useful to override there.
+function elbowPath(p1, side1, p2, side2, wp){
+  let midX = (p1.x+p2.x)/2, midY = (p1.y+p2.y)/2;
   const h1 = sideIsHoriz(side1), h2 = sideIsHoriz(side2);
+  if(wp){
+    if(wp.axis === 'x' && h1 && h2) midX = wp.value;
+    else if(wp.axis === 'y' && !h1 && !h2) midY = wp.value;
+  }
   let pts;
   if(h1 && h2) pts = [p1, {x:midX,y:p1.y}, {x:midX,y:p2.y}, p2];
   else if(!h1 && !h2) pts = [p1, {x:p1.x,y:midY}, {x:p2.x,y:midY}, p2];
   else if(h1 && !h2) pts = [p1, {x:p2.x,y:p1.y}, p2];
   else pts = [p1, {x:p1.x,y:p2.y}, p2];
   return roundedPolylinePath(pts, 12);
+}
+// Where the draggable waypoint handle should sit for a given edge, or null
+// if this edge's route has no free coordinate to manually bend (see above).
+function elbowWaypointHandlePos(p1, side1, p2, side2, wp){
+  const h1 = sideIsHoriz(side1), h2 = sideIsHoriz(side2);
+  if(h1 && h2){
+    const midX = (wp && wp.axis==='x') ? wp.value : (p1.x+p2.x)/2;
+    return { x:midX, y:(p1.y+p2.y)/2, axis:'x' };
+  }
+  if(!h1 && !h2){
+    const midY = (wp && wp.axis==='y') ? wp.value : (p1.y+p2.y)/2;
+    return { x:(p1.x+p2.x)/2, y:midY, axis:'y' };
+  }
+  return null;
 }
 function straightPath(p1, p2){
   return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} L ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
@@ -1070,7 +1237,8 @@ function curvedPath(p1, side1, p2, side2){
 function edgePathFor(edge, p1, side1, p2, side2){
   if(edge.shape === 'straight') return straightPath(p1, p2);
   if(edge.shape === 'curved') return curvedPath(p1, side1, p2, side2);
-  return elbowPath(p1, side1, p2, side2);
+  const wp = (edge.waypoint != null && edge.waypointAxis) ? { axis: edge.waypointAxis, value: edge.waypoint } : null;
+  return elbowPath(p1, side1, p2, side2, wp);
 }
 function pathMidpoint(p1, side1, p2, side2){
   const midX = (p1.x+p2.x)/2, midY = (p1.y+p2.y)/2;
@@ -1090,8 +1258,18 @@ function isSelected(kind, id){ return state.selection.has((kind==='node'?'n:':'e
 function renderFrames(){
   layerFrames.innerHTML = '';
   state.nodes.filter(n=>n.kind==='frame').forEach(node=>{
-    const g = svgEl_('g', { class:'frame-node' + (isSelected('node',node.id)?' selected':''), 'data-id':node.id, 'data-kind':'node' });
-    g.appendChild(svgEl_('rect', { x:node.x, y:node.y, width:node.w, height:node.h, rx:14 }));
+    const solid = node.frameStyle === 'solid';
+    const g = svgEl_('g', { class:'frame-node' + (solid?' frame-solid':'') + (isSelected('node',node.id)?' selected':''), 'data-id':node.id, 'data-kind':'node' });
+    const rectAttrs = { x:node.x, y:node.y, width:node.w, height:node.h, rx:14 };
+    if(solid){
+      // Solid boundary: a real filled zone (VPC / trust-boundary style)
+      // instead of the default dashed logical grouping — same node, just a
+      // heavier, more "this is a real perimeter" visual treatment.
+      const c = node.color || '#748ffc';
+      rectAttrs.fill = c; rectAttrs['fill-opacity'] = 0.07;
+      rectAttrs.stroke = c; rectAttrs['stroke-opacity'] = 0.6; rectAttrs['stroke-width'] = 1.6;
+    }
+    g.appendChild(svgEl_('rect', rectAttrs));
     const fo = document.createElementNS(SVGNS,'foreignObject');
     fo.setAttribute('x', node.x+10); fo.setAttribute('y', node.y-13); fo.setAttribute('width', Math.max(40,node.w-20)); fo.setAttribute('height', 26);
     fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" class="frame-tag" title="Drag to move the group · double-click to rename" style="display:inline-block;padding:2px 9px;border-radius:7px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:.4px;color:var(--text-dim);background:var(--surface);border:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;user-select:none;" contenteditable="false" spellcheck="false" data-role="label">${escapeHtml(node.label)}</div>`;
@@ -1123,37 +1301,86 @@ function addResizeHandle(g, node){
   g.appendChild(h);
 }
 
+// A small warning-colored dot in a card's top-right corner when it carries
+// a notes/description field, and a padlock glyph when locked — both purely
+// informational overlays, added after the handles so they sit on top.
+function addStatusBadges(g, node){
+  if(node.locked){
+    const lg = svgEl_('g', { class:'lock-badge', transform:`translate(${node.x+node.w-16},${node.y+4})` });
+    lg.innerHTML = `<circle r="8" cx="8" cy="8" fill="var(--surface-solid)" stroke="var(--border-strong)" stroke-width="1"></circle>
+      <svg x="3" y="3" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="1.5"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>`;
+    g.appendChild(lg);
+  }
+  if(node.notes && node.notes.trim()){
+    g.appendChild(svgEl_('circle', { class:'notes-dot', cx:node.x+8, cy:node.y+8, r:4 }));
+  }
+}
 function renderNodes(){
   layerNodes.innerHTML = '';
-  state.nodes.filter(n=>n.kind==='icon').forEach(node=>{
-    const def = ICONS_BY_ID[node.icon] || ICON_DEFS[0];
-    const g = svgEl_('g', { class:'node-card' + (isSelected('node',node.id)?' selected':''), 'data-id':node.id, 'data-kind':'node' });
-    g.appendChild(svgEl_('rect', { class:'card-bg', x:node.x, y:node.y, width:node.w, height:node.h, rx:16 }));
-    const fo = document.createElementNS(SVGNS,'foreignObject');
-    fo.setAttribute('x', node.x); fo.setAttribute('y', node.y); fo.setAttribute('width', node.w); fo.setAttribute('height', node.h);
-    fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:10px 8px;font-family:Inter,sans-serif;pointer-events:none;">
-        <div style="width:34px;height:34px;pointer-events:none;">${def.svg}</div>
-        <div data-role="label" contenteditable="false" spellcheck="false" title="Double-click to rename" style="pointer-events:auto;text-align:center;font-size:11px;font-weight:600;color:var(--text);line-height:1.25;max-width:100%;outline:none;word-break:break-word;user-select:none;">${escapeHtml(node.label)}</div>
-      </div>`;
-    g.appendChild(fo);
-    addNodeHandles(g, node, false);
-    layerNodes.appendChild(g);
-    wireLabelEditable(fo.querySelector('[data-role="label"]'), node);
-    wireNodeDrag(g, node);
-  });
-  state.nodes.filter(n=>n.kind==='text').forEach(node=>{
-    const g = svgEl_('g', { class:'text-node' + (isSelected('node',node.id)?' selected':''), 'data-id':node.id, 'data-kind':'node' });
-    g.appendChild(svgEl_('rect', { class:'hit', x:node.x, y:node.y, width:node.w, height:node.h, rx:8 }));
-    const fo = document.createElementNS(SVGNS,'foreignObject');
-    fo.setAttribute('x', node.x); fo.setAttribute('y', node.y); fo.setAttribute('width', node.w); fo.setAttribute('height', node.h);
-    fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;display:flex;align-items:flex-start;padding:6px 8px;">
-        <div data-role="label" contenteditable="false" spellcheck="false" title="Double-click to edit" style="width:100%;font-size:12.5px;font-weight:500;color:var(--text-dim);line-height:1.4;outline:none;user-select:none;">${escapeHtml(node.label)}</div>
-      </div>`;
-    g.appendChild(fo);
-    addResizeHandle(g, node);
-    layerNodes.appendChild(g);
-    wireLabelEditable(fo.querySelector('[data-role="label"]'), node);
-    wireNodeDrag(g, node);
+  // Rendered in state.nodes array order (icons/text/shapes interleaved) so
+  // that reordering the array — via bring-to-front / send-to-back — is the
+  // single source of truth for stacking, instead of every icon always
+  // drawing above every text note regardless of when it was added.
+  state.nodes.filter(n=>n.kind==='icon' || n.kind==='text' || n.kind==='shape').forEach(node=>{
+    if(node.kind === 'icon'){
+      const def = ICONS_BY_ID[node.icon] || ICON_DEFS[0];
+      const g = svgEl_('g', { class:'node-card' + (isSelected('node',node.id)?' selected':'') + (node.locked?' node-locked':''), 'data-id':node.id, 'data-kind':'node' });
+      const cardAttrs = { class:'card-bg', x:node.x, y:node.y, width:node.w, height:node.h, rx:16 };
+      g.appendChild(svgEl_('rect', cardAttrs));
+      const fo = document.createElementNS(SVGNS,'foreignObject');
+      fo.setAttribute('x', node.x); fo.setAttribute('y', node.y); fo.setAttribute('width', node.w); fo.setAttribute('height', node.h);
+      fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:10px 8px;font-family:Inter,sans-serif;pointer-events:none;">
+          <div style="width:34px;height:34px;pointer-events:none;">${def.svg}</div>
+          <div data-role="label" contenteditable="false" spellcheck="false" title="Double-click to rename" style="pointer-events:auto;text-align:center;font-size:11px;font-weight:600;color:var(--text);line-height:1.25;max-width:100%;outline:none;word-break:break-word;user-select:none;">${escapeHtml(node.label)}</div>
+        </div>`;
+      g.appendChild(fo);
+      addNodeHandles(g, node, false);
+      addResizeHandle(g, node);
+      addStatusBadges(g, node);
+      layerNodes.appendChild(g);
+      wireLabelEditable(fo.querySelector('[data-role="label"]'), node);
+      wireNodeDrag(g, node);
+    } else if(node.kind === 'shape'){
+      const shapeType = node.shapeType || 'rectangle';
+      const fillMode = node.fill || 'soft';
+      const color = node.color || '#8fa2ff';
+      const g = svgEl_('g', { class:'shape-node' + (isSelected('node',node.id)?' selected':'') + (node.locked?' node-locked':''), 'data-id':node.id, 'data-kind':'node', 'data-fill':fillMode });
+      const geomAttrs = { class:'shape-bg' };
+      if(fillMode === 'solid'){ geomAttrs.fill = color; geomAttrs['fill-opacity'] = 0.88; geomAttrs.stroke = shadeColor(color, -22); geomAttrs['stroke-width'] = 1.6; }
+      else if(fillMode === 'outline'){ geomAttrs.fill = 'none'; geomAttrs.stroke = color; geomAttrs['stroke-width'] = 2; }
+      else { geomAttrs.fill = color; geomAttrs['fill-opacity'] = 0.13; geomAttrs.stroke = color; geomAttrs['stroke-opacity'] = 0.8; geomAttrs['stroke-width'] = 1.6; }
+      g.appendChild(shapeGeometryEl(shapeType, node.x, node.y, node.w, node.h, geomAttrs));
+      const fo = document.createElementNS(SVGNS,'foreignObject');
+      fo.setAttribute('x', node.x); fo.setAttribute('y', node.y); fo.setAttribute('width', node.w); fo.setAttribute('height', node.h);
+      const labelColor = fillMode === 'solid' ? '#04141a' : 'var(--text)';
+      fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:${shapeType==='diamond'?'22px 30px':'8px 10px'};pointer-events:none;">
+          <div data-role="label" contenteditable="false" spellcheck="false" title="Double-click to rename" style="pointer-events:auto;text-align:center;font-size:12px;font-weight:600;color:${labelColor};line-height:1.3;max-width:100%;outline:none;word-break:break-word;user-select:none;">${escapeHtml(node.label)}</div>
+        </div>`;
+      g.appendChild(fo);
+      addNodeHandles(g, node, false);
+      addResizeHandle(g, node);
+      addStatusBadges(g, node);
+      layerNodes.appendChild(g);
+      wireLabelEditable(fo.querySelector('[data-role="label"]'), node);
+      wireNodeDrag(g, node);
+    } else {
+      // text note
+      const g = svgEl_('g', { class:'text-node' + (isSelected('node',node.id)?' selected':'') + (node.locked?' node-locked':''), 'data-id':node.id, 'data-kind':'node' });
+      g.appendChild(svgEl_('rect', { class:'hit', x:node.x, y:node.y, width:node.w, height:node.h, rx:8 }));
+      const fo = document.createElementNS(SVGNS,'foreignObject');
+      fo.setAttribute('x', node.x); fo.setAttribute('y', node.y); fo.setAttribute('width', node.w); fo.setAttribute('height', node.h);
+      fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;display:flex;align-items:flex-start;padding:6px 8px;">
+          <div data-role="label" contenteditable="false" spellcheck="false" title="Double-click to edit" style="width:100%;font-size:12.5px;font-weight:500;color:var(--text-dim);line-height:1.4;outline:none;user-select:none;">${escapeHtml(node.label)}</div>
+        </div>`;
+      g.appendChild(fo);
+      // Text notes can now anchor a connector too (e.g. "flows out to an
+      // external partner" annotations), not just receive a resize handle.
+      addNodeHandles(g, node, true);
+      addResizeHandle(g, node);
+      layerNodes.appendChild(g);
+      wireLabelEditable(fo.querySelector('[data-role="label"]'), node);
+      wireNodeDrag(g, node);
+    }
   });
 }
 
@@ -1203,12 +1430,17 @@ function renderEdges(){
     const showEndArrow = edge.arrowEnd !== false; // default true — matches every diagram before this option existed
     const showStartArrow = !!edge.arrowStart;
     const arrowShape = edge.arrowShape || 'triangle';
+    // Line thickness: a plain multiplier over the base 1.8px, so "Thick" on
+    // a default line and "Thick" on a custom-colored one both scale the
+    // same way rather than needing separate absolute values.
+    const strokeWidth = (edge.strokeWidth || 1.8) + (sel ? 0.5 : 0);
     const g = svgEl_('g', { class:'edge-group', 'data-id':edge.id, 'data-kind':'edge' });
     const pathAttrs = { class:'edge-path' + (sel?' selected':'') + (edge.animated!==false?' flow':''), d, 'stroke-dasharray': dashArray };
+    let styleStr = `stroke-width:${strokeWidth};`;
     if(edge.color){
       // Custom color overrides the theme-following default entirely, both
       // for the line and for whichever arrowheads are shown.
-      pathAttrs.style = `stroke:${edge.color};`;
+      styleStr += `stroke:${edge.color};`;
       const markerId = ensureArrowMarker(arrowShape, sel ? edge.color : edge.color);
       if(showEndArrow) pathAttrs['marker-end'] = `url(#${markerId})`;
       if(showStartArrow) pathAttrs['marker-start'] = `url(#${markerId})`;
@@ -1223,6 +1455,7 @@ function renderEdges(){
       if(showEndArrow) pathAttrs['marker-end'] = `url(#${sel?'arrowHeadSel':'arrowHead'})`;
       if(showStartArrow) pathAttrs['marker-start'] = `url(#${sel?'arrowHeadSel':'arrowHead'})`;
     }
+    pathAttrs.style = styleStr;
     g.appendChild(svgEl_('path', pathAttrs));
     g.appendChild(svgEl_('path', { class:'edge-hit', d }));
     if(edge.label){
@@ -1232,6 +1465,18 @@ function renderEdges(){
       const t = svgEl_('text', { class:'edge-label', x:mid.x, y:mid.y+4, 'text-anchor':'middle' });
       t.textContent = edge.label;
       g.appendChild(t);
+    }
+    // Manual waypoint handle — only meaningful for the default elbow shape,
+    // and only when the route actually has one free coordinate to drag
+    // (see elbowWaypointHandlePos).
+    if(!edge.shape || edge.shape === 'elbow'){
+      const wp = (edge.waypoint != null && edge.waypointAxis) ? { axis: edge.waypointAxis, value: edge.waypoint } : null;
+      const hp = elbowWaypointHandlePos(p1, edge.fromSide, p2, edge.toSide, wp);
+      if(hp){
+        const wh = svgEl_('rect', { class:'handle waypoint-handle', x:hp.x-6, y:hp.y-6, width:12, height:12, transform:`rotate(45 ${hp.x} ${hp.y})`, 'data-waypoint':edge.id, 'data-axis':hp.axis, title:'Drag to bend the connector' });
+        g.appendChild(wh);
+        if(sel) g.classList.add('wp-visible');
+      }
     }
     layerEdges.appendChild(g);
     wireEdgeEvents(g, edge);
@@ -1378,6 +1623,126 @@ function duplicateSelection(){
   pushHistory();
 }
 
+/* ---- Copy / paste (Ctrl+C / Ctrl+V) — distinct from Duplicate: it goes
+   through an in-memory clipboard, so it can be pasted more than once and
+   survives switching selection in between, matching how copy/paste works
+   everywhere else instead of just being an alias for Duplicate. ---- */
+function copySelection(){
+  const nids = selectedNodeIds();
+  if(nids.length === 0) return;
+  const idSet = new Set(nids);
+  const nodes = nids.map(id=>nodeById(id)).filter(Boolean).map(n=>({...n}));
+  const edges = state.edges.filter(e=>idSet.has(e.from) && idSet.has(e.to)).map(e=>({...e}));
+  clipboard = { nodes, edges };
+  toast(`Copied ${nodes.length} item${nodes.length===1?'':'s'}`);
+}
+function pasteClipboard(){
+  if(!clipboard || clipboard.nodes.length === 0) return;
+  const idMap = {};
+  const newNodes = clipboard.nodes.map(n=>{
+    const copy = { ...n, id: uid(), x: n.x+32, y: n.y+32, parentId: null };
+    idMap[n.id] = copy.id;
+    return copy;
+  });
+  newNodes.forEach(n=>{ if(n.parentId && idMap[n.parentId]) n.parentId = idMap[n.parentId]; });
+  state.nodes.push(...newNodes);
+  const newEdges = clipboard.edges.map(e=>({ ...e, id: uid(), from: idMap[e.from], to: idMap[e.to] }));
+  state.edges.push(...newEdges);
+  state.selection.clear();
+  newNodes.forEach(n=>addToSelection('node', n.id));
+  // Nudge the clipboard's reference position forward so repeated pastes
+  // step diagonally instead of stacking every copy in the exact same spot.
+  clipboard = { nodes: newNodes.map(n=>({...n})), edges: newEdges.map(e=>({...e})) };
+  render();
+  pushHistory();
+  toast('Pasted');
+}
+function selectAll(){
+  state.selection.clear();
+  state.nodes.forEach(n=>addToSelection('node', n.id));
+  state.edges.forEach(e=>addToSelection('edge', e.id));
+  render();
+}
+function nudgeSelection(dx, dy){
+  const ids = selectedNodeIds();
+  if(ids.length === 0) return;
+  ids.forEach(id=>{ const n = nodeById(id); if(n && !n.locked){ n.x += dx; n.y += dy; } });
+  render();
+}
+
+/* ==================== Z-order ==================== */
+// Stacking is simply array order within state.nodes (see renderNodes /
+// renderFrames): later entries draw on top. These helpers reorder the
+// array for the current selection while leaving every other node's
+// relative order untouched.
+function reorderNodes(ids, mode){
+  const idSet = new Set(ids);
+  const selected = state.nodes.filter(n=>idSet.has(n.id));
+  const rest = state.nodes.filter(n=>!idSet.has(n.id));
+  if(selected.length === 0) return;
+  if(mode === 'front') state.nodes = [...rest, ...selected];
+  else if(mode === 'back') state.nodes = [...selected, ...rest];
+  else if(mode === 'forward' || mode === 'backward'){
+    // Move each selected node one step past its immediate neighbor, highest
+    // index first for "forward" and lowest first for "backward" so a
+    // multi-selection shifts as a block instead of nodes leap-frogging
+    // each other.
+    const arr = [...state.nodes];
+    const indices = arr.map((n,i)=> idSet.has(n.id) ? i : -1).filter(i=>i>=0);
+    const order = mode === 'forward' ? [...indices].reverse() : indices;
+    order.forEach(i=>{
+      const j = mode === 'forward' ? i+1 : i-1;
+      if(j < 0 || j >= arr.length) return;
+      if(idSet.has(arr[j].id)) return; // already adjacent to another selected node
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    });
+    state.nodes = arr;
+  }
+  render();
+  pushHistory();
+}
+function bringToFront(){ reorderNodes(selectedNodeIds(), 'front'); }
+function sendToBack(){ reorderNodes(selectedNodeIds(), 'back'); }
+function bringForward(){ reorderNodes(selectedNodeIds(), 'forward'); }
+function sendBackward(){ reorderNodes(selectedNodeIds(), 'backward'); }
+
+/* ==================== Align & distribute ==================== */
+// Operates on the current multi-selection's bounding boxes. Single-item or
+// empty selections are a no-op since "align" needs at least two things to
+// align relative to each other.
+function selectedNodesForAlign(){ return selectedNodeIds().map(nodeById).filter(Boolean); }
+function alignNodes(edge){
+  const nodes = selectedNodesForAlign();
+  if(nodes.length < 2) return;
+  if(edge === 'left'){ const x = Math.min(...nodes.map(n=>n.x)); nodes.forEach(n=>n.x=x); }
+  else if(edge === 'right'){ const x = Math.max(...nodes.map(n=>n.x+n.w)); nodes.forEach(n=>n.x=x-n.w); }
+  else if(edge === 'centerH'){ const c = (Math.min(...nodes.map(n=>n.x)) + Math.max(...nodes.map(n=>n.x+n.w)))/2; nodes.forEach(n=>n.x=c-n.w/2); }
+  else if(edge === 'top'){ const y = Math.min(...nodes.map(n=>n.y)); nodes.forEach(n=>n.y=y); }
+  else if(edge === 'bottom'){ const y = Math.max(...nodes.map(n=>n.y+n.h)); nodes.forEach(n=>n.y=y-n.h); }
+  else if(edge === 'centerV'){ const c = (Math.min(...nodes.map(n=>n.y)) + Math.max(...nodes.map(n=>n.y+n.h)))/2; nodes.forEach(n=>n.y=c-n.h/2); }
+  render(); pushHistory();
+}
+function distributeNodes(axis){
+  const nodes = selectedNodesForAlign();
+  if(nodes.length < 3) return; // distributing needs at least 3 to have "gaps" to even out
+  if(axis === 'h'){
+    const sorted = [...nodes].sort((a,b)=>a.x-b.x);
+    const min = sorted[0].x, max = sorted[sorted.length-1].x + sorted[sorted.length-1].w;
+    const totalW = sorted.reduce((s,n)=>s+n.w,0);
+    const gap = (max - min - totalW) / (sorted.length - 1);
+    let cursor = min;
+    sorted.forEach(n=>{ n.x = cursor; cursor += n.w + gap; });
+  } else {
+    const sorted = [...nodes].sort((a,b)=>a.y-b.y);
+    const min = sorted[0].y, max = sorted[sorted.length-1].y + sorted[sorted.length-1].h;
+    const totalH = sorted.reduce((s,n)=>s+n.h,0);
+    const gap = (max - min - totalH) / (sorted.length - 1);
+    let cursor = min;
+    sorted.forEach(n=>{ n.y = cursor; cursor += n.h + gap; });
+  }
+  render(); pushHistory();
+}
+
 /* ==================== Pointer interaction engine ==================== */
 const canvasWrap = document.getElementById('canvasWrap');
 let ptr = null;       // active drag/gesture state
@@ -1453,6 +1818,7 @@ function wireNodeDrag(g, node){
     e.stopPropagation();
     commitActiveLabelEdit();
     selectNodeFromEvent(e, node);
+    if(node.locked) return; // still selectable/inspectable, just not draggable
     const directIds = selectedNodeIds().length ? selectedNodeIds() : [node.id];
     // Dragging a group frame carries every node contained inside it along
     // for the ride, so the group actually moves as one unit.
@@ -1490,10 +1856,11 @@ function wireNodeDrag(g, node){
       layerOverlay.appendChild(temp);
     });
   });
-  // resize handle (frame / text)
+  // resize handle (icon / frame / text / shape)
   g.querySelectorAll('[data-resize]').forEach(h=>{
     h.addEventListener('pointerdown', (e)=>{
       e.stopPropagation();
+      if(node.locked) return;
       selectOnly('node', node.id); render();
       ptr = { mode:'resize', id:node.id, startW:node.w, startH:node.h, start: screenToCanvas(e.clientX,e.clientY) };
     });
@@ -1502,15 +1869,32 @@ function wireNodeDrag(g, node){
 
 function wireEdgeEvents(g, edge){
   g.addEventListener('pointerdown', (e)=>{
+    if(e.target.dataset && e.target.dataset.waypoint) return; // handled separately below
     e.stopPropagation();
     if(e.shiftKey) toggleSelection('edge', edge.id); else selectOnly('edge', edge.id);
     render();
   });
+  const wh = g.querySelector('[data-waypoint]');
+  if(wh){
+    wh.addEventListener('pointerdown', (e)=>{
+      e.stopPropagation();
+      selectOnly('edge', edge.id); render();
+      ptr = { mode:'waypoint', id: edge.id, axis: wh.dataset.axis };
+    });
+    // Double-click the bend handle to reset the connector back to its
+    // automatic, evenly-split route.
+    wh.addEventListener('dblclick', (e)=>{
+      e.stopPropagation();
+      delete edge.waypoint; delete edge.waypointAxis;
+      render(); pushHistory();
+      toast('Connector reset to automatic routing.');
+    });
+  }
 }
 
 // Canvas background: marquee-select, pan (space/middle-click), or place text/frame tool
 canvasWrap.addEventListener('pointerdown', (e)=>{
-  if(e.target.closest('.node-card, .frame-node, .text-node, .edge-group')) return;
+  if(e.target.closest('.node-card, .frame-node, .text-node, .shape-node, .edge-group')) return;
   const canvasPt = screenToCanvas(e.clientX, e.clientY);
   if(e.button === 1 || spaceDown){
     ptr = { mode:'pan', startClient:{x:e.clientX,y:e.clientY}, startPan:{...state.pan} };
@@ -1529,6 +1913,12 @@ canvasWrap.addEventListener('pointerdown', (e)=>{
     setTool('select');
     return;
   }
+  if(state.tool === 'shape'){
+    const n = makeShapeNode(currentShapeType, canvasPt.x, canvasPt.y);
+    state.nodes.push(n); recomputeContainment(n.id); selectOnly('node', n.id); render(); pushHistory();
+    setTool('select');
+    return;
+  }
   if(!e.shiftKey){ clearSelection(); render(); }
   ptr = { mode:'marquee', start: canvasPt, rectEl: null };
 });
@@ -1537,8 +1927,17 @@ window.addEventListener('pointermove', (e)=>{
   if(!ptr) return;
   if(ptr.mode === 'move-nodes'){
     const cur = screenToCanvas(e.clientX, e.clientY);
-    const dx = cur.x - ptr.start.x, dy = cur.y - ptr.start.y;
+    let dx = cur.x - ptr.start.x, dy = cur.y - ptr.start.y;
     if(Math.abs(dx) > 1 || Math.abs(dy) > 1) ptr.moved = true;
+    if(snapToGrid){
+      // Snap the primary (first) dragged node's resulting position to the
+      // grid, then apply that same rounded delta to every other selected
+      // node — keeps the whole selection's relative layout intact instead
+      // of independently snapping each node (which would warp spacing).
+      const firstId = ptr.ids[0];
+      const p0 = ptr.startPositions[firstId];
+      if(p0){ dx = snapVal(p0.x + dx) - p0.x; dy = snapVal(p0.y + dy) - p0.y; }
+    }
     ptr.ids.forEach(id=>{
       const n = nodeById(id); const p = ptr.startPositions[id];
       if(n && p){ n.x = p.x + dx; n.y = p.y + dy; }
@@ -1560,16 +1959,26 @@ window.addEventListener('pointermove', (e)=>{
     const anchor = nodeAnchor(fromNode, ptr.fromSide);
     const temp = document.getElementById('tempEdgePath');
     if(temp) temp.setAttribute('d', elbowPath(anchor, ptr.fromSide, cur, oppositeSide(ptr.fromSide)));
-    document.querySelectorAll('.node-card, .frame-node').forEach(g=>{
+    document.querySelectorAll('.node-card, .frame-node, .text-node, .shape-node').forEach(g=>{
       g.classList.toggle('connect-target', g === hoveredDropTarget(e));
     });
   } else if(ptr.mode === 'resize'){
     const cur = screenToCanvas(e.clientX, e.clientY);
     const n = nodeById(ptr.id);
     if(n){
-      n.w = Math.max(80, ptr.startW + (cur.x - ptr.start.x));
-      n.h = Math.max(50, ptr.startH + (cur.y - ptr.start.y));
+      let w = Math.max(60, ptr.startW + (cur.x - ptr.start.x));
+      let h = Math.max(40, ptr.startH + (cur.y - ptr.start.y));
+      if(snapToGrid){ w = Math.max(60, snapVal(w)); h = Math.max(40, snapVal(h)); }
+      n.w = w; n.h = h;
       render();
+    }
+  } else if(ptr.mode === 'waypoint'){
+    const cur = screenToCanvas(e.clientX, e.clientY);
+    const edge = edgeById(ptr.id);
+    if(edge){
+      edge.waypointAxis = ptr.axis;
+      edge.waypoint = ptr.axis === 'x' ? cur.x : cur.y;
+      renderEdges();
     }
   } else if(ptr.mode === 'pan'){
     state.pan.x = ptr.startPan.x + (e.clientX - ptr.startClient.x);
@@ -1588,7 +1997,7 @@ window.addEventListener('pointermove', (e)=>{
 function oppositeSide(side){ return { top:'bottom', bottom:'top', left:'right', right:'left' }[side]; }
 function hoveredDropTarget(e){
   const el = document.elementFromPoint(e.clientX, e.clientY);
-  return el ? el.closest('.node-card, .frame-node') : null;
+  return el ? el.closest('.node-card, .frame-node, .text-node, .shape-node') : null;
 }
 
 window.addEventListener('pointerup', (e)=>{
@@ -1619,6 +2028,8 @@ window.addEventListener('pointerup', (e)=>{
       // Growing/shrinking a frame can pull nodes in or push them out.
       state.nodes.forEach(n=>{ if(n.kind !== 'frame') recomputeContainment(n.id); });
     }
+    pushHistory();
+  } else if(ptr.mode === 'waypoint'){
     pushHistory();
   } else if(ptr.mode === 'pan'){
     canvasWrap.classList.remove('panning');
@@ -1688,8 +2099,8 @@ function fitToScreen(){
 /* ==================== Toolbar / tools ==================== */
 function setTool(tool){
   state.tool = tool;
-  document.querySelectorAll('#toolSelect,#toolText,#toolFrame').forEach(b=>b.classList.remove('active'));
-  const map = { select:'toolSelect', text:'toolText', frame:'toolFrame' };
+  document.querySelectorAll('#toolSelect,#toolText,#toolFrame,#toolShape').forEach(b=>b.classList.remove('active'));
+  const map = { select:'toolSelect', text:'toolText', frame:'toolFrame', shape:'toolShape' };
   document.getElementById(map[tool]).classList.add('active');
   canvasWrap.style.cursor = tool === 'select' ? '' : 'crosshair';
 }
@@ -1705,6 +2116,37 @@ document.getElementById('btnTogglePalette').addEventListener('click', ()=>{
   document.getElementById('btnTogglePalette').title = collapsed ? 'Show component library' : 'Hide component library';
 });
 
+/* ---- Shape tool: click the main button to place the last-used shape,
+   or open the flyout to pick a different one first. ---- */
+const shapeFlyout = document.getElementById('shapeFlyout');
+document.getElementById('toolShape').addEventListener('click', (e)=>{
+  e.stopPropagation();
+  if(state.tool === 'shape'){ shapeFlyout.classList.toggle('hidden'); return; }
+  setTool('shape');
+  shapeFlyout.classList.remove('hidden');
+});
+shapeFlyout.querySelectorAll('button[data-shape]').forEach(btn=>{
+  btn.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    currentShapeType = btn.dataset.shape;
+    shapeFlyout.querySelectorAll('button').forEach(b=>b.classList.toggle('active', b===btn));
+    setTool('shape');
+    shapeFlyout.classList.add('hidden');
+  });
+});
+document.addEventListener('click', (e)=>{
+  if(!e.target.closest('.tb-flyout-wrap')) shapeFlyout.classList.add('hidden');
+});
+
+/* ---- Snap to grid toggle ---- */
+const btnSnap = document.getElementById('btnSnap');
+btnSnap.addEventListener('click', ()=>{
+  snapToGrid = !snapToGrid;
+  btnSnap.classList.toggle('active', snapToGrid);
+  btnSnap.title = snapToGrid ? 'Snap to grid (on)' : 'Snap to grid (off)';
+  toast(snapToGrid ? 'Snap to grid on' : 'Snap to grid off');
+});
+
 window.addEventListener('keydown', (e)=>{
   const tag = (document.activeElement && document.activeElement.tagName) || '';
   const isEditing = document.activeElement && document.activeElement.isContentEditable;
@@ -1717,13 +2159,34 @@ window.addEventListener('keydown', (e)=>{
     e.preventDefault(); if(e.shiftKey) redo(); else undo(); return;
   }
   if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd'){ e.preventDefault(); duplicateSelection(); return; }
+  if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a'){ e.preventDefault(); selectAll(); return; }
+  if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c'){ e.preventDefault(); copySelection(); return; }
+  if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v'){ e.preventDefault(); pasteClipboard(); return; }
+  if((e.ctrlKey || e.metaKey) && e.key === ']'){ e.preventDefault(); if(e.shiftKey) bringToFront(); else bringForward(); return; }
+  if((e.ctrlKey || e.metaKey) && e.key === '['){ e.preventDefault(); if(e.shiftKey) sendToBack(); else sendBackward(); return; }
+  if((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')){ e.preventDefault(); setZoom(state.zoom*1.2); return; }
+  if((e.ctrlKey || e.metaKey) && e.key === '-'){ e.preventDefault(); setZoom(state.zoom/1.2); return; }
+  if((e.ctrlKey || e.metaKey) && e.key === '0'){ e.preventDefault(); fitToScreen(); return; }
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key) && selectedNodeIds().length){
+    e.preventDefault();
+    const step = e.shiftKey ? 10 : 1;
+    const d = { ArrowUp:[0,-step], ArrowDown:[0,step], ArrowLeft:[-step,0], ArrowRight:[step,0] }[e.key];
+    nudgeSelection(d[0], d[1]);
+    return;
+  }
   if(e.key === 'Delete' || e.key === 'Backspace'){ e.preventDefault(); deleteSelection(); return; }
   if(e.key === 'Escape'){ clearSelection(); render(); setTool('select'); return; }
   if(e.key.toLowerCase() === 'v') setTool('select');
   if(e.key.toLowerCase() === 't') setTool('text');
   if(e.key.toLowerCase() === 'f') setTool('frame');
+  if(e.key.toLowerCase() === 'r') setTool('shape');
 });
-window.addEventListener('keyup', (e)=>{ if(e.code === 'Space'){ spaceDown = false; canvasWrap.classList.remove('space-down'); } });
+window.addEventListener('keyup', (e)=>{
+  if(e.code === 'Space'){ spaceDown = false; canvasWrap.classList.remove('space-down'); }
+  // A key-up commits the arrow-key nudge as one undo step instead of one
+  // step per pixel, so holding an arrow down doesn't flood the history.
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key) && selectedNodeIds().length) pushHistory();
+});
 
 /* ==================== Palette (searchable component library) ==================== */
 // Which categories are collapsed, by name — in-memory only (resets on
@@ -1870,37 +2333,117 @@ function updateInspector(){
     document.getElementById('inspTitle').textContent = `${total} items selected`;
     document.getElementById('inspType').textContent = 'Multiple';
     document.getElementById('inspIcon').innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect></svg>`;
+    const alignableCount = nids.length;
     body.innerHTML = `
+      ${alignableCount >= 2 ? `
+      <div class="insp-field">
+        <label>Align</label>
+        <div class="align-grid">
+          <button class="align-btn" id="alLeft" title="Align left"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="3" x2="4" y2="21"></line><rect x="7" y="6" width="12" height="5"></rect><rect x="7" y="14" width="7" height="5"></rect></svg></button>
+          <button class="align-btn" id="alCenterH" title="Align center (horizontal)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="21"></line><rect x="6" y="6" width="12" height="5"></rect><rect x="8.5" y="14" width="7" height="5"></rect></svg></button>
+          <button class="align-btn" id="alRight" title="Align right"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="20" y1="3" x2="20" y2="21"></line><rect x="5" y="6" width="12" height="5"></rect><rect x="10" y="14" width="7" height="5"></rect></svg></button>
+          <button class="align-btn" id="alTop" title="Align top"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="4" x2="21" y2="4"></line><rect x="6" y="7" width="5" height="12"></rect><rect x="14" y="7" width="5" height="7"></rect></svg></button>
+          <button class="align-btn" id="alCenterV" title="Align middle (vertical)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="12" x2="21" y2="12"></line><rect x="6" y="6" width="5" height="12"></rect><rect x="14" y="8.5" width="5" height="7"></rect></svg></button>
+          <button class="align-btn" id="alBottom" title="Align bottom"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="20" x2="21" y2="20"></line><rect x="6" y="5" width="5" height="12"></rect><rect x="14" y="10" width="5" height="7"></rect></svg></button>
+        </div>
+      </div>` : ''}
+      ${alignableCount >= 3 ? `
+      <div class="insp-field">
+        <label>Distribute</label>
+        <div class="align-grid" style="grid-template-columns:1fr 1fr;">
+          <button class="align-btn" id="distH" title="Distribute horizontally">↔ Even</button>
+          <button class="align-btn" id="distV" title="Distribute vertically">↕ Even</button>
+        </div>
+      </div>` : ''}
+      <div class="insp-field">
+        <label>Layer order</label>
+        <div class="align-grid">
+          <button class="align-btn" id="ordFront" title="Bring to front">⤒</button>
+          <button class="align-btn" id="ordFwd" title="Bring forward">▲</button>
+          <button class="align-btn" id="ordBack2" title="Send to back">⤓</button>
+          <button class="align-btn" id="ordBwd" title="Send backward">▼</button>
+        </div>
+      </div>
       <div class="insp-actions" style="margin-top:0;">
+        <button class="insp-btn" id="inspLockAll">Lock / unlock</button>
         <button class="insp-btn" id="inspDup">Duplicate</button>
         <button class="insp-btn danger" id="inspDel">Delete</button>
       </div>`;
     document.getElementById('inspDup').addEventListener('click', duplicateSelection);
     document.getElementById('inspDel').addEventListener('click', deleteSelection);
+    const on = (id,fn)=>{ const el=document.getElementById(id); if(el) el.addEventListener('click', fn); };
+    on('alLeft', ()=>alignNodes('left'));
+    on('alCenterH', ()=>alignNodes('centerH'));
+    on('alRight', ()=>alignNodes('right'));
+    on('alTop', ()=>alignNodes('top'));
+    on('alCenterV', ()=>alignNodes('centerV'));
+    on('alBottom', ()=>alignNodes('bottom'));
+    on('distH', ()=>distributeNodes('h'));
+    on('distV', ()=>distributeNodes('v'));
+    on('ordFront', bringToFront);
+    on('ordFwd', bringForward);
+    on('ordBack2', sendToBack);
+    on('ordBwd', sendBackward);
+    on('inspLockAll', ()=>{
+      const nodes = nids.map(nodeById).filter(Boolean);
+      const nowLocked = !nodes.every(n=>n.locked);
+      nodes.forEach(n=>n.locked = nowLocked);
+      render(); pushHistory();
+      toast(nowLocked ? 'Locked' : 'Unlocked');
+    });
     return;
   }
 
   if(nids.length === 1){
     const node = nodeById(nids[0]);
     if(!node) return;
-    const typeLabel = node.kind === 'icon' ? (ICONS_BY_ID[node.icon]||{}).cat || 'Component' : node.kind === 'frame' ? 'Group frame' : 'Text note';
-    document.getElementById('inspTitle').textContent = node.kind === 'icon' ? (ICONS_BY_ID[node.icon]||{}).name : (node.kind === 'frame' ? 'Frame' : 'Text note');
-    document.getElementById('inspType').textContent = typeLabel;
+    const kindLabel = { icon:(ICONS_BY_ID[node.icon]||{}).cat || 'Component', frame:'Group frame', text:'Text note', shape:'Shape' }[node.kind];
+    const kindTitle = node.kind === 'icon' ? (ICONS_BY_ID[node.icon]||{}).name
+      : node.kind === 'frame' ? 'Frame' : node.kind === 'shape' ? (SHAPE_DEFS[node.shapeType]||SHAPE_DEFS.rectangle).name : 'Text note';
+    document.getElementById('inspTitle').textContent = kindTitle;
+    document.getElementById('inspType').textContent = kindLabel;
     document.getElementById('inspIcon').innerHTML = node.kind === 'icon' ? (ICONS_BY_ID[node.icon]||{}).svg :
-      (node.kind === 'frame' ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 2"><rect x="3" y="3" width="18" height="18" rx="2"></rect></svg>`
-      : `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="7" x2="20" y2="7"></line><line x1="4" y1="12" x2="16" y2="12"></line><line x1="4" y1="17" x2="12" y2="17"></line></svg>`);
+      node.kind === 'frame' ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 2"><rect x="3" y="3" width="18" height="18" rx="2"></rect></svg>`
+      : node.kind === 'shape' ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"></rect></svg>`
+      : `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="7" x2="20" y2="7"></line><line x1="4" y1="12" x2="16" y2="12"></line><line x1="4" y1="17" x2="12" y2="17"></line></svg>`;
     const members = node.kind === 'frame' ? childrenOf(node.id) : [];
+    const showColor = node.kind !== 'text';
+    const showNotes = node.kind !== 'text';
     body.innerHTML = `
       <div class="insp-field">
         <label>Label</label>
         <input type="text" id="inspLabel" value="${escapeHtml(node.label)}">
       </div>
+      ${showColor ? `
       <div class="insp-field">
         <label>Accent color</label>
         <div class="swatches" id="inspSwatches">
           ${SWATCHES.map(c=>`<div class="swatch${node.color===c?' active':''}" data-c="${c}" style="background:${c};"></div>`).join('')}
         </div>
-      </div>
+        <input type="color" id="inspNodeColorCustom" value="${node.color||'#22e5ff'}" title="Custom color" style="margin-top:8px;width:36px;height:26px;border:none;border-radius:6px;padding:0;cursor:pointer;background:none;">
+      </div>` : ''}
+      ${node.kind === 'frame' ? `
+      <div class="insp-field">
+        <label>Boundary style</label>
+        <div class="seg-group" id="inspFrameStyle">
+          <button type="button" class="seg-btn${(node.frameStyle||'dashed')==='dashed'?' active':''}" data-v="dashed" title="Dashed logical group">Dashed</button>
+          <button type="button" class="seg-btn${node.frameStyle==='solid'?' active':''}" data-v="solid" title="Solid filled boundary (VPC / trust zone)">Solid</button>
+        </div>
+      </div>` : ''}
+      ${node.kind === 'shape' ? `
+      <div class="insp-field">
+        <label>Fill style</label>
+        <div class="seg-group" id="inspShapeFill">
+          <button type="button" class="seg-btn${(node.fill||'soft')==='soft'?' active':''}" data-v="soft">Soft</button>
+          <button type="button" class="seg-btn${node.fill==='outline'?' active':''}" data-v="outline">Outline</button>
+          <button type="button" class="seg-btn${node.fill==='solid'?' active':''}" data-v="solid">Solid</button>
+        </div>
+      </div>` : ''}
+      ${showNotes ? `
+      <div class="insp-field">
+        <label>Notes</label>
+        <textarea id="inspNotes" placeholder="Why is this component here? Internal-only context…">${escapeHtml(node.notes||'')}</textarea>
+      </div>` : ''}
       ${node.kind === 'frame' ? `
       <div class="insp-field">
         <label>Group contents</label>
@@ -1908,8 +2451,20 @@ function updateInspector(){
           ${members.length ? `${members.length} item${members.length===1?'':'s'} — drag the frame or its tag to move them together.` : `Empty — drag components into the dashed area to add them.`}
         </div>
       </div>` : ''}
+      <div class="insp-field">
+        <label>Layer order</label>
+        <div class="align-grid">
+          <button class="align-btn" id="ordFront" title="Bring to front">⤒</button>
+          <button class="align-btn" id="ordFwd" title="Bring forward">▲</button>
+          <button class="align-btn" id="ordBack2" title="Send to back">⤓</button>
+          <button class="align-btn" id="ordBwd" title="Send backward">▼</button>
+        </div>
+      </div>
       <div class="insp-actions">
         ${node.kind === 'frame' && members.length ? `<button class="insp-btn" id="inspSelectMembers">Select items</button>` : ''}
+        <button class="insp-btn" id="inspLockOne">${node.locked ? 'Unlock' : 'Lock'}</button>
+      </div>
+      <div class="insp-actions" style="margin-top:${node.kind === 'frame' && members.length ? '-6px' : '0'};">
         <button class="insp-btn" id="inspDup">Duplicate</button>
         <button class="insp-btn danger" id="inspDel">Delete</button>
       </div>
@@ -1926,8 +2481,36 @@ function updateInspector(){
     });
     document.getElementById('inspLabel').addEventListener('blur', pushHistory);
     document.getElementById('inspLabel').addEventListener('keydown', e=>{ if(e.key==='Enter') e.target.blur(); });
-    document.getElementById('inspSwatches').querySelectorAll('.swatch').forEach(sw=>{
+    const swatchesEl = document.getElementById('inspSwatches');
+    if(swatchesEl) swatchesEl.querySelectorAll('.swatch').forEach(sw=>{
       sw.addEventListener('click', ()=>{ node.color = node.color === sw.dataset.c ? null : sw.dataset.c; render(); pushHistory(); });
+    });
+    const customColorEl = document.getElementById('inspNodeColorCustom');
+    if(customColorEl){
+      customColorEl.addEventListener('input', (e)=>{ node.color = e.target.value; render(); markDirty(); scheduleAutosave(); });
+      customColorEl.addEventListener('change', ()=>{ pushHistory(); });
+    }
+    const frameStyleEl = document.getElementById('inspFrameStyle');
+    if(frameStyleEl) frameStyleEl.querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ node.frameStyle = btn.dataset.v; render(); pushHistory(); });
+    });
+    const shapeFillEl = document.getElementById('inspShapeFill');
+    if(shapeFillEl) shapeFillEl.querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ node.fill = btn.dataset.v; render(); pushHistory(); });
+    });
+    const notesEl = document.getElementById('inspNotes');
+    if(notesEl){
+      notesEl.addEventListener('input', (e)=>{ node.notes = e.target.value; markDirty(); scheduleAutosave(); });
+      notesEl.addEventListener('blur', pushHistory);
+    }
+    document.getElementById('ordFront').addEventListener('click', bringToFront);
+    document.getElementById('ordFwd').addEventListener('click', bringForward);
+    document.getElementById('ordBack2').addEventListener('click', sendToBack);
+    document.getElementById('ordBwd').addEventListener('click', sendBackward);
+    document.getElementById('inspLockOne').addEventListener('click', ()=>{
+      node.locked = !node.locked;
+      render(); pushHistory();
+      toast(node.locked ? 'Locked' : 'Unlocked');
     });
     document.getElementById('inspDup').addEventListener('click', duplicateSelection);
     document.getElementById('inspDel').addEventListener('click', deleteSelection);
@@ -1956,6 +2539,7 @@ function updateInspector(){
     const lineStyle = edge.lineStyle || (edge.dashed ? 'dashed' : 'solid');
     const arrowDir = edge.arrowStart && edge.arrowEnd ? 'both' : edge.arrowStart && !edge.arrowEnd ? 'start' : edge.arrowEnd === false ? 'none' : 'end';
     const arrowShape = edge.arrowShape || 'triangle';
+    const strokeW = edge.strokeWidth || 1.8;
     body.innerHTML = `
       <div class="insp-field">
         <label>Label</label>
@@ -1986,6 +2570,14 @@ function updateInspector(){
         </div>
       </div>
       <div class="insp-field">
+        <label>Line thickness</label>
+        <div class="seg-group" id="inspStrokeWidth">
+          <button type="button" class="seg-btn${strokeW===1.8?' active':''}" data-v="1.8">Thin</button>
+          <button type="button" class="seg-btn${strokeW===3?' active':''}" data-v="3">Medium</button>
+          <button type="button" class="seg-btn${strokeW===4.5?' active':''}" data-v="4.5">Thick</button>
+        </div>
+      </div>
+      <div class="insp-field">
         <label>Arrowheads</label>
         <div class="seg-group" id="inspArrowDir">
           <button type="button" class="seg-btn${arrowDir==='none'?' active':''}" data-v="none" title="Plain line, no arrowhead">None</button>
@@ -2008,6 +2600,7 @@ function updateInspector(){
         <span class="sw-toggle"><input type="checkbox" id="inspAnimated" ${edge.animated!==false?'checked':''}><span class="knob"></span></span>
       </div>
       <div class="insp-actions">
+        ${(edge.waypoint != null) ? `<button class="insp-btn" id="inspResetWaypoint">Reset routing</button>` : ''}
         <button class="insp-btn danger" id="inspDel">Delete connector</button>
       </div>`;
     document.getElementById('inspEdgeLabel').addEventListener('input', (e)=>{
@@ -2033,6 +2626,9 @@ function updateInspector(){
     document.getElementById('inspLineStyle').querySelectorAll('.seg-btn').forEach(btn=>{
       btn.addEventListener('click', ()=>{ edge.lineStyle = btn.dataset.v; delete edge.dashed; render(); pushHistory(); });
     });
+    document.getElementById('inspStrokeWidth').querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ edge.strokeWidth = parseFloat(btn.dataset.v); render(); pushHistory(); });
+    });
     document.getElementById('inspArrowDir').querySelectorAll('.seg-btn').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         const v = btn.dataset.v;
@@ -2046,6 +2642,12 @@ function updateInspector(){
     });
     document.getElementById('inspAnimated').addEventListener('change', (e)=>{ edge.animated = e.target.checked; render(); pushHistory(); });
     document.getElementById('inspDel').addEventListener('click', deleteSelection);
+    const resetWpBtn = document.getElementById('inspResetWaypoint');
+    if(resetWpBtn) resetWpBtn.addEventListener('click', ()=>{
+      delete edge.waypoint; delete edge.waypointAxis;
+      render(); pushHistory();
+      toast('Connector reset to automatic routing.');
+    });
   }
 }
 
@@ -2055,7 +2657,7 @@ function hideCtxMenu(){ ctxMenu.classList.add('hidden'); }
 document.addEventListener('click', hideCtxMenu);
 canvasWrap.addEventListener('contextmenu', (e)=>{
   e.preventDefault();
-  const target = e.target.closest('.node-card, .frame-node, .text-node, .edge-group');
+  const target = e.target.closest('.node-card, .frame-node, .text-node, .shape-node, .edge-group');
   if(target){
     const kind = target.dataset.kind === 'edge' ? 'edge' : 'node';
     if(!isSelected(kind, target.dataset.id)) selectOnly(kind, target.dataset.id);
@@ -2064,12 +2666,24 @@ canvasWrap.addEventListener('contextmenu', (e)=>{
     clearSelection(); render();
   }
   const hasSel = state.selection.size > 0;
+  const hasNodeSel = selectedNodeIds().length > 0;
   const singleFrame = selectedNodeIds().length === 1 && nodeById(selectedNodeIds()[0]) && nodeById(selectedNodeIds()[0]).kind === 'frame'
     ? nodeById(selectedNodeIds()[0]) : null;
   const frameHasMembers = singleFrame && childrenOf(singleFrame.id).length > 0;
+  const singleNode = selectedNodeIds().length === 1 ? nodeById(selectedNodeIds()[0]) : null;
   ctxMenu.innerHTML = `
+    <button class="ctx-item" id="ctxCopy" ${hasNodeSel?'':'disabled'}>Copy<span class="k">⌘C</span></button>
+    <button class="ctx-item" id="ctxPaste" ${clipboard?'':'disabled'}>Paste<span class="k">⌘V</span></button>
     <button class="ctx-item" id="ctxDup" ${hasSel?'':'disabled'}>Duplicate<span class="k">⌘D</span></button>
     <button class="ctx-item danger" id="ctxDel" ${hasSel?'':'disabled'}>Delete<span class="k">Del</span></button>
+    ${hasNodeSel ? `
+    <div class="ctx-sep"></div>
+    <button class="ctx-item" id="ctxFront">Bring to front<span class="k">⌘⇧]</span></button>
+    <button class="ctx-item" id="ctxFwd">Bring forward<span class="k">⌘]</span></button>
+    <button class="ctx-item" id="ctxBack">Send to back<span class="k">⌘⇧[</span></button>
+    <button class="ctx-item" id="ctxBwd">Send backward<span class="k">⌘[</span></button>
+    <div class="ctx-sep"></div>
+    <button class="ctx-item" id="ctxLock">${singleNode ? (singleNode.locked ? 'Unlock' : 'Lock') : 'Lock / unlock'}</button>` : ''}
     ${frameHasMembers ? `<div class="ctx-sep"></div><button class="ctx-item" id="ctxUngroup">Ungroup (keep items)</button>` : ''}
     <div class="ctx-sep"></div>
     <button class="ctx-item" id="ctxFit">Fit to screen</button>
@@ -2077,9 +2691,23 @@ canvasWrap.addEventListener('contextmenu', (e)=>{
   ctxMenu.style.left = e.clientX + 'px';
   ctxMenu.style.top = e.clientY + 'px';
   ctxMenu.classList.remove('hidden');
+  document.getElementById('ctxCopy').addEventListener('click', copySelection);
+  document.getElementById('ctxPaste').addEventListener('click', pasteClipboard);
   document.getElementById('ctxDup').addEventListener('click', duplicateSelection);
   document.getElementById('ctxDel').addEventListener('click', deleteSelection);
   document.getElementById('ctxFit').addEventListener('click', fitToScreen);
+  const on = (id,fn)=>{ const el=document.getElementById(id); if(el) el.addEventListener('click', fn); };
+  on('ctxFront', bringToFront);
+  on('ctxFwd', bringForward);
+  on('ctxBack', sendToBack);
+  on('ctxBwd', sendBackward);
+  on('ctxLock', ()=>{
+    const nodes = selectedNodeIds().map(nodeById).filter(Boolean);
+    const nowLocked = !nodes.every(n=>n.locked);
+    nodes.forEach(n=>n.locked = nowLocked);
+    render(); pushHistory();
+    toast(nowLocked ? 'Locked' : 'Unlocked');
+  });
   const ctxUngroup = document.getElementById('ctxUngroup');
   if(ctxUngroup) ctxUngroup.addEventListener('click', ()=>{
     childrenOf(singleFrame.id).forEach(c=>c.parentId=null);
@@ -2120,13 +2748,19 @@ function buildExportSvgString(){
   const cardColor = getComputedStyle(document.documentElement).getPropertyValue('--surface-solid').trim() || '#12141f';
   const borderColor = getComputedStyle(document.documentElement).getPropertyValue('--border-strong').trim() || '#333';
   // foreignObject HTML uses CSS vars that won't resolve outside this document — inline the ones that matter.
-  clone.querySelectorAll('foreignObject div[data-role]').forEach(div=>{ div.style.color = div.closest('.frame-node') ? dimColor : textColor; });
+  clone.querySelectorAll('foreignObject div[data-role]').forEach(div=>{
+    const shapeG = div.closest('.shape-node');
+    if(shapeG && shapeG.getAttribute('data-fill') === 'solid') return; // solid-fill shapes already set an explicit dark label color inline
+    const isDim = div.closest('.frame-node') || div.closest('.text-node');
+    div.style.color = isDim ? dimColor : textColor;
+  });
   clone.querySelectorAll('.card-bg').forEach(r=>{ if(!r.getAttribute('stroke')) r.setAttribute('stroke', borderColor); r.setAttribute('fill', cardColor); });
   clone.querySelectorAll('.frame-node rect').forEach(r=>{ if(!r.getAttribute('stroke')) r.setAttribute('stroke', borderColor); });
   clone.querySelectorAll('.edge-path').forEach(p=>p.setAttribute('stroke', dimColor));
   clone.querySelectorAll('.edge-label-bg').forEach(r=>{ r.setAttribute('fill', bgColor); r.setAttribute('stroke', borderColor); });
   clone.querySelectorAll('.edge-label').forEach(t=>t.setAttribute('fill', dimColor));
   clone.querySelectorAll('.frame-tag').forEach(el=>{ el.style.background = cardColor; el.style.borderColor = borderColor; });
+  clone.querySelectorAll('.lock-badge, .notes-dot, .waypoint-handle').forEach(el=>el.remove());
 
   const svgOut = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minY} ${w} ${h}" width="${Math.round(w)}" height="${Math.round(h)}">
     <rect x="${minX}" y="${minY}" width="${w}" height="${h}" fill="${bgColor}"></rect>
@@ -2223,6 +2857,7 @@ function buildMarkdownDoc(){
 
   const frames = state.nodes.filter(n=>n.kind==='frame');
   const icons = state.nodes.filter(n=>n.kind==='icon');
+  const shapes = state.nodes.filter(n=>n.kind==='shape');
   const byCat = {};
   icons.forEach(n=>{
     const def = ICONS_BY_ID[n.icon] || {};
@@ -2235,10 +2870,21 @@ function buildMarkdownDoc(){
     lines.push(`### ${cat}`, '');
     byCat[cat].forEach(({node,def})=>{
       const frame = node.parentId ? nodeById(node.parentId) : null;
-      lines.push(`- **${node.label}** (${def.name || 'component'})${frame ? ` — part of group "${frame.label}"` : ''}`);
+      const notes = node.notes && node.notes.trim() ? ` — _${node.notes.trim()}_` : '';
+      lines.push(`- **${node.label}** (${def.name || 'component'})${frame ? ` — part of group "${frame.label}"` : ''}${notes}`);
     });
     lines.push('');
   });
+
+  if(shapes.length){
+    lines.push('## Shapes', '');
+    shapes.forEach(n=>{
+      const def = SHAPE_DEFS[n.shapeType] || SHAPE_DEFS.rectangle;
+      const notes = n.notes && n.notes.trim() ? ` — _${n.notes.trim()}_` : '';
+      lines.push(`- **${n.label}** (${def.name})${notes}`);
+    });
+    lines.push('');
+  }
 
   if(frames.length){
     lines.push('## Groups', '');
