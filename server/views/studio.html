@@ -949,6 +949,33 @@ pre.code-block{
 .doc-card-dl{ flex-shrink:0; width:26px; height:26px; display:flex; align-items:center; justify-content:center; color:var(--text-faint); border-radius:7px; transition:color .12s ease; }
 .doc-card:hover .doc-card-dl{ color:var(--doc-accent, var(--accent)); }
 
+/* ---------- Architecture diagram (project overview page) ---------- */
+.ad-preview-wrap{
+  position:relative; border:1px solid var(--border); border-radius:14px; background:
+    radial-gradient(700px 260px at 10% 0%, rgba(92,124,250,.07), transparent 60%), var(--surface);
+  overflow:hidden;
+}
+.ad-preview-svg{ width:100%; height:230px; display:block; }
+.ad-prev-card{ fill:var(--surface-2); stroke:var(--border-strong); stroke-width:1.4; }
+.ad-prev-frame{ fill:none; stroke:var(--border-strong); stroke-width:1.2; stroke-dasharray:6 5; }
+.ad-prev-line{ stroke:var(--text-faint); stroke-width:1.4; fill:none; }
+.ad-prev-label{ fill:var(--text-dim); font-family:var(--sans); font-size:9px; font-weight:600; }
+.ad-prev-text{ fill:var(--text-faint); font-family:var(--sans); font-size:9px; }
+.ad-preview-meta{
+  display:flex; align-items:center; gap:10px; padding:10px 14px; border-top:1px solid var(--border);
+  font-size:11px; color:var(--text-faint);
+}
+.ad-preview-meta b{ color:var(--text-dim); font-weight:700; }
+.ad-preview-meta .spacer{ flex:1; }
+.ad-empty{
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
+  padding:38px 20px; border:1px dashed var(--border-strong); border-radius:14px; background:var(--surface);
+  text-align:center;
+}
+.ad-empty .ic{ width:40px; height:40px; border-radius:11px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; }
+.ad-empty .t{ font-size:12.5px; color:var(--text-dim); font-weight:600; }
+.ad-empty .s{ font-size:11.5px; color:var(--text-faint); max-width:340px; }
+
 .resp-tabs{ display:flex; gap:6px; margin-bottom:12px; }
 .resp-tab{
   font-size:11px; font-weight:700; padding:6px 13px; border-radius:999px;
@@ -2343,6 +2370,7 @@ pre.json-raw{ max-height:360px; margin:0; }
       <div class="modal-tab" data-mtab="release">Release Pipeline</div>
       <div class="modal-tab" data-mtab="auth">Auth</div>
       <div class="modal-tab" data-mtab="docs">Documents</div>
+      <div class="modal-tab" data-mtab="architecture">Architecture</div>
     </div>
     <div class="modal-pane active" data-mpane="general">
       <div class="field">
@@ -2529,6 +2557,11 @@ pre.json-raw{ max-height:360px; margin:0; }
       </div>
       <input type="file" id="projDocsInput" multiple>
       <div class="doc-list" id="projDocsList"></div>
+    </div>
+    <div class="modal-pane" data-mpane="architecture">
+      <div class="hint" style="margin-top:0;">Design a drag-and-drop system architecture diagram — cloud services, SaaS connectors, MuleSoft flows, databases and more — with a dedicated diagramming tool that opens in its own tab. Publish it from there to show it on this project's overview page, below the request flow.</div>
+      <div class="ad-modal-status" id="projArchStatus" style="margin:14px 0; font-size:12px; color:var(--text-dim);"></div>
+      <button type="button" class="primary" id="btnOpenArchStudioSettings">Open Architecture Studio →</button>
     </div>
     <div class="modal-actions">
       <div></div>
@@ -6911,6 +6944,24 @@ function renderProjectOverview(main, projectId){
       }).join('')}</div>`
     : `<div class="empty-field">No documents uploaded yet — add some from Manage documents above.</div>`;
 
+  const archDiagram = proj.architectureDiagram;
+  const hasArchDiagram = !!(archDiagram && Array.isArray(archDiagram.nodes) && archDiagram.nodes.length);
+  const adHtml = hasArchDiagram
+    ? `<div class="ad-preview-wrap">
+        ${architectureDiagramPreviewSvg(archDiagram)}
+        <div class="ad-preview-meta">
+          <span>Published ${archDiagram.updatedBy ? `by <b>${escapeHtml(archDiagram.updatedBy)}</b> ` : ''}${archDiagram.updatedAt ? '· ' + escapeHtml(formatDateTime(archDiagram.updatedAt)) : ''}</span>
+          <div class="spacer"></div>
+          <button type="button" class="ghost" id="btnOpenArchStudio" style="text-transform:none; letter-spacing:0; font-weight:600; font-size:11px; padding:5px 10px;">Open Architecture Studio</button>
+        </div>
+      </div>`
+    : `<div class="ad-empty">
+        <div class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.4"></rect><rect x="14" y="3" width="7" height="7" rx="1.4"></rect><rect x="14" y="14" width="7" height="7" rx="1.4"></rect><rect x="3" y="14" width="7" height="7" rx="1.4"></rect><path d="M10 6.5h4M17.5 10v4M14 17.5h-4M6.5 14v-4"></path></svg></div>
+        <div class="t">No architecture diagram yet</div>
+        <div class="s">Design a drag-and-drop system diagram — AWS, Salesforce, MuleSoft flows and more — in Architecture Studio, then publish it here.</div>
+        <button type="button" class="ghost" id="btnOpenArchStudio" style="text-transform:none; letter-spacing:0; font-weight:600; font-size:11.5px; padding:7px 14px; margin-top:2px;">Open Architecture Studio</button>
+      </div>`;
+
   main.innerHTML = `
     <div class="crumb">${escapeHtml(proj.name)} <span class="sep">/</span> Overview</div>
 
@@ -6968,6 +7019,11 @@ function renderProjectOverview(main, projectId){
                 <span class="item-sub">${proj.visibility==='public' ? 'Only you' : 'Your organisation'}</span>
               </button>`}
               <div class="ep-actions-divider"></div>
+              <button type="button" class="ep-actions-item proj-actions-item" id="btnOpenArchStudioMenu" role="menuitem">
+                <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.4"></rect><rect x="14" y="3" width="7" height="7" rx="1.4"></rect><rect x="14" y="14" width="7" height="7" rx="1.4"></rect><rect x="3" y="14" width="7" height="7" rx="1.4"></rect><path d="M10 6.5h4M17.5 10v4M14 17.5h-4M6.5 14v-4"></path></svg></span>
+                Open Architecture Studio
+              </button>
+              <div class="ep-actions-divider"></div>
               <button type="button" class="ep-actions-item proj-actions-item" id="btnExportPdf" role="menuitem">
                 <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M9 15l3 3 3-3"></path><path d="M12 11v7"></path></svg></span>
                 Export as PDF
@@ -6999,6 +7055,13 @@ function renderProjectOverview(main, projectId){
         <span><span class="sw"></span>Request</span>
         ${direction==='2-way' ? '<span><span class="sw ret"></span>Response</span>' : ''}
       </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">
+        <span style="flex:1;">Architecture diagram <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— drag-and-drop system diagram for ${escapeHtml(proj.name)}</span></span>
+      </div>
+      ${adHtml}
     </div>
 
     <div class="section">
@@ -7070,6 +7133,12 @@ function renderProjectOverview(main, projectId){
     document.getElementById('projActionsDD').classList.remove('open');
     openExportPdfModal(proj.id);
   });
+  document.getElementById('btnOpenArchStudioMenu').addEventListener('click', ()=>{
+    document.getElementById('projActionsDD').classList.remove('open');
+    openArchitectureStudioTab(proj);
+  });
+  const btnOpenArchStudio = document.getElementById('btnOpenArchStudio');
+  if(btnOpenArchStudio) btnOpenArchStudio.addEventListener('click', ()=>openArchitectureStudioTab(proj));
   main.querySelectorAll('[data-open-ep]').forEach(row=>{
     row.addEventListener('click', ()=>{
       state.selected = { type:'endpoint', id: row.getAttribute('data-open-ep') };
@@ -8397,6 +8466,12 @@ function openProjectModal(projectId, initialTab){
   renderProjectDocsList(proj);
   renderReleasePipeline(proj);
 
+  const archStatusEl = document.getElementById('projArchStatus');
+  if(archStatusEl){
+    archStatusEl.textContent = proj.architectureDiagram
+      ? `Last published${proj.architectureDiagram.updatedBy ? ' by ' + proj.architectureDiagram.updatedBy : ''}${proj.architectureDiagram.updatedAt ? ' · ' + formatDateTime(proj.architectureDiagram.updatedAt) : ''}.`
+      : 'Not published yet.';
+  }
   const tab = initialTab || 'general';
   document.querySelectorAll('.modal-tab').forEach(t=>t.classList.remove('active'));
   document.querySelector(`.modal-tab[data-mtab="${tab}"]`).classList.add('active');
@@ -9207,16 +9282,68 @@ function openEditorTab(proj, ep){
   const w = window.open(buildEditorUrl(proj, ep), '_blank');
   if(!w){ toast('Please allow popups to open the endpoint editor in a new tab.'); }
 }
-// The editor tab broadcasts on save so this tab can pick up the change without
-// a manual refresh, whether it was a brand-new endpoint or an edit to one
-// already open here.
+// The draw.io-style diagram editor (server/views/architecture-studio.html) —
+// opens in its own tab the same way edit.studio does, authenticated by the
+// same session cookie. It re-resolves the project slug against
+// /api/workspace itself, and its "Publish" button writes straight back to
+// this project's `architectureDiagram` field via the normal PUT
+// /api/workspace/projects call — no separate API route needed.
+function buildArchitectureStudioUrl(proj){
+  return `/${ORG_TOKEN}/${slugify(proj.name)}/architecture.studio`;
+}
+function openArchitectureStudioTab(proj){
+  const w = window.open(buildArchitectureStudioUrl(proj), '_blank');
+  if(!w){ toast('Please allow popups to open Architecture Studio in a new tab.'); }
+}
+// Renders a compact read-only preview of a published architecture diagram
+// for the project overview page (the full icon library only lives in
+// architecture-studio.html — this is just boxes, labels and connector lines,
+// enough to recognise the shape of the diagram before opening the real editor).
+function architectureDiagramPreviewSvg(diagram){
+  const nodes = (diagram && diagram.nodes) || [];
+  const edges = (diagram && diagram.edges) || [];
+  if(!nodes.length) return '';
+  const pad = 26;
+  const minX = Math.min(...nodes.map(n=>n.x)) - pad, minY = Math.min(...nodes.map(n=>n.y)) - pad;
+  const maxX = Math.max(...nodes.map(n=>n.x+n.w)) + pad, maxY = Math.max(...nodes.map(n=>n.y+n.h)) + pad;
+  const byId = {}; nodes.forEach(n=>byId[n.id]=n);
+  const anchor = (n, side)=>{
+    switch(side){
+      case 'top': return { x:n.x+n.w/2, y:n.y };
+      case 'bottom': return { x:n.x+n.w/2, y:n.y+n.h };
+      case 'left': return { x:n.x, y:n.y+n.h/2 };
+      default: return { x:n.x+n.w, y:n.y+n.h/2 };
+    }
+  };
+  const edgesSvg = edges.map(e=>{
+    const a = byId[e.from], b = byId[e.to];
+    if(!a || !b) return '';
+    const p1 = anchor(a, e.fromSide||'right'), p2 = anchor(b, e.toSide||'left');
+    return `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" class="ad-prev-line"${e.dashed ? ' stroke-dasharray="5 4"' : ''}></line>`;
+  }).join('');
+  const nodesSvg = nodes.map(n=>{
+    if(n.kind === 'frame'){
+      return `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="10" class="ad-prev-frame"></rect>`;
+    }
+    if(n.kind === 'text'){
+      return `<text x="${n.x+6}" y="${n.y+16}" class="ad-prev-text">${escapeHtml((n.label||'').slice(0,44))}</text>`;
+    }
+    return `<g>
+      <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="12" class="ad-prev-card"${n.color ? ` stroke="${n.color}"` : ''}></rect>
+      <text x="${n.x+n.w/2}" y="${n.y+n.h/2+4}" text-anchor="middle" class="ad-prev-label">${escapeHtml((n.label||'').slice(0,22))}</text>
+    </g>`;
+  }).join('');
+  return `<svg viewBox="${minX} ${minY} ${maxX-minX} ${maxY-minY}" class="ad-preview-svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Architecture diagram preview">${edgesSvg}${nodesSvg}</svg>`;
+}
+// Both the editor tab and the architecture studio tab broadcast on save so
+// this tab can pick up the change without a manual refresh.
 if('BroadcastChannel' in window){
   const editorSyncChannel = new BroadcastChannel('api-studio-sync');
   editorSyncChannel.addEventListener('message', (e)=>{
-    if(!e.data || e.data.type !== 'endpoint-saved') return;
+    if(!e.data || !['endpoint-saved','architecture-diagram-saved'].includes(e.data.type)) return;
     loadState().then(()=>{
       renderAll();
-      toast('Endpoint updated in another tab — refreshed.');
+      toast(e.data.type === 'architecture-diagram-saved' ? 'Architecture diagram updated in another tab — refreshed.' : 'Endpoint updated in another tab — refreshed.');
     });
   });
 }
@@ -9628,6 +9755,9 @@ document.getElementById('pdfExportModal').addEventListener('click', (e)=>{ if(e.
 
 document.getElementById('pgCancel').addEventListener('click', closeProjectModal);
 document.getElementById('pgSave').addEventListener('click', saveProjectSettings);
+document.getElementById('btnOpenArchStudioSettings').addEventListener('click', ()=>{
+  if(editingProjectId && state.projects[editingProjectId]) openArchitectureStudioTab(state.projects[editingProjectId]);
+});
 
 /* ---------- Request flow direction: custom preset builder wiring ---------- */
 document.getElementById('pgFlowDirection').addEventListener('change', (e)=>{

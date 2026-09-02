@@ -110,6 +110,7 @@ async function requireAuth(req, res, next) {
 const studioTemplate = fs.readFileSync(path.join(__dirname, 'views', 'studio.html'), 'utf8');
 const auditLogTemplate = fs.readFileSync(path.join(__dirname, 'views', 'auditlog.html'), 'utf8');
 const editorTemplate = fs.readFileSync(path.join(__dirname, 'views', 'editor.html'), 'utf8');
+const architectureStudioTemplate = fs.readFileSync(path.join(__dirname, 'views', 'architecture-studio.html'), 'utf8');
 
 // The organisation name never appears in a URL in the clear — every tenant-
 // scoped page is addressed as /<encrypted-org-token>/whatever instead of
@@ -197,6 +198,39 @@ function renderEditor(req, res, { projectSlug = '', endpointSlug = '' } = {}) {
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
 }
+
+// The draw.io-style architecture diagram editor (server/views/architecture-studio.html)
+// — opens in its own tab from a project's Overview page or Project settings,
+// authenticated by the same session cookie. Like edit.studio, it never
+// decodes the project slug server-side: it re-resolves it client-side
+// against the same GET /api/workspace payload, and the diagram itself is
+// just another field on that project's opaque encrypted blob
+// (`architectureDiagram`), saved through the existing PUT /api/workspace/projects
+// endpoint — no new API routes needed for it.
+function renderArchitectureStudio(req, res, { projectSlug = '' } = {}) {
+  const authUser = {
+    id: req.user.sub,
+    username: req.user.username,
+    organisation: req.user.organisation,
+    role: req.user.role,
+    ...(req.user.role === 'custom' ? { customPermissions: req.user.customPermissions || null } : {}),
+  };
+  const html = architectureStudioTemplate
+    .replace(/__CSP_NONCE__/g, res.locals.cspNonce)
+    .replace('__AUTH_USER_JSON__', JSON.stringify(authUser))
+    .replace(/__ORG_TOKEN__/g, tokenForUser(req.user))
+    .replace('__PROJECT_SLUG__', JSON.stringify(projectSlug));
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+}
+
+app.get('/:orgToken/:projectSlug/architecture.studio', requireAuth, (req, res) => {
+  const org = dataCrypto.decryptOrgToken(req.params.orgToken);
+  if (org !== req.user.organisation) {
+    return res.redirect(`/${tokenForUser(req.user)}/${req.params.projectSlug}/architecture.studio`);
+  }
+  renderArchitectureStudio(req, res, { projectSlug: req.params.projectSlug });
+});
 
 // Brand new endpoint, brand new project: /{orgToken}/edit.studio
 app.get('/:orgToken/edit.studio', requireAuth, (req, res) => {

@@ -196,7 +196,12 @@ function projectForViewer(row, viewerId, data) {
     ? data.endpoints.filter((ep) => ep && ep.visibility === 'public')
     : [];
   const attachments = row.visibility === 'public' && Array.isArray(data.attachments) ? data.attachments : [];
-  return { ...data, id: row.id, visibility: row.visibility, endpoints, attachments, _owned: false, _readonly: true };
+  // Same rule as attachments: the architecture diagram is project-level (not
+  // per-endpoint), so it only follows a project into a viewer's workspace
+  // when the whole project is public — never via the has_public_endpoint
+  // loophole that lets an otherwise-private project's public endpoints show up here.
+  const architectureDiagram = row.visibility === 'public' ? data.architectureDiagram : undefined;
+  return { ...data, id: row.id, visibility: row.visibility, endpoints, attachments, architectureDiagram, _owned: false, _readonly: true };
 }
 
 // GET /api/workspace — everything the signed-in user should see: their own
