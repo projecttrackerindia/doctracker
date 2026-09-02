@@ -1633,8 +1633,14 @@ window.addEventListener('pointerup', (e)=>{
 function nearestSide(node, pt){
   const cx = node.x+node.w/2, cy = node.y+node.h/2;
   const dx = pt.x - cx, dy = pt.y - cy;
-  if(Math.abs(dx/node.w) > Math.abs(dy/node.h)) return dx > 0 ? 'left' : 'right';
-  return dy > 0 ? 'top' : 'bottom';
+  // dx/dy are the drop point's offset from the node's center. The nearest
+  // side must be in the SAME direction as that offset — right when the
+  // point is right of center, bottom when it's below center, etc. This was
+  // previously inverted (returning the opposite side from where you
+  // actually dropped), which is why connecting to the top of a node or
+  // frame would anchor the edge to its bottom instead.
+  if(Math.abs(dx/node.w) > Math.abs(dy/node.h)) return dx > 0 ? 'right' : 'left';
+  return dy > 0 ? 'bottom' : 'top';
 }
 
 /* zoom */
