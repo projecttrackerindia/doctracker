@@ -577,6 +577,9 @@ svg{ display:block; }
           <marker id="arrowHeadSel" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" class="edge-arrow selected"></path>
           </marker>
+          <!-- Colored / alternate-shape arrowhead markers are generated on
+               demand into this defs block by ensureArrowMarker() below,
+               one per (shape,color) pair actually used in the diagram. -->>
           <filter id="iconSoftShadow" x="-40%" y="-40%" width="180%" height="180%">
             <feDropShadow dx="0" dy="1.5" stdDeviation="1.6" flood-color="#000" flood-opacity="0.35"></feDropShadow>
           </filter>
@@ -865,6 +868,30 @@ const ICON_DEFS = [
     `<path d="M16 6l8 3v6c0 6-3.4 9.8-8 11-4.6-1.2-8-5-8-11V9z" stroke-linejoin="round"></path><path d="M12.3 16.4l2.6 2.6 5-5.4" stroke-linecap="round" stroke-linejoin="round"></path>`) },
   { id:'dns', name:'DNS', cat:'Networking & Security', color:'#a855f7', svg: badge('#a855f7','square',
     `<circle cx="16" cy="16" r="10.5"></circle><path d="M5.5 16h21M16 5.5c3 3 3 18 0 21-3-3-3-18 0-21" stroke-width="1.4"></path>`) },
+  { id:'auth', name:'Auth / Identity', cat:'Networking & Security', color:'#f76707', svg: badge('#f76707','circle',
+    `<circle cx="16" cy="12.5" r="4.5"></circle><path d="M7 26c1.6-5 4.7-7.5 9-7.5s7.4 2.5 9 7.5" stroke-linecap="round"></path><rect x="12.5" y="10" width="7" height="6" rx="1.4" fill="none"></rect>`) },
+  { id:'apikey', name:'API Key / Secret', cat:'Networking & Security', color:'#495057', svg: badge('#495057','square',
+    `<circle cx="12" cy="16" r="5.5"></circle><path d="M17 16h10M23 16v4.5M27 16v3" stroke-width="1.8" stroke-linecap="round"></path>`) },
+  // ---- Devops & Monitoring ----
+  { id:'cicd', name:'CI/CD Pipeline', cat:'DevOps & Monitoring', color:'#20c997', svg: badge('#20c997','square',
+    `<circle cx="8" cy="10" r="2.6"></circle><circle cx="8" cy="22" r="2.6"></circle><circle cx="24" cy="16" r="2.6"></circle><path d="M8 12.6V19M10.5 10h8a5 5 0 0 1 5 5v0M10.5 22h8a5 5 0 0 0 5-5v0" stroke-width="1.6"></path>`) },
+  { id:'monitoring', name:'Monitoring / APM', cat:'DevOps & Monitoring', color:'#4dabf7', svg: badge('#4dabf7','circle',
+    `<path d="M5.5 20h5l3-9 5 15 3-11 2.5 5h6.5" stroke-linecap="round" stroke-linejoin="round"></path>`) },
+  { id:'logs', name:'Logging', cat:'DevOps & Monitoring', color:'#868e96', svg: badge('#868e96','square',
+    `<rect x="6" y="5" width="20" height="22" rx="2"></rect><path d="M10 11h12M10 16h12M10 21h8" stroke-width="1.6" stroke-linecap="round"></path>`) },
+  { id:'scheduler', name:'Cron / Scheduler', cat:'DevOps & Monitoring', color:'#7048e8', svg: badge('#7048e8','circle',
+    `<circle cx="16" cy="16" r="10.5"></circle><path d="M16 9.5V16l5 3" stroke-linecap="round" stroke-linejoin="round"></path>`) },
+  { id:'alert', name:'Alert / Incident', cat:'DevOps & Monitoring', color:'#e03131', svg: badge('#e03131','square',
+    `<path d="M16 6l11 19H5z" stroke-linejoin="round"></path><path d="M16 14v5" stroke-linecap="round"></path><circle cx="16" cy="22.5" r="1" fill="#fff" stroke="none"></circle>`) },
+  // ---- Data & Analytics ----
+  { id:'etl', name:'ETL / Data Pipeline', cat:'Data & Analytics', color:'#0ca678', svg: badge('#0ca678','square',
+    `<rect x="4" y="13.5" width="7" height="5" rx="1.4"></rect><rect x="13" y="6" width="7" height="5" rx="1.4"></rect><rect x="13" y="21" width="7" height="5" rx="1.4"></rect><rect x="22" y="13.5" width="7" height="5" rx="1.4"></rect><path d="M11 16h2M18 11v2.5M18 21v-2.5M20 16h2" stroke-width="1.5"></path>`) },
+  { id:'datalake', name:'Data Lake', cat:'Data & Analytics', color:'#1c7ed6', svg: badge('#1c7ed6','circle',
+    `<ellipse cx="16" cy="11" rx="10" ry="4"></ellipse><path d="M6 11v10c0 2.2 4.5 4 10 4s10-1.8 10-4V11" ></path><path d="M6 16c0 2.2 4.5 4 10 4s10-1.8 10-4" stroke-width="1.4"></path>`) },
+  { id:'analytics', name:'Analytics Dashboard', cat:'Data & Analytics', color:'#ae3ec9', svg: badge('#ae3ec9','square',
+    `<rect x="5.5" y="16" width="5" height="10" rx="1.2"></rect><rect x="13.5" y="10" width="5" height="16" rx="1.2"></rect><rect x="21.5" y="6" width="5" height="20" rx="1.2"></rect>`) },
+  { id:'search', name:'Search Index', cat:'Data & Analytics', color:'#0c8599', svg: badge('#0c8599','circle',
+    `<circle cx="14" cy="14" r="7.5"></circle><path d="M19.5 19.5L27 27" stroke-width="2.4" stroke-linecap="round"></path>`) },
   // ---- Generic shapes ----
   { id:'cloud', name:'Cloud (generic)', cat:'Generic', color:'#9aa3c0', svg: badge('#9aa3c0','circle',
     `<path d="M9 22a5.5 5.5 0 0 1-.6-11 7 7 0 0 1 13.2-3 5.3 5.3 0 0 1 7.2 5 5 5 0 0 1-1.4 9z" stroke-linejoin="round"></path>`) },
@@ -872,8 +899,14 @@ const ICON_DEFS = [
     `<rect x="6" y="11" width="20" height="10" rx="2.6"></rect>`) },
   { id:'decision', name:'Decision', cat:'Generic', color:'#ffc45c', svg: badge('#ffc45c','square',
     `<path d="M16 6l10 10-10 10-10-10z" stroke-linejoin="round"></path>`) },
+  { id:'actor', name:'Actor / Person', cat:'Generic', color:'#495057', svg: badge('#495057','circle',
+    `<circle cx="16" cy="10.5" r="4.2"></circle><path d="M7 26c1.5-5.4 4.8-8 9-8s7.5 2.6 9 8" stroke-linecap="round"></path>`) },
+  { id:'externalsystem', name:'External System', cat:'Generic', color:'#adb5bd', svg: badge('#adb5bd','square',
+    `<rect x="5" y="7" width="22" height="18" rx="2.4" stroke-dasharray="3 2.4"></rect><path d="M12 14h8M12 18h8" stroke-width="1.6"></path>`) },
+  { id:'datastore', name:'Generic Data Store', cat:'Generic', color:'#748ffc', svg: badge('#748ffc','circle',
+    `<path d="M6 12v10c0 1.7 4.5 3 10 3s10-1.3 10-3V12" ></path><ellipse cx="16" cy="12" rx="10" ry="3.4"></ellipse>`) },
 ];
-const CATEGORY_ORDER = ['Custom','Client & Users','Compute','Storage & Database','Integration & Messaging','SaaS & Platforms','Networking & Security','Generic'];
+const CATEGORY_ORDER = ['Custom','Client & Users','Compute','Storage & Database','Integration & Messaging','SaaS & Platforms','Networking & Security','DevOps & Monitoring','Data & Analytics','Generic'];
 const ICONS_BY_ID = {}; ICON_DEFS.forEach(i=>ICONS_BY_ID[i.id]=i);
 
 // ---- Custom icon library (org-wide, shared across every project) ----
@@ -1111,6 +1144,32 @@ function renderNodes(){
   });
 }
 
+// ---- Colored / alternate-shape arrowhead markers -------------------------
+// SVG <marker> fill can't just inherit the path's stroke color reliably
+// across browsers, so instead of one marker per edge we lazily create one
+// shared marker per (arrowShape, color) combination the diagram actually
+// uses, and cache the ids so re-rendering never duplicates a <marker>.
+const ARROW_MARKER_CACHE = new Set();
+const ARROW_SHAPE_INNER = {
+  triangle: c => `<path d="M0.5,0.5 L10,5 L0.5,9.5 z" fill="${c}"></path>`,
+  open:     c => `<path d="M1,1 L9,5 L1,9" fill="none" stroke="${c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>`,
+  diamond:  c => `<path d="M5,0.5 L9.5,5 L5,9.5 L0.5,5 z" fill="${c}"></path>`,
+  circle:   c => `<circle cx="5" cy="5" r="4" fill="${c}"></circle>`,
+};
+function arrowMarkerId(shape, color){
+  return `arrow-${shape}-${color.replace('#','')}`;
+}
+function ensureArrowMarker(shape, color){
+  const id = arrowMarkerId(shape, color);
+  if(ARROW_MARKER_CACHE.has(id)) return id;
+  const inner = (ARROW_SHAPE_INNER[shape] || ARROW_SHAPE_INNER.triangle)(color);
+  const marker = svgEl_('marker', { id, viewBox:'0 0 10 10', refX:'8', refY:'5', markerWidth:'8', markerHeight:'8', orient:'auto-start-reverse' });
+  marker.innerHTML = inner;
+  document.querySelector('#dgSvg defs').appendChild(marker);
+  ARROW_MARKER_CACHE.add(id);
+  return id;
+}
+
 function renderEdges(){
   layerEdges.innerHTML = '';
   state.edges.forEach(edge=>{
@@ -1125,10 +1184,27 @@ function renderEdges(){
     const dashArray = lineStyle === 'dotted' ? '2 4' : lineStyle === 'dashed' ? '6 5' : (edge.animated!==false ? '5 5' : 'none');
     const showEndArrow = edge.arrowEnd !== false; // default true — matches every diagram before this option existed
     const showStartArrow = !!edge.arrowStart;
+    const arrowShape = edge.arrowShape || 'triangle';
     const g = svgEl_('g', { class:'edge-group', 'data-id':edge.id, 'data-kind':'edge' });
     const pathAttrs = { class:'edge-path' + (sel?' selected':'') + (edge.animated!==false?' flow':''), d, 'stroke-dasharray': dashArray };
-    if(showEndArrow) pathAttrs['marker-end'] = `url(#${sel?'arrowHeadSel':'arrowHead'})`;
-    if(showStartArrow) pathAttrs['marker-start'] = `url(#${sel?'arrowHeadSel':'arrowHead'})`;
+    if(edge.color){
+      // Custom color overrides the theme-following default entirely, both
+      // for the line and for whichever arrowheads are shown.
+      pathAttrs.style = `stroke:${edge.color};`;
+      const markerId = ensureArrowMarker(arrowShape, sel ? edge.color : edge.color);
+      if(showEndArrow) pathAttrs['marker-end'] = `url(#${markerId})`;
+      if(showStartArrow) pathAttrs['marker-start'] = `url(#${markerId})`;
+    } else if(arrowShape !== 'triangle'){
+      // No custom color, but a non-default arrow shape — build a themed
+      // marker using the same colors the default markers use.
+      const themeColor = sel ? 'var(--accent)' : 'var(--text-faint)';
+      const markerId = ensureArrowMarker(arrowShape, themeColor);
+      if(showEndArrow) pathAttrs['marker-end'] = `url(#${markerId})`;
+      if(showStartArrow) pathAttrs['marker-start'] = `url(#${markerId})`;
+    } else {
+      if(showEndArrow) pathAttrs['marker-end'] = `url(#${sel?'arrowHeadSel':'arrowHead'})`;
+      if(showStartArrow) pathAttrs['marker-start'] = `url(#${sel?'arrowHeadSel':'arrowHead'})`;
+    }
     g.appendChild(svgEl_('path', pathAttrs));
     g.appendChild(svgEl_('path', { class:'edge-hit', d }));
     if(edge.label){
@@ -1817,10 +1893,19 @@ function updateInspector(){
     const shape = edge.shape || 'elbow';
     const lineStyle = edge.lineStyle || (edge.dashed ? 'dashed' : 'solid');
     const arrowDir = edge.arrowStart && edge.arrowEnd ? 'both' : edge.arrowStart && !edge.arrowEnd ? 'start' : edge.arrowEnd === false ? 'none' : 'end';
+    const arrowShape = edge.arrowShape || 'triangle';
     body.innerHTML = `
       <div class="insp-field">
         <label>Label</label>
         <input type="text" id="inspEdgeLabel" placeholder="e.g. HTTPS, async event…" value="${escapeHtml(edge.label||'')}">
+      </div>
+      <div class="insp-field">
+        <label>Line color</label>
+        <div class="swatches" id="inspEdgeSwatches">
+          <div class="swatch${!edge.color?' active':''}" data-c="" title="Default (theme)" style="background:var(--surface-2);border:1.5px dashed var(--border-strong);"></div>
+          ${SWATCHES.map(c=>`<div class="swatch${edge.color===c?' active':''}" data-c="${c}" style="background:${c};"></div>`).join('')}
+        </div>
+        <input type="color" id="inspEdgeColorCustom" value="${edge.color||'#22e5ff'}" title="Custom color" style="margin-top:8px;width:36px;height:26px;border:none;border-radius:6px;padding:0;cursor:pointer;background:none;">
       </div>
       <div class="insp-field">
         <label>Path shape</label>
@@ -1843,7 +1928,17 @@ function updateInspector(){
         <div class="seg-group" id="inspArrowDir">
           <button type="button" class="seg-btn${arrowDir==='none'?' active':''}" data-v="none" title="Plain line, no arrowhead">None</button>
           <button type="button" class="seg-btn${arrowDir==='end'?' active':''}" data-v="end" title="Arrow at the end">→</button>
+          <button type="button" class="seg-btn${arrowDir==='start'?' active':''}" data-v="start" title="Arrow at the start">←</button>
           <button type="button" class="seg-btn${arrowDir==='both'?' active':''}" data-v="both" title="Arrow both ends">↔</button>
+        </div>
+      </div>
+      <div class="insp-field">
+        <label>Arrowhead style</label>
+        <div class="seg-group" id="inspArrowShape">
+          <button type="button" class="seg-btn${arrowShape==='triangle'?' active':''}" data-v="triangle" title="Solid triangle">▶</button>
+          <button type="button" class="seg-btn${arrowShape==='open'?' active':''}" data-v="open" title="Open / chevron">›</button>
+          <button type="button" class="seg-btn${arrowShape==='diamond'?' active':''}" data-v="diamond" title="Diamond">◆</button>
+          <button type="button" class="seg-btn${arrowShape==='circle'?' active':''}" data-v="circle" title="Circle">●</button>
         </div>
       </div>
       <div class="insp-field toggle-row">
@@ -1861,6 +1956,15 @@ function updateInspector(){
       markDirty(); scheduleAutosave();
     });
     document.getElementById('inspEdgeLabel').addEventListener('blur', pushHistory);
+    document.getElementById('inspEdgeSwatches').querySelectorAll('.swatch').forEach(sw=>{
+      sw.addEventListener('click', ()=>{ edge.color = sw.dataset.c || null; render(); pushHistory(); });
+    });
+    document.getElementById('inspEdgeColorCustom').addEventListener('input', (e)=>{
+      edge.color = e.target.value;
+      renderEdges();
+      markDirty(); scheduleAutosave();
+    });
+    document.getElementById('inspEdgeColorCustom').addEventListener('change', ()=>{ render(); pushHistory(); });
     document.getElementById('inspShape').querySelectorAll('.seg-btn').forEach(btn=>{
       btn.addEventListener('click', ()=>{ edge.shape = btn.dataset.v; render(); pushHistory(); });
     });
@@ -1870,10 +1974,13 @@ function updateInspector(){
     document.getElementById('inspArrowDir').querySelectorAll('.seg-btn').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         const v = btn.dataset.v;
-        edge.arrowStart = v === 'both';
-        edge.arrowEnd = v !== 'none';
+        edge.arrowStart = v === 'both' || v === 'start';
+        edge.arrowEnd = v === 'both' || v === 'end';
         render(); pushHistory();
       });
+    });
+    document.getElementById('inspArrowShape').querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ edge.arrowShape = btn.dataset.v; render(); pushHistory(); });
     });
     document.getElementById('inspAnimated').addEventListener('change', (e)=>{ edge.animated = e.target.checked; render(); pushHistory(); });
     document.getElementById('inspDel').addEventListener('click', deleteSelection);
@@ -1996,16 +2103,128 @@ function exportPng(){
   img.onerror = ()=>{ toast('Could not render export — try SVG instead.'); URL.revokeObjectURL(url); };
   img.src = url;
 }
+function pngCanvasFromSvg(svgStr, scale){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
+    const url = URL.createObjectURL(svgBlob);
+    img.onload = ()=>{
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width*scale; canvas.height = img.height*scale;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(scale, scale);
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      resolve(canvas);
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error('render failed')); };
+    img.src = url;
+  });
+}
+let _jsPdfLoading = null;
+function loadJsPdf(){
+  if(window.jspdf) return Promise.resolve();
+  if(_jsPdfLoading) return _jsPdfLoading;
+  _jsPdfLoading = new Promise((resolve, reject)=>{
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+    s.onload = resolve; s.onerror = ()=>reject(new Error('Could not load PDF library — check your connection.'));
+    document.head.appendChild(s);
+  });
+  return _jsPdfLoading;
+}
+async function exportPdf(){
+  const svgStr = buildExportSvgString();
+  if(!svgStr){ toast('Nothing to export yet.'); return; }
+  try{
+    await loadJsPdf();
+    const canvas = await pngCanvasFromSvg(svgStr, 2);
+    const { jsPDF } = window.jspdf;
+    const orientation = canvas.width >= canvas.height ? 'landscape' : 'portrait';
+    const pdf = new jsPDF({ orientation, unit:'pt', format:[canvas.width/2, canvas.height/2] });
+    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, canvas.width/2, canvas.height/2);
+    pdf.save(`${slugify(proj?proj.name:'architecture')}-diagram.pdf`);
+  }catch(err){
+    toast(err.message || 'PDF export failed — try SVG or PNG instead.');
+  }
+}
+// ---- Written documentation export (Markdown) ------------------------------
+// Walks the current diagram's nodes/frames/connectors and writes a plain
+// architecture-doc summary: components grouped by category, group
+// membership, and every connector with its label and direction. This is a
+// text artifact meant to sit alongside the visual export (e.g. in a wiki
+// page or PR description), not a replacement for it.
+function buildMarkdownDoc(){
+  if(state.nodes.length === 0) return null;
+  const title = proj ? proj.name : 'Architecture';
+  const lines = [`# ${title} — Architecture Documentation`, '', `_Generated ${new Date().toISOString().slice(0,10)}_`, ''];
+
+  const frames = state.nodes.filter(n=>n.kind==='frame');
+  const icons = state.nodes.filter(n=>n.kind==='icon');
+  const byCat = {};
+  icons.forEach(n=>{
+    const def = ICONS_BY_ID[n.icon] || {};
+    const cat = def.cat || 'Other';
+    (byCat[cat] = byCat[cat] || []).push({ node:n, def });
+  });
+
+  lines.push('## Components', '');
+  CATEGORY_ORDER.filter(c=>byCat[c]).forEach(cat=>{
+    lines.push(`### ${cat}`, '');
+    byCat[cat].forEach(({node,def})=>{
+      const frame = node.parentId ? nodeById(node.parentId) : null;
+      lines.push(`- **${node.label}** (${def.name || 'component'})${frame ? ` — part of group "${frame.label}"` : ''}`);
+    });
+    lines.push('');
+  });
+
+  if(frames.length){
+    lines.push('## Groups', '');
+    frames.forEach(f=>{
+      const members = childrenOf(f.id).map(m=>m.label);
+      lines.push(`- **${f.label}**: ${members.length ? members.join(', ') : '(empty)'}`);
+    });
+    lines.push('');
+  }
+
+  if(state.edges.length){
+    lines.push('## Connections', '');
+    state.edges.forEach(e=>{
+      const a = nodeById(e.from), b = nodeById(e.to);
+      if(!a || !b) return;
+      const arrow = e.arrowStart && e.arrowEnd ? '<->' : e.arrowStart ? '<-' : e.arrowEnd===false ? '--' : '->';
+      const label = e.label ? ` — ${e.label}` : '';
+      lines.push(`- ${a.label} ${arrow} ${b.label}${label}`);
+    });
+    lines.push('');
+  }
+
+  const textNotes = state.nodes.filter(n=>n.kind==='text' && n.label && n.label.trim());
+  if(textNotes.length){
+    lines.push('## Notes', '');
+    textNotes.forEach(n=>lines.push(`- ${n.label}`));
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+function exportMarkdown(){
+  const md = buildMarkdownDoc();
+  if(!md){ toast('Nothing to document yet.'); return; }
+  downloadBlob(new Blob([md], {type:'text/markdown'}), `${slugify(proj?proj.name:'architecture')}-documentation.md`);
+}
 document.getElementById('btnExport').addEventListener('click', (e)=>{
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
-  menu.innerHTML = `<button class="ctx-item" id="expSvg">Export as SVG</button><button class="ctx-item" id="expPng">Export as PNG</button>`;
+  menu.innerHTML = `<button class="ctx-item" id="expSvg">Export as SVG</button><button class="ctx-item" id="expPng">Export as PNG</button><button class="ctx-item" id="expPdf">Export as PDF</button><button class="ctx-item" id="expMd">Export documentation (Markdown)</button>`;
   document.body.appendChild(menu);
   const rect = e.target.closest('button').getBoundingClientRect();
   menu.style.left = rect.left + 'px'; menu.style.top = (rect.bottom+6) + 'px';
   const close = ()=>{ menu.remove(); document.removeEventListener('click', close); };
   setTimeout(()=>document.addEventListener('click', close), 0);
   menu.querySelector('#expSvg').addEventListener('click', exportSvg);
+  menu.querySelector('#expPdf').addEventListener('click', exportPdf);
+  menu.querySelector('#expMd').addEventListener('click', exportMarkdown);
   menu.querySelector('#expPng').addEventListener('click', exportPng);
 });
 
