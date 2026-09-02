@@ -276,9 +276,19 @@ svg{ display:block; }
 .palette-body{ flex:1; overflow-y:auto; padding:4px 10px 16px; }
 .palette-cat{ margin-top:10px; }
 .palette-cat-title{
+  cursor:pointer; user-select:none; display:flex; align-items:center; gap:6px;
   font-size:10px; font-weight:700; letter-spacing:.7px; text-transform:uppercase; color:var(--text-faint);
-  padding:6px 6px; display:flex; align-items:center; gap:6px;
+  padding:6px 6px;
 }
+.palette-cat-title .chev{ transition:transform .15s ease; flex-shrink:0; }
+.palette-cat.collapsed .palette-cat-title .chev{ transform:rotate(-90deg); }
+.palette-cat-title:hover{ color:var(--text-dim); }
+.palette-cat-title .folder-ic{ flex-shrink:0; opacity:.85; }
+.palette-cat-body{ overflow:hidden; transition:grid-template-rows .18s ease; display:grid; grid-template-rows:1fr; }
+.palette-cat-body > div{ overflow:hidden; }
+.palette-cat.collapsed .palette-cat-body{ grid-template-rows:0fr; }
+.palette-collapse-all{ font-size:10px; font-weight:700; letter-spacing:.3px; color:var(--text-faint); background:none; border:none; cursor:pointer; padding:2px 4px; }
+.palette-collapse-all:hover{ color:var(--accent); }
 .palette-grid{ display:grid; grid-template-columns:1fr 1fr; gap:6px; }
 .pal-item{
   display:flex; flex-direction:column; align-items:center; gap:6px; padding:10px 6px 8px;
@@ -553,6 +563,9 @@ svg{ display:block; }
       <div class="palette-search">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.2" y2="16.2"></line></svg>
         <input type="text" id="paletteSearch" placeholder="Search AWS S3, Salesforce, Kafka…">
+      </div>
+      <div style="display:flex;justify-content:flex-end;padding:0 4px 4px;">
+        <button type="button" class="palette-collapse-all" id="paletteCollapseAll">Collapse all</button>
       </div>
       <div class="palette-body" id="paletteBody"></div>
     </div>
@@ -1702,7 +1715,15 @@ window.addEventListener('keydown', (e)=>{
 window.addEventListener('keyup', (e)=>{ if(e.code === 'Space'){ spaceDown = false; canvasWrap.classList.remove('space-down'); } });
 
 /* ==================== Palette (searchable component library) ==================== */
+// Which categories are collapsed, by name — in-memory only (resets on
+// reload). "Custom" opens by default since it's where the add-icon tile
+// lives; everything else starts collapsed so the palette reads as a real
+// accordion on first load instead of one long scrolling list.
+let collapsedPaletteCats = null; // lazily seeded once ICON_DEFS/CATEGORY_ORDER are known
 function renderPalette(filter){
+  if(collapsedPaletteCats === null){
+    collapsedPaletteCats = new Set(CATEGORY_ORDER.filter(c=>c!=='Custom'));
+  }
   const body = document.getElementById('paletteBody');
   const q = (filter||'').trim().toLowerCase();
   const grouped = {};
@@ -1719,9 +1740,19 @@ function renderPalette(filter){
     body.innerHTML = `<div class="palette-empty">No components match “${escapeHtml(filter)}”.</div>`;
     return;
   }
-  body.innerHTML = cats.map(cat=>`
-    <div class="palette-cat">
-      <div class="palette-cat-title">${escapeHtml(cat)}</div>
+  body.innerHTML = cats.map(cat=>{
+    // While actively searching, force every matching category open so
+    // results are never hidden behind a collapsed folder.
+    const collapsed = !q && collapsedPaletteCats.has(cat);
+    return `
+    <div class="palette-cat${collapsed?' collapsed':''}" data-cat="${escapeHtml(cat)}">
+      <div class="palette-cat-title">
+        <svg class="folder-ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.2h8.5A1.5 1.5 0 0 1 20.5 8.7v9a1.5 1.5 0 0 1-1.5 1.5H4.5A1.5 1.5 0 0 1 3 17.7z"></path></svg>
+        <span>${escapeHtml(cat)}</span>
+        <span style="margin-left:4px;font-weight:600;opacity:.55;">${cat==='Custom' ? '' : grouped[cat].length}</span>
+        <svg class="chev" style="margin-left:auto;" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+      </div>
+      <div class="palette-cat-body"><div>
       <div class="palette-grid">
         ${cat === 'Custom' ? `
           <div class="pal-item pal-add" id="palAddCustom" title="Add a custom icon">
@@ -1735,8 +1766,17 @@ function renderPalette(filter){
           </div>
         `).join('')}
       </div>
+      </div></div>
     </div>
-  `).join('');
+  `;}).join('');
+  body.querySelectorAll('.palette-cat-title').forEach(title=>{
+    title.addEventListener('click', ()=>{
+      const catEl = title.closest('.palette-cat');
+      const cat = catEl.dataset.cat;
+      if(collapsedPaletteCats.has(cat)) collapsedPaletteCats.delete(cat); else collapsedPaletteCats.add(cat);
+      catEl.classList.toggle('collapsed');
+    });
+  });
   const addTile = document.getElementById('palAddCustom');
   if(addTile) addTile.addEventListener('click', openCustomIconModal);
   body.querySelectorAll('.pal-item[data-icon]').forEach(item=>{
@@ -1754,6 +1794,17 @@ function renderPalette(filter){
     });
   });
 }
+document.getElementById('paletteCollapseAll').addEventListener('click', (e)=>{
+  const allCollapsed = CATEGORY_ORDER.every(c => collapsedPaletteCats && collapsedPaletteCats.has(c));
+  if(allCollapsed){
+    collapsedPaletteCats = new Set();
+    e.target.textContent = 'Collapse all';
+  } else {
+    collapsedPaletteCats = new Set(CATEGORY_ORDER);
+    e.target.textContent = 'Expand all';
+  }
+  renderPalette(document.getElementById('paletteSearch').value);
+});
 document.getElementById('paletteSearch').addEventListener('input', (e)=>renderPalette(e.target.value));
 
 canvasWrap.addEventListener('dragover', (e)=>{
