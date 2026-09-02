@@ -172,6 +172,9 @@ svg{ display:block; }
 }
 .tb-icon-btn:hover{ background:var(--surface-2); color:var(--text); }
 .tb-icon-btn.active{ background:var(--accent-soft); color:var(--accent); }
+.tb-group{ display:flex; align-items:center; border:1px solid var(--border); border-radius:9px; overflow:hidden; }
+.tb-group-btn{ border-radius:0; }
+.tb-group-div{ width:1px; height:18px; background:var(--border); }
 
 .btn-publish{
   display:flex; align-items:center; gap:7px; padding:8px 16px; border-radius:10px;
@@ -233,6 +236,9 @@ svg{ display:block; }
 .pal-item .ic{ width:30px; height:30px; display:flex; align-items:center; justify-content:center; }
 .pal-item .lbl{ font-size:10px; font-weight:600; line-height:1.15; color:var(--text-dim); }
 .palette-empty{ padding:20px 10px; text-align:center; color:var(--text-faint); font-size:12px; }
+.pal-add{ border-style:dashed; cursor:pointer; color:var(--text-faint); }
+.pal-add:hover{ color:var(--accent); }
+.pal-add .ic{ color:inherit; }
 .palette-shapes-row{ display:flex; flex-direction:column; gap:6px; }
 .pal-shape-item{
   display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:10px; border:1px solid var(--border);
@@ -308,6 +314,11 @@ svg{ display:block; }
 .insp-row2 .insp-field{ flex:1; }
 .toggle-row{ display:flex; align-items:center; justify-content:space-between; }
 .toggle-row label{ margin:0; text-transform:none; letter-spacing:0; font-size:12px; font-weight:600; color:var(--text-dim); }
+.seg-group{ display:flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+.seg-btn{ flex:1; padding:7px 4px; font-size:11px; font-weight:600; color:var(--text-dim); background:var(--surface-2); border:none; border-right:1px solid var(--border); cursor:pointer; transition:background .12s,color .12s; display:flex; align-items:center; justify-content:center; gap:4px; }
+.seg-btn:last-child{ border-right:none; }
+.seg-btn:hover{ color:var(--text); }
+.seg-btn.active{ background:var(--accent-soft); color:var(--accent); }
 .sw-toggle{ position:relative; width:34px; height:19px; border-radius:99px; background:var(--surface-2); border:1px solid var(--border); flex:none; }
 .sw-toggle input{ position:absolute; inset:0; opacity:0; cursor:pointer; margin:0; }
 .sw-toggle .knob{ position:absolute; top:2px; left:2px; width:13px; height:13px; border-radius:50%; background:var(--text-faint); transition:transform .15s, background .15s; }
@@ -440,18 +451,24 @@ svg{ display:block; }
       <div class="sub"><span class="savedot" id="saveDot"></span><span id="topSaveState">Loading workspace…</span></div>
     </div>
     <div class="topbar-spacer"></div>
-    <button type="button" class="tb-icon-btn" id="btnUndo" title="Undo (Ctrl+Z)">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"></path><path d="M3 13a9 9 0 1 0 3-7.7L3 8"></path></svg>
-    </button>
-    <button type="button" class="tb-icon-btn" id="btnRedo" title="Redo (Ctrl+Shift+Z)">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"></path><path d="M21 13a9 9 0 1 1-3-7.7L21 8"></path></svg>
-    </button>
+    <div class="tb-group">
+      <button type="button" class="tb-icon-btn tb-group-btn" id="btnUndo" title="Undo (Ctrl+Z)">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"></path><path d="M3 13a9 9 0 1 0 3-7.7L3 8"></path></svg>
+      </button>
+      <div class="tb-group-div"></div>
+      <button type="button" class="tb-icon-btn tb-group-btn" id="btnRedo" title="Redo (Ctrl+Shift+Z)">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"></path><path d="M21 13a9 9 0 1 1-3-7.7L21 8"></path></svg>
+      </button>
+    </div>
     <div class="ft-sep"></div>
     <button type="button" class="tb-btn" id="btnExport" title="Export diagram">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"></path><path d="M7 10l5 5 5-5"></path><path d="M4 20h16"></path></svg>
       Export
     </button>
-    <button type="button" class="tb-icon-btn" id="btnTheme" title="Switch theme">◐</button>
+    <button type="button" class="tb-icon-btn" id="btnTheme" title="Switch theme">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="btnThemeIconMoon"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="btnThemeIconSun" style="display:none;"><circle cx="12" cy="12" r="4.5"></circle><path d="M12 2v2.5M12 19.5V22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M2 12h2.5M19.5 12H22M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"></path></svg>
+    </button>
     <div class="ft-sep"></div>
     <button type="button" class="btn-publish" id="btnPublish">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg>
@@ -587,6 +604,29 @@ svg{ display:block; }
     <div class="modal-actions">
       <button id="publishCancel">Cancel</button>
       <button class="primary" id="publishConfirm">Publish now</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="customIconModal">
+  <div class="modal">
+    <h2>Add a custom icon</h2>
+    <p>Drop in a logo (yours to use — PNG, JPEG, WebP or SVG, under 300KB) and give it a name. It's saved for your whole organisation, so it'll show up in every project's diagram from now on.</p>
+    <div class="insp-field" id="ciDropZone" style="border:1.5px dashed var(--border-strong); border-radius:12px; padding:16px; text-align:center; cursor:pointer; margin-bottom:14px;">
+      <div id="ciPreviewWrap" style="display:none; margin-bottom:8px;">
+        <img id="ciPreview" style="width:56px; height:56px; object-fit:contain; background:#fff; border-radius:8px; padding:6px; box-sizing:border-box;" />
+      </div>
+      <div id="ciDropLabel" style="font-size:12px; color:var(--text-dim);">Click to choose an image, or drag one here</div>
+      <input type="file" id="ciFileInput" accept="image/png,image/jpeg,image/webp,image/svg+xml" style="display:none;">
+    </div>
+    <div class="insp-field">
+      <label>Name</label>
+      <input type="text" id="ciNameInput" placeholder="e.g. MuleSoft, Acme Gateway…">
+    </div>
+    <div id="ciError" style="display:none; font-size:11.5px; color:#ff6b6b; margin:-6px 0 12px;"></div>
+    <div class="modal-actions">
+      <button id="ciCancel">Cancel</button>
+      <button class="primary" id="ciSave" disabled>Save icon</button>
     </div>
   </div>
 </div>
@@ -777,8 +817,31 @@ const ICON_DEFS = [
   { id:'decision', name:'Decision', cat:'Generic', color:'#ffc45c', svg: badge('#ffc45c','square',
     `<path d="M16 6l10 10-10 10-10-10z" stroke-linejoin="round"></path>`) },
 ];
-const CATEGORY_ORDER = ['Client & Users','Compute','Storage & Database','Integration & Messaging','SaaS & Platforms','Networking & Security','Generic'];
+const CATEGORY_ORDER = ['Custom','Client & Users','Compute','Storage & Database','Integration & Messaging','SaaS & Platforms','Networking & Security','Generic'];
 const ICONS_BY_ID = {}; ICON_DEFS.forEach(i=>ICONS_BY_ID[i.id]=i);
+
+// ---- Custom icon library (org-wide, shared across every project) ----
+// A person can drop in their own logo (their own licensed artwork — e.g. an
+// actual MuleSoft/vendor mark, not something we ship) plus a name, and it's
+// saved to the organisation's workspace so it shows up in every project's
+// palette from then on, not just this diagram.
+function customIconBadge(dataUrl){
+  return `<div style="width:100%;height:100%;border-radius:8px;overflow:hidden;background:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px -2px rgba(0,0,0,.35);">
+    <img src="${dataUrl}" style="width:100%;height:100%;object-fit:contain;padding:4px;box-sizing:border-box;" />
+  </div>`;
+}
+function registerCustomIcons(list){
+  // Drop any previously-registered custom defs first so a reload doesn't
+  // duplicate them, then re-add from the (possibly updated) source list.
+  for(let i = ICON_DEFS.length-1; i >= 0; i--){
+    if(ICON_DEFS[i].custom){ delete ICONS_BY_ID[ICON_DEFS[i].id]; ICON_DEFS.splice(i,1); }
+  }
+  (list||[]).forEach(ci=>{
+    const def = { id: ci.id, name: ci.name, cat:'Custom', color:null, custom:true, svg: customIconBadge(ci.dataUrl) };
+    ICON_DEFS.push(def);
+    ICONS_BY_ID[def.id] = def;
+  });
+}
 
 /* ==================== Diagram state ==================== */
 const state = {
@@ -888,6 +951,25 @@ function elbowPath(p1, side1, p2, side2){
   else pts = [p1, {x:p1.x,y:p2.y}, p2];
   return roundedPolylinePath(pts, 12);
 }
+function straightPath(p1, p2){
+  return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} L ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+}
+const SIDE_DIR = { top:{x:0,y:-1}, bottom:{x:0,y:1}, left:{x:-1,y:0}, right:{x:1,y:0} };
+function curvedPath(p1, side1, p2, side2){
+  // Cubic bezier whose control points leave each anchor perpendicular to
+  // the side it's attached to, so the curve always departs/arrives cleanly
+  // instead of cutting across the shape.
+  const pull = Math.max(40, Math.hypot(p2.x-p1.x, p2.y-p1.y) * 0.45);
+  const d1 = SIDE_DIR[side1] || SIDE_DIR.right, d2 = SIDE_DIR[side2] || SIDE_DIR.left;
+  const c1 = { x: p1.x + d1.x*pull, y: p1.y + d1.y*pull };
+  const c2 = { x: p2.x + d2.x*pull, y: p2.y + d2.y*pull };
+  return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} C ${c1.x.toFixed(1)} ${c1.y.toFixed(1)} ${c2.x.toFixed(1)} ${c2.y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+}
+function edgePathFor(edge, p1, side1, p2, side2){
+  if(edge.shape === 'straight') return straightPath(p1, p2);
+  if(edge.shape === 'curved') return curvedPath(p1, side1, p2, side2);
+  return elbowPath(p1, side1, p2, side2);
+}
 function pathMidpoint(p1, side1, p2, side2){
   const midX = (p1.x+p2.x)/2, midY = (p1.y+p2.y)/2;
   return { x: midX, y: midY };
@@ -979,12 +1061,19 @@ function renderEdges(){
     const a = nodeById(edge.from), b = nodeById(edge.to);
     if(!a || !b) return;
     const p1 = nodeAnchor(a, edge.fromSide), p2 = nodeAnchor(b, edge.toSide);
-    const d = elbowPath(p1, edge.fromSide, p2, edge.toSide);
+    const d = edgePathFor(edge, p1, edge.fromSide, p2, edge.toSide);
     const sel = isSelected('edge', edge.id);
+    // lineStyle replaces the old `dashed` boolean — read either so diagrams
+    // saved before this option existed still render the same as before.
+    const lineStyle = edge.lineStyle || (edge.dashed ? 'dashed' : 'solid');
+    const dashArray = lineStyle === 'dotted' ? '2 4' : lineStyle === 'dashed' ? '6 5' : (edge.animated!==false ? '5 5' : 'none');
+    const showEndArrow = edge.arrowEnd !== false; // default true — matches every diagram before this option existed
+    const showStartArrow = !!edge.arrowStart;
     const g = svgEl_('g', { class:'edge-group', 'data-id':edge.id, 'data-kind':'edge' });
-    g.appendChild(svgEl_('path', { class:'edge-path' + (sel?' selected':'') + (edge.animated!==false?' flow':''), d,
-      'stroke-dasharray': edge.dashed ? '6 5' : (edge.animated!==false ? '5 5' : 'none'),
-      'marker-end': `url(#${sel?'arrowHeadSel':'arrowHead'})` }));
+    const pathAttrs = { class:'edge-path' + (sel?' selected':'') + (edge.animated!==false?' flow':''), d, 'stroke-dasharray': dashArray };
+    if(showEndArrow) pathAttrs['marker-end'] = `url(#${sel?'arrowHeadSel':'arrowHead'})`;
+    if(showStartArrow) pathAttrs['marker-start'] = `url(#${sel?'arrowHeadSel':'arrowHead'})`;
+    g.appendChild(svgEl_('path', pathAttrs));
     g.appendChild(svgEl_('path', { class:'edge-hit', d }));
     if(edge.label){
       const mid = pathMidpoint(p1, edge.fromSide, p2, edge.toSide);
@@ -1368,7 +1457,7 @@ window.addEventListener('pointerup', (e)=>{
       if(toId && toId !== ptr.fromId){
         const toNode = nodeById(toId);
         const toSide = nearestSide(toNode, ptr.cur);
-        state.edges.push({ id: uid(), from: ptr.fromId, to: toId, fromSide: ptr.fromSide, toSide, label:'', dashed:false, animated:true });
+        state.edges.push({ id: uid(), from: ptr.fromId, to: toId, fromSide: ptr.fromSide, toSide, label:'', lineStyle:'solid', shape:'elbow', arrowStart:false, arrowEnd:true, animated:true });
         selectOnly('edge', state.edges[state.edges.length-1].id);
         pushHistory();
       }
@@ -1488,7 +1577,11 @@ function renderPalette(filter){
     if(q && !def.name.toLowerCase().includes(q) && !def.cat.toLowerCase().includes(q)) return;
     (grouped[def.cat] = grouped[def.cat] || []).push(def);
   });
-  const cats = CATEGORY_ORDER.filter(c=>grouped[c] && grouped[c].length);
+  // "Custom" always shows (with its add-tile) even with zero saved icons yet
+  // and even while a search filter is active, so the option to add one is
+  // never hidden behind a search that happens to match nothing there.
+  if(!grouped['Custom']) grouped['Custom'] = [];
+  const cats = CATEGORY_ORDER.filter(c=>grouped[c] && (grouped[c].length || c === 'Custom'));
   if(cats.length === 0){
     body.innerHTML = `<div class="palette-empty">No components match “${escapeHtml(filter)}”.</div>`;
     return;
@@ -1497,6 +1590,11 @@ function renderPalette(filter){
     <div class="palette-cat">
       <div class="palette-cat-title">${escapeHtml(cat)}</div>
       <div class="palette-grid">
+        ${cat === 'Custom' ? `
+          <div class="pal-item pal-add" id="palAddCustom" title="Add a custom icon">
+            <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></div>
+            <div class="lbl">Add icon</div>
+          </div>` : ''}
         ${grouped[cat].map(def=>`
           <div class="pal-item" draggable="true" data-icon="${def.id}" title="${escapeHtml(def.name)}">
             <div class="ic">${def.svg}</div>
@@ -1506,7 +1604,9 @@ function renderPalette(filter){
       </div>
     </div>
   `).join('');
-  body.querySelectorAll('.pal-item').forEach(item=>{
+  const addTile = document.getElementById('palAddCustom');
+  if(addTile) addTile.addEventListener('click', openCustomIconModal);
+  body.querySelectorAll('.pal-item[data-icon]').forEach(item=>{
     item.addEventListener('dragstart', (e)=>{
       e.dataTransfer.setData('text/plain', item.dataset.icon);
       e.dataTransfer.effectAllowed = 'copy';
@@ -1619,7 +1719,16 @@ function updateInspector(){
         <button class="insp-btn danger" id="inspDel">Delete</button>
       </div>
       ${node.kind === 'frame' && members.length ? `<div class="insp-actions" style="margin-top:-6px;"><button class="insp-btn" id="inspUngroup">Ungroup (keep items)</button></div>` : ''}`;
-    document.getElementById('inspLabel').addEventListener('input', (e)=>{ node.label = e.target.value; markDirty(); scheduleAutosave(); render(); });
+    document.getElementById('inspLabel').addEventListener('input', (e)=>{
+      // Update the model and the on-canvas label directly instead of calling
+      // render() here — render() rebuilds this whole inspector body (see
+      // updateInspector below), which replaces this very <input> on every
+      // keystroke and kills focus/cursor after a single character.
+      node.label = e.target.value;
+      const canvasLabel = document.querySelector(`[data-id="${node.id}"] [data-role="label"]`);
+      if(canvasLabel) canvasLabel.textContent = node.label;
+      markDirty(); scheduleAutosave();
+    });
     document.getElementById('inspLabel').addEventListener('blur', pushHistory);
     document.getElementById('inspLabel').addEventListener('keydown', e=>{ if(e.key==='Enter') e.target.blur(); });
     document.getElementById('inspSwatches').querySelectorAll('.swatch').forEach(sw=>{
@@ -1648,14 +1757,37 @@ function updateInspector(){
     document.getElementById('inspTitle').textContent = 'Connector';
     document.getElementById('inspType').textContent = 'Edge';
     document.getElementById('inspIcon').innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 19L19 5"></path><circle cx="5" cy="19" r="2"></circle><circle cx="19" cy="5" r="2"></circle></svg>`;
+    const shape = edge.shape || 'elbow';
+    const lineStyle = edge.lineStyle || (edge.dashed ? 'dashed' : 'solid');
+    const arrowDir = edge.arrowStart && edge.arrowEnd ? 'both' : edge.arrowStart && !edge.arrowEnd ? 'start' : edge.arrowEnd === false ? 'none' : 'end';
     body.innerHTML = `
       <div class="insp-field">
         <label>Label</label>
         <input type="text" id="inspEdgeLabel" placeholder="e.g. HTTPS, async event…" value="${escapeHtml(edge.label||'')}">
       </div>
-      <div class="insp-field toggle-row">
-        <label>Dashed line</label>
-        <span class="sw-toggle"><input type="checkbox" id="inspDashed" ${edge.dashed?'checked':''}><span class="knob"></span></span>
+      <div class="insp-field">
+        <label>Path shape</label>
+        <div class="seg-group" id="inspShape">
+          <button type="button" class="seg-btn${shape==='elbow'?' active':''}" data-v="elbow" title="Right-angle elbow">Elbow</button>
+          <button type="button" class="seg-btn${shape==='straight'?' active':''}" data-v="straight" title="Straight line">Straight</button>
+          <button type="button" class="seg-btn${shape==='curved'?' active':''}" data-v="curved" title="Smooth curve">Curved</button>
+        </div>
+      </div>
+      <div class="insp-field">
+        <label>Line style</label>
+        <div class="seg-group" id="inspLineStyle">
+          <button type="button" class="seg-btn${lineStyle==='solid'?' active':''}" data-v="solid">Solid</button>
+          <button type="button" class="seg-btn${lineStyle==='dashed'?' active':''}" data-v="dashed">Dashed</button>
+          <button type="button" class="seg-btn${lineStyle==='dotted'?' active':''}" data-v="dotted">Dotted</button>
+        </div>
+      </div>
+      <div class="insp-field">
+        <label>Arrowheads</label>
+        <div class="seg-group" id="inspArrowDir">
+          <button type="button" class="seg-btn${arrowDir==='none'?' active':''}" data-v="none" title="Plain line, no arrowhead">None</button>
+          <button type="button" class="seg-btn${arrowDir==='end'?' active':''}" data-v="end" title="Arrow at the end">→</button>
+          <button type="button" class="seg-btn${arrowDir==='both'?' active':''}" data-v="both" title="Arrow both ends">↔</button>
+        </div>
       </div>
       <div class="insp-field toggle-row">
         <label>Animated flow</label>
@@ -1664,9 +1796,28 @@ function updateInspector(){
       <div class="insp-actions">
         <button class="insp-btn danger" id="inspDel">Delete connector</button>
       </div>`;
-    document.getElementById('inspEdgeLabel').addEventListener('input', (e)=>{ edge.label = e.target.value; render(); markDirty(); scheduleAutosave(); });
+    document.getElementById('inspEdgeLabel').addEventListener('input', (e)=>{
+      // renderEdges() only, not render() — full render() rebuilds the
+      // inspector body and destroys this input's focus after one keystroke.
+      edge.label = e.target.value;
+      renderEdges();
+      markDirty(); scheduleAutosave();
+    });
     document.getElementById('inspEdgeLabel').addEventListener('blur', pushHistory);
-    document.getElementById('inspDashed').addEventListener('change', (e)=>{ edge.dashed = e.target.checked; render(); pushHistory(); });
+    document.getElementById('inspShape').querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ edge.shape = btn.dataset.v; render(); pushHistory(); });
+    });
+    document.getElementById('inspLineStyle').querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ edge.lineStyle = btn.dataset.v; delete edge.dashed; render(); pushHistory(); });
+    });
+    document.getElementById('inspArrowDir').querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const v = btn.dataset.v;
+        edge.arrowStart = v === 'both';
+        edge.arrowEnd = v !== 'none';
+        render(); pushHistory();
+      });
+    });
     document.getElementById('inspAnimated').addEventListener('change', (e)=>{ edge.animated = e.target.checked; render(); pushHistory(); });
     document.getElementById('inspDel').addEventListener('click', deleteSelection);
   }
@@ -1717,7 +1868,14 @@ document.getElementById('btnTheme').addEventListener('click', ()=>{
   const next = cur === 'light' ? 'dark' : 'light';
   document.documentElement.setAttribute('data-theme', next);
   localStorage.setItem('apiStudio_theme', next);
+  document.getElementById('btnThemeIconMoon').style.display = next === 'light' ? '' : 'none';
+  document.getElementById('btnThemeIconSun').style.display = next === 'light' ? 'none' : '';
 });
+(function initThemeIcon(){
+  const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  document.getElementById('btnThemeIconMoon').style.display = cur === 'light' ? '' : 'none';
+  document.getElementById('btnThemeIconSun').style.display = cur === 'light' ? 'none' : '';
+})();
 
 /* ==================== Export (SVG / PNG) ==================== */
 function buildExportSvgString(){
@@ -1851,7 +2009,17 @@ async function performPublish(force){
     }
     proj = freshProj;
     const now = new Date().toISOString();
-    proj.architectureDiagram = { nodes: state.nodes, edges: state.edges, updatedAt: now, updatedBy: AUTH_USER.username || 'Unknown' };
+    // The Overview page's preview (studio.html) doesn't have this file's icon
+    // library loaded, so it can't look up a badge's gradient/glyph from an
+    // icon id alone — that's why published diagrams used to show as plain
+    // grey boxes. Snapshot each icon node's rendered badge markup + color
+    // here at publish time so the preview can drop it straight in.
+    const nodesForPublish = state.nodes.map(n=>{
+      if(n.kind !== 'icon') return n;
+      const def = ICONS_BY_ID[n.icon] || ICON_DEFS[0];
+      return { ...n, iconSvg: def.svg, iconColor: def.color, iconName: def.name };
+    });
+    proj.architectureDiagram = { nodes: nodesForPublish, edges: state.edges, updatedAt: now, updatedBy: AUTH_USER.username || 'Unknown' };
     proj.updatedAt = now;
     await apiSend('PUT', '/projects', { projects: { [proj.id]: proj } });
     publishedSnapshotAt = now;
@@ -1878,10 +2046,120 @@ document.getElementById('btnPublish').addEventListener('click', ()=>{
 document.getElementById('publishCancel').addEventListener('click', ()=>publishModal.classList.remove('show'));
 document.getElementById('publishConfirm').addEventListener('click', ()=>{ publishModal.classList.remove('show'); performPublish(false); });
 
+/* ==================== Custom icon upload ==================== */
+const customIconModal = document.getElementById('customIconModal');
+let ciPendingDataUrl = null;
+
+function openCustomIconModal(){
+  ciPendingDataUrl = null;
+  document.getElementById('ciNameInput').value = '';
+  document.getElementById('ciFileInput').value = '';
+  document.getElementById('ciPreviewWrap').style.display = 'none';
+  document.getElementById('ciDropLabel').textContent = 'Click to choose an image, or drag one here';
+  document.getElementById('ciError').style.display = 'none';
+  document.getElementById('ciSave').disabled = true;
+  customIconModal.classList.add('show');
+}
+function closeCustomIconModal(){ customIconModal.classList.remove('show'); }
+function ciShowError(msg){
+  const el = document.getElementById('ciError');
+  el.textContent = msg; el.style.display = 'block';
+}
+function updateCiSaveEnabled(){
+  document.getElementById('ciSave').disabled = !(ciPendingDataUrl && document.getElementById('ciNameInput').value.trim());
+}
+
+// Raster images get downscaled to a small square on a canvas before they're
+// ever turned into a dataUrl — a person will typically drop in a phone-camera
+// photo of a logo or a full-res export, and these only ever render at badge
+// size (~34px) in the editor, so there's no reason to carry megabytes of
+// pixels through the server and every future page load. SVGs pass through
+// untouched since they're already tiny and resolution-independent.
+const CUSTOM_ICON_TARGET_PX = 128;
+function fileToProcessedDataUrl(file){
+  return new Promise((resolve, reject)=>{
+    if(file.size > 5 * 1024 * 1024) return reject(new Error('That file is too large to even read in (max 5MB before compression).'));
+    if(file.type === 'image/svg+xml'){
+      const reader = new FileReader();
+      reader.onload = ()=>resolve(reader.result);
+      reader.onerror = ()=>reject(new Error('Could not read that file.'));
+      reader.readAsDataURL(file);
+      return;
+    }
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = ()=>{
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, CUSTOM_ICON_TARGET_PX / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      // PNG keeps transparency (most logos need it); quality param is ignored for PNG but harmless.
+      resolve(canvas.toDataURL('image/png', 0.92));
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error('Could not read that image.')); };
+    img.src = url;
+  });
+}
+
+async function handleCiFile(file){
+  document.getElementById('ciError').style.display = 'none';
+  if(!file) return;
+  const okType = ['image/png','image/jpeg','image/webp','image/svg+xml'].includes(file.type);
+  if(!okType){ ciShowError('Please choose a PNG, JPEG, WebP, or SVG file.'); return; }
+  try{
+    const dataUrl = await fileToProcessedDataUrl(file);
+    if(dataUrl.length > MAX_CUSTOM_ICON_BYTES_CLIENT){
+      ciShowError('That image is still too large after compression — try a smaller or simpler source image.');
+      return;
+    }
+    ciPendingDataUrl = dataUrl;
+    document.getElementById('ciPreview').src = dataUrl;
+    document.getElementById('ciPreviewWrap').style.display = 'block';
+    document.getElementById('ciDropLabel').textContent = file.name;
+    if(!document.getElementById('ciNameInput').value.trim()){
+      document.getElementById('ciNameInput').value = file.name.replace(/\.[a-z0-9]+$/i, '');
+    }
+    updateCiSaveEnabled();
+  }catch(e){
+    ciShowError(e.message || 'Could not process that image.');
+  }
+}
+const MAX_CUSTOM_ICON_BYTES_CLIENT = 300 * 1024; // mirrors the server-side cap in routes/workspace.js
+
+document.getElementById('ciDropZone').addEventListener('click', ()=>document.getElementById('ciFileInput').click());
+document.getElementById('ciFileInput').addEventListener('change', (e)=>handleCiFile(e.target.files[0]));
+document.getElementById('ciDropZone').addEventListener('dragover', (e)=>{ e.preventDefault(); });
+document.getElementById('ciDropZone').addEventListener('drop', (e)=>{ e.preventDefault(); handleCiFile(e.dataTransfer.files[0]); });
+document.getElementById('ciNameInput').addEventListener('input', updateCiSaveEnabled);
+document.getElementById('ciCancel').addEventListener('click', closeCustomIconModal);
+document.getElementById('ciSave').addEventListener('click', async ()=>{
+  const name = document.getElementById('ciNameInput').value.trim();
+  if(!ciPendingDataUrl || !name) return;
+  const saveBtn = document.getElementById('ciSave');
+  saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+  const newIcon = { id: 'custom-' + uid(), name, dataUrl: ciPendingDataUrl };
+  const nextIcons = [...(workspace.customIcons||[]), newIcon];
+  try{
+    await apiSend('PUT', '/custom-icons', { customIcons: nextIcons });
+    workspace.customIcons = nextIcons;
+    registerCustomIcons(workspace.customIcons);
+    renderPalette(document.getElementById('paletteSearch').value);
+    closeCustomIconModal();
+    toast(`Saved "${name}" — it'll show up in every project's palette now.`);
+  }catch(e){
+    console.error(e);
+    ciShowError('Could not save this icon — check your connection and try again.');
+  }finally{
+    saveBtn.disabled = false; saveBtn.textContent = 'Save icon';
+  }
+});
+
 async function boot(){
   document.getElementById('userLabel').textContent = AUTH_USER.username || 'Unknown';
   document.getElementById('userDot').textContent = userInitials(AUTH_USER.username);
-  renderPalette('');
   setTool('select');
 
   try{
@@ -1890,8 +2168,11 @@ async function boot(){
     console.error(e);
     toast('Could not load your workspace — check your connection and reload.');
     document.getElementById('topSaveState').textContent = 'Could not load workspace';
+    renderPalette('');
     return;
   }
+  registerCustomIcons(workspace.customIcons);
+  renderPalette('');
 
   proj = findProjectBySlug(PROJECT_SLUG);
   if(!proj){

@@ -115,9 +115,17 @@ async function initDb() {
       audit_log JSONB NOT NULL DEFAULT '[]',
       request_history JSONB NOT NULL DEFAULT '{}',
       custom_flow_directions JSONB NOT NULL DEFAULT '[]',
+      custom_icons JSONB NOT NULL DEFAULT '[]',
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+
+  // Custom icon/logo library (Architecture Studio ▸ "+ Custom icon") — an
+  // org can drop in their own logos (e.g. their actual MuleSoft/vendor
+  // artwork under their own license) and reuse them across every project's
+  // diagram. Added via ALTER too, since org_workspace rows already exist in
+  // deployed databases and CREATE TABLE IF NOT EXISTS won't touch them.
+  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS custom_icons JSONB NOT NULL DEFAULT '[]';`);
 
   // Org-wide PII masking settings (Admin ▸ Security ▸ PII & Data Masking).
   // Kept separate from the per-rule table below since it's a single JSON blob

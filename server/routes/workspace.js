@@ -12,6 +12,8 @@ router.use(authenticate);
 const MAX_PROJECTS_PER_SAVE = 200;
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // hard server-side cap per file (base64 dataUrl length)
 const MAX_PROJECT_ATTACHMENT_BYTES = 40 * 1024 * 1024; // hard server-side cap for a project's attachments combined
+const MAX_CUSTOM_ICON_BYTES = 300 * 1024; // per-icon logo cap — these render inline at badge size, no need for 8MB attachments
+const MAX_CUSTOM_ICONS = 60; // per organisation
 
 function isPlainObject(v) {
   return v && typeof v === 'object' && !Array.isArray(v);
@@ -242,7 +244,7 @@ router.get('/', async (req, res) => {
     });
 
     const wsResult = await pool.query(
-      `SELECT environments, environments_enc, request_history, request_history_enc, custom_flow_directions
+      `SELECT environments, environments_enc, request_history, request_history_enc, custom_flow_directions, custom_icons
        FROM org_workspace WHERE organisation = $1`,
       [org]
     );
@@ -256,6 +258,7 @@ router.get('/', async (req, res) => {
       environments: decryptOrgBlob(ws.environments_enc, ws.environments, org, 'environments', []),
       requestHistory: decryptOrgBlob(ws.request_history_enc, ws.request_history, org, 'request_history', {}),
       customFlowDirections: ws.custom_flow_directions || [],
+      customIcons: ws.custom_icons || [],
     };
     await cache.setWorkspace(org, userId, payload);
     res.json(payload);
@@ -429,7 +432,7 @@ router.get('/projects/:id/attachments/:docId', async (req, res) => {
 // JSONB blob) — that endpoint is removed. Audit events are now written one at
 // a time, server-side only, via POST /api/audit/events (see routes/audit.js).
 async function upsertOrgWorkspace(org, column, value) {
-  const columnWhitelist = ['custom_flow_directions']; // the only remaining plaintext-JSONB column
+  const columnWhitelist = ['custom_flow_directions', 'custom_icons']; // the only remaining plaintext-JSONB columns
   if (!columnWhitelist.includes(column)) throw new Error('Invalid column');
   await pool.query(
     `INSERT INTO org_workspace (organisation, ${column}, updated_at) VALUES ($1, $2, now())
@@ -484,6 +487,38 @@ router.put('/custom-flow-directions', async (req, res) => {
   } catch (err) {
     console.error('PUT custom-flow-directions failed:', err);
     res.status(500).json({ error: 'Could not save flow direction presets.' });
+  }
+});
+
+// Custom icon/logo library for Architecture Studio — shared across every
+// project in the organisation (people drop in their own vendor artwork
+// under their own license + a name, once, and it shows up in every
+// diagram's component palette from then on). Not per-project: the whole
+// point is "save it for further" use elsewhere.
+router.put('/custom-icons', async (req, res) => {
+  if (!Array.isArray(req.body?.customIcons)) return res.status(400).json({ error: 'Expected { customIcons: [] }.' });
+  const icons = req.body.customIcons;
+  if (icons.length > MAX_CUSTOM_ICONS) {
+    return res.status(400).json({ error: `Custom icon library is limited to ${MAX_CUSTOM_ICONS} icons per organisation.` });
+  }
+  for (const icon of icons) {
+    if (!icon || typeof icon.id !== 'string' || typeof icon.name !== 'string' || typeof icon.dataUrl !== 'string') {
+      return res.status(400).json({ error: 'Each custom icon needs an id, name, and dataUrl.' });
+    }
+    if (!/^data:image\/(png|jpeg|jpg|svg\+xml|webp);base64,/.test(icon.dataUrl)) {
+      return res.status(400).json({ error: `"${icon.name}" isn't a supported image type (PNG, JPEG, WebP, or SVG only).` });
+    }
+    if (icon.dataUrl.length > MAX_CUSTOM_ICON_BYTES) {
+      return res.status(400).json({ error: `"${icon.name}" is too large (max ${Math.floor(MAX_CUSTOM_ICON_BYTES / 1024)}KB — logos don't need to be huge).` });
+    }
+  }
+  try {
+    await upsertOrgWorkspace(req.authUser.organisation, 'custom_icons', icons);
+    await cache.invalidateOrg(req.authUser.organisation);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('PUT custom-icons failed:', err);
+    res.status(500).json({ error: 'Could not save custom icons.' });
   }
 });
 
