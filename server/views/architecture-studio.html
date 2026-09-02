@@ -181,21 +181,32 @@ svg{ display:block; }
 .tb-icon-btn:disabled{ opacity:.32; cursor:not-allowed; }
 .tb-icon-btn:disabled:hover{ background:none; color:var(--text-dim); }
 .tb-icon-btn:disabled:active{ transform:none; }
-/* Undo/Redo group: was a flat, unshadowed outline box that visually
-   disappeared into the toolbar — same weight as every other control, no
-   depth, nothing to make it read as a distinct, purposeful cluster. Gave it
-   its own raised surface (background + shadow, like a segmented control in
-   Figma/Linear) so it reads as one cohesive unit rather than two loose
-   buttons touching by accident. */
-.tb-group{
-  display:flex; align-items:center; background:var(--surface-2);
-  border:1px solid var(--border); border-radius:10px; overflow:hidden;
-  box-shadow:0 1px 2px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.03);
+/* Undo/Redo: switched from a joined segmented control to two separate
+   floating circular buttons (filled accent-gradient for Undo, light
+   outlined for Redo) with soft drop shadows and a hover lift — the
+   detached-pill look used for prominent action buttons in most modern
+   toolbars, rather than a flat bordered box. */
+.tb-group{ display:flex; align-items:center; gap:10px; }
+.tb-circle-btn{
+  width:34px; height:34px; border-radius:50%; flex:none;
+  display:flex; align-items:center; justify-content:center;
+  transition:transform .15s ease, box-shadow .15s ease, background .15s ease, color .15s ease, border-color .15s ease;
 }
-.tb-group .tb-icon-btn{ width:30px; height:30px; border-radius:0; }
-.tb-group .tb-icon-btn:hover{ background:var(--surface-hover); }
-.tb-group-btn{ border-radius:0; }
-.tb-group-div{ width:1px; height:16px; background:var(--border-strong); flex:none; }
+.tb-circle-btn:hover{ transform:translateY(-1px); }
+.tb-circle-btn:active{ transform:scale(.92); }
+.tb-circle-primary{
+  background:linear-gradient(135deg, var(--accent), var(--accent-2));
+  color:var(--accent-ink);
+  box-shadow:0 4px 14px -3px rgba(34,229,255,.55), inset 0 0 0 1px rgba(255,255,255,.12);
+}
+.tb-circle-primary:hover{ box-shadow:0 6px 20px -3px rgba(34,229,255,.7), inset 0 0 0 1px rgba(255,255,255,.16); }
+.tb-circle-primary:disabled{ opacity:.32; box-shadow:none; cursor:not-allowed; transform:none; }
+.tb-circle-light{
+  background:var(--surface-solid); color:var(--text-dim); border:1px solid var(--border-strong);
+  box-shadow:0 2px 8px -2px rgba(0,0,0,.3);
+}
+.tb-circle-light:hover{ color:var(--text); border-color:var(--accent); box-shadow:0 4px 14px -3px rgba(34,229,255,.3); }
+.tb-circle-light:disabled{ opacity:.32; box-shadow:none; cursor:not-allowed; transform:none; border-color:var(--border-strong); color:var(--text-dim); }
 
 .btn-publish{
   display:flex; align-items:center; gap:7px; padding:8px 16px; border-radius:10px;
@@ -496,12 +507,11 @@ svg{ display:block; }
     </div>
     <div class="topbar-spacer"></div>
     <div class="tb-group">
-      <button type="button" class="tb-icon-btn tb-group-btn" id="btnUndo" title="Undo (Ctrl+Z)">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"></path><path d="M3 13a9 9 0 1 0 3-7.7L3 8"></path></svg>
+      <button type="button" class="tb-circle-btn tb-circle-primary" id="btnUndo" title="Undo (Ctrl+Z)">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"></path><path d="M3 13a9 9 0 1 0 3-7.7L3 8"></path></svg>
       </button>
-      <div class="tb-group-div"></div>
-      <button type="button" class="tb-icon-btn tb-group-btn" id="btnRedo" title="Redo (Ctrl+Shift+Z)">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"></path><path d="M21 13a9 9 0 1 1-3-7.7L21 8"></path></svg>
+      <button type="button" class="tb-circle-btn tb-circle-light" id="btnRedo" title="Redo (Ctrl+Shift+Z)">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"></path><path d="M21 13a9 9 0 1 1-3-7.7L21 8"></path></svg>
       </button>
     </div>
     <div class="ft-sep"></div>
