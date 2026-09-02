@@ -1194,7 +1194,12 @@ function renderEdges(){
     // lineStyle replaces the old `dashed` boolean — read either so diagrams
     // saved before this option existed still render the same as before.
     const lineStyle = edge.lineStyle || (edge.dashed ? 'dashed' : 'solid');
-    const dashArray = lineStyle === 'dotted' ? '2 4' : lineStyle === 'dashed' ? '6 5' : (edge.animated!==false ? '5 5' : 'none');
+    // Each line style now gets its own distinct dash pattern regardless of
+    // the animated-flow toggle. Previously "solid" secretly fell back to
+    // the same dash pattern as the flow animation whenever Animated flow
+    // was on, making Solid/Dashed/Dotted look almost identical — the flow
+    // animation now only affects lines that already have a dash pattern.
+    const dashArray = lineStyle === 'dotted' ? '2 5' : lineStyle === 'dashed' ? '9 6' : 'none';
     const showEndArrow = edge.arrowEnd !== false; // default true — matches every diagram before this option existed
     const showStartArrow = !!edge.arrowStart;
     const arrowShape = edge.arrowShape || 'triangle';
