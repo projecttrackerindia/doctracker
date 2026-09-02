@@ -1,0 +1,3214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Architecture Studio</title>
+<script nonce="__CSP_NONCE__">
+(function(){
+  var t = localStorage.getItem('apiStudio_theme');
+  document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+})();
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* ============================================================
+   TOKENS — "2050" studio palette. Dark is the primary identity
+   (deep space, neon signal); light is a clean daylight variant
+   so the theme toggle still makes sense here.
+   ============================================================ */
+:root{
+  --sans:'Inter', system-ui, -apple-system, sans-serif;
+  --display:'Space Grotesk', var(--sans);
+  --mono:'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+
+  --bg:#05060a;
+  --bg-2:#080a12;
+  --canvas-bg:#06070d;
+  --surface:rgba(18,21,34,.72);
+  --surface-solid:#12141f;
+  --surface-2:rgba(26,29,46,.78);
+  --surface-hover:rgba(38,42,64,.85);
+  --border:rgba(255,255,255,.08);
+  --border-strong:rgba(255,255,255,.16);
+
+  --text:#eef1fb;
+  --text-dim:#9aa3c0;
+  --text-faint:#5d6488;
+
+  --accent:#22e5ff;
+  --accent-2:#a855f7;
+  --accent-ink:#04141a;
+  --accent-soft:rgba(34,229,255,.14);
+  --accent-soft-strong:rgba(34,229,255,.24);
+  --accent-glow:0 0 0 1px rgba(34,229,255,.4), 0 0 22px -2px rgba(34,229,255,.55);
+
+  --danger:#ff5d78;
+  --danger-soft:rgba(255,93,120,.14);
+  --ok:#33e6a8;
+  --ok-soft:rgba(51,230,168,.14);
+  --warn:#ffc45c;
+  --warn-soft:rgba(255,196,92,.14);
+
+  --grid-dot:rgba(255,255,255,.055);
+  --grid-dot-strong:rgba(34,229,255,.09);
+
+  --radius-sm:8px; --radius-md:14px; --radius-lg:20px;
+  --shadow-panel:0 30px 80px -30px rgba(0,0,0,.7);
+  --glass-blur:blur(18px);
+}
+
+[data-theme="light"]{
+  --bg:#eef1f8;
+  --bg-2:#e6e9f3;
+  --canvas-bg:#e9ecf5;
+  --surface:rgba(255,255,255,.78);
+  --surface-solid:#ffffff;
+  --surface-2:rgba(255,255,255,.9);
+  --surface-hover:rgba(255,255,255,.98);
+  --border:rgba(20,25,50,.10);
+  --border-strong:rgba(20,25,50,.18);
+
+  --text:#12152a;
+  --text-dim:#4d5578;
+  --text-faint:#8890b3;
+
+  --accent:#4a5fe0;
+  --accent-2:#a855f7;
+  --accent-ink:#ffffff;
+  --accent-soft:rgba(74,95,224,.10);
+  --accent-soft-strong:rgba(74,95,224,.18);
+  --accent-glow:0 0 0 1px rgba(74,95,224,.35), 0 0 22px -4px rgba(74,95,224,.4);
+
+  --danger:#d13750;
+  --danger-soft:rgba(209,55,80,.10);
+  --ok:#1c8f66;
+  --ok-soft:rgba(28,143,102,.10);
+  --warn:#a06f10;
+  --warn-soft:rgba(160,111,16,.10);
+
+  --grid-dot:rgba(20,25,50,.09);
+  --grid-dot-strong:rgba(74,95,224,.14);
+
+  --shadow-panel:0 30px 70px -30px rgba(30,35,60,.25);
+  --glass-blur:blur(14px);
+}
+
+*{ box-sizing:border-box; margin:0; padding:0; }
+html{ color-scheme:dark; }
+html[data-theme="light"]{ color-scheme:light; }
+body{
+  background:
+    radial-gradient(1100px 620px at 14% -8%, rgba(34,229,255,.10), transparent 60%),
+    radial-gradient(900px 700px at 100% 0%, rgba(168,85,247,.09), transparent 55%),
+    var(--bg);
+  color:var(--text);
+  font-family:var(--sans);
+  font-size:14px;
+  overflow:hidden;
+  height:100vh;
+  width:100vw;
+}
+[data-theme="light"] body{
+  background:
+    radial-gradient(1100px 620px at 14% -8%, rgba(74,95,224,.08), transparent 60%),
+    radial-gradient(900px 700px at 100% 0%, rgba(168,85,247,.07), transparent 55%),
+    var(--bg);
+}
+button, input, select, textarea{ font:inherit; color:inherit; }
+button{ cursor:pointer; background:none; border:none; }
+::selection{ background:var(--accent-soft-strong); }
+.hidden{ display:none !important; }
+svg{ display:block; }
+
+/* scrollbars */
+*::-webkit-scrollbar{ width:9px; height:9px; }
+*::-webkit-scrollbar-track{ background:transparent; }
+*::-webkit-scrollbar-thumb{ background:var(--border-strong); border-radius:8px; }
+*::-webkit-scrollbar-thumb:hover{ background:var(--text-faint); }
+
+/* ============================================================
+   APP SHELL
+   ============================================================ */
+.app{ height:100vh; width:100vw; display:flex; flex-direction:column; }
+
+.topbar{
+  position:relative; z-index:40; display:flex; align-items:center; gap:14px;
+  padding:10px 16px; background:var(--surface); backdrop-filter:var(--glass-blur);
+  -webkit-backdrop-filter:var(--glass-blur);
+  border-bottom:1px solid var(--border);
+}
+.topbar-brand{ display:flex; align-items:center; gap:9px; padding-right:12px; border-right:1px solid var(--border); }
+.topbar-mark{
+  width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center;
+  background:linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow:0 0 18px -2px rgba(34,229,255,.6);
+  color:#04141a; font-family:var(--display); font-weight:700; font-size:13px;
+}
+.topbar-brandtext{ display:flex; flex-direction:column; line-height:1.15; }
+.topbar-brandtext b{ font-family:var(--display); font-weight:700; font-size:13px; letter-spacing:.2px; }
+.topbar-brandtext span{ font-size:10px; color:var(--text-faint); font-family:var(--mono); letter-spacing:.4px; text-transform:uppercase; }
+
+.topbar-crumb{ display:flex; flex-direction:column; line-height:1.2; min-width:0; }
+.topbar-crumb .proj{ font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:280px; }
+.topbar-crumb .sub{ font-size:11px; color:var(--text-faint); font-family:var(--mono); display:flex; align-items:center; gap:6px; }
+.savedot{ width:6px; height:6px; border-radius:50%; background:var(--text-faint); flex:none; }
+.savedot.dirty{ background:var(--warn); box-shadow:0 0 8px rgba(255,196,92,.7); }
+.savedot.saved{ background:var(--ok); box-shadow:0 0 8px rgba(51,230,168,.7); }
+
+.topbar-spacer{ flex:1; }
+
+.tb-btn{
+  display:flex; align-items:center; gap:6px; padding:7px 12px; border-radius:9px;
+  font-size:12px; font-weight:600; color:var(--text-dim); border:1px solid transparent;
+  transition:background .15s, color .15s, border-color .15s;
+}
+.tb-btn:hover{ background:var(--surface-2); color:var(--text); }
+.tb-btn:disabled{ opacity:.4; cursor:not-allowed; }
+.tb-icon-btn{
+  width:32px; height:32px; border-radius:9px; display:flex; align-items:center; justify-content:center;
+  color:var(--text-dim); transition:background .15s, color .15s;
+}
+.tb-icon-btn:hover{ background:var(--surface-2); color:var(--text); }
+.tb-icon-btn.active{ background:var(--accent-soft); color:var(--accent); }
+.tb-icon-btn:active{ transform:scale(.92); }
+/* Undo/Redo (and any other icon button) had no :disabled treatment, so a
+   disabled button still rendered at full opacity with a pointer cursor and
+   still lit up on hover — it looked clickable and "broken" rather than
+   simply unavailable, which is most visible right after opening a diagram
+   when both Undo and Redo start disabled. */
+.tb-icon-btn:disabled{ opacity:.32; cursor:not-allowed; }
+.tb-icon-btn:disabled:hover{ background:none; color:var(--text-dim); }
+.tb-icon-btn:disabled:active{ transform:none; }
+/* Undo/Redo: switched from a joined segmented control to two separate
+   floating circular buttons (filled accent-gradient for Undo, light
+   outlined for Redo) with soft drop shadows and a hover lift — the
+   detached-pill look used for prominent action buttons in most modern
+   toolbars, rather than a flat bordered box. */
+.tb-group{ display:flex; align-items:center; gap:10px; }
+.tb-circle-btn{
+  width:34px; height:34px; border-radius:50%; flex:none;
+  display:flex; align-items:center; justify-content:center;
+  transition:transform .15s ease, box-shadow .15s ease, background .15s ease, color .15s ease, border-color .15s ease;
+}
+.tb-circle-btn:hover{ transform:translateY(-1px); }
+.tb-circle-btn:active{ transform:scale(.92); }
+.tb-circle-primary{
+  background:linear-gradient(135deg, var(--accent), var(--accent-2));
+  color:var(--accent-ink);
+  box-shadow:0 4px 14px -3px rgba(34,229,255,.55), inset 0 0 0 1px rgba(255,255,255,.12);
+}
+.tb-circle-primary:hover{ box-shadow:0 6px 20px -3px rgba(34,229,255,.7), inset 0 0 0 1px rgba(255,255,255,.16); }
+.tb-circle-primary:disabled{ opacity:.32; box-shadow:none; cursor:not-allowed; transform:none; }
+.tb-circle-light{
+  background:var(--surface-solid); color:var(--text-dim); border:1px solid var(--border-strong);
+  box-shadow:0 2px 8px -2px rgba(0,0,0,.3);
+}
+.tb-circle-light:hover{ color:var(--text); border-color:var(--accent); box-shadow:0 4px 14px -3px rgba(34,229,255,.3); }
+.tb-circle-light:disabled{ opacity:.32; box-shadow:none; cursor:not-allowed; transform:none; border-color:var(--border-strong); color:var(--text-dim); }
+
+.btn-publish{
+  display:flex; align-items:center; gap:7px; padding:8px 16px; border-radius:10px;
+  font-weight:700; font-size:12.5px; letter-spacing:.2px;
+  background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:#04141a;
+  box-shadow:0 4px 20px -4px rgba(34,229,255,.55);
+  transition:transform .12s, box-shadow .15s, filter .15s;
+}
+.btn-publish:hover{ filter:brightness(1.08); box-shadow:0 6px 26px -4px rgba(34,229,255,.7); }
+.btn-publish:active{ transform:translateY(1px); }
+.btn-publish:disabled{ opacity:.55; filter:none; cursor:not-allowed; transform:none; }
+
+.user-chip{ display:flex; align-items:center; gap:8px; padding:5px 10px 5px 5px; border-radius:999px; background:var(--surface-2); border:1px solid var(--border); }
+.user-dot{
+  width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+  background:linear-gradient(135deg, var(--accent-2), var(--accent)); color:#04141a;
+  font-size:10px; font-weight:800; font-family:var(--display); flex:none;
+}
+.user-chip span.name{ font-size:11.5px; font-weight:600; color:var(--text-dim); max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* ============================================================
+   MAIN LAYOUT
+   ============================================================ */
+.main{ flex:1; display:flex; min-height:0; position:relative; }
+
+/* ---------- Palette (left) ---------- */
+.palette{
+  width:268px; flex:none; display:flex; flex-direction:column; min-height:0;
+  background:var(--surface); backdrop-filter:var(--glass-blur); -webkit-backdrop-filter:var(--glass-blur);
+  border-right:1px solid var(--border);
+  transition:margin-left .18s ease;
+}
+.palette.collapsed{ margin-left:-268px; }
+/* Sidebar collapse handle. Previous version was a plain 32px square button
+   with position:absolute; left:8px; top:64px inline styles — a floating box
+   dropped on top of the palette's own content (it overlapped the search
+   row, see screenshot), it never moved when the panel collapsed, and its
+   icon (a static two-rect glyph) never indicated which way it would toggle.
+   This version is a small tab attached to the panel's right edge, half
+   overlapping the border the way collapse handles work in VS Code / Notion
+   / Figma: it slides with the panel and its chevron rotates 180° so it
+   always points in the direction the next click will move things. */
+.palette-toggle{
+  position:absolute; z-index:16; top:72px; left:257px;
+  width:20px; height:46px; border-radius:7px;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--surface-solid); border:1px solid var(--border);
+  color:var(--text-faint);
+  box-shadow:0 2px 8px -2px rgba(0,0,0,.35), 0 0 0 1px rgba(0,0,0,.02);
+  transition:left .18s ease, background .15s, color .15s, border-color .15s, box-shadow .15s;
+}
+.palette-toggle:hover{ background:var(--surface-hover); color:var(--accent); border-color:var(--accent); box-shadow:0 2px 12px -1px rgba(34,229,255,.3); }
+.palette-toggle:active{ transform:scale(.94); }
+.palette-toggle svg{ transition:transform .18s ease; }
+.palette.collapsed + .palette-toggle{ left:8px; }
+.palette.collapsed + .palette-toggle svg{ transform:rotate(180deg); }
+.palette-head{ padding:14px 14px 10px; }
+.palette-head h3{ font-family:var(--display); font-size:13px; font-weight:700; margin-bottom:2px; }
+.palette-head .hint{ font-size:11px; color:var(--text-faint); }
+.palette-search{ margin:10px 14px 8px; position:relative; }
+.palette-search input{
+  width:100%; padding:9px 10px 9px 32px; border-radius:9px; background:var(--surface-2);
+  border:1px solid var(--border); color:var(--text); font-size:12.5px;
+}
+.palette-search input:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+.palette-search svg{ position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--text-faint); }
+.palette-body{ flex:1; overflow-y:auto; padding:4px 10px 16px; }
+.palette-cat{ margin-top:10px; }
+.palette-cat-title{
+  cursor:pointer; user-select:none; display:flex; align-items:center; gap:6px;
+  font-size:10px; font-weight:700; letter-spacing:.7px; text-transform:uppercase; color:var(--text-faint);
+  padding:6px 6px;
+}
+.palette-cat-title .chev{ transition:transform .15s ease; flex-shrink:0; }
+.palette-cat.collapsed .palette-cat-title .chev{ transform:rotate(-90deg); }
+.palette-cat-title:hover{ color:var(--text-dim); }
+.palette-cat-title .folder-ic{ flex-shrink:0; opacity:.85; }
+.palette-cat-body{ overflow:hidden; transition:grid-template-rows .18s ease; display:grid; grid-template-rows:1fr; }
+.palette-cat-body > div{ overflow:hidden; }
+.palette-cat.collapsed .palette-cat-body{ grid-template-rows:0fr; }
+.palette-collapse-all{ font-size:10px; font-weight:700; letter-spacing:.3px; color:var(--text-faint); background:none; border:none; cursor:pointer; padding:2px 4px; }
+.palette-collapse-all:hover{ color:var(--accent); }
+.palette-grid{ display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+.pal-item{
+  display:flex; flex-direction:column; align-items:center; gap:6px; padding:10px 6px 8px;
+  border-radius:11px; border:1px solid var(--border); background:var(--surface-2);
+  cursor:grab; transition:border-color .15s, transform .1s, box-shadow .15s;
+  text-align:center;
+}
+.pal-item:hover{ border-color:var(--accent); box-shadow:0 0 0 1px rgba(34,229,255,.25), 0 6px 18px -8px rgba(34,229,255,.4); transform:translateY(-1px); }
+.pal-item:active{ cursor:grabbing; }
+.pal-item .ic{ width:30px; height:30px; display:flex; align-items:center; justify-content:center; }
+.pal-item .lbl{ font-size:10px; font-weight:600; line-height:1.15; color:var(--text-dim); }
+.palette-empty{ padding:20px 10px; text-align:center; color:var(--text-faint); font-size:12px; }
+.pal-add{ border-style:dashed; cursor:pointer; color:var(--text-faint); }
+.pal-add:hover{ color:var(--accent); }
+.pal-add .ic{ color:inherit; }
+.palette-shapes-row{ display:flex; flex-direction:column; gap:6px; }
+.pal-shape-item{
+  display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:10px; border:1px solid var(--border);
+  background:var(--surface-2); cursor:grab; font-size:11.5px; font-weight:600; color:var(--text-dim);
+  transition:border-color .15s, color .15s;
+}
+.pal-shape-item:hover{ border-color:var(--accent); color:var(--text); }
+.pal-shape-item .ic{ width:20px; height:20px; flex:none; display:flex; align-items:center; justify-content:center; color:var(--accent); }
+
+/* ---------- Canvas ---------- */
+.canvas-wrap{ flex:1; position:relative; overflow:hidden; background:var(--canvas-bg); }
+.canvas-wrap.panning{ cursor:grabbing; }
+.canvas-wrap.space-down{ cursor:grab; }
+#dgSvg{ width:100%; height:100%; touch-action:none; }
+.canvas-drop-hint{
+  position:absolute; inset:14px; border:1.5px dashed var(--accent); border-radius:18px;
+  background:rgba(34,229,255,.05); pointer-events:none; display:none; align-items:center; justify-content:center;
+  color:var(--accent); font-weight:700; font-size:13px; letter-spacing:.3px;
+}
+.canvas-drop-hint.show{ display:flex; }
+
+/* floating top-center toolbar */
+.floating-toolbar{
+  position:absolute; top:14px; left:50%; transform:translateX(-50%); z-index:15;
+  display:flex; align-items:center; gap:2px; padding:5px; border-radius:13px;
+  background:var(--surface); backdrop-filter:var(--glass-blur); -webkit-backdrop-filter:var(--glass-blur);
+  border:1px solid var(--border); box-shadow:var(--shadow-panel);
+}
+.ft-sep{ width:1px; height:20px; background:var(--border); margin:0 3px; }
+
+/* Shape tool flyout — a small popover of the 4 basic shapes, opened from
+   the "Shape" button in the floating toolbar rather than cluttering the
+   toolbar itself with 4 separate always-visible buttons. */
+.tb-flyout-wrap{ position:relative; }
+.shape-flyout{
+  position:absolute; top:calc(100% + 8px); left:50%; transform:translateX(-50%);
+  display:flex; gap:3px; padding:5px; border-radius:11px;
+  background:var(--surface-solid); border:1px solid var(--border); box-shadow:var(--shadow-panel);
+  z-index:20;
+}
+.shape-flyout button{ width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--text-dim); }
+.shape-flyout button:hover{ background:var(--surface-2); color:var(--text); }
+.shape-flyout button.active{ background:var(--accent-soft); color:var(--accent); }
+
+/* zoom controls bottom-left */
+.zoom-controls{
+  position:absolute; left:14px; bottom:14px; z-index:15; display:flex; align-items:center; gap:2px;
+  padding:4px; border-radius:11px; background:var(--surface); backdrop-filter:var(--glass-blur); -webkit-backdrop-filter:var(--glass-blur);
+  border:1px solid var(--border); box-shadow:var(--shadow-panel); font-family:var(--mono);
+}
+.zoom-controls .zlabel{ font-size:11px; color:var(--text-dim); padding:0 6px; min-width:42px; text-align:center; }
+
+/* Align & distribute strip shown in the inspector when 2+ items are
+   selected — grouped 3-and-3 (horizontal / vertical) plus distribute. */
+.align-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+.align-btn{ height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--text-dim); border:1px solid var(--border); background:var(--surface-2); }
+.align-btn:hover{ background:var(--surface-hover); color:var(--text); }
+
+.canvas-hint-empty{
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none;
+}
+.canvas-hint-empty.hidden{ display:none; }
+.canvas-hint-empty-inner{ text-align:center; color:var(--text-faint); max-width:280px; }
+.canvas-hint-empty-inner .ic{ margin:0 auto 12px; opacity:.55; }
+.canvas-hint-empty-inner b{ display:block; color:var(--text-dim); font-size:13px; margin-bottom:4px; font-family:var(--display); }
+.canvas-hint-empty-inner span{ font-size:12px; line-height:1.5; }
+
+/* ---------- Inspector (right) ---------- */
+.inspector{
+  width:270px; flex:none; display:flex; flex-direction:column; min-height:0;
+  background:var(--surface); backdrop-filter:var(--glass-blur); -webkit-backdrop-filter:var(--glass-blur);
+  border-left:1px solid var(--border); margin-right:-270px; transition:margin-right .18s ease;
+}
+.inspector.show{ margin-right:0; }
+.insp-head{ padding:14px; display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--border); }
+.insp-head .ic{ width:34px; height:34px; border-radius:9px; background:var(--surface-2); display:flex; align-items:center; justify-content:center; flex:none; }
+.insp-head .t{ min-width:0; }
+.insp-head .t b{ font-size:12.5px; font-weight:700; display:block; }
+.insp-head .t span{ font-size:10.5px; color:var(--text-faint); font-family:var(--mono); text-transform:uppercase; letter-spacing:.4px; }
+.insp-body{ flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:14px; }
+.insp-field label{ display:block; font-size:10.5px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; color:var(--text-faint); margin-bottom:6px; }
+.insp-field input[type="text"], .insp-field textarea{
+  width:100%; padding:8px 10px; border-radius:8px; background:var(--surface-2); border:1px solid var(--border);
+  color:var(--text); font-size:12.5px;
+}
+.insp-field textarea{ resize:vertical; min-height:52px; font-family:var(--sans); }
+.insp-field input:focus, .insp-field textarea:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+.swatches{ display:flex; gap:7px; flex-wrap:wrap; }
+.swatch{ width:22px; height:22px; border-radius:7px; border:2px solid transparent; cursor:pointer; transition:transform .1s; }
+.swatch:hover{ transform:scale(1.12); }
+.swatch.active{ border-color:var(--text); box-shadow:0 0 0 2px var(--bg); }
+.insp-row2{ display:flex; gap:8px; }
+.insp-row2 .insp-field{ flex:1; }
+.toggle-row{ display:flex; align-items:center; justify-content:space-between; }
+.toggle-row label{ margin:0; text-transform:none; letter-spacing:0; font-size:12px; font-weight:600; color:var(--text-dim); }
+.seg-group{ display:flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+.seg-btn{ flex:1; padding:7px 4px; font-size:11px; font-weight:600; color:var(--text-dim); background:var(--surface-2); border:none; border-right:1px solid var(--border); cursor:pointer; transition:background .12s,color .12s; display:flex; align-items:center; justify-content:center; gap:4px; }
+.seg-btn:last-child{ border-right:none; }
+.seg-btn:hover{ color:var(--text); }
+.seg-btn.active{ background:var(--accent-soft); color:var(--accent); }
+.sw-toggle{ position:relative; width:34px; height:19px; border-radius:99px; background:var(--surface-2); border:1px solid var(--border); flex:none; }
+.sw-toggle input{ position:absolute; inset:0; opacity:0; cursor:pointer; margin:0; }
+.sw-toggle .knob{ position:absolute; top:2px; left:2px; width:13px; height:13px; border-radius:50%; background:var(--text-faint); transition:transform .15s, background .15s; }
+.sw-toggle input:checked + .knob{ transform:translateX(15px); background:var(--accent); box-shadow:0 0 6px rgba(34,229,255,.7); }
+.insp-actions{ display:flex; gap:8px; margin-top:auto; padding-top:6px; }
+.insp-btn{ flex:1; padding:8px; border-radius:8px; font-size:11.5px; font-weight:700; border:1px solid var(--border); color:var(--text-dim); }
+.insp-btn:hover{ background:var(--surface-2); color:var(--text); }
+.insp-btn.danger{ color:var(--danger); border-color:rgba(255,93,120,.3); }
+.insp-btn.danger:hover{ background:var(--danger-soft); }
+.insp-empty{ padding:30px 16px; text-align:center; color:var(--text-faint); font-size:12px; line-height:1.6; }
+
+/* ============================================================
+   DIAGRAM SVG — nodes, frames, edges, handles
+   ============================================================ */
+.node-card rect.card-bg{
+  fill:var(--surface-solid); stroke:var(--border-strong); stroke-width:1.2;
+  filter:drop-shadow(0 10px 26px rgba(0,0,0,.35));
+}
+[data-theme="light"] .node-card rect.card-bg{ filter:drop-shadow(0 8px 20px rgba(30,35,70,.14)); }
+.node-card.selected rect.card-bg{ stroke:var(--accent); stroke-width:1.6; filter:drop-shadow(0 0 14px rgba(34,229,255,.45)); }
+.node-card:hover rect.card-bg{ stroke:var(--border-strong); }
+.node-card .card-label{ fill:var(--text); font-family:var(--sans); font-weight:600; }
+.node-card .card-sub{ fill:var(--text-faint); font-family:var(--mono); }
+.node-icon-bg{ opacity:.14; }
+
+.frame-node rect{ fill:rgba(120,140,255,.05); stroke:var(--border-strong); stroke-width:1.4; stroke-dasharray:7 6; cursor:grab; transition:fill .12s, stroke .12s; }
+.frame-node:hover rect{ fill:rgba(120,140,255,.09); stroke:var(--border-strong); }
+.frame-node.selected rect{ stroke:var(--accent); fill:rgba(34,229,255,.06); }
+.frame-node.group-target rect{ stroke:var(--accent); stroke-width:2; fill:var(--accent-soft-strong); }
+.frame-node .frame-label{ fill:var(--text-dim); font-family:var(--mono); font-weight:600; letter-spacing:.4px; }
+.frame-node .frame-tag{ fill:var(--surface); cursor:grab; }
+.frame-node .frame-tag:active{ cursor:grabbing; }
+
+.text-node rect.hit{ fill:transparent; cursor:grab; }
+.text-node.selected rect.hit{ stroke:var(--accent); stroke-width:1.2; stroke-dasharray:4 4; fill:var(--accent-soft); }
+.text-node text{ fill:var(--text-dim); font-family:var(--sans); }
+
+/* Freeform shape elements (rectangle / ellipse / diamond / cylinder) —
+   a lightweight whiteboard-style element independent of the icon library. */
+.shape-node .shape-bg{ cursor:grab; transition:filter .12s, stroke .12s; }
+.shape-node:hover .shape-bg{ filter:brightness(1.08); }
+.shape-node.selected .shape-bg{ stroke:var(--accent) !important; stroke-width:2 !important; filter:drop-shadow(0 0 12px rgba(34,229,255,.4)); }
+
+/* Locked nodes: dimmed handles + a distinct "can't touch this" cursor so
+   an accidental drag on a finished part of the diagram is a visible no-op
+   rather than a silent failure to move. */
+.node-locked{ cursor:default !important; }
+.node-locked .card-bg, .node-locked.frame-node rect, .node-locked .shape-bg, .node-locked rect.hit{ cursor:default !important; }
+.node-locked:hover .handle, .node-locked .handle{ opacity:0 !important; pointer-events:none; }
+.lock-badge{ pointer-events:none; }
+
+/* Small dot shown on a node's card when it has a notes/description field
+   filled in, so the extra context is discoverable without opening the
+   inspector for every single component. */
+.notes-dot{ fill:var(--warn); stroke:var(--surface-solid); stroke-width:1.2; }
+
+.handle{ fill:var(--surface-solid); stroke:var(--accent); stroke-width:1.4; opacity:0; transition:opacity .12s; cursor:crosshair; }
+.node-card:hover .handle, .node-card.selected .handle,
+.frame-node:hover .handle, .frame-node.selected .handle,
+.text-node:hover .handle, .text-node.selected .handle,
+.shape-node:hover .handle, .shape-node.selected .handle{ opacity:1; }
+.handle:hover{ fill:var(--accent); }
+.resize-handle{ cursor:nwse-resize; }
+.resize-handle:hover{ fill:var(--accent); stroke:var(--accent-ink); }
+
+.edge-path{ fill:none; stroke:var(--text-faint); stroke-width:1.8; }
+.edge-hit{ fill:none; stroke:transparent; stroke-width:14; cursor:pointer; }
+.edge-path.selected{ stroke:var(--accent); stroke-width:2.2; filter:drop-shadow(0 0 6px rgba(34,229,255,.6)); }
+.edge-path.flow{ stroke-dasharray:5 5; animation:dashflow 1.1s linear infinite; }
+@keyframes dashflow{ to{ stroke-dashoffset:-20; } }
+.edge-label-bg{ fill:var(--canvas-bg); stroke:var(--border); stroke-width:1; }
+.edge-label{ fill:var(--text-dim); font-family:var(--mono); font-size:10px; }
+.edge-arrow{ fill:var(--text-faint); }
+.edge-path.selected + .edge-arrow, .edge-arrow.selected{ fill:var(--accent); }
+
+/* Manual waypoint handle for elbow connectors — a draggable bend point
+   distinct from the round connect handles (diamond vs. circle) so the two
+   affordances never get visually confused on a selected edge. */
+.waypoint-handle{ fill:var(--surface-solid); stroke:var(--accent-2); stroke-width:1.4; cursor:move; opacity:0; transition:opacity .12s; }
+.edge-group:hover .waypoint-handle, .edge-group.wp-visible .waypoint-handle{ opacity:1; }
+.waypoint-handle:hover{ fill:var(--accent-2); }
+
+.marquee{ fill:rgba(34,229,255,.08); stroke:var(--accent); stroke-width:1; stroke-dasharray:4 3; }
+
+.temp-edge{ stroke:var(--accent); stroke-width:2; stroke-dasharray:5 4; fill:none; }
+
+/* Alignment guide lines shown while dragging with snapping enabled */
+.snap-guide{ stroke:var(--accent-2); stroke-width:1; stroke-dasharray:4 3; pointer-events:none; }
+
+/* grid pattern dot color driven by CSS var via currentColor trick */
+#gridDots circle{ fill:var(--grid-dot); }
+#gridDotsStrong circle{ fill:var(--grid-dot-strong); }
+
+/* ============================================================
+   BANNERS / TOAST / CONTEXT MENU / MODAL
+   ============================================================ */
+.banner{
+  position:absolute; top:60px; left:50%; transform:translateX(-50%); z-index:50;
+  display:flex; align-items:center; gap:12px; padding:10px 14px; border-radius:11px;
+  background:var(--surface); backdrop-filter:var(--glass-blur); border:1px solid var(--border);
+  box-shadow:var(--shadow-panel); font-size:12.5px; max-width:560px;
+}
+.banner.warn{ border-color:rgba(255,196,92,.4); }
+.banner.ok{ border-color:rgba(51,230,168,.4); }
+.banner button{ font-weight:700; font-size:11.5px; padding:5px 10px; border-radius:7px; background:var(--surface-2); }
+.banner button:hover{ background:var(--surface-hover); }
+.banner button.primary{ background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:#04141a; }
+
+#toast{
+  position:absolute; bottom:20px; left:50%; transform:translateX(-50%) translateY(10px); z-index:60;
+  background:var(--surface-solid); border:1px solid var(--border-strong); color:var(--text);
+  padding:9px 16px; border-radius:10px; font-size:12.5px; font-weight:600; opacity:0; pointer-events:none;
+  transition:opacity .2s, transform .2s; box-shadow:var(--shadow-panel);
+}
+#toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+.ctx-menu{
+  position:fixed; z-index:70; min-width:170px; padding:5px; border-radius:11px;
+  background:var(--surface-solid); border:1px solid var(--border-strong); box-shadow:var(--shadow-panel);
+}
+.ctx-item{ display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:8px; font-size:12px; font-weight:600; color:var(--text-dim); width:100%; text-align:left; }
+.ctx-item:hover{ background:var(--surface-2); color:var(--text); }
+.ctx-item.danger{ color:var(--danger); }
+.ctx-item .k{ margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--text-faint); }
+.ctx-sep{ height:1px; background:var(--border); margin:4px 2px; }
+
+.modal-overlay{
+  position:fixed; inset:0; z-index:80; background:rgba(4,5,10,.55); backdrop-filter:blur(4px);
+  display:none; align-items:center; justify-content:center;
+}
+.modal-overlay.show{ display:flex; }
+.modal{
+  width:420px; max-width:92vw; background:var(--surface-solid); border:1px solid var(--border-strong);
+  border-radius:16px; padding:22px; box-shadow:var(--shadow-panel);
+}
+.modal h2{ font-family:var(--display); font-size:16px; margin-bottom:6px; }
+.modal p{ font-size:12.5px; color:var(--text-dim); line-height:1.55; margin-bottom:16px; }
+.modal-actions{ display:flex; justify-content:flex-end; gap:8px; }
+.modal-actions button{ padding:8px 14px; border-radius:9px; font-size:12px; font-weight:700; background:var(--surface-2); color:var(--text-dim); }
+.modal-actions button.primary{ background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:#04141a; }
+.modal-actions button:hover{ filter:brightness(1.08); }
+
+@media (max-width: 900px){
+  .palette{ position:absolute; z-index:30; height:100%; left:0; }
+  .inspector{ position:absolute; z-index:30; height:100%; right:0; }
+  .palette.collapsed{ margin-left:-268px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="topbar">
+    <div class="topbar-brand">
+      <div class="topbar-mark">λ</div>
+      <div class="topbar-brandtext"><b>Architecture Studio</b><span>Diagram Editor</span></div>
+    </div>
+    <div class="topbar-crumb">
+      <div class="proj" id="topProjName">Loading…</div>
+      <div class="sub"><span class="savedot" id="saveDot"></span><span id="topSaveState">Loading workspace…</span></div>
+    </div>
+    <div class="topbar-spacer"></div>
+    <div class="tb-group">
+      <button type="button" class="tb-circle-btn tb-circle-primary" id="btnUndo" title="Undo (Ctrl+Z)">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"></path><path d="M3 13a9 9 0 1 0 3-7.7L3 8"></path></svg>
+      </button>
+      <button type="button" class="tb-circle-btn tb-circle-light" id="btnRedo" title="Redo (Ctrl+Shift+Z)">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"></path><path d="M21 13a9 9 0 1 1-3-7.7L21 8"></path></svg>
+      </button>
+    </div>
+    <div class="ft-sep"></div>
+    <button type="button" class="tb-btn" id="btnExport" title="Export diagram">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"></path><path d="M7 10l5 5 5-5"></path><path d="M4 20h16"></path></svg>
+      Export
+    </button>
+    <button type="button" class="tb-icon-btn" id="btnTheme" title="Switch theme">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="btnThemeIconMoon"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="btnThemeIconSun" style="display:none;"><circle cx="12" cy="12" r="4.5"></circle><path d="M12 2v2.5M12 19.5V22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M2 12h2.5M19.5 12H22M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"></path></svg>
+    </button>
+    <div class="ft-sep"></div>
+    <button type="button" class="btn-publish" id="btnPublish">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg>
+      Publish
+    </button>
+    <div class="user-chip"><span class="user-dot" id="userDot">?</span><span class="name" id="userLabel">—</span></div>
+  </div>
+
+  <div id="conflictBanner" class="banner warn hidden">
+    <span id="conflictMsg"></span>
+    <button id="conflictReload">Reload latest</button>
+    <button class="primary" id="conflictForce">Publish anyway</button>
+  </div>
+  <div id="draftBanner" class="banner hidden">
+    <span id="draftMsg">You have unsaved local edits to this diagram.</span>
+    <button id="draftDiscard">Discard</button>
+    <button class="primary" id="draftRestore">Restore</button>
+  </div>
+
+  <div class="main">
+
+    <!-- ===================== PALETTE ===================== -->
+    <div class="palette" id="palette">
+      <div class="palette-head">
+        <h3>Components</h3>
+        <div class="hint">Drag onto the canvas to place</div>
+      </div>
+      <div class="palette-search">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.2" y2="16.2"></line></svg>
+        <input type="text" id="paletteSearch" placeholder="Search AWS S3, Salesforce, Kafka…">
+      </div>
+      <div style="display:flex;justify-content:flex-end;padding:0 4px 4px;">
+        <button type="button" class="palette-collapse-all" id="paletteCollapseAll">Collapse all</button>
+      </div>
+      <div class="palette-body" id="paletteBody"></div>
+    </div>
+    <button type="button" class="palette-toggle" id="btnTogglePalette" title="Hide component library">
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>
+    </button>
+
+
+    <!-- ===================== CANVAS ===================== -->
+    <div class="canvas-wrap" id="canvasWrap">
+      <svg id="dgSvg">
+        <defs>
+          <pattern id="gridDots" width="26" height="26" patternUnits="userSpaceOnUse">
+            <circle cx="1.4" cy="1.4" r="1.4"></circle>
+          </pattern>
+          <pattern id="gridDotsStrong" width="130" height="130" patternUnits="userSpaceOnUse">
+            <circle cx="1.6" cy="1.6" r="1.8"></circle>
+          </pattern>
+          <marker id="arrowHead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="edge-arrow"></path>
+          </marker>
+          <marker id="arrowHeadSel" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="edge-arrow selected"></path>
+          </marker>
+          <!-- Colored / alternate-shape arrowhead markers are generated on
+               demand into this defs block by ensureArrowMarker() below,
+               one per (shape,color) pair actually used in the diagram. -->>
+          <filter id="iconSoftShadow" x="-40%" y="-40%" width="180%" height="180%">
+            <feDropShadow dx="0" dy="1.5" stdDeviation="1.6" flood-color="#000" flood-opacity="0.35"></feDropShadow>
+          </filter>
+        </defs>
+        <rect id="gridBgRect" x="-20000" y="-20000" width="40000" height="40000" fill="url(#gridDots)"></rect>
+        <rect id="gridBgRect2" x="-20000" y="-20000" width="40000" height="40000" fill="url(#gridDotsStrong)"></rect>
+        <g id="viewport">
+          <g id="layerFrames"></g>
+          <g id="layerEdges"></g>
+          <g id="layerNodes"></g>
+          <g id="layerOverlay"></g>
+        </g>
+      </svg>
+      <div class="canvas-drop-hint" id="dropHint">Drop to place component</div>
+      <div class="canvas-hint-empty" id="emptyHint">
+        <div class="canvas-hint-empty-inner">
+          <svg class="ic" width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><path d="M10 6.5h4M17.5 10v4M14 17.5h-4M6.5 14v-4"></path></svg>
+          <b>Blank canvas</b>
+          <span>Drag a component from the left, or add a text note / frame from the toolbar, to start mapping the architecture.</span>
+        </div>
+      </div>
+
+      <!-- floating top-center toolbar -->
+      <div class="floating-toolbar">
+        <button type="button" class="tb-icon-btn active" id="toolSelect" title="Select / pan (V)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l6.5 16 2-6.5L19 11.5z"></path></svg>
+        </button>
+        <button type="button" class="tb-icon-btn" id="toolText" title="Add text note (T)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"></polyline><line x1="12" y1="4" x2="12" y2="20"></line><line x1="9" y1="20" x2="15" y2="20"></line></svg>
+        </button>
+        <button type="button" class="tb-icon-btn" id="toolFrame" title="Add group frame (F)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="3 2.5"><rect x="3.5" y="3.5" width="17" height="17" rx="2"></rect></svg>
+        </button>
+        <div class="tb-flyout-wrap">
+          <button type="button" class="tb-icon-btn" id="toolShape" title="Add shape (R)">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="10" height="7" rx="1.5"></rect><circle cx="17.5" cy="16" r="4"></circle></svg>
+          </button>
+          <div class="shape-flyout hidden" id="shapeFlyout">
+            <button type="button" data-shape="rectangle" title="Rectangle" class="active">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3.5" y="6" width="17" height="12" rx="2"></rect></svg>
+            </button>
+            <button type="button" data-shape="ellipse" title="Ellipse">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="12" rx="8.5" ry="6.5"></ellipse></svg>
+            </button>
+            <button type="button" data-shape="diamond" title="Diamond">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l9 9-9 9-9-9z"></path></svg>
+            </button>
+            <button type="button" data-shape="cylinder" title="Cylinder">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5.5" rx="7.5" ry="2.5"></ellipse><path d="M4.5 5.5v13a7.5 2.5 0 0 0 15 0v-13"></path></svg>
+            </button>
+          </div>
+        </div>
+        <div class="ft-sep"></div>
+        <button type="button" class="tb-icon-btn" id="btnDuplicate" title="Duplicate (Ctrl+D)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path></svg>
+        </button>
+        <button type="button" class="tb-icon-btn" id="btnDelete" title="Delete (Del)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6M14 11v6"></path></svg>
+        </button>
+      </div>
+
+      <!-- zoom controls -->
+      <div class="zoom-controls">
+        <button type="button" class="tb-icon-btn active" id="btnSnap" title="Snap to grid (on)">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a5 5 0 0 1 5 5c0 3.5-5 10-5 10s-5-6.5-5-10a5 5 0 0 1 5-5z"></path><path d="M9.5 7a2.5 2.5 0 0 0 5 0"></path></svg>
+        </button>
+        <div class="ft-sep"></div>
+        <button type="button" class="tb-icon-btn" id="zoomOut" title="Zoom out">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </button>
+        <span class="zlabel" id="zoomLabel">100%</span>
+        <button type="button" class="tb-icon-btn" id="zoomIn" title="Zoom in">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </button>
+        <div class="ft-sep"></div>
+        <button type="button" class="tb-icon-btn" id="zoomFit" title="Fit to screen">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"></path><path d="M9 21H3v-6"></path><path d="M21 3l-7 7"></path><path d="M3 21l7-7"></path></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ===================== INSPECTOR ===================== -->
+    <div class="inspector" id="inspector">
+      <div class="insp-head">
+        <div class="ic" id="inspIcon"></div>
+        <div class="t"><b id="inspTitle">Nothing selected</b><span id="inspType">—</span></div>
+      </div>
+      <div class="insp-body" id="inspBody">
+        <div class="insp-empty">Select a component or connector to edit its label, color, and style — or drag a component from the library to begin.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+<div class="ctx-menu hidden" id="ctxMenu"></div>
+
+<div class="modal-overlay" id="publishModal">
+  <div class="modal">
+    <h2>Publish diagram</h2>
+    <p id="publishModalText">This replaces the architecture diagram shown on <b id="publishProjName">this project's</b> overview page for everyone who can view it. You can keep editing and publish again anytime.</p>
+    <div class="modal-actions">
+      <button id="publishCancel">Cancel</button>
+      <button class="primary" id="publishConfirm">Publish now</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="customIconModal">
+  <div class="modal">
+    <h2>Add a custom icon</h2>
+    <p>Drop in a logo (yours to use — PNG, JPEG, WebP or SVG, under 300KB) and give it a name. It's saved for your whole organisation, so it'll show up in every project's diagram from now on.</p>
+    <div class="insp-field" id="ciDropZone" style="border:1.5px dashed var(--border-strong); border-radius:12px; padding:16px; text-align:center; cursor:pointer; margin-bottom:14px;">
+      <div id="ciPreviewWrap" style="display:none; margin-bottom:8px;">
+        <img id="ciPreview" style="width:56px; height:56px; object-fit:contain; background:#fff; border-radius:8px; padding:6px; box-sizing:border-box;" />
+      </div>
+      <div id="ciDropLabel" style="font-size:12px; color:var(--text-dim);">Click to choose an image, or drag one here</div>
+      <input type="file" id="ciFileInput" accept="image/png,image/jpeg,image/webp,image/svg+xml" style="display:none;">
+    </div>
+    <div class="insp-field">
+      <label>Name</label>
+      <input type="text" id="ciNameInput" placeholder="e.g. MuleSoft, Acme Gateway…">
+    </div>
+    <div id="ciError" style="display:none; font-size:11.5px; color:#ff6b6b; margin:-6px 0 12px;"></div>
+    <div class="modal-actions">
+      <button id="ciCancel">Cancel</button>
+      <button class="primary" id="ciSave" disabled>Save icon</button>
+    </div>
+  </div>
+</div>
+
+<script nonce="__CSP_NONCE__">
+/* ==================== Injected from server (see server.js) ==================== */
+const AUTH_USER = __AUTH_USER_JSON__;
+const ORG_TOKEN = '__ORG_TOKEN__';
+const PROJECT_SLUG = __PROJECT_SLUG__;
+
+/* ==================== Small utilities (mirrors studio.html / editor.html) ==================== */
+function uid(){ return Math.random().toString(36).slice(2,10); }
+function escapeHtml(str){
+  if(str === undefined || str === null) return '';
+  return String(str).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+function slugify(str){
+  return String(str||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'x';
+}
+function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(()=>t.classList.remove('show'), 2800);
+}
+async function apiGet(path){
+  const res = await fetch('/api/workspace' + path, { credentials:'same-origin' });
+  if(!res.ok) throw new Error('Request failed: ' + res.status);
+  return res.json();
+}
+async function apiSend(method, path, body){
+  const res = await fetch('/api/workspace' + path, {
+    method, credentials:'same-origin', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body),
+  });
+  if(!res.ok) throw new Error('Request failed: ' + res.status);
+  return res.json();
+}
+function formatDateTime(iso){
+  if(!iso) return '';
+  try{
+    return new Date(iso).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+  }catch(e){ return ''; }
+}
+function userInitials(name){
+  const w = (name||'?').trim().split(/\s+/).slice(0,2);
+  return (w.map(x=>x[0]).join('') || '?').toUpperCase();
+}
+// Same channel name the rest of API Studio uses so other open tabs (the main
+// dashboard, the endpoint editor) can pick up a freshly-published diagram
+// without a manual refresh.
+const syncChannel = ('BroadcastChannel' in window) ? new BroadcastChannel('api-studio-sync') : null;
+
+/* ==================== Icon library ====================
+   Every icon renders as a premium gradient "badge" (rounded square or
+   circle, soft drop shadow, subtle inner rim-light) with a crisp white
+   pictogram on top — the same visual language used across every category
+   so the whole palette reads as one polished, professional icon set.
+   Icons are original pictograms (bucket, cylinder, chip, cluster of
+   nodes…) rather than traced copies of any vendor's actual logo artwork —
+   the same approach draw.io / Lucidchart use for their shape libraries.
+   Brand colour is used to identify the platform; the glyph never
+   reproduces a company's trademarked logo mark. */
+// SVGNS/svgEl_ are used throughout rendering (canvas nodes, edges, handles),
+// so they need to be defined before the icon library below runs. They used
+// to live further down the file (in the "Rendering" section); building
+// ICON_DEFS before that point meant early code could reference the
+// not-yet-initialized `const SVGNS` and throw. Declared here once instead.
+const SVGNS = 'http://www.w3.org/2000/svg';
+function svgEl_(tag, attrs){
+  const el = document.createElementNS(SVGNS, tag);
+  for(const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+function shadeColor(hex, percent){
+  hex = hex.replace('#','');
+  if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+  const num = parseInt(hex,16);
+  let r=(num>>16)+Math.round(2.55*percent), g=((num>>8)&0xff)+Math.round(2.55*percent), b=(num&0xff)+Math.round(2.55*percent);
+  r=Math.max(0,Math.min(255,r)); g=Math.max(0,Math.min(255,g)); b=Math.max(0,Math.min(255,b));
+  return '#' + (0x1000000 + r*0x10000 + g*0x100 + b).toString(16).slice(1);
+}
+/** Wrap a white-line glyph in a gradient badge. shape: 'square' | 'circle'.
+ * The gradient (and the drop-shadow filter) used to be referenced by id —
+ * `url(#grad_XXXXX)` / `url(#iconSoftShadow)` — pointing at defs that only
+ * exist in THIS document's own <svg id="dgSvg"> (see ensureGradient above
+ * and the <filter id="iconSoftShadow"> in the canvas markup). That's fine as
+ * long as the returned string is only ever rendered inside this same page,
+ * but every one of these strings also gets copied verbatim into other
+ * documents — the Overview page preview, the published diagram snapshot,
+ * PDF/SVG export — where those ids don't exist. A dangling filter reference
+ * doesn't just lose the shadow, it can make the whole element fail to
+ * render per the SVG spec, which is why badges showed up nearly invisible
+ * outside the editor. Embedding a small local <defs> in every single badge
+ * makes each one fully self-contained and portable, at the cost of a few
+ * duplicate (but identical, so harmless) ids when the same color repeats. */
+function badge(hex, shape, glyph){
+  const gid = 'grad_' + hex.replace('#','') + '_' + shape;
+  const fid = 'shadow_' + hex.replace('#','') + '_' + shape;
+  const fillRef = `url(#${gid})`;
+  const shapeEl = shape === 'circle'
+    ? `<circle cx="16" cy="16" r="15" fill="${fillRef}"></circle><circle cx="16" cy="16" r="15" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1"></circle>`
+    : `<rect x="1" y="1" width="30" height="30" rx="9" fill="${fillRef}"></rect><rect x="1" y="1" width="30" height="30" rx="9" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1"></rect>`;
+  const defs = `<defs>
+      <linearGradient id="${gid}" x1="12%" y1="6%" x2="88%" y2="96%">
+        <stop offset="0%" stop-color="${shadeColor(hex, 16)}"></stop>
+        <stop offset="100%" stop-color="${shadeColor(hex, -20)}"></stop>
+      </linearGradient>
+      <filter id="${fid}" x="-40%" y="-40%" width="180%" height="180%">
+        <feDropShadow dx="0" dy="1.5" stdDeviation="1.6" flood-color="#000" flood-opacity="0.35"></feDropShadow>
+      </filter>
+    </defs>`;
+  return `<svg viewBox="0 0 32 32" style="filter:url(#${fid})">${defs}${shapeEl}<g fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${glyph}</g></svg>`;
+}
+/** Small brand-letter badge, used only where no clean universal pictogram exists. */
+function monogramSvg(text, bg, shape){
+  const size = text.length > 2 ? 9.5 : (text.length > 1 ? 11.5 : 14);
+  return badge(bg, shape, `<text x="16" y="16.5" text-anchor="middle" dominant-baseline="central" font-family="Space Grotesk, Inter, sans-serif" font-weight="700" font-size="${size}" stroke="none" fill="#fff">${text}</text>`);
+}
+const ICON_DEFS = [
+  // ---- Client & Users ----
+  { id:'client', name:'Browser / Client', cat:'Client & Users', color:'#4a90d9', svg: badge('#4a90d9','square',
+    `<rect x="6" y="8" width="20" height="16" rx="2.5"></rect><path d="M6 12.5h20"></path><circle cx="9.3" cy="10.3" r=".9" fill="#fff" stroke="none"></circle><circle cx="12" cy="10.3" r=".9" fill="#fff" stroke="none"></circle>`) },
+  { id:'mobile', name:'Mobile App', cat:'Client & Users', color:'#7c8fee', svg: badge('#7c8fee','square',
+    `<rect x="10" y="5" width="12" height="22" rx="2.6"></rect><path d="M14 24h4" stroke-width="2"></path>`) },
+  { id:'user', name:'User', cat:'Client & Users', color:'#9aa3c0', svg: badge('#9aa3c0','circle',
+    `<circle cx="16" cy="12.5" r="4.6"></circle><path d="M7.5 25c1.3-5.2 4.8-8 8.5-8s7.2 2.8 8.5 8"></path>`) },
+  // ---- Compute ----
+  { id:'server', name:'Server', cat:'Compute', color:'#5b7fd6', svg: badge('#5b7fd6','square',
+    `<rect x="6" y="6" width="20" height="7" rx="1.8"></rect><rect x="6" y="15" width="20" height="7" rx="1.8"></rect><circle cx="10" cy="9.5" r="1" fill="#fff" stroke="none"></circle><circle cx="10" cy="18.5" r="1" fill="#fff" stroke="none"></circle><path d="M9 26h14" stroke-width="1.6"></path>`) },
+  { id:'vm', name:'Virtual Machine', cat:'Compute', color:'#ff9900', svg: badge('#ff9900','square',
+    `<rect x="6" y="7" width="20" height="14" rx="2"></rect><path d="M13 25h6M16 21v4" stroke-width="1.6"></path><path d="M12.5 12l3 2.6-3 2.6" stroke-width="1.6"></path>`) },
+  { id:'lambda', name:'Function (Lambda)', cat:'Compute', color:'#a855f7', svg: badge('#a855f7','circle',
+    `<path d="M11 23l4.4-16M15.4 7l7 16M13.6 16h3" stroke-width="2"></path>`) },
+  { id:'container', name:'Container', cat:'Compute', color:'#2496ed', svg: badge('#2496ed','square',
+    `<rect x="5" y="12" width="22" height="13" rx="2"></rect><path d="M5 12l3.5-5h15l3.5 5" stroke-linejoin="round"></path><path d="M11 16.5v4M16 16.5v4M21 16.5v4"></path>`) },
+  { id:'k8s', name:'Kubernetes Cluster', cat:'Compute', color:'#326ce5', svg: badge('#326ce5','circle',
+    `<circle cx="16" cy="8.5" r="2"></circle><circle cx="24" cy="20.5" r="2"></circle><circle cx="8" cy="20.5" r="2"></circle><path d="M16 10.5v6M16 16.5l7 4M16 16.5l-7 4" stroke-width="1.6"></path>`) },
+  // ---- Storage & Database ----
+  { id:'s3', name:'Object Storage (S3)', cat:'Storage & Database', color:'#ff9900', svg: badge('#ff9900','square',
+    `<path d="M8 9h16l-1.6 15a2 2 0 0 1-2 1.8h-8.8a2 2 0 0 1-2-1.8z" stroke-linejoin="round"></path><path d="M6.5 9h19" stroke-width="2"></path><path d="M16 13.5v6M13 17l3 3 3-3" stroke-width="1.6"></path>`) },
+  { id:'sql', name:'SQL Database', cat:'Storage & Database', color:'#4a90d9', svg: badge('#4a90d9','square',
+    `<ellipse cx="16" cy="9.5" rx="10" ry="3.6"></ellipse><path d="M6 9.5v13c0 2 4.5 3.6 10 3.6s10-1.6 10-3.6v-13"></path><path d="M6 16.5c0 2 4.5 3.6 10 3.6s10-1.6 10-3.6" stroke-width="1.6"></path>`) },
+  { id:'nosql', name:'NoSQL Database', cat:'Storage & Database', color:'#22c1a4', svg: badge('#22c1a4','square',
+    `<path d="M12 6c-2.5 1.6-2.5 4.4 0 6-2.5 1.6-2.5 4.4 0 6-2.5 1.6-2.5 4.4 0 6" stroke-width="2"></path><path d="M20 6c2.5 1.6 2.5 4.4 0 6 2.5 1.6 2.5 4.4 0 6-2.5 1.6-2.5 4.4 0 6" stroke-width="2"></path>`) },
+  { id:'cache', name:'Cache (Redis)', cat:'Storage & Database', color:'#e03131', svg: badge('#e03131','circle',
+    `<circle cx="16" cy="16" r="10.2" stroke-width="1.6"></circle><path d="M17.6 8.5l-6.2 9h4.4l-1.4 6 6.6-9.4h-4.6z" fill="#fff" stroke="none"></path>`) },
+  { id:'warehouse', name:'Data Warehouse', cat:'Storage & Database', color:'#7048e8', svg: badge('#7048e8','square',
+    `<path d="M6 14l10-7 10 7" stroke-linejoin="round"></path><rect x="8" y="14" width="16" height="11" rx="1.4"></rect><path d="M13 25v-6h6v6" stroke-width="1.6"></path>`) },
+  // ---- Integration & Messaging ----
+  { id:'gateway', name:'API Gateway', cat:'Integration & Messaging', color:'#22b8cf', svg: badge('#22b8cf','square',
+    `<path d="M16 5l9.5 5.5v11L16 27l-9.5-5.5v-11z" stroke-linejoin="round"></path><path d="M10.5 13h11M10.5 16h11M10.5 19h11" stroke-width="1.5"></path>`) },
+  { id:'mulesoft', name:'Integration Flow', cat:'Integration & Messaging', color:'#00a1e0', svg: badge('#00a1e0','circle',
+    `<circle cx="8" cy="16" r="2.4"></circle><circle cx="23" cy="9" r="2.4"></circle><circle cx="23" cy="23" r="2.4"></circle><path d="M10.3 15.2L20.8 10M10.3 16.8L20.8 22" stroke-width="1.6"></path>`) },
+  { id:'queue', name:'Message Queue', cat:'Integration & Messaging', color:'#ffb84d', svg: badge('#ffb84d','square',
+    `<rect x="6" y="8" width="20" height="4.5" rx="1.4"></rect><rect x="6" y="14" width="20" height="4.5" rx="1.4"></rect><rect x="6" y="20" width="14" height="4.5" rx="1.4"></rect>`) },
+  { id:'kafka', name:'Event Stream (Kafka)', cat:'Integration & Messaging', color:'#8574c7', svg: badge('#8574c7','circle',
+    `<path d="M6 12c3-3 6 3 9 0s6 3 9 0" stroke-width="1.8"></path><path d="M6 17c3-3 6 3 9 0s6 3 9 0" stroke-width="1.8"></path><path d="M6 22c3-3 6 3 9 0s6 3 9 0" stroke-width="1.8"></path>`) },
+  { id:'webhook', name:'Webhook', cat:'Integration & Messaging', color:'#37b24d', svg: badge('#37b24d','square',
+    `<circle cx="9" cy="23" r="3"></circle><circle cx="23" cy="10" r="3"></circle><circle cx="23" cy="23" r="3"></circle><path d="M11.5 21.3L20.5 11.7M11.7 23h9" stroke-width="1.8"></path>`) },
+  { id:'loadbalancer', name:'Load Balancer', cat:'Integration & Messaging', color:'#4dabf7', svg: badge('#4dabf7','circle',
+    `<circle cx="7" cy="16" r="2.6"></circle><circle cx="25" cy="7" r="2.4"></circle><circle cx="25" cy="16" r="2.4"></circle><circle cx="25" cy="25" r="2.4"></circle><path d="M9.4 16h5M16 16l6-8M16 16h6M16 16l6 8" stroke-width="1.6"></path>`) },
+  // ---- SaaS & Platforms ----
+  { id:'salesforce', name:'Salesforce', cat:'SaaS & Platforms', color:'#00a1e0', svg: badge('#00a1e0','circle',
+    `<path d="M9 21a4.6 4.6 0 0 1-.4-9.2 5.6 5.6 0 0 1 10.2-2 4.2 4.2 0 0 1 5.7 4 4 4 0 0 1-.9 7.2z" stroke-linejoin="round"></path>`) },
+  { id:'slack', name:'Slack', cat:'SaaS & Platforms', color:'#e01e5a', svg: badge('#e01e5a','square',
+    `<path d="M11 8a2.4 2.4 0 1 1 2.4-2.4V8z" fill="#fff" stroke="none"></path><rect x="7.5" y="9.5" width="9" height="9" rx="4.4"></rect><path d="M23 15a2.4 2.4 0 1 1 2.4 2.4H23z" fill="#fff" stroke="none"></path><circle cx="20" cy="18.5" r="2" fill="#fff" stroke="none"></circle>`) },
+  { id:'stripe', name:'Stripe', cat:'SaaS & Platforms', color:'#635bff', svg: badge('#635bff','square',
+    `<rect x="5" y="9" width="22" height="15" rx="2.4"></rect><path d="M5 13.5h22" stroke-width="2"></path><rect x="8.5" y="18" width="6" height="2.4" rx="1" fill="#fff" stroke="none"></rect>`) },
+  { id:'twilio', name:'Twilio', cat:'SaaS & Platforms', color:'#f22f46', svg: badge('#f22f46','circle',
+    `<path d="M8 22V13a5 5 0 0 1 5-5h6a5 5 0 0 1 5 5v4a5 5 0 0 1-5 5h-8z" stroke-linejoin="round"></path><path d="M11 25l3-3" stroke-width="1.6"></path>`) },
+  { id:'email', name:'Email / SES', cat:'SaaS & Platforms', color:'#ffa94d', svg: badge('#ffa94d','square',
+    `<rect x="5" y="9" width="22" height="15" rx="2.2"></rect><path d="M5.5 10l10.5 9L26.5 10" stroke-linejoin="round"></path>`) },
+  // ---- Networking & Security ----
+  { id:'cdn', name:'CDN', cat:'Networking & Security', color:'#22b8cf', svg: badge('#22b8cf','circle',
+    `<circle cx="16" cy="16" r="10.5"></circle><ellipse cx="16" cy="16" rx="4.4" ry="10.5"></ellipse><path d="M5.6 16h20.8M7 10h18M7 22h18" stroke-width="1.4"></path>`) },
+  { id:'firewall', name:'Firewall', cat:'Networking & Security', color:'#ff5d78', svg: badge('#ff5d78','square',
+    `<g stroke-width="1.6"><rect x="5" y="7" width="8" height="5.5"></rect><rect x="13" y="7" width="8" height="5.5"></rect><rect x="21" y="7" width="6" height="5.5"></rect><rect x="9" y="12.5" width="8" height="5.5"></rect><rect x="17" y="12.5" width="8" height="5.5"></rect><rect x="5" y="12.5" width="4" height="5.5"></rect><rect x="5" y="18" width="8" height="5.5"></rect><rect x="13" y="18" width="8" height="5.5"></rect><rect x="21" y="18" width="6" height="5.5"></rect></g>`) },
+  { id:'vpn', name:'VPN / Shield', cat:'Networking & Security', color:'#33e6a8', svg: badge('#33e6a8','circle',
+    `<path d="M16 6l8 3v6c0 6-3.4 9.8-8 11-4.6-1.2-8-5-8-11V9z" stroke-linejoin="round"></path><path d="M12.3 16.4l2.6 2.6 5-5.4" stroke-linecap="round" stroke-linejoin="round"></path>`) },
+  { id:'dns', name:'DNS', cat:'Networking & Security', color:'#a855f7', svg: badge('#a855f7','square',
+    `<circle cx="16" cy="16" r="10.5"></circle><path d="M5.5 16h21M16 5.5c3 3 3 18 0 21-3-3-3-18 0-21" stroke-width="1.4"></path>`) },
+  { id:'auth', name:'Auth / Identity', cat:'Networking & Security', color:'#f76707', svg: badge('#f76707','circle',
+    `<circle cx="16" cy="12.5" r="4.5"></circle><path d="M7 26c1.6-5 4.7-7.5 9-7.5s7.4 2.5 9 7.5" stroke-linecap="round"></path><rect x="12.5" y="10" width="7" height="6" rx="1.4" fill="none"></rect>`) },
+  { id:'apikey', name:'API Key / Secret', cat:'Networking & Security', color:'#495057', svg: badge('#495057','square',
+    `<circle cx="12" cy="16" r="5.5"></circle><path d="M17 16h10M23 16v4.5M27 16v3" stroke-width="1.8" stroke-linecap="round"></path>`) },
+  // ---- Devops & Monitoring ----
+  { id:'cicd', name:'CI/CD Pipeline', cat:'DevOps & Monitoring', color:'#20c997', svg: badge('#20c997','square',
+    `<circle cx="8" cy="10" r="2.6"></circle><circle cx="8" cy="22" r="2.6"></circle><circle cx="24" cy="16" r="2.6"></circle><path d="M8 12.6V19M10.5 10h8a5 5 0 0 1 5 5v0M10.5 22h8a5 5 0 0 0 5-5v0" stroke-width="1.6"></path>`) },
+  { id:'monitoring', name:'Monitoring / APM', cat:'DevOps & Monitoring', color:'#4dabf7', svg: badge('#4dabf7','circle',
+    `<path d="M5.5 20h5l3-9 5 15 3-11 2.5 5h6.5" stroke-linecap="round" stroke-linejoin="round"></path>`) },
+  { id:'logs', name:'Logging', cat:'DevOps & Monitoring', color:'#868e96', svg: badge('#868e96','square',
+    `<rect x="6" y="5" width="20" height="22" rx="2"></rect><path d="M10 11h12M10 16h12M10 21h8" stroke-width="1.6" stroke-linecap="round"></path>`) },
+  { id:'scheduler', name:'Cron / Scheduler', cat:'DevOps & Monitoring', color:'#7048e8', svg: badge('#7048e8','circle',
+    `<circle cx="16" cy="16" r="10.5"></circle><path d="M16 9.5V16l5 3" stroke-linecap="round" stroke-linejoin="round"></path>`) },
+  { id:'alert', name:'Alert / Incident', cat:'DevOps & Monitoring', color:'#e03131', svg: badge('#e03131','square',
+    `<path d="M16 6l11 19H5z" stroke-linejoin="round"></path><path d="M16 14v5" stroke-linecap="round"></path><circle cx="16" cy="22.5" r="1" fill="#fff" stroke="none"></circle>`) },
+  // ---- Data & Analytics ----
+  { id:'etl', name:'ETL / Data Pipeline', cat:'Data & Analytics', color:'#0ca678', svg: badge('#0ca678','square',
+    `<rect x="4" y="13.5" width="7" height="5" rx="1.4"></rect><rect x="13" y="6" width="7" height="5" rx="1.4"></rect><rect x="13" y="21" width="7" height="5" rx="1.4"></rect><rect x="22" y="13.5" width="7" height="5" rx="1.4"></rect><path d="M11 16h2M18 11v2.5M18 21v-2.5M20 16h2" stroke-width="1.5"></path>`) },
+  { id:'datalake', name:'Data Lake', cat:'Data & Analytics', color:'#1c7ed6', svg: badge('#1c7ed6','circle',
+    `<ellipse cx="16" cy="11" rx="10" ry="4"></ellipse><path d="M6 11v10c0 2.2 4.5 4 10 4s10-1.8 10-4V11" ></path><path d="M6 16c0 2.2 4.5 4 10 4s10-1.8 10-4" stroke-width="1.4"></path>`) },
+  { id:'analytics', name:'Analytics Dashboard', cat:'Data & Analytics', color:'#ae3ec9', svg: badge('#ae3ec9','square',
+    `<rect x="5.5" y="16" width="5" height="10" rx="1.2"></rect><rect x="13.5" y="10" width="5" height="16" rx="1.2"></rect><rect x="21.5" y="6" width="5" height="20" rx="1.2"></rect>`) },
+  { id:'search', name:'Search Index', cat:'Data & Analytics', color:'#0c8599', svg: badge('#0c8599','circle',
+    `<circle cx="14" cy="14" r="7.5"></circle><path d="M19.5 19.5L27 27" stroke-width="2.4" stroke-linecap="round"></path>`) },
+  // ---- Generic shapes ----
+  { id:'cloud', name:'Cloud (generic)', cat:'Generic', color:'#9aa3c0', svg: badge('#9aa3c0','circle',
+    `<path d="M9 22a5.5 5.5 0 0 1-.6-11 7 7 0 0 1 13.2-3 5.3 5.3 0 0 1 7.2 5 5 5 0 0 1-1.4 9z" stroke-linejoin="round"></path>`) },
+  { id:'process', name:'Process', cat:'Generic', color:'#6d8dff', svg: badge('#6d8dff','square',
+    `<rect x="6" y="11" width="20" height="10" rx="2.6"></rect>`) },
+  { id:'decision', name:'Decision', cat:'Generic', color:'#ffc45c', svg: badge('#ffc45c','square',
+    `<path d="M16 6l10 10-10 10-10-10z" stroke-linejoin="round"></path>`) },
+  { id:'actor', name:'Actor / Person', cat:'Generic', color:'#495057', svg: badge('#495057','circle',
+    `<circle cx="16" cy="10.5" r="4.2"></circle><path d="M7 26c1.5-5.4 4.8-8 9-8s7.5 2.6 9 8" stroke-linecap="round"></path>`) },
+  { id:'externalsystem', name:'External System', cat:'Generic', color:'#adb5bd', svg: badge('#adb5bd','square',
+    `<rect x="5" y="7" width="22" height="18" rx="2.4" stroke-dasharray="3 2.4"></rect><path d="M12 14h8M12 18h8" stroke-width="1.6"></path>`) },
+  { id:'datastore', name:'Generic Data Store', cat:'Generic', color:'#748ffc', svg: badge('#748ffc','circle',
+    `<path d="M6 12v10c0 1.7 4.5 3 10 3s10-1.3 10-3V12" ></path><ellipse cx="16" cy="12" rx="10" ry="3.4"></ellipse>`) },
+  // ---- Added: previously-overloaded and missing pictograms ----
+  // These give a few common components their own distinct glyph instead of
+  // sharing one (e.g. a message broker no longer looks identical to a plain
+  // queue), plus cover categories that had no icon at all (GraphQL, gRPC,
+  // WAF, service mesh, IaC, multi-region, blob storage, ingress, flags).
+  { id:'broker', name:'Message Broker (RabbitMQ/SQS)', cat:'Integration & Messaging', color:'#ff8a3d', svg: badge('#ff8a3d','circle',
+    `<circle cx="16" cy="16" r="3.6"></circle><circle cx="16" cy="7" r="2.2"></circle><circle cx="7" cy="21" r="2.2"></circle><circle cx="25" cy="21" r="2.2"></circle><path d="M16 12.4V9.2M13.6 18.2L8.7 19.6M18.4 18.2l4.9 1.4" stroke-width="1.5"></path>`) },
+  { id:'graphql', name:'GraphQL API', cat:'Integration & Messaging', color:'#e535ab', svg: badge('#e535ab','circle',
+    `<path d="M16 6l8.7 5v10L16 26l-8.7-5V11z" stroke-linejoin="round"></path><circle cx="16" cy="16" r="1.7" fill="#fff" stroke="none"></circle><circle cx="16" cy="6" r="1.5" fill="#fff" stroke="none"></circle><circle cx="24.7" cy="21" r="1.5" fill="#fff" stroke="none"></circle><circle cx="7.3" cy="21" r="1.5" fill="#fff" stroke="none"></circle>`) },
+  { id:'grpc', name:'gRPC Service', cat:'Integration & Messaging', color:'#4a90d9', svg: badge('#4a90d9','circle',
+    `<circle cx="16" cy="16" r="10.2"></circle><path d="M11 13.5h7M18 13.5l-2.4-2.4M18 13.5l-2.4 2.4" stroke-width="1.6"></path><path d="M21 18.5h-7M14 18.5l2.4-2.4M14 18.5l2.4 2.4" stroke-width="1.6"></path>`) },
+  { id:'ingress', name:'Ingress Controller', cat:'Integration & Messaging', color:'#37b24d', svg: badge('#37b24d','square',
+    `<path d="M6 8h20l-6.5 9v8h-7v-8z" stroke-linejoin="round"></path>`) },
+  { id:'elasticsearch', name:'Search Engine (Elasticsearch)', cat:'Data & Analytics', color:'#fec514', svg: badge('#fec514','square',
+    `<path d="M16 6l10 5-10 5-10-5z" stroke-linejoin="round"></path><path d="M6 16l10 5 10-5" stroke-width="1.6"></path><path d="M6 21l10 5 10-5" stroke-width="1.6"></path>`) },
+  { id:'secretsvault', name:'Secrets Vault', cat:'Networking & Security', color:'#20c997', svg: badge('#20c997','square',
+    `<rect x="6" y="6" width="20" height="20" rx="4"></rect><circle cx="16" cy="16" r="5"></circle><path d="M16 13.2v3.2l2.3 1.3" stroke-width="1.5"></path>`) },
+  { id:'waf', name:'Web App Firewall', cat:'Networking & Security', color:'#ff5d78', svg: badge('#ff5d78','square',
+    `<path d="M16 6l8 3v6c0 6-3.4 9.8-8 11-4.6-1.2-8-5-8-11V9z" stroke-linejoin="round"></path><path d="M10.5 15h11M10.5 18.5h11" stroke-width="1.5"></path>`) },
+  { id:'multiregion', name:'Multi-Region / DR', cat:'Networking & Security', color:'#4dabf7', svg: badge('#4dabf7','circle',
+    `<circle cx="16" cy="16" r="10.2"></circle><path d="M5.8 16h20.4M16 5.8c2.8 2.8 2.8 17.4 0 20.2-2.8-2.8-2.8-17.4 0-20.2" stroke-width="1.3"></path><circle cx="10.5" cy="11.5" r="1.7" fill="#fff" stroke="none"></circle><circle cx="21.5" cy="20.5" r="1.7" fill="#fff" stroke="none"></circle>`) },
+  { id:'servicemesh', name:'Service Mesh', cat:'DevOps & Monitoring', color:'#0ca8a0', svg: badge('#0ca8a0','circle',
+    `<circle cx="8" cy="9" r="2"></circle><circle cx="24" cy="9" r="2"></circle><circle cx="8" cy="23" r="2"></circle><circle cx="24" cy="23" r="2"></circle><circle cx="16" cy="16" r="2.3"></circle><path d="M9.5 10.3L14.2 14.5M22.5 10.3L17.8 14.5M9.5 21.7L14.2 17.5M22.5 21.7L17.8 17.5" stroke-width="1.4"></path>`) },
+  { id:'terraform', name:'Infrastructure as Code', cat:'DevOps & Monitoring', color:'#7b42f6', svg: badge('#7b42f6','square',
+    `<rect x="6" y="14.5" width="8.5" height="8.5" rx="1.4"></rect><rect x="17.5" y="14.5" width="8.5" height="8.5" rx="1.4"></rect><rect x="11.75" y="5" width="8.5" height="8.5" rx="1.4"></rect>`) },
+  { id:'featureflag', name:'Feature Flags', cat:'DevOps & Monitoring', color:'#f76707', svg: badge('#f76707','square',
+    `<path d="M9 5v22" stroke-width="2"></path><path d="M9 6.5h13l-3.5 5L22 16.5H9z" stroke-linejoin="round"></path>`) },
+  { id:'blobstorage', name:'Blob Storage (GCS/Azure)', cat:'Storage & Database', color:'#0f9d58', svg: badge('#0f9d58','circle',
+    `<path d="M16 6c5 4.2 8 9 8 12.6A8 8 0 1 1 8 18.6C8 15 11 10.2 16 6z"></path>`) },
+];
+const CATEGORY_ORDER = ['Custom','Client & Users','Compute','Storage & Database','Integration & Messaging','SaaS & Platforms','Networking & Security','DevOps & Monitoring','Data & Analytics','Generic'];
+const ICONS_BY_ID = {}; ICON_DEFS.forEach(i=>ICONS_BY_ID[i.id]=i);
+
+// ---- Custom icon library (org-wide, shared across every project) ----
+// A person can drop in their own logo (their own licensed artwork — e.g. an
+// actual MuleSoft/vendor mark, not something we ship) plus a name, and it's
+// saved to the organisation's workspace so it shows up in every project's
+// palette from then on, not just this diagram.
+function customIconBadge(dataUrl){
+  return `<div style="width:100%;height:100%;border-radius:8px;overflow:hidden;background:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px -2px rgba(0,0,0,.35);">
+    <img src="${dataUrl}" style="width:100%;height:100%;object-fit:contain;padding:4px;box-sizing:border-box;" />
+  </div>`;
+}
+function registerCustomIcons(list){
+  // Drop any previously-registered custom defs first so a reload doesn't
+  // duplicate them, then re-add from the (possibly updated) source list.
+  for(let i = ICON_DEFS.length-1; i >= 0; i--){
+    if(ICON_DEFS[i].custom){ delete ICONS_BY_ID[ICON_DEFS[i].id]; ICON_DEFS.splice(i,1); }
+  }
+  (list||[]).forEach(ci=>{
+    const def = { id: ci.id, name: ci.name, cat:'Custom', color:null, custom:true, svg: customIconBadge(ci.dataUrl) };
+    ICON_DEFS.push(def);
+    ICONS_BY_ID[def.id] = def;
+  });
+}
+
+/* ==================== Diagram state ==================== */
+const state = {
+  nodes: [],
+  edges: [],
+  selection: new Set(),  // 'n:<id>' or 'e:<id>'
+  tool: 'select',
+  pan: { x: 0, y: 0 },
+  zoom: 1,
+};
+let workspace = { projects:{} };
+let proj = null;
+let publishedSnapshotAt = null; // updatedAt of the diagram as last loaded from the server, for conflict checks
+let history = [];
+let historyIdx = -1;
+let suppressHistory = false;
+let localDirty = false;
+let saving = false;
+
+/* ---- Selection/layout productivity state ---- */
+const GRID_SIZE = 10;                 // px, used by snap-to-grid
+let snapToGrid = true;                // toggled from the toolbar magnet button
+let currentShapeType = 'rectangle';   // which basic shape the Shape tool places next
+let clipboard = null;                 // { nodes:[...], edges:[...] } from Ctrl+C, pasted with Ctrl+V
+function snapVal(v){ return snapToGrid ? Math.round(v / GRID_SIZE) * GRID_SIZE : v; }
+
+const svgEl = document.getElementById('dgSvg');
+const viewportEl = document.getElementById('viewport');
+const layerFrames = document.getElementById('layerFrames');
+const layerEdges = document.getElementById('layerEdges');
+const layerNodes = document.getElementById('layerNodes');
+const layerOverlay = document.getElementById('layerOverlay');
+
+const SHAPE_DEFS = {
+  rectangle: { name:'Rectangle', w:160, h:92 },
+  ellipse:   { name:'Ellipse',   w:150, h:100 },
+  diamond:   { name:'Diamond',   w:150, h:112 },
+  cylinder:  { name:'Cylinder',  w:120, h:118 },
+};
+function defaultSize(kind, sub){
+  if(kind==='frame') return { w:320, h:220 };
+  if(kind==='text') return { w:180, h:56 };
+  if(kind==='shape') return { w:(SHAPE_DEFS[sub]||SHAPE_DEFS.rectangle).w, h:(SHAPE_DEFS[sub]||SHAPE_DEFS.rectangle).h };
+  return { w:132, h:92 };
+}
+function makeIconNode(iconId, x, y){
+  const size = defaultSize('icon');
+  const def = ICONS_BY_ID[iconId] || ICON_DEFS[0];
+  return { id: uid(), kind:'icon', icon: iconId, label: def.name, x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h, parentId: null };
+}
+function makeFrameNode(x, y){
+  const size = defaultSize('frame');
+  return { id: uid(), kind:'frame', label:'Group', x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h, parentId: null, frameStyle:'dashed' };
+}
+function makeTextNode(x, y){
+  const size = defaultSize('text');
+  return { id: uid(), kind:'text', label:'Text note', x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h, parentId: null };
+}
+function makeShapeNode(shapeType, x, y){
+  const def = SHAPE_DEFS[shapeType] || SHAPE_DEFS.rectangle;
+  const size = defaultSize('shape', shapeType);
+  return { id: uid(), kind:'shape', shapeType: SHAPE_DEFS[shapeType] ? shapeType : 'rectangle', label: def.name, x: x - size.w/2, y: y - size.h/2, w: size.w, h: size.h, parentId: null, fill:'soft' };
+}
+// Builds the actual geometry element for a freeform shape node at the given
+// box — kept separate from styling (fill/stroke) so the same geometry can
+// be reused for on-canvas rendering and for export.
+function shapeGeometryEl(shapeType, x, y, w, h, attrs){
+  if(shapeType === 'ellipse'){
+    return svgEl_('ellipse', Object.assign({ cx:x+w/2, cy:y+h/2, rx:w/2, ry:h/2 }, attrs));
+  }
+  if(shapeType === 'diamond'){
+    const pts = `${x+w/2},${y} ${x+w},${y+h/2} ${x+w/2},${y+h} ${x},${y+h/2}`;
+    return svgEl_('polygon', Object.assign({ points: pts }, attrs));
+  }
+  if(shapeType === 'cylinder'){
+    const rx = w/2, ry = Math.min(16, h*0.16);
+    const d = `M ${x} ${y+ry} `
+      + `A ${rx} ${ry} 0 0 1 ${x+w} ${y+ry} `
+      + `L ${x+w} ${y+h-ry} `
+      + `A ${rx} ${ry} 0 0 1 ${x} ${y+h-ry} `
+      + `Z `
+      + `M ${x} ${y+ry} A ${rx} ${ry} 0 0 0 ${x+w} ${y+ry}`;
+    return svgEl_('path', Object.assign({ d }, attrs));
+  }
+  return svgEl_('rect', Object.assign({ x, y, width:w, height:h, rx:10 }, attrs));
+}
+function nodeById(id){ return state.nodes.find(n=>n.id===id); }
+function edgeById(id){ return state.edges.find(e=>e.id===id); }
+
+/* ---- Group containment: frames are real containers. A non-frame node
+   whose centre point sits inside a frame's bounds "belongs" to it via
+   parentId, so dragging the frame carries its members along. ---- */
+function frameContaining(node, excludeId){
+  const cx = node.x + node.w/2, cy = node.y + node.h/2;
+  let best = null;
+  state.nodes.forEach(f=>{
+    if(f.kind !== 'frame' || f.id === excludeId || f.id === node.id) return;
+    if(cx >= f.x && cx <= f.x+f.w && cy >= f.y && cy <= f.y+f.h){
+      if(!best || (f.w*f.h) < (best.w*best.h)) best = f; // prefer the smallest (innermost) frame on overlap
+    }
+  });
+  return best;
+}
+function childrenOf(frameId){ return state.nodes.filter(n=>n.parentId===frameId); }
+function recomputeContainment(nodeId){
+  const n = nodeById(nodeId);
+  if(!n || n.kind === 'frame') return;
+  const f = frameContaining(n);
+  n.parentId = f ? f.id : null;
+}
+
+function nodeAnchor(node, side){
+  switch(side){
+    case 'top': return { x: node.x + node.w/2, y: node.y };
+    case 'bottom': return { x: node.x + node.w/2, y: node.y + node.h };
+    case 'left': return { x: node.x, y: node.y + node.h/2 };
+    default: return { x: node.x + node.w, y: node.y + node.h/2 };
+  }
+}
+function sideIsHoriz(side){ return side==='left' || side==='right'; }
+function pointTowards(from, to, dist){
+  const dx=to.x-from.x, dy=to.y-from.y; const len=Math.hypot(dx,dy)||1;
+  return { x: from.x + dx/len*dist, y: from.y + dy/len*dist };
+}
+function roundedPolylinePath(pts, r){
+  pts = pts.filter((p,i)=> i===0 || Math.hypot(p.x-pts[i-1].x, p.y-pts[i-1].y) > 0.5);
+  if(pts.length < 2) return '';
+  let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)} `;
+  for(let i=1;i<pts.length-1;i++){
+    const prev=pts[i-1], cur=pts[i], next=pts[i+1];
+    const d1 = Math.hypot(cur.x-prev.x, cur.y-prev.y);
+    const d2 = Math.hypot(next.x-cur.x, next.y-cur.y);
+    const rr = Math.min(r, d1/2, d2/2);
+    const p1 = pointTowards(cur, prev, rr);
+    const p2 = pointTowards(cur, next, rr);
+    d += `L ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} Q ${cur.x.toFixed(1)} ${cur.y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)} `;
+  }
+  const last = pts[pts.length-1];
+  d += `L ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
+  return d;
+}
+// `wp` is an optional manual waypoint override: { axis:'x'|'y', value }.
+// It only applies to the two-bend cases (both anchors on horizontal, or
+// both on vertical, sides) since those are the only ones with a free
+// coordinate to drag — single-bend routes are already fully determined by
+// the two anchor points, so there's nothing useful to override there.
+function elbowPath(p1, side1, p2, side2, wp){
+  let midX = (p1.x+p2.x)/2, midY = (p1.y+p2.y)/2;
+  const h1 = sideIsHoriz(side1), h2 = sideIsHoriz(side2);
+  if(wp){
+    if(wp.axis === 'x' && h1 && h2) midX = wp.value;
+    else if(wp.axis === 'y' && !h1 && !h2) midY = wp.value;
+  }
+  let pts;
+  if(h1 && h2) pts = [p1, {x:midX,y:p1.y}, {x:midX,y:p2.y}, p2];
+  else if(!h1 && !h2) pts = [p1, {x:p1.x,y:midY}, {x:p2.x,y:midY}, p2];
+  else if(h1 && !h2) pts = [p1, {x:p2.x,y:p1.y}, p2];
+  else pts = [p1, {x:p1.x,y:p2.y}, p2];
+  return roundedPolylinePath(pts, 12);
+}
+// Where the draggable waypoint handle should sit for a given edge, or null
+// if this edge's route has no free coordinate to manually bend (see above).
+function elbowWaypointHandlePos(p1, side1, p2, side2, wp){
+  const h1 = sideIsHoriz(side1), h2 = sideIsHoriz(side2);
+  if(h1 && h2){
+    const midX = (wp && wp.axis==='x') ? wp.value : (p1.x+p2.x)/2;
+    return { x:midX, y:(p1.y+p2.y)/2, axis:'x' };
+  }
+  if(!h1 && !h2){
+    const midY = (wp && wp.axis==='y') ? wp.value : (p1.y+p2.y)/2;
+    return { x:(p1.x+p2.x)/2, y:midY, axis:'y' };
+  }
+  return null;
+}
+function straightPath(p1, p2){
+  return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} L ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+}
+const SIDE_DIR = { top:{x:0,y:-1}, bottom:{x:0,y:1}, left:{x:-1,y:0}, right:{x:1,y:0} };
+function curvedPath(p1, side1, p2, side2){
+  // Cubic bezier whose control points leave each anchor perpendicular to
+  // the side it's attached to, so the curve always departs/arrives cleanly
+  // instead of cutting across the shape.
+  const pull = Math.max(40, Math.hypot(p2.x-p1.x, p2.y-p1.y) * 0.45);
+  const d1 = SIDE_DIR[side1] || SIDE_DIR.right, d2 = SIDE_DIR[side2] || SIDE_DIR.left;
+  const c1 = { x: p1.x + d1.x*pull, y: p1.y + d1.y*pull };
+  const c2 = { x: p2.x + d2.x*pull, y: p2.y + d2.y*pull };
+  return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} C ${c1.x.toFixed(1)} ${c1.y.toFixed(1)} ${c2.x.toFixed(1)} ${c2.y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+}
+function edgePathFor(edge, p1, side1, p2, side2){
+  if(edge.shape === 'straight') return straightPath(p1, p2);
+  if(edge.shape === 'curved') return curvedPath(p1, side1, p2, side2);
+  const wp = (edge.waypoint != null && edge.waypointAxis) ? { axis: edge.waypointAxis, value: edge.waypoint } : null;
+  return elbowPath(p1, side1, p2, side2, wp);
+}
+function pathMidpoint(p1, side1, p2, side2){
+  const midX = (p1.x+p2.x)/2, midY = (p1.y+p2.y)/2;
+  return { x: midX, y: midY };
+}
+
+/* ==================== Rendering ====================
+   (SVGNS / svgEl_ now declared earlier, above the icon library — see the
+   comment there for why.) */
+function applyViewportTransform(){
+  viewportEl.setAttribute('transform', `translate(${state.pan.x} ${state.pan.y}) scale(${state.zoom})`);
+  document.getElementById('zoomLabel').textContent = Math.round(state.zoom*100) + '%';
+}
+
+function isSelected(kind, id){ return state.selection.has((kind==='node'?'n:':'e:') + id); }
+
+function renderFrames(){
+  layerFrames.innerHTML = '';
+  state.nodes.filter(n=>n.kind==='frame').forEach(node=>{
+    const solid = node.frameStyle === 'solid';
+    const g = svgEl_('g', { class:'frame-node' + (solid?' frame-solid':'') + (isSelected('node',node.id)?' selected':''), 'data-id':node.id, 'data-kind':'node' });
+    const rectAttrs = { x:node.x, y:node.y, width:node.w, height:node.h, rx:14 };
+    if(solid){
+      // Solid boundary: a real filled zone (VPC / trust-boundary style)
+      // instead of the default dashed logical grouping — same node, just a
+      // heavier, more "this is a real perimeter" visual treatment.
+      const c = node.color || '#748ffc';
+      rectAttrs.fill = c; rectAttrs['fill-opacity'] = 0.07;
+      rectAttrs.stroke = c; rectAttrs['stroke-opacity'] = 0.6; rectAttrs['stroke-width'] = 1.6;
+    }
+    g.appendChild(svgEl_('rect', rectAttrs));
+    const fo = document.createElementNS(SVGNS,'foreignObject');
+    fo.setAttribute('x', node.x+10); fo.setAttribute('y', node.y-13); fo.setAttribute('width', Math.max(40,node.w-20)); fo.setAttribute('height', 26);
+    fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" class="frame-tag" title="Drag to move the group · double-click to rename" style="display:inline-block;padding:2px 9px;border-radius:7px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:.4px;color:var(--text-dim);background:var(--surface);border:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;user-select:none;" contenteditable="false" spellcheck="false" data-role="label">${escapeHtml(node.label)}</div>`;
+    g.appendChild(fo);
+    addResizeHandle(g, node);
+    addNodeHandles(g, node, true);
+    layerFrames.appendChild(g);
+    wireLabelEditable(fo.querySelector('[data-role="label"]'), node);
+    wireNodeDrag(g, node);
+  });
+}
+
+// Connector handles float just OUTSIDE the shape's edge (not on top of the
+// border itself) so they never intercept a click meant to drag/select the
+// node — that overlap used to make frames feel "stuck" when you tried to
+// grab them right at the dashed border.
+const HANDLE_OFFSET = 10;
+function addNodeHandles(g, node, small){
+  ['top','right','bottom','left'].forEach(side=>{
+    const a = nodeAnchor(node, side);
+    const off = { top:{x:0,y:-HANDLE_OFFSET}, bottom:{x:0,y:HANDLE_OFFSET}, left:{x:-HANDLE_OFFSET,y:0}, right:{x:HANDLE_OFFSET,y:0} }[side];
+    const h = svgEl_('circle', { class:'handle', cx:a.x+off.x, cy:a.y+off.y, r: small?5:6, 'data-handle':side, 'data-id':node.id });
+    h.setAttribute('title','Drag to connect');
+    g.appendChild(h);
+  });
+}
+function addResizeHandle(g, node){
+  const h = svgEl_('rect', { x:node.x+node.w-7, y:node.y+node.h-7, width:14, height:14, rx:3, class:'handle resize-handle', 'data-resize':node.id, cursor:'nwse-resize' });
+  g.appendChild(h);
+}
+
+// A small warning-colored dot in a card's top-right corner when it carries
+// a notes/description field, and a padlock glyph when locked — both purely
+// informational overlays, added after the handles so they sit on top.
+function addStatusBadges(g, node){
+  if(node.locked){
+    const lg = svgEl_('g', { class:'lock-badge', transform:`translate(${node.x+node.w-16},${node.y+4})` });
+    lg.innerHTML = `<circle r="8" cx="8" cy="8" fill="var(--surface-solid)" stroke="var(--border-strong)" stroke-width="1"></circle>
+      <svg x="3" y="3" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="1.5"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>`;
+    g.appendChild(lg);
+  }
+  if(node.notes && node.notes.trim()){
+    g.appendChild(svgEl_('circle', { class:'notes-dot', cx:node.x+8, cy:node.y+8, r:4 }));
+  }
+}
+function renderNodes(){
+  layerNodes.innerHTML = '';
+  // Rendered in state.nodes array order (icons/text/shapes interleaved) so
+  // that reordering the array — via bring-to-front / send-to-back — is the
+  // single source of truth for stacking, instead of every icon always
+  // drawing above every text note regardless of when it was added.
+  state.nodes.filter(n=>n.kind==='icon' || n.kind==='text' || n.kind==='shape').forEach(node=>{
+    if(node.kind === 'icon'){
+      const def = ICONS_BY_ID[node.icon] || ICON_DEFS[0];
+      const g = svgEl_('g', { class:'node-card' + (isSelected('node',node.id)?' selected':'') + (node.locked?' node-locked':''), 'data-id':node.id, 'data-kind':'node' });
+      const cardAttrs = { class:'card-bg', x:node.x, y:node.y, width:node.w, height:node.h, rx:16 };
+      g.appendChild(svgEl_('rect', cardAttrs));
+      const fo = document.createElementNS(SVGNS,'foreignObject');
+      fo.setAttribute('x', node.x); fo.setAttribute('y', node.y); fo.setAttribute('width', node.w); fo.setAttribute('height', node.h);
+      fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:10px 8px;font-family:Inter,sans-serif;pointer-events:none;">
+          <div style="width:34px;height:34px;pointer-events:none;">${def.svg}</div>
+          <div data-role="label" contenteditable="false" spellcheck="false" title="Double-click to rename" style="pointer-events:auto;text-align:center;font-size:11px;font-weight:600;color:var(--text);line-height:1.25;max-width:100%;outline:none;word-break:break-word;user-select:none;">${escapeHtml(node.label)}</div>
+        </div>`;
+      g.appendChild(fo);
+      addNodeHandles(g, node, false);
+      addResizeHandle(g, node);
+      addStatusBadges(g, node);
+      layerNodes.appendChild(g);
+      wireLabelEditable(fo.querySelector('[data-role="label"]'), node);
+      wireNodeDrag(g, node);
+    } else if(node.kind === 'shape'){
+      const shapeType = node.shapeType || 'rectangle';
+      const fillMode = node.fill || 'soft';
+      const color = node.color || '#8fa2ff';
+      const g = svgEl_('g', { class:'shape-node' + (isSelected('node',node.id)?' selected':'') + (node.locked?' node-locked':''), 'data-id':node.id, 'data-kind':'node', 'data-fill':fillMode });
+      const geomAttrs = { class:'shape-bg' };
+      if(fillMode === 'solid'){ geomAttrs.fill = color; geomAttrs['fill-opacity'] = 0.88; geomAttrs.stroke = shadeColor(color, -22); geomAttrs['stroke-width'] = 1.6; }
+      else if(fillMode === 'outline'){ geomAttrs.fill = 'none'; geomAttrs.stroke = color; geomAttrs['stroke-width'] = 2; }
+      else { geomAttrs.fill = color; geomAttrs['fill-opacity'] = 0.13; geomAttrs.stroke = color; geomAttrs['stroke-opacity'] = 0.8; geomAttrs['stroke-width'] = 1.6; }
+      g.appendChild(shapeGeometryEl(shapeType, node.x, node.y, node.w, node.h, geomAttrs));
+      const fo = document.createElementNS(SVGNS,'foreignObject');
+      fo.setAttribute('x', node.x); fo.setAttribute('y', node.y); fo.setAttribute('width', node.w); fo.setAttribute('height', node.h);
+      const labelColor = fillMode === 'solid' ? '#04141a' : 'var(--text)';
+      fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:${shapeType==='diamond'?'22px 30px':'8px 10px'};pointer-events:none;">
+          <div data-role="label" contenteditable="false" spellcheck="false" title="Double-click to rename" style="pointer-events:auto;text-align:center;font-size:12px;font-weight:600;color:${labelColor};line-height:1.3;max-width:100%;outline:none;word-break:break-word;user-select:none;">${escapeHtml(node.label)}</div>
+        </div>`;
+      g.appendChild(fo);
+      addNodeHandles(g, node, false);
+      addResizeHandle(g, node);
+      addStatusBadges(g, node);
+      layerNodes.appendChild(g);
+      wireLabelEditable(fo.querySelector('[data-role="label"]'), node);
+      wireNodeDrag(g, node);
+    } else {
+      // text note
+      const g = svgEl_('g', { class:'text-node' + (isSelected('node',node.id)?' selected':'') + (node.locked?' node-locked':''), 'data-id':node.id, 'data-kind':'node' });
+      g.appendChild(svgEl_('rect', { class:'hit', x:node.x, y:node.y, width:node.w, height:node.h, rx:8 }));
+      const fo = document.createElementNS(SVGNS,'foreignObject');
+      fo.setAttribute('x', node.x); fo.setAttribute('y', node.y); fo.setAttribute('width', node.w); fo.setAttribute('height', node.h);
+      fo.innerHTML = `<div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;display:flex;align-items:flex-start;padding:6px 8px;">
+          <div data-role="label" contenteditable="false" spellcheck="false" title="Double-click to edit" style="width:100%;font-size:12.5px;font-weight:500;color:var(--text-dim);line-height:1.4;outline:none;user-select:none;">${escapeHtml(node.label)}</div>
+        </div>`;
+      g.appendChild(fo);
+      // Text notes can now anchor a connector too (e.g. "flows out to an
+      // external partner" annotations), not just receive a resize handle.
+      addNodeHandles(g, node, true);
+      addResizeHandle(g, node);
+      layerNodes.appendChild(g);
+      wireLabelEditable(fo.querySelector('[data-role="label"]'), node);
+      wireNodeDrag(g, node);
+    }
+  });
+}
+
+// ---- Colored / alternate-shape arrowhead markers -------------------------
+// SVG <marker> fill can't just inherit the path's stroke color reliably
+// across browsers, so instead of one marker per edge we lazily create one
+// shared marker per (arrowShape, color) combination the diagram actually
+// uses, and cache the ids so re-rendering never duplicates a <marker>.
+const ARROW_MARKER_CACHE = new Set();
+const ARROW_SHAPE_INNER = {
+  triangle: c => `<path d="M0.5,0.5 L10,5 L0.5,9.5 z" fill="${c}"></path>`,
+  open:     c => `<path d="M1,1 L9,5 L1,9" fill="none" stroke="${c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>`,
+  diamond:  c => `<path d="M5,0.5 L9.5,5 L5,9.5 L0.5,5 z" fill="${c}"></path>`,
+  circle:   c => `<circle cx="5" cy="5" r="4" fill="${c}"></circle>`,
+};
+function arrowMarkerId(shape, color){
+  return `arrow-${shape}-${color.replace('#','')}`;
+}
+function ensureArrowMarker(shape, color){
+  const id = arrowMarkerId(shape, color);
+  if(ARROW_MARKER_CACHE.has(id)) return id;
+  const inner = (ARROW_SHAPE_INNER[shape] || ARROW_SHAPE_INNER.triangle)(color);
+  const marker = svgEl_('marker', { id, viewBox:'0 0 10 10', refX:'8', refY:'5', markerWidth:'8', markerHeight:'8', orient:'auto-start-reverse' });
+  marker.innerHTML = inner;
+  document.querySelector('#dgSvg defs').appendChild(marker);
+  ARROW_MARKER_CACHE.add(id);
+  return id;
+}
+
+function renderEdges(){
+  layerEdges.innerHTML = '';
+  state.edges.forEach(edge=>{
+    const a = nodeById(edge.from), b = nodeById(edge.to);
+    if(!a || !b) return;
+    const p1 = nodeAnchor(a, edge.fromSide), p2 = nodeAnchor(b, edge.toSide);
+    const d = edgePathFor(edge, p1, edge.fromSide, p2, edge.toSide);
+    const sel = isSelected('edge', edge.id);
+    // lineStyle replaces the old `dashed` boolean — read either so diagrams
+    // saved before this option existed still render the same as before.
+    const lineStyle = edge.lineStyle || (edge.dashed ? 'dashed' : 'solid');
+    // Each line style now gets its own distinct dash pattern regardless of
+    // the animated-flow toggle. Previously "solid" secretly fell back to
+    // the same dash pattern as the flow animation whenever Animated flow
+    // was on, making Solid/Dashed/Dotted look almost identical — the flow
+    // animation now only affects lines that already have a dash pattern.
+    const dashArray = lineStyle === 'dotted' ? '2 5' : lineStyle === 'dashed' ? '9 6' : 'none';
+    const showEndArrow = edge.arrowEnd !== false; // default true — matches every diagram before this option existed
+    const showStartArrow = !!edge.arrowStart;
+    const arrowShape = edge.arrowShape || 'triangle';
+    // Line thickness: a plain multiplier over the base 1.8px, so "Thick" on
+    // a default line and "Thick" on a custom-colored one both scale the
+    // same way rather than needing separate absolute values.
+    const strokeWidth = (edge.strokeWidth || 1.8) + (sel ? 0.5 : 0);
+    const g = svgEl_('g', { class:'edge-group', 'data-id':edge.id, 'data-kind':'edge' });
+    const pathAttrs = { class:'edge-path' + (sel?' selected':'') + (edge.animated!==false?' flow':''), d, 'stroke-dasharray': dashArray };
+    let styleStr = `stroke-width:${strokeWidth};`;
+    if(edge.color){
+      // Custom color overrides the theme-following default entirely, both
+      // for the line and for whichever arrowheads are shown.
+      styleStr += `stroke:${edge.color};`;
+      const markerId = ensureArrowMarker(arrowShape, sel ? edge.color : edge.color);
+      if(showEndArrow) pathAttrs['marker-end'] = `url(#${markerId})`;
+      if(showStartArrow) pathAttrs['marker-start'] = `url(#${markerId})`;
+    } else if(arrowShape !== 'triangle'){
+      // No custom color, but a non-default arrow shape — build a themed
+      // marker using the same colors the default markers use.
+      const themeColor = sel ? 'var(--accent)' : 'var(--text-faint)';
+      const markerId = ensureArrowMarker(arrowShape, themeColor);
+      if(showEndArrow) pathAttrs['marker-end'] = `url(#${markerId})`;
+      if(showStartArrow) pathAttrs['marker-start'] = `url(#${markerId})`;
+    } else {
+      if(showEndArrow) pathAttrs['marker-end'] = `url(#${sel?'arrowHeadSel':'arrowHead'})`;
+      if(showStartArrow) pathAttrs['marker-start'] = `url(#${sel?'arrowHeadSel':'arrowHead'})`;
+    }
+    pathAttrs.style = styleStr;
+    g.appendChild(svgEl_('path', pathAttrs));
+    g.appendChild(svgEl_('path', { class:'edge-hit', d }));
+    if(edge.label){
+      const mid = pathMidpoint(p1, edge.fromSide, p2, edge.toSide);
+      const w = Math.max(30, edge.label.length*6.4 + 14);
+      g.appendChild(svgEl_('rect', { class:'edge-label-bg', x:mid.x-w/2, y:mid.y-10, width:w, height:20, rx:6 }));
+      const t = svgEl_('text', { class:'edge-label', x:mid.x, y:mid.y+4, 'text-anchor':'middle' });
+      t.textContent = edge.label;
+      g.appendChild(t);
+    }
+    // Manual waypoint handle — only meaningful for the default elbow shape,
+    // and only when the route actually has one free coordinate to drag
+    // (see elbowWaypointHandlePos).
+    if(!edge.shape || edge.shape === 'elbow'){
+      const wp = (edge.waypoint != null && edge.waypointAxis) ? { axis: edge.waypointAxis, value: edge.waypoint } : null;
+      const hp = elbowWaypointHandlePos(p1, edge.fromSide, p2, edge.toSide, wp);
+      if(hp){
+        const wh = svgEl_('rect', { class:'handle waypoint-handle', x:hp.x-6, y:hp.y-6, width:12, height:12, transform:`rotate(45 ${hp.x} ${hp.y})`, 'data-waypoint':edge.id, 'data-axis':hp.axis, title:'Drag to bend the connector' });
+        g.appendChild(wh);
+        if(sel) g.classList.add('wp-visible');
+      }
+    }
+    layerEdges.appendChild(g);
+    wireEdgeEvents(g, edge);
+  });
+}
+
+function updateEmptyHint(){
+  document.getElementById('emptyHint').classList.toggle('hidden', state.nodes.length > 0);
+}
+
+function render(){
+  renderFrames();
+  renderEdges();
+  renderNodes();
+  applyNodeColorAttrs();
+  updateEmptyHint();
+  applyViewportTransform();
+  updateInspector();
+  updateUndoRedoButtons();
+}
+
+/* ==================== History (undo/redo) ==================== */
+function snapshot(){
+  return JSON.stringify({ nodes: state.nodes, edges: state.edges });
+}
+function pushHistory(){
+  if(suppressHistory) return;
+  const snap = snapshot();
+  if(historyIdx >= 0 && history[historyIdx] === snap) return;
+  history = history.slice(0, historyIdx+1);
+  history.push(snap);
+  if(history.length > 80) history.shift();
+  historyIdx = history.length - 1;
+  markDirty();
+  scheduleAutosave();
+}
+function updateUndoRedoButtons(){
+  document.getElementById('btnUndo').disabled = historyIdx <= 0;
+  document.getElementById('btnRedo').disabled = historyIdx >= history.length-1;
+}
+function restoreSnapshot(json){
+  const data = JSON.parse(json);
+  suppressHistory = true;
+  state.nodes = data.nodes; state.edges = data.edges;
+  state.selection.clear();
+  render();
+  suppressHistory = false;
+}
+function undo(){
+  if(historyIdx <= 0) return;
+  historyIdx--;
+  restoreSnapshot(history[historyIdx]);
+  markDirty(); scheduleAutosave();
+}
+function redo(){
+  if(historyIdx >= history.length-1) return;
+  historyIdx++;
+  restoreSnapshot(history[historyIdx]);
+  markDirty(); scheduleAutosave();
+}
+
+/* ==================== Dirty / autosave (local draft) ==================== */
+function draftKey(){ return 'archStudioDraft:' + (proj ? proj.id : 'new'); }
+function markDirty(){
+  localDirty = true;
+  document.getElementById('saveDot').className = 'savedot dirty';
+  document.getElementById('topSaveState').textContent = 'Unpublished changes';
+}
+function markClean(msg){
+  localDirty = false;
+  document.getElementById('saveDot').className = 'savedot saved';
+  document.getElementById('topSaveState').textContent = msg || 'All changes published';
+}
+let autosaveTimer = null;
+function scheduleAutosave(){
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(()=>{
+    try{
+      localStorage.setItem(draftKey(), JSON.stringify({ nodes: state.nodes, edges: state.edges, savedAt: new Date().toISOString() }));
+    }catch(e){ /* storage full/unavailable — non-fatal, publish still works */ }
+  }, 500);
+}
+function loadLocalDraft(){
+  try{
+    const raw = localStorage.getItem(draftKey());
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+function clearLocalDraft(){
+  try{ localStorage.removeItem(draftKey()); }catch(e){}
+}
+
+/* ==================== Selection ==================== */
+function clearSelection(){ state.selection.clear(); }
+function selectOnly(kind, id){ state.selection.clear(); state.selection.add((kind==='node'?'n:':'e:')+id); }
+function addToSelection(kind, id){ state.selection.add((kind==='node'?'n:':'e:')+id); }
+function toggleSelection(kind, id){
+  const key = (kind==='node'?'n:':'e:')+id;
+  if(state.selection.has(key)) state.selection.delete(key); else state.selection.add(key);
+}
+function selectedNodeIds(){ return [...state.selection].filter(k=>k.startsWith('n:')).map(k=>k.slice(2)); }
+function selectedEdgeIds(){ return [...state.selection].filter(k=>k.startsWith('e:')).map(k=>k.slice(2)); }
+
+function deleteSelection(){
+  commitActiveLabelEdit();
+  const nids = new Set(selectedNodeIds());
+  if(nids.size === 0 && selectedEdgeIds().length === 0) return;
+  // Deleting a group frame ungroups (not deletes) its members, so items
+  // inside a group are never silently destroyed along with it.
+  state.nodes.forEach(n=>{ if(n.parentId && nids.has(n.parentId)) n.parentId = null; });
+  state.edges = state.edges.filter(e => !selectedEdgeIds().includes(e.id) && !nids.has(e.from) && !nids.has(e.to));
+  state.nodes = state.nodes.filter(n => !nids.has(n.id));
+  clearSelection();
+  render();
+  pushHistory();
+}
+function duplicateSelection(){
+  commitActiveLabelEdit();
+  const nids = selectedNodeIds();
+  if(nids.length === 0) return;
+  const idMap = {};
+  const newNodes = [];
+  nids.forEach(id=>{
+    const n = nodeById(id);
+    if(!n) return;
+    const copy = { ...n, id: uid(), x: n.x+28, y: n.y+28 };
+    idMap[id] = copy.id;
+    newNodes.push(copy);
+  });
+  // If a duplicated node's parent frame was duplicated too, re-point it at
+  // the new frame copy so the group relationship carries over intact.
+  newNodes.forEach(n=>{ if(n.parentId && idMap[n.parentId]) n.parentId = idMap[n.parentId]; });
+  state.nodes.push(...newNodes);
+  const newEdges = [];
+  state.edges.forEach(e=>{
+    if(idMap[e.from] && idMap[e.to]){
+      newEdges.push({ ...e, id: uid(), from: idMap[e.from], to: idMap[e.to] });
+    }
+  });
+  state.edges.push(...newEdges);
+  state.selection.clear();
+  newNodes.forEach(n=>addToSelection('node', n.id));
+  render();
+  pushHistory();
+}
+
+/* ---- Copy / paste (Ctrl+C / Ctrl+V) — distinct from Duplicate: it goes
+   through an in-memory clipboard, so it can be pasted more than once and
+   survives switching selection in between, matching how copy/paste works
+   everywhere else instead of just being an alias for Duplicate. ---- */
+function copySelection(){
+  const nids = selectedNodeIds();
+  if(nids.length === 0) return;
+  const idSet = new Set(nids);
+  const nodes = nids.map(id=>nodeById(id)).filter(Boolean).map(n=>({...n}));
+  const edges = state.edges.filter(e=>idSet.has(e.from) && idSet.has(e.to)).map(e=>({...e}));
+  clipboard = { nodes, edges };
+  toast(`Copied ${nodes.length} item${nodes.length===1?'':'s'}`);
+}
+function pasteClipboard(){
+  if(!clipboard || clipboard.nodes.length === 0) return;
+  const idMap = {};
+  const newNodes = clipboard.nodes.map(n=>{
+    const copy = { ...n, id: uid(), x: n.x+32, y: n.y+32, parentId: null };
+    idMap[n.id] = copy.id;
+    return copy;
+  });
+  newNodes.forEach(n=>{ if(n.parentId && idMap[n.parentId]) n.parentId = idMap[n.parentId]; });
+  state.nodes.push(...newNodes);
+  const newEdges = clipboard.edges.map(e=>({ ...e, id: uid(), from: idMap[e.from], to: idMap[e.to] }));
+  state.edges.push(...newEdges);
+  state.selection.clear();
+  newNodes.forEach(n=>addToSelection('node', n.id));
+  // Nudge the clipboard's reference position forward so repeated pastes
+  // step diagonally instead of stacking every copy in the exact same spot.
+  clipboard = { nodes: newNodes.map(n=>({...n})), edges: newEdges.map(e=>({...e})) };
+  render();
+  pushHistory();
+  toast('Pasted');
+}
+function selectAll(){
+  state.selection.clear();
+  state.nodes.forEach(n=>addToSelection('node', n.id));
+  state.edges.forEach(e=>addToSelection('edge', e.id));
+  render();
+}
+function nudgeSelection(dx, dy){
+  const ids = selectedNodeIds();
+  if(ids.length === 0) return;
+  ids.forEach(id=>{ const n = nodeById(id); if(n && !n.locked){ n.x += dx; n.y += dy; } });
+  render();
+}
+
+/* ==================== Z-order ==================== */
+// Stacking is simply array order within state.nodes (see renderNodes /
+// renderFrames): later entries draw on top. These helpers reorder the
+// array for the current selection while leaving every other node's
+// relative order untouched.
+function reorderNodes(ids, mode){
+  const idSet = new Set(ids);
+  const selected = state.nodes.filter(n=>idSet.has(n.id));
+  const rest = state.nodes.filter(n=>!idSet.has(n.id));
+  if(selected.length === 0) return;
+  if(mode === 'front') state.nodes = [...rest, ...selected];
+  else if(mode === 'back') state.nodes = [...selected, ...rest];
+  else if(mode === 'forward' || mode === 'backward'){
+    // Move each selected node one step past its immediate neighbor, highest
+    // index first for "forward" and lowest first for "backward" so a
+    // multi-selection shifts as a block instead of nodes leap-frogging
+    // each other.
+    const arr = [...state.nodes];
+    const indices = arr.map((n,i)=> idSet.has(n.id) ? i : -1).filter(i=>i>=0);
+    const order = mode === 'forward' ? [...indices].reverse() : indices;
+    order.forEach(i=>{
+      const j = mode === 'forward' ? i+1 : i-1;
+      if(j < 0 || j >= arr.length) return;
+      if(idSet.has(arr[j].id)) return; // already adjacent to another selected node
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    });
+    state.nodes = arr;
+  }
+  render();
+  pushHistory();
+}
+function bringToFront(){ reorderNodes(selectedNodeIds(), 'front'); }
+function sendToBack(){ reorderNodes(selectedNodeIds(), 'back'); }
+function bringForward(){ reorderNodes(selectedNodeIds(), 'forward'); }
+function sendBackward(){ reorderNodes(selectedNodeIds(), 'backward'); }
+
+/* ==================== Align & distribute ==================== */
+// Operates on the current multi-selection's bounding boxes. Single-item or
+// empty selections are a no-op since "align" needs at least two things to
+// align relative to each other.
+function selectedNodesForAlign(){ return selectedNodeIds().map(nodeById).filter(Boolean); }
+function alignNodes(edge){
+  const nodes = selectedNodesForAlign();
+  if(nodes.length < 2) return;
+  if(edge === 'left'){ const x = Math.min(...nodes.map(n=>n.x)); nodes.forEach(n=>n.x=x); }
+  else if(edge === 'right'){ const x = Math.max(...nodes.map(n=>n.x+n.w)); nodes.forEach(n=>n.x=x-n.w); }
+  else if(edge === 'centerH'){ const c = (Math.min(...nodes.map(n=>n.x)) + Math.max(...nodes.map(n=>n.x+n.w)))/2; nodes.forEach(n=>n.x=c-n.w/2); }
+  else if(edge === 'top'){ const y = Math.min(...nodes.map(n=>n.y)); nodes.forEach(n=>n.y=y); }
+  else if(edge === 'bottom'){ const y = Math.max(...nodes.map(n=>n.y+n.h)); nodes.forEach(n=>n.y=y-n.h); }
+  else if(edge === 'centerV'){ const c = (Math.min(...nodes.map(n=>n.y)) + Math.max(...nodes.map(n=>n.y+n.h)))/2; nodes.forEach(n=>n.y=c-n.h/2); }
+  render(); pushHistory();
+}
+function distributeNodes(axis){
+  const nodes = selectedNodesForAlign();
+  if(nodes.length < 3) return; // distributing needs at least 3 to have "gaps" to even out
+  if(axis === 'h'){
+    const sorted = [...nodes].sort((a,b)=>a.x-b.x);
+    const min = sorted[0].x, max = sorted[sorted.length-1].x + sorted[sorted.length-1].w;
+    const totalW = sorted.reduce((s,n)=>s+n.w,0);
+    const gap = (max - min - totalW) / (sorted.length - 1);
+    let cursor = min;
+    sorted.forEach(n=>{ n.x = cursor; cursor += n.w + gap; });
+  } else {
+    const sorted = [...nodes].sort((a,b)=>a.y-b.y);
+    const min = sorted[0].y, max = sorted[sorted.length-1].y + sorted[sorted.length-1].h;
+    const totalH = sorted.reduce((s,n)=>s+n.h,0);
+    const gap = (max - min - totalH) / (sorted.length - 1);
+    let cursor = min;
+    sorted.forEach(n=>{ n.y = cursor; cursor += n.h + gap; });
+  }
+  render(); pushHistory();
+}
+
+/* ==================== Pointer interaction engine ==================== */
+const canvasWrap = document.getElementById('canvasWrap');
+let ptr = null;       // active drag/gesture state
+let spaceDown = false;
+
+function screenToCanvas(clientX, clientY){
+  const rect = svgEl.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left - state.pan.x) / state.zoom,
+    y: (clientY - rect.top - state.pan.y) / state.zoom,
+  };
+}
+
+// Rename is opt-in via double-click; a single pointerdown on the label is
+// left to bubble so it can also act as a drag handle for the node/frame
+// (this is what lets you move a group by grabbing its "Group" tag).
+// While actively editing, clicks are kept local so text selection/caret
+// placement works normally instead of dragging the shape underneath.
+function wireLabelEditable(el, node){
+  if(!el) return;
+  const isEditing = ()=> el.getAttribute('contenteditable') === 'true';
+  el.addEventListener('pointerdown', e=>{ if(isEditing()) e.stopPropagation(); });
+  el.addEventListener('mousedown', e=>{ if(isEditing()) e.stopPropagation(); });
+  el.addEventListener('dblclick', e=>{
+    e.stopPropagation();
+    el.setAttribute('contenteditable','true');
+    el.focus();
+    const range = document.createRange(); range.selectNodeContents(el);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+  });
+  el.addEventListener('input', ()=>{ node.label = el.textContent; markDirty(); scheduleAutosave(); });
+  el.addEventListener('blur', ()=>{
+    node.label = el.textContent.trim() || (node.kind==='text' ? 'Text note' : node.kind==='frame' ? 'Group' : 'Untitled');
+    el.textContent = node.label;
+    el.setAttribute('contenteditable','false');
+    pushHistory(); updateInspector();
+  });
+  el.addEventListener('keydown', e=>{
+    e.stopPropagation();
+    if(e.key === 'Enter' && node.kind !== 'text'){ e.preventDefault(); el.blur(); }
+    if(e.key === 'Escape'){ el.blur(); }
+  });
+}
+/** Blur any node label currently mid-rename, committing its text first.
+    Called before delete/duplicate/drag-start so a lingering edit caret
+    never swallows a keystroke or click meant for the canvas. */
+function commitActiveLabelEdit(){
+  const el = document.activeElement;
+  if(el && el.isContentEditable && el.dataset && el.dataset.role === 'label') el.blur();
+}
+
+function selectNodeFromEvent(e, node){
+  let changed = false;
+  if(e.shiftKey){ toggleSelection('node', node.id); changed = true; }
+  else if(!isSelected('node', node.id)){ selectOnly('node', node.id); changed = true; }
+  // Selection-driven re-render is deferred a frame rather than run inline
+  // inside this pointerdown handler. render() rebuilds the SVG subtree
+  // (innerHTML = ''), which — if done synchronously here — destroys the
+  // very element the browser is mid-way through processing a click on.
+  // With the node gone before mouseup, Chromium never fires 'click' or
+  // 'dblclick' for that press, silently breaking double-click-to-rename
+  // and making single clicks feel unresponsive. Pushing the rebuild to the
+  // next frame lets the native click/dblclick sequence complete against
+  // the original element first; the one-frame delay before the selection
+  // outline appears is imperceptible.
+  if(changed) requestAnimationFrame(render);
+}
+
+function wireNodeDrag(g, node){
+  g.addEventListener('pointerdown', (e)=>{
+    if(e.target.dataset && (e.target.dataset.handle || e.target.dataset.resize)) return; // handled separately
+    if(e.button !== 0) return;
+    e.stopPropagation();
+    commitActiveLabelEdit();
+    selectNodeFromEvent(e, node);
+    if(node.locked) return; // still selectable/inspectable, just not draggable
+    const directIds = selectedNodeIds().length ? selectedNodeIds() : [node.id];
+    // Dragging a group frame carries every node contained inside it along
+    // for the ride, so the group actually moves as one unit.
+    const expanded = new Set(directIds);
+    directIds.forEach(id=>{
+      const n = nodeById(id);
+      if(n && n.kind === 'frame') childrenOf(n.id).forEach(c=>expanded.add(c.id));
+    });
+    const ids = [...expanded];
+    const start = screenToCanvas(e.clientX, e.clientY);
+    const startPositions = {};
+    ids.forEach(id=>{ const n = nodeById(id); if(n) startPositions[id] = { x:n.x, y:n.y }; });
+    // Non-frame ids the user actually grabbed (not ones just carried along
+    // as a frame's children) — these are the ones re-tested against every
+    // frame's bounds once the drag ends, so dropping an icon into/out of a
+    // group's box re-parents it automatically.
+    const regroupIds = directIds.filter(id=>{ const n = nodeById(id); return n && n.kind !== 'frame'; });
+    ptr = { mode:'move-nodes', ids, start, startPositions, moved:false, regroupIds };
+    // Deliberately NOT using setPointerCapture here: drag tracking already
+    // works via the window-level pointermove/pointerup listeners below, and
+    // capturing onto canvasWrap would retarget the subsequent mouseup/click
+    // events there instead of the node — which silently breaks double-click
+    // (rename) on labels, since the browser's dblclick would never reach
+    // the label element that was actually clicked.
+  });
+
+  // connector handles
+  g.querySelectorAll('[data-handle]').forEach(h=>{
+    h.addEventListener('pointerdown', (e)=>{
+      e.stopPropagation();
+      const side = h.dataset.handle;
+      const anchor = nodeAnchor(node, side);
+      ptr = { mode:'connect', fromId: node.id, fromSide: side, cur: anchor };
+      const temp = svgEl_('path', { class:'temp-edge', d:`M ${anchor.x} ${anchor.y} L ${anchor.x} ${anchor.y}`, id:'tempEdgePath' });
+      layerOverlay.appendChild(temp);
+    });
+  });
+  // resize handle (icon / frame / text / shape)
+  g.querySelectorAll('[data-resize]').forEach(h=>{
+    h.addEventListener('pointerdown', (e)=>{
+      e.stopPropagation();
+      if(node.locked) return;
+      selectOnly('node', node.id); render();
+      ptr = { mode:'resize', id:node.id, startW:node.w, startH:node.h, start: screenToCanvas(e.clientX,e.clientY) };
+    });
+  });
+}
+
+function wireEdgeEvents(g, edge){
+  g.addEventListener('pointerdown', (e)=>{
+    if(e.target.dataset && e.target.dataset.waypoint) return; // handled separately below
+    e.stopPropagation();
+    if(e.shiftKey) toggleSelection('edge', edge.id); else selectOnly('edge', edge.id);
+    render();
+  });
+  const wh = g.querySelector('[data-waypoint]');
+  if(wh){
+    wh.addEventListener('pointerdown', (e)=>{
+      e.stopPropagation();
+      selectOnly('edge', edge.id); render();
+      ptr = { mode:'waypoint', id: edge.id, axis: wh.dataset.axis };
+    });
+    // Double-click the bend handle to reset the connector back to its
+    // automatic, evenly-split route.
+    wh.addEventListener('dblclick', (e)=>{
+      e.stopPropagation();
+      delete edge.waypoint; delete edge.waypointAxis;
+      render(); pushHistory();
+      toast('Connector reset to automatic routing.');
+    });
+  }
+}
+
+// Canvas background: marquee-select, pan (space/middle-click), or place text/frame tool
+canvasWrap.addEventListener('pointerdown', (e)=>{
+  if(e.target.closest('.node-card, .frame-node, .text-node, .shape-node, .edge-group')) return;
+  // The floating toolbar and zoom controls are overlay chrome that lives
+  // inside #canvasWrap for positioning purposes — they are NOT the canvas
+  // itself. Without this guard, a click on any toolbar button (especially
+  // the shape flyout's ellipse/diamond/cylinder icons) also bubbles into
+  // this handler and, whenever a placement tool is already active, drops a
+  // stray node at the toolbar's screen position using the *previous*
+  // currentShapeType (the flyout button's own click handler, which updates
+  // currentShapeType, only runs after this pointerdown). That's why every
+  // shape picked from the flyout was landing on the canvas as a Rectangle.
+  if(e.target.closest('.floating-toolbar, .zoom-controls')) return;
+  const canvasPt = screenToCanvas(e.clientX, e.clientY);
+  if(e.button === 1 || spaceDown){
+    ptr = { mode:'pan', startClient:{x:e.clientX,y:e.clientY}, startPan:{...state.pan} };
+    canvasWrap.classList.add('panning');
+    return;
+  }
+  if(state.tool === 'text'){
+    const n = makeTextNode(canvasPt.x, canvasPt.y);
+    state.nodes.push(n); recomputeContainment(n.id); selectOnly('node', n.id); render(); pushHistory();
+    setTool('select');
+    return;
+  }
+  if(state.tool === 'frame'){
+    const n = makeFrameNode(canvasPt.x, canvasPt.y);
+    state.nodes.push(n); selectOnly('node', n.id); render(); pushHistory();
+    setTool('select');
+    return;
+  }
+  if(state.tool === 'shape'){
+    const n = makeShapeNode(currentShapeType, canvasPt.x, canvasPt.y);
+    state.nodes.push(n); recomputeContainment(n.id); selectOnly('node', n.id); render(); pushHistory();
+    setTool('select');
+    return;
+  }
+  if(!e.shiftKey){ clearSelection(); render(); }
+  ptr = { mode:'marquee', start: canvasPt, rectEl: null };
+});
+
+window.addEventListener('pointermove', (e)=>{
+  if(!ptr) return;
+  if(ptr.mode === 'move-nodes'){
+    const cur = screenToCanvas(e.clientX, e.clientY);
+    let dx = cur.x - ptr.start.x, dy = cur.y - ptr.start.y;
+    if(Math.abs(dx) > 1 || Math.abs(dy) > 1) ptr.moved = true;
+    if(snapToGrid){
+      // Snap the primary (first) dragged node's resulting position to the
+      // grid, then apply that same rounded delta to every other selected
+      // node — keeps the whole selection's relative layout intact instead
+      // of independently snapping each node (which would warp spacing).
+      const firstId = ptr.ids[0];
+      const p0 = ptr.startPositions[firstId];
+      if(p0){ dx = snapVal(p0.x + dx) - p0.x; dy = snapVal(p0.y + dy) - p0.y; }
+    }
+    ptr.ids.forEach(id=>{
+      const n = nodeById(id); const p = ptr.startPositions[id];
+      if(n && p){ n.x = p.x + dx; n.y = p.y + dy; }
+    });
+    render();
+    // While dragging a single, non-frame node, highlight whichever frame
+    // it's currently hovering over so it's obvious it will join that group.
+    if(ptr.regroupIds.length === 1){
+      const n = nodeById(ptr.regroupIds[0]);
+      const target = n ? frameContaining(n) : null;
+      document.querySelectorAll('.frame-node').forEach(fg=>{
+        fg.classList.toggle('group-target', !!target && fg.dataset.id === target.id);
+      });
+    }
+  } else if(ptr.mode === 'connect'){
+    const cur = screenToCanvas(e.clientX, e.clientY);
+    ptr.cur = cur;
+    const fromNode = nodeById(ptr.fromId);
+    const anchor = nodeAnchor(fromNode, ptr.fromSide);
+    const temp = document.getElementById('tempEdgePath');
+    if(temp) temp.setAttribute('d', elbowPath(anchor, ptr.fromSide, cur, oppositeSide(ptr.fromSide)));
+    document.querySelectorAll('.node-card, .frame-node, .text-node, .shape-node').forEach(g=>{
+      g.classList.toggle('connect-target', g === hoveredDropTarget(e));
+    });
+  } else if(ptr.mode === 'resize'){
+    const cur = screenToCanvas(e.clientX, e.clientY);
+    const n = nodeById(ptr.id);
+    if(n){
+      let w = Math.max(60, ptr.startW + (cur.x - ptr.start.x));
+      let h = Math.max(40, ptr.startH + (cur.y - ptr.start.y));
+      if(snapToGrid){ w = Math.max(60, snapVal(w)); h = Math.max(40, snapVal(h)); }
+      n.w = w; n.h = h;
+      render();
+    }
+  } else if(ptr.mode === 'waypoint'){
+    const cur = screenToCanvas(e.clientX, e.clientY);
+    const edge = edgeById(ptr.id);
+    if(edge){
+      edge.waypointAxis = ptr.axis;
+      edge.waypoint = ptr.axis === 'x' ? cur.x : cur.y;
+      renderEdges();
+    }
+  } else if(ptr.mode === 'pan'){
+    state.pan.x = ptr.startPan.x + (e.clientX - ptr.startClient.x);
+    state.pan.y = ptr.startPan.y + (e.clientY - ptr.startClient.y);
+    applyViewportTransform();
+  } else if(ptr.mode === 'marquee'){
+    const cur = screenToCanvas(e.clientX, e.clientY);
+    const x = Math.min(cur.x, ptr.start.x), y = Math.min(cur.y, ptr.start.y);
+    const w = Math.abs(cur.x - ptr.start.x), h = Math.abs(cur.y - ptr.start.y);
+    if(!ptr.rectEl){ ptr.rectEl = svgEl_('rect', { class:'marquee' }); layerOverlay.appendChild(ptr.rectEl); }
+    ptr.rectEl.setAttribute('x', x); ptr.rectEl.setAttribute('y', y); ptr.rectEl.setAttribute('width', w); ptr.rectEl.setAttribute('height', h);
+    ptr.box = { x, y, w, h };
+  }
+});
+
+function oppositeSide(side){ return { top:'bottom', bottom:'top', left:'right', right:'left' }[side]; }
+function hoveredDropTarget(e){
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  return el ? el.closest('.node-card, .frame-node, .text-node, .shape-node') : null;
+}
+
+window.addEventListener('pointerup', (e)=>{
+  if(!ptr) return;
+  if(ptr.mode === 'move-nodes'){
+    document.querySelectorAll('.frame-node.group-target').forEach(fg=>fg.classList.remove('group-target'));
+    if(ptr.moved) ptr.regroupIds.forEach(recomputeContainment);
+    if(ptr.moved){ render(); pushHistory(); }
+  } else if(ptr.mode === 'connect'){
+    const temp = document.getElementById('tempEdgePath');
+    if(temp) temp.remove();
+    document.querySelectorAll('.connect-target').forEach(g=>g.classList.remove('connect-target'));
+    const target = hoveredDropTarget(e);
+    if(target){
+      const toId = target.dataset.id;
+      if(toId && toId !== ptr.fromId){
+        const toNode = nodeById(toId);
+        const toSide = nearestSide(toNode, ptr.cur);
+        state.edges.push({ id: uid(), from: ptr.fromId, to: toId, fromSide: ptr.fromSide, toSide, label:'', lineStyle:'solid', shape:'elbow', arrowStart:false, arrowEnd:true, animated:true });
+        selectOnly('edge', state.edges[state.edges.length-1].id);
+        pushHistory();
+      }
+    }
+    render();
+  } else if(ptr.mode === 'resize'){
+    const resized = nodeById(ptr.id);
+    if(resized && resized.kind === 'frame'){
+      // Growing/shrinking a frame can pull nodes in or push them out.
+      state.nodes.forEach(n=>{ if(n.kind !== 'frame') recomputeContainment(n.id); });
+    }
+    pushHistory();
+  } else if(ptr.mode === 'waypoint'){
+    pushHistory();
+  } else if(ptr.mode === 'pan'){
+    canvasWrap.classList.remove('panning');
+  } else if(ptr.mode === 'marquee'){
+    if(ptr.rectEl) ptr.rectEl.remove();
+    if(ptr.box && (ptr.box.w > 3 || ptr.box.h > 3)){
+      state.nodes.forEach(n=>{
+        const overlaps = !(n.x+n.w < ptr.box.x || n.x > ptr.box.x+ptr.box.w || n.y+n.h < ptr.box.y || n.y > ptr.box.y+ptr.box.h);
+        if(overlaps) addToSelection('node', n.id);
+      });
+      render();
+    }
+  }
+  ptr = null;
+});
+
+function nearestSide(node, pt){
+  const cx = node.x+node.w/2, cy = node.y+node.h/2;
+  const dx = pt.x - cx, dy = pt.y - cy;
+  // dx/dy are the drop point's offset from the node's center. The nearest
+  // side must be in the SAME direction as that offset — right when the
+  // point is right of center, bottom when it's below center, etc. This was
+  // previously inverted (returning the opposite side from where you
+  // actually dropped), which is why connecting to the top of a node or
+  // frame would anchor the edge to its bottom instead.
+  if(Math.abs(dx/node.w) > Math.abs(dy/node.h)) return dx > 0 ? 'right' : 'left';
+  return dy > 0 ? 'bottom' : 'top';
+}
+
+/* zoom */
+function setZoom(z, pivotClientX, pivotClientY){
+  const newZoom = clamp(z, 0.2, 2.5);
+  if(pivotClientX !== undefined){
+    const rect = svgEl.getBoundingClientRect();
+    const px = pivotClientX - rect.left, py = pivotClientY - rect.top;
+    const worldX = (px - state.pan.x) / state.zoom, worldY = (py - state.pan.y) / state.zoom;
+    state.pan.x = px - worldX*newZoom;
+    state.pan.y = py - worldY*newZoom;
+  }
+  state.zoom = newZoom;
+  applyViewportTransform();
+}
+canvasWrap.addEventListener('wheel', (e)=>{
+  e.preventDefault();
+  if(e.ctrlKey || e.metaKey || Math.abs(e.deltaY) > 0){
+    const factor = Math.exp(-e.deltaY * 0.0016);
+    setZoom(state.zoom * factor, e.clientX, e.clientY);
+  }
+}, { passive:false });
+
+document.getElementById('zoomIn').addEventListener('click', ()=>setZoom(state.zoom*1.2));
+document.getElementById('zoomOut').addEventListener('click', ()=>setZoom(state.zoom/1.2));
+document.getElementById('zoomFit').addEventListener('click', fitToScreen);
+function fitToScreen(){
+  if(state.nodes.length === 0){ state.pan = {x:0,y:0}; state.zoom = 1; applyViewportTransform(); return; }
+  const xs = state.nodes.map(n=>n.x), ys = state.nodes.map(n=>n.y);
+  const xe = state.nodes.map(n=>n.x+n.w), ye = state.nodes.map(n=>n.y+n.h);
+  const minX = Math.min(...xs)-40, minY = Math.min(...ys)-40, maxX = Math.max(...xe)+40, maxY = Math.max(...ye)+40;
+  const rect = svgEl.getBoundingClientRect();
+  const zx = rect.width / (maxX-minX), zy = rect.height / (maxY-minY);
+  state.zoom = clamp(Math.min(zx, zy, 1.4), 0.2, 2.5);
+  state.pan.x = (rect.width - (maxX-minX)*state.zoom)/2 - minX*state.zoom;
+  state.pan.y = (rect.height - (maxY-minY)*state.zoom)/2 - minY*state.zoom;
+  applyViewportTransform();
+}
+
+/* ==================== Toolbar / tools ==================== */
+function setTool(tool){
+  state.tool = tool;
+  document.querySelectorAll('#toolSelect,#toolText,#toolFrame,#toolShape').forEach(b=>b.classList.remove('active'));
+  const map = { select:'toolSelect', text:'toolText', frame:'toolFrame', shape:'toolShape' };
+  document.getElementById(map[tool]).classList.add('active');
+  canvasWrap.style.cursor = tool === 'select' ? '' : 'crosshair';
+}
+document.getElementById('toolSelect').addEventListener('click', ()=>setTool('select'));
+document.getElementById('toolText').addEventListener('click', ()=>setTool('text'));
+document.getElementById('toolFrame').addEventListener('click', ()=>setTool('frame'));
+document.getElementById('btnDelete').addEventListener('click', deleteSelection);
+document.getElementById('btnDuplicate').addEventListener('click', duplicateSelection);
+document.getElementById('btnUndo').addEventListener('click', undo);
+document.getElementById('btnRedo').addEventListener('click', redo);
+document.getElementById('btnTogglePalette').addEventListener('click', ()=>{
+  const collapsed = document.getElementById('palette').classList.toggle('collapsed');
+  document.getElementById('btnTogglePalette').title = collapsed ? 'Show component library' : 'Hide component library';
+});
+
+/* ---- Shape tool: click the main button to place the last-used shape,
+   or open the flyout to pick a different one first. ---- */
+const shapeFlyout = document.getElementById('shapeFlyout');
+document.getElementById('toolShape').addEventListener('click', (e)=>{
+  e.stopPropagation();
+  if(state.tool === 'shape'){ shapeFlyout.classList.toggle('hidden'); return; }
+  setTool('shape');
+  shapeFlyout.classList.remove('hidden');
+});
+shapeFlyout.querySelectorAll('button[data-shape]').forEach(btn=>{
+  btn.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    currentShapeType = btn.dataset.shape;
+    shapeFlyout.querySelectorAll('button').forEach(b=>b.classList.toggle('active', b===btn));
+    setTool('shape');
+    shapeFlyout.classList.add('hidden');
+  });
+});
+document.addEventListener('click', (e)=>{
+  if(!e.target.closest('.tb-flyout-wrap')) shapeFlyout.classList.add('hidden');
+});
+
+/* ---- Snap to grid toggle ---- */
+const btnSnap = document.getElementById('btnSnap');
+btnSnap.addEventListener('click', ()=>{
+  snapToGrid = !snapToGrid;
+  btnSnap.classList.toggle('active', snapToGrid);
+  btnSnap.title = snapToGrid ? 'Snap to grid (on)' : 'Snap to grid (off)';
+  toast(snapToGrid ? 'Snap to grid on' : 'Snap to grid off');
+});
+
+window.addEventListener('keydown', (e)=>{
+  const tag = (document.activeElement && document.activeElement.tagName) || '';
+  const isEditing = document.activeElement && document.activeElement.isContentEditable;
+  if(isEditing || tag === 'INPUT' || tag === 'TEXTAREA'){
+    if(e.key === 'Escape') document.activeElement.blur();
+    return;
+  }
+  if(e.code === 'Space'){ spaceDown = true; canvasWrap.classList.add('space-down'); }
+  if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z'){
+    e.preventDefault(); if(e.shiftKey) redo(); else undo(); return;
+  }
+  if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd'){ e.preventDefault(); duplicateSelection(); return; }
+  if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a'){ e.preventDefault(); selectAll(); return; }
+  if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c'){ e.preventDefault(); copySelection(); return; }
+  if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v'){ e.preventDefault(); pasteClipboard(); return; }
+  if((e.ctrlKey || e.metaKey) && e.key === ']'){ e.preventDefault(); if(e.shiftKey) bringToFront(); else bringForward(); return; }
+  if((e.ctrlKey || e.metaKey) && e.key === '['){ e.preventDefault(); if(e.shiftKey) sendToBack(); else sendBackward(); return; }
+  if((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')){ e.preventDefault(); setZoom(state.zoom*1.2); return; }
+  if((e.ctrlKey || e.metaKey) && e.key === '-'){ e.preventDefault(); setZoom(state.zoom/1.2); return; }
+  if((e.ctrlKey || e.metaKey) && e.key === '0'){ e.preventDefault(); fitToScreen(); return; }
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key) && selectedNodeIds().length){
+    e.preventDefault();
+    const step = e.shiftKey ? 10 : 1;
+    const d = { ArrowUp:[0,-step], ArrowDown:[0,step], ArrowLeft:[-step,0], ArrowRight:[step,0] }[e.key];
+    nudgeSelection(d[0], d[1]);
+    return;
+  }
+  if(e.key === 'Delete' || e.key === 'Backspace'){ e.preventDefault(); deleteSelection(); return; }
+  if(e.key === 'Escape'){ clearSelection(); render(); setTool('select'); return; }
+  if(e.key.toLowerCase() === 'v') setTool('select');
+  if(e.key.toLowerCase() === 't') setTool('text');
+  if(e.key.toLowerCase() === 'f') setTool('frame');
+  if(e.key.toLowerCase() === 'r') setTool('shape');
+});
+window.addEventListener('keyup', (e)=>{
+  if(e.code === 'Space'){ spaceDown = false; canvasWrap.classList.remove('space-down'); }
+  // A key-up commits the arrow-key nudge as one undo step instead of one
+  // step per pixel, so holding an arrow down doesn't flood the history.
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key) && selectedNodeIds().length) pushHistory();
+});
+
+/* ==================== Palette (searchable component library) ==================== */
+// Which categories are collapsed, by name — in-memory only (resets on
+// reload). "Custom" opens by default since it's where the add-icon tile
+// lives; everything else starts collapsed so the palette reads as a real
+// accordion on first load instead of one long scrolling list.
+let collapsedPaletteCats = null; // lazily seeded once ICON_DEFS/CATEGORY_ORDER are known
+function renderPalette(filter){
+  if(collapsedPaletteCats === null){
+    collapsedPaletteCats = new Set(CATEGORY_ORDER.filter(c=>c!=='Custom'));
+  }
+  const body = document.getElementById('paletteBody');
+  const q = (filter||'').trim().toLowerCase();
+  const grouped = {};
+  ICON_DEFS.forEach(def=>{
+    if(q && !def.name.toLowerCase().includes(q) && !def.cat.toLowerCase().includes(q)) return;
+    (grouped[def.cat] = grouped[def.cat] || []).push(def);
+  });
+  // "Custom" always shows (with its add-tile) even with zero saved icons yet
+  // and even while a search filter is active, so the option to add one is
+  // never hidden behind a search that happens to match nothing there.
+  if(!grouped['Custom']) grouped['Custom'] = [];
+  const cats = CATEGORY_ORDER.filter(c=>grouped[c] && (grouped[c].length || c === 'Custom'));
+  if(cats.length === 0){
+    body.innerHTML = `<div class="palette-empty">No components match “${escapeHtml(filter)}”.</div>`;
+    return;
+  }
+  body.innerHTML = cats.map(cat=>{
+    // While actively searching, force every matching category open so
+    // results are never hidden behind a collapsed folder.
+    const collapsed = !q && collapsedPaletteCats.has(cat);
+    return `
+    <div class="palette-cat${collapsed?' collapsed':''}" data-cat="${escapeHtml(cat)}">
+      <div class="palette-cat-title">
+        <svg class="folder-ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.2h8.5A1.5 1.5 0 0 1 20.5 8.7v9a1.5 1.5 0 0 1-1.5 1.5H4.5A1.5 1.5 0 0 1 3 17.7z"></path></svg>
+        <span>${escapeHtml(cat)}</span>
+        <span style="margin-left:4px;font-weight:600;opacity:.55;">${cat==='Custom' ? '' : grouped[cat].length}</span>
+        <svg class="chev" style="margin-left:auto;" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+      </div>
+      <div class="palette-cat-body"><div>
+      <div class="palette-grid">
+        ${cat === 'Custom' ? `
+          <div class="pal-item pal-add" id="palAddCustom" title="Add a custom icon">
+            <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></div>
+            <div class="lbl">Add icon</div>
+          </div>` : ''}
+        ${grouped[cat].map(def=>`
+          <div class="pal-item" draggable="true" data-icon="${def.id}" title="${escapeHtml(def.name)}">
+            <div class="ic">${def.svg}</div>
+            <div class="lbl">${escapeHtml(def.name)}</div>
+          </div>
+        `).join('')}
+      </div>
+      </div></div>
+    </div>
+  `;}).join('');
+  body.querySelectorAll('.palette-cat-title').forEach(title=>{
+    title.addEventListener('click', ()=>{
+      const catEl = title.closest('.palette-cat');
+      const cat = catEl.dataset.cat;
+      if(collapsedPaletteCats.has(cat)) collapsedPaletteCats.delete(cat); else collapsedPaletteCats.add(cat);
+      catEl.classList.toggle('collapsed');
+    });
+  });
+  const addTile = document.getElementById('palAddCustom');
+  if(addTile) addTile.addEventListener('click', openCustomIconModal);
+  body.querySelectorAll('.pal-item[data-icon]').forEach(item=>{
+    item.addEventListener('dragstart', (e)=>{
+      e.dataTransfer.setData('text/plain', item.dataset.icon);
+      e.dataTransfer.effectAllowed = 'copy';
+    });
+    // double-click also drops it straight into the current view centre — handy for touch/trackpad users
+    item.addEventListener('dblclick', ()=>{
+      const rect = svgEl.getBoundingClientRect();
+      const pt = screenToCanvas(rect.left+rect.width/2, rect.top+rect.height/2);
+      const n = makeIconNode(item.dataset.icon, pt.x, pt.y);
+      state.nodes.push(n); recomputeContainment(n.id); selectOnly('node', n.id); render(); pushHistory();
+      toast(`Added ${ICONS_BY_ID[item.dataset.icon].name}`);
+    });
+  });
+}
+document.getElementById('paletteCollapseAll').addEventListener('click', (e)=>{
+  const allCollapsed = CATEGORY_ORDER.every(c => collapsedPaletteCats && collapsedPaletteCats.has(c));
+  if(allCollapsed){
+    collapsedPaletteCats = new Set();
+    e.target.textContent = 'Collapse all';
+  } else {
+    collapsedPaletteCats = new Set(CATEGORY_ORDER);
+    e.target.textContent = 'Expand all';
+  }
+  renderPalette(document.getElementById('paletteSearch').value);
+});
+document.getElementById('paletteSearch').addEventListener('input', (e)=>renderPalette(e.target.value));
+
+canvasWrap.addEventListener('dragover', (e)=>{
+  e.preventDefault();
+  document.getElementById('dropHint').classList.add('show');
+});
+canvasWrap.addEventListener('dragleave', (e)=>{
+  if(e.target === canvasWrap) document.getElementById('dropHint').classList.remove('show');
+});
+canvasWrap.addEventListener('drop', (e)=>{
+  e.preventDefault();
+  document.getElementById('dropHint').classList.remove('show');
+  const iconId = e.dataTransfer.getData('text/plain');
+  if(!iconId || !ICONS_BY_ID[iconId]) return;
+  const pt = screenToCanvas(e.clientX, e.clientY);
+  const n = makeIconNode(iconId, pt.x, pt.y);
+  state.nodes.push(n);
+  recomputeContainment(n.id);
+  selectOnly('node', n.id);
+  render();
+  pushHistory();
+});
+
+/* apply node.color as a stroke override (CSS class rules for .selected still win, since stylesheet rules beat presentation attributes) */
+function applyNodeColorAttrs(){
+  document.querySelectorAll('#layerNodes .node-card rect.card-bg, #layerFrames .frame-node rect').forEach(rect=>{
+    const g = rect.closest('g');
+    const n = nodeById(g.dataset.id);
+    if(n && n.color) rect.setAttribute('stroke', n.color);
+  });
+}
+/* ==================== Inspector ==================== */
+const SWATCHES = ['#22e5ff','#a855f7','#37b24d','#ffb84d','#ff5d78','#4dabf7','#e03131','#9aa3c0'];
+
+function updateInspector(){
+  const insp = document.getElementById('inspector');
+  const body = document.getElementById('inspBody');
+  const nids = selectedNodeIds(), eids = selectedEdgeIds();
+  const total = nids.length + eids.length;
+
+  if(total === 0){
+    insp.classList.remove('show');
+    document.getElementById('inspTitle').textContent = 'Nothing selected';
+    document.getElementById('inspType').textContent = '—';
+    document.getElementById('inspIcon').innerHTML = '';
+    body.innerHTML = `<div class="insp-empty">Select a component or connector to edit its label, color, and style — or drag a component from the library to begin.</div>`;
+    return;
+  }
+  insp.classList.add('show');
+
+  if(total > 1){
+    document.getElementById('inspTitle').textContent = `${total} items selected`;
+    document.getElementById('inspType').textContent = 'Multiple';
+    document.getElementById('inspIcon').innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect></svg>`;
+    const alignableCount = nids.length;
+    body.innerHTML = `
+      ${alignableCount >= 2 ? `
+      <div class="insp-field">
+        <label>Align</label>
+        <div class="align-grid">
+          <button class="align-btn" id="alLeft" title="Align left"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="3" x2="4" y2="21"></line><rect x="7" y="6" width="12" height="5"></rect><rect x="7" y="14" width="7" height="5"></rect></svg></button>
+          <button class="align-btn" id="alCenterH" title="Align center (horizontal)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="21"></line><rect x="6" y="6" width="12" height="5"></rect><rect x="8.5" y="14" width="7" height="5"></rect></svg></button>
+          <button class="align-btn" id="alRight" title="Align right"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="20" y1="3" x2="20" y2="21"></line><rect x="5" y="6" width="12" height="5"></rect><rect x="10" y="14" width="7" height="5"></rect></svg></button>
+          <button class="align-btn" id="alTop" title="Align top"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="4" x2="21" y2="4"></line><rect x="6" y="7" width="5" height="12"></rect><rect x="14" y="7" width="5" height="7"></rect></svg></button>
+          <button class="align-btn" id="alCenterV" title="Align middle (vertical)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="12" x2="21" y2="12"></line><rect x="6" y="6" width="5" height="12"></rect><rect x="14" y="8.5" width="5" height="7"></rect></svg></button>
+          <button class="align-btn" id="alBottom" title="Align bottom"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="20" x2="21" y2="20"></line><rect x="6" y="5" width="5" height="12"></rect><rect x="14" y="10" width="5" height="7"></rect></svg></button>
+        </div>
+      </div>` : ''}
+      ${alignableCount >= 3 ? `
+      <div class="insp-field">
+        <label>Distribute</label>
+        <div class="align-grid" style="grid-template-columns:1fr 1fr;">
+          <button class="align-btn" id="distH" title="Distribute horizontally">↔ Even</button>
+          <button class="align-btn" id="distV" title="Distribute vertically">↕ Even</button>
+        </div>
+      </div>` : ''}
+      <div class="insp-field">
+        <label>Layer order</label>
+        <div class="align-grid">
+          <button class="align-btn" id="ordFront" title="Bring to front">⤒</button>
+          <button class="align-btn" id="ordFwd" title="Bring forward">▲</button>
+          <button class="align-btn" id="ordBack2" title="Send to back">⤓</button>
+          <button class="align-btn" id="ordBwd" title="Send backward">▼</button>
+        </div>
+      </div>
+      <div class="insp-actions" style="margin-top:0;">
+        <button class="insp-btn" id="inspLockAll">Lock / unlock</button>
+        <button class="insp-btn" id="inspDup">Duplicate</button>
+        <button class="insp-btn danger" id="inspDel">Delete</button>
+      </div>`;
+    document.getElementById('inspDup').addEventListener('click', duplicateSelection);
+    document.getElementById('inspDel').addEventListener('click', deleteSelection);
+    const on = (id,fn)=>{ const el=document.getElementById(id); if(el) el.addEventListener('click', fn); };
+    on('alLeft', ()=>alignNodes('left'));
+    on('alCenterH', ()=>alignNodes('centerH'));
+    on('alRight', ()=>alignNodes('right'));
+    on('alTop', ()=>alignNodes('top'));
+    on('alCenterV', ()=>alignNodes('centerV'));
+    on('alBottom', ()=>alignNodes('bottom'));
+    on('distH', ()=>distributeNodes('h'));
+    on('distV', ()=>distributeNodes('v'));
+    on('ordFront', bringToFront);
+    on('ordFwd', bringForward);
+    on('ordBack2', sendToBack);
+    on('ordBwd', sendBackward);
+    on('inspLockAll', ()=>{
+      const nodes = nids.map(nodeById).filter(Boolean);
+      const nowLocked = !nodes.every(n=>n.locked);
+      nodes.forEach(n=>n.locked = nowLocked);
+      render(); pushHistory();
+      toast(nowLocked ? 'Locked' : 'Unlocked');
+    });
+    return;
+  }
+
+  if(nids.length === 1){
+    const node = nodeById(nids[0]);
+    if(!node) return;
+    const kindLabel = { icon:(ICONS_BY_ID[node.icon]||{}).cat || 'Component', frame:'Group frame', text:'Text note', shape:'Shape' }[node.kind];
+    const kindTitle = node.kind === 'icon' ? (ICONS_BY_ID[node.icon]||{}).name
+      : node.kind === 'frame' ? 'Frame' : node.kind === 'shape' ? (SHAPE_DEFS[node.shapeType]||SHAPE_DEFS.rectangle).name : 'Text note';
+    document.getElementById('inspTitle').textContent = kindTitle;
+    document.getElementById('inspType').textContent = kindLabel;
+    document.getElementById('inspIcon').innerHTML = node.kind === 'icon' ? (ICONS_BY_ID[node.icon]||{}).svg :
+      node.kind === 'frame' ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 2"><rect x="3" y="3" width="18" height="18" rx="2"></rect></svg>`
+      : node.kind === 'shape' ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"></rect></svg>`
+      : `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="7" x2="20" y2="7"></line><line x1="4" y1="12" x2="16" y2="12"></line><line x1="4" y1="17" x2="12" y2="17"></line></svg>`;
+    const members = node.kind === 'frame' ? childrenOf(node.id) : [];
+    const showColor = node.kind !== 'text';
+    const showNotes = node.kind !== 'text';
+    body.innerHTML = `
+      <div class="insp-field">
+        <label>Label</label>
+        <input type="text" id="inspLabel" value="${escapeHtml(node.label)}">
+      </div>
+      ${showColor ? `
+      <div class="insp-field">
+        <label>Accent color</label>
+        <div class="swatches" id="inspSwatches">
+          ${SWATCHES.map(c=>`<div class="swatch${node.color===c?' active':''}" data-c="${c}" style="background:${c};"></div>`).join('')}
+        </div>
+        <input type="color" id="inspNodeColorCustom" value="${node.color||'#22e5ff'}" title="Custom color" style="margin-top:8px;width:36px;height:26px;border:none;border-radius:6px;padding:0;cursor:pointer;background:none;">
+      </div>` : ''}
+      ${node.kind === 'frame' ? `
+      <div class="insp-field">
+        <label>Boundary style</label>
+        <div class="seg-group" id="inspFrameStyle">
+          <button type="button" class="seg-btn${(node.frameStyle||'dashed')==='dashed'?' active':''}" data-v="dashed" title="Dashed logical group">Dashed</button>
+          <button type="button" class="seg-btn${node.frameStyle==='solid'?' active':''}" data-v="solid" title="Solid filled boundary (VPC / trust zone)">Solid</button>
+        </div>
+      </div>` : ''}
+      ${node.kind === 'shape' ? `
+      <div class="insp-field">
+        <label>Fill style</label>
+        <div class="seg-group" id="inspShapeFill">
+          <button type="button" class="seg-btn${(node.fill||'soft')==='soft'?' active':''}" data-v="soft">Soft</button>
+          <button type="button" class="seg-btn${node.fill==='outline'?' active':''}" data-v="outline">Outline</button>
+          <button type="button" class="seg-btn${node.fill==='solid'?' active':''}" data-v="solid">Solid</button>
+        </div>
+      </div>` : ''}
+      ${showNotes ? `
+      <div class="insp-field">
+        <label>Notes</label>
+        <textarea id="inspNotes" placeholder="Why is this component here? Internal-only context…">${escapeHtml(node.notes||'')}</textarea>
+      </div>` : ''}
+      ${node.kind === 'frame' ? `
+      <div class="insp-field">
+        <label>Group contents</label>
+        <div style="font-size:12px;color:var(--text-dim);line-height:1.5;">
+          ${members.length ? `${members.length} item${members.length===1?'':'s'} — drag the frame or its tag to move them together.` : `Empty — drag components into the dashed area to add them.`}
+        </div>
+      </div>` : ''}
+      <div class="insp-field">
+        <label>Layer order</label>
+        <div class="align-grid">
+          <button class="align-btn" id="ordFront" title="Bring to front">⤒</button>
+          <button class="align-btn" id="ordFwd" title="Bring forward">▲</button>
+          <button class="align-btn" id="ordBack2" title="Send to back">⤓</button>
+          <button class="align-btn" id="ordBwd" title="Send backward">▼</button>
+        </div>
+      </div>
+      <div class="insp-actions">
+        ${node.kind === 'frame' && members.length ? `<button class="insp-btn" id="inspSelectMembers">Select items</button>` : ''}
+        <button class="insp-btn" id="inspLockOne">${node.locked ? 'Unlock' : 'Lock'}</button>
+      </div>
+      <div class="insp-actions" style="margin-top:${node.kind === 'frame' && members.length ? '-6px' : '0'};">
+        <button class="insp-btn" id="inspDup">Duplicate</button>
+        <button class="insp-btn danger" id="inspDel">Delete</button>
+      </div>
+      ${node.kind === 'frame' && members.length ? `<div class="insp-actions" style="margin-top:-6px;"><button class="insp-btn" id="inspUngroup">Ungroup (keep items)</button></div>` : ''}`;
+    document.getElementById('inspLabel').addEventListener('input', (e)=>{
+      // Update the model and the on-canvas label directly instead of calling
+      // render() here — render() rebuilds this whole inspector body (see
+      // updateInspector below), which replaces this very <input> on every
+      // keystroke and kills focus/cursor after a single character.
+      node.label = e.target.value;
+      const canvasLabel = document.querySelector(`[data-id="${node.id}"] [data-role="label"]`);
+      if(canvasLabel) canvasLabel.textContent = node.label;
+      markDirty(); scheduleAutosave();
+    });
+    document.getElementById('inspLabel').addEventListener('blur', pushHistory);
+    document.getElementById('inspLabel').addEventListener('keydown', e=>{ if(e.key==='Enter') e.target.blur(); });
+    const swatchesEl = document.getElementById('inspSwatches');
+    if(swatchesEl) swatchesEl.querySelectorAll('.swatch').forEach(sw=>{
+      sw.addEventListener('click', ()=>{ node.color = node.color === sw.dataset.c ? null : sw.dataset.c; render(); pushHistory(); });
+    });
+    const customColorEl = document.getElementById('inspNodeColorCustom');
+    if(customColorEl){
+      customColorEl.addEventListener('input', (e)=>{ node.color = e.target.value; render(); markDirty(); scheduleAutosave(); });
+      customColorEl.addEventListener('change', ()=>{ pushHistory(); });
+    }
+    const frameStyleEl = document.getElementById('inspFrameStyle');
+    if(frameStyleEl) frameStyleEl.querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ node.frameStyle = btn.dataset.v; render(); pushHistory(); });
+    });
+    const shapeFillEl = document.getElementById('inspShapeFill');
+    if(shapeFillEl) shapeFillEl.querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ node.fill = btn.dataset.v; render(); pushHistory(); });
+    });
+    const notesEl = document.getElementById('inspNotes');
+    if(notesEl){
+      notesEl.addEventListener('input', (e)=>{ node.notes = e.target.value; markDirty(); scheduleAutosave(); });
+      notesEl.addEventListener('blur', pushHistory);
+    }
+    document.getElementById('ordFront').addEventListener('click', bringToFront);
+    document.getElementById('ordFwd').addEventListener('click', bringForward);
+    document.getElementById('ordBack2').addEventListener('click', sendToBack);
+    document.getElementById('ordBwd').addEventListener('click', sendBackward);
+    document.getElementById('inspLockOne').addEventListener('click', ()=>{
+      node.locked = !node.locked;
+      render(); pushHistory();
+      toast(node.locked ? 'Locked' : 'Unlocked');
+    });
+    document.getElementById('inspDup').addEventListener('click', duplicateSelection);
+    document.getElementById('inspDel').addEventListener('click', deleteSelection);
+    const selectMembersBtn = document.getElementById('inspSelectMembers');
+    if(selectMembersBtn) selectMembersBtn.addEventListener('click', ()=>{
+      state.selection.clear();
+      childrenOf(node.id).forEach(c=>addToSelection('node', c.id));
+      render();
+    });
+    const ungroupBtn = document.getElementById('inspUngroup');
+    if(ungroupBtn) ungroupBtn.addEventListener('click', ()=>{
+      childrenOf(node.id).forEach(c=>c.parentId=null);
+      render(); pushHistory();
+      toast('Ungrouped — items stayed in place.');
+    });
+    return;
+  }
+
+  if(eids.length === 1){
+    const edge = edgeById(eids[0]);
+    if(!edge) return;
+    document.getElementById('inspTitle').textContent = 'Connector';
+    document.getElementById('inspType').textContent = 'Edge';
+    document.getElementById('inspIcon').innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 19L19 5"></path><circle cx="5" cy="19" r="2"></circle><circle cx="19" cy="5" r="2"></circle></svg>`;
+    const shape = edge.shape || 'elbow';
+    const lineStyle = edge.lineStyle || (edge.dashed ? 'dashed' : 'solid');
+    const arrowDir = edge.arrowStart && edge.arrowEnd ? 'both' : edge.arrowStart && !edge.arrowEnd ? 'start' : edge.arrowEnd === false ? 'none' : 'end';
+    const arrowShape = edge.arrowShape || 'triangle';
+    const strokeW = edge.strokeWidth || 1.8;
+    body.innerHTML = `
+      <div class="insp-field">
+        <label>Label</label>
+        <input type="text" id="inspEdgeLabel" placeholder="e.g. HTTPS, async event…" value="${escapeHtml(edge.label||'')}">
+      </div>
+      <div class="insp-field">
+        <label>Line color</label>
+        <div class="swatches" id="inspEdgeSwatches">
+          <div class="swatch${!edge.color?' active':''}" data-c="" title="Default (theme)" style="background:var(--surface-2);border:1.5px dashed var(--border-strong);"></div>
+          ${SWATCHES.map(c=>`<div class="swatch${edge.color===c?' active':''}" data-c="${c}" style="background:${c};"></div>`).join('')}
+        </div>
+        <input type="color" id="inspEdgeColorCustom" value="${edge.color||'#22e5ff'}" title="Custom color" style="margin-top:8px;width:36px;height:26px;border:none;border-radius:6px;padding:0;cursor:pointer;background:none;">
+      </div>
+      <div class="insp-field">
+        <label>Path shape</label>
+        <div class="seg-group" id="inspShape">
+          <button type="button" class="seg-btn${shape==='elbow'?' active':''}" data-v="elbow" title="Right-angle elbow">Elbow</button>
+          <button type="button" class="seg-btn${shape==='straight'?' active':''}" data-v="straight" title="Straight line">Straight</button>
+          <button type="button" class="seg-btn${shape==='curved'?' active':''}" data-v="curved" title="Smooth curve">Curved</button>
+        </div>
+      </div>
+      <div class="insp-field">
+        <label>Line style</label>
+        <div class="seg-group" id="inspLineStyle">
+          <button type="button" class="seg-btn${lineStyle==='solid'?' active':''}" data-v="solid">Solid</button>
+          <button type="button" class="seg-btn${lineStyle==='dashed'?' active':''}" data-v="dashed">Dashed</button>
+          <button type="button" class="seg-btn${lineStyle==='dotted'?' active':''}" data-v="dotted">Dotted</button>
+        </div>
+      </div>
+      <div class="insp-field">
+        <label>Line thickness</label>
+        <div class="seg-group" id="inspStrokeWidth">
+          <button type="button" class="seg-btn${strokeW===1.8?' active':''}" data-v="1.8">Thin</button>
+          <button type="button" class="seg-btn${strokeW===3?' active':''}" data-v="3">Medium</button>
+          <button type="button" class="seg-btn${strokeW===4.5?' active':''}" data-v="4.5">Thick</button>
+        </div>
+      </div>
+      <div class="insp-field">
+        <label>Arrowheads</label>
+        <div class="seg-group" id="inspArrowDir">
+          <button type="button" class="seg-btn${arrowDir==='none'?' active':''}" data-v="none" title="Plain line, no arrowhead">None</button>
+          <button type="button" class="seg-btn${arrowDir==='end'?' active':''}" data-v="end" title="Arrow at the end">→</button>
+          <button type="button" class="seg-btn${arrowDir==='start'?' active':''}" data-v="start" title="Arrow at the start">←</button>
+          <button type="button" class="seg-btn${arrowDir==='both'?' active':''}" data-v="both" title="Arrow both ends">↔</button>
+        </div>
+      </div>
+      <div class="insp-field">
+        <label>Arrowhead style</label>
+        <div class="seg-group" id="inspArrowShape">
+          <button type="button" class="seg-btn${arrowShape==='triangle'?' active':''}" data-v="triangle" title="Solid triangle">▶</button>
+          <button type="button" class="seg-btn${arrowShape==='open'?' active':''}" data-v="open" title="Open / chevron">›</button>
+          <button type="button" class="seg-btn${arrowShape==='diamond'?' active':''}" data-v="diamond" title="Diamond">◆</button>
+          <button type="button" class="seg-btn${arrowShape==='circle'?' active':''}" data-v="circle" title="Circle">●</button>
+        </div>
+      </div>
+      <div class="insp-field toggle-row">
+        <label>Animated flow</label>
+        <span class="sw-toggle"><input type="checkbox" id="inspAnimated" ${edge.animated!==false?'checked':''}><span class="knob"></span></span>
+      </div>
+      <div class="insp-actions">
+        ${(edge.waypoint != null) ? `<button class="insp-btn" id="inspResetWaypoint">Reset routing</button>` : ''}
+        <button class="insp-btn danger" id="inspDel">Delete connector</button>
+      </div>`;
+    document.getElementById('inspEdgeLabel').addEventListener('input', (e)=>{
+      // renderEdges() only, not render() — full render() rebuilds the
+      // inspector body and destroys this input's focus after one keystroke.
+      edge.label = e.target.value;
+      renderEdges();
+      markDirty(); scheduleAutosave();
+    });
+    document.getElementById('inspEdgeLabel').addEventListener('blur', pushHistory);
+    document.getElementById('inspEdgeSwatches').querySelectorAll('.swatch').forEach(sw=>{
+      sw.addEventListener('click', ()=>{ edge.color = sw.dataset.c || null; render(); pushHistory(); });
+    });
+    document.getElementById('inspEdgeColorCustom').addEventListener('input', (e)=>{
+      edge.color = e.target.value;
+      renderEdges();
+      markDirty(); scheduleAutosave();
+    });
+    document.getElementById('inspEdgeColorCustom').addEventListener('change', ()=>{ render(); pushHistory(); });
+    document.getElementById('inspShape').querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ edge.shape = btn.dataset.v; render(); pushHistory(); });
+    });
+    document.getElementById('inspLineStyle').querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ edge.lineStyle = btn.dataset.v; delete edge.dashed; render(); pushHistory(); });
+    });
+    document.getElementById('inspStrokeWidth').querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ edge.strokeWidth = parseFloat(btn.dataset.v); render(); pushHistory(); });
+    });
+    document.getElementById('inspArrowDir').querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const v = btn.dataset.v;
+        edge.arrowStart = v === 'both' || v === 'start';
+        edge.arrowEnd = v === 'both' || v === 'end';
+        render(); pushHistory();
+      });
+    });
+    document.getElementById('inspArrowShape').querySelectorAll('.seg-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ edge.arrowShape = btn.dataset.v; render(); pushHistory(); });
+    });
+    document.getElementById('inspAnimated').addEventListener('change', (e)=>{ edge.animated = e.target.checked; render(); pushHistory(); });
+    document.getElementById('inspDel').addEventListener('click', deleteSelection);
+    const resetWpBtn = document.getElementById('inspResetWaypoint');
+    if(resetWpBtn) resetWpBtn.addEventListener('click', ()=>{
+      delete edge.waypoint; delete edge.waypointAxis;
+      render(); pushHistory();
+      toast('Connector reset to automatic routing.');
+    });
+  }
+}
+
+/* ==================== Context menu (right-click) ==================== */
+const ctxMenu = document.getElementById('ctxMenu');
+function hideCtxMenu(){ ctxMenu.classList.add('hidden'); }
+document.addEventListener('click', hideCtxMenu);
+canvasWrap.addEventListener('contextmenu', (e)=>{
+  e.preventDefault();
+  const target = e.target.closest('.node-card, .frame-node, .text-node, .shape-node, .edge-group');
+  if(target){
+    const kind = target.dataset.kind === 'edge' ? 'edge' : 'node';
+    if(!isSelected(kind, target.dataset.id)) selectOnly(kind, target.dataset.id);
+    render();
+  } else {
+    clearSelection(); render();
+  }
+  const hasSel = state.selection.size > 0;
+  const hasNodeSel = selectedNodeIds().length > 0;
+  const singleFrame = selectedNodeIds().length === 1 && nodeById(selectedNodeIds()[0]) && nodeById(selectedNodeIds()[0]).kind === 'frame'
+    ? nodeById(selectedNodeIds()[0]) : null;
+  const frameHasMembers = singleFrame && childrenOf(singleFrame.id).length > 0;
+  const singleNode = selectedNodeIds().length === 1 ? nodeById(selectedNodeIds()[0]) : null;
+  ctxMenu.innerHTML = `
+    <button class="ctx-item" id="ctxCopy" ${hasNodeSel?'':'disabled'}>Copy<span class="k">⌘C</span></button>
+    <button class="ctx-item" id="ctxPaste" ${clipboard?'':'disabled'}>Paste<span class="k">⌘V</span></button>
+    <button class="ctx-item" id="ctxDup" ${hasSel?'':'disabled'}>Duplicate<span class="k">⌘D</span></button>
+    <button class="ctx-item danger" id="ctxDel" ${hasSel?'':'disabled'}>Delete<span class="k">Del</span></button>
+    ${hasNodeSel ? `
+    <div class="ctx-sep"></div>
+    <button class="ctx-item" id="ctxFront">Bring to front<span class="k">⌘⇧]</span></button>
+    <button class="ctx-item" id="ctxFwd">Bring forward<span class="k">⌘]</span></button>
+    <button class="ctx-item" id="ctxBack">Send to back<span class="k">⌘⇧[</span></button>
+    <button class="ctx-item" id="ctxBwd">Send backward<span class="k">⌘[</span></button>
+    <div class="ctx-sep"></div>
+    <button class="ctx-item" id="ctxLock">${singleNode ? (singleNode.locked ? 'Unlock' : 'Lock') : 'Lock / unlock'}</button>` : ''}
+    ${frameHasMembers ? `<div class="ctx-sep"></div><button class="ctx-item" id="ctxUngroup">Ungroup (keep items)</button>` : ''}
+    <div class="ctx-sep"></div>
+    <button class="ctx-item" id="ctxFit">Fit to screen</button>
+  `;
+  ctxMenu.style.left = e.clientX + 'px';
+  ctxMenu.style.top = e.clientY + 'px';
+  ctxMenu.classList.remove('hidden');
+  document.getElementById('ctxCopy').addEventListener('click', copySelection);
+  document.getElementById('ctxPaste').addEventListener('click', pasteClipboard);
+  document.getElementById('ctxDup').addEventListener('click', duplicateSelection);
+  document.getElementById('ctxDel').addEventListener('click', deleteSelection);
+  document.getElementById('ctxFit').addEventListener('click', fitToScreen);
+  const on = (id,fn)=>{ const el=document.getElementById(id); if(el) el.addEventListener('click', fn); };
+  on('ctxFront', bringToFront);
+  on('ctxFwd', bringForward);
+  on('ctxBack', sendToBack);
+  on('ctxBwd', sendBackward);
+  on('ctxLock', ()=>{
+    const nodes = selectedNodeIds().map(nodeById).filter(Boolean);
+    const nowLocked = !nodes.every(n=>n.locked);
+    nodes.forEach(n=>n.locked = nowLocked);
+    render(); pushHistory();
+    toast(nowLocked ? 'Locked' : 'Unlocked');
+  });
+  const ctxUngroup = document.getElementById('ctxUngroup');
+  if(ctxUngroup) ctxUngroup.addEventListener('click', ()=>{
+    childrenOf(singleFrame.id).forEach(c=>c.parentId=null);
+    render(); pushHistory();
+    toast('Ungrouped — items stayed in place.');
+  });
+});
+
+/* ==================== Theme toggle ==================== */
+document.getElementById('btnTheme').addEventListener('click', ()=>{
+  const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  const next = cur === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('apiStudio_theme', next);
+  document.getElementById('btnThemeIconMoon').style.display = next === 'light' ? '' : 'none';
+  document.getElementById('btnThemeIconSun').style.display = next === 'light' ? 'none' : '';
+});
+(function initThemeIcon(){
+  const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  document.getElementById('btnThemeIconMoon').style.display = cur === 'light' ? '' : 'none';
+  document.getElementById('btnThemeIconSun').style.display = cur === 'light' ? 'none' : '';
+})();
+
+/* ==================== Export (SVG / PNG) ==================== */
+function buildExportSvgString(){
+  if(state.nodes.length === 0) return null;
+  const xs = state.nodes.map(n=>n.x), ys = state.nodes.map(n=>n.y);
+  const xe = state.nodes.map(n=>n.x+n.w), ye = state.nodes.map(n=>n.y+n.h);
+  const pad = 40;
+  const minX = Math.min(...xs)-pad, minY = Math.min(...ys)-pad;
+  const w = Math.max(...xe)-minX+pad, h = Math.max(...ye)-minY+pad;
+  const clone = viewportEl.cloneNode(true);
+  clone.removeAttribute('transform');
+  clone.querySelectorAll('.handle, .marquee, .temp-edge').forEach(el=>el.remove());
+  const bgColor = getComputedStyle(document.documentElement).getPropertyValue('--canvas-bg').trim() || '#06070d';
+  const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#eef1fb';
+  const dimColor = getComputedStyle(document.documentElement).getPropertyValue('--text-faint').trim() || '#5d6488';
+  const cardColor = getComputedStyle(document.documentElement).getPropertyValue('--surface-solid').trim() || '#12141f';
+  const borderColor = getComputedStyle(document.documentElement).getPropertyValue('--border-strong').trim() || '#333';
+  // foreignObject HTML uses CSS vars that won't resolve outside this document — inline the ones that matter.
+  clone.querySelectorAll('foreignObject div[data-role]').forEach(div=>{
+    const shapeG = div.closest('.shape-node');
+    if(shapeG && shapeG.getAttribute('data-fill') === 'solid') return; // solid-fill shapes already set an explicit dark label color inline
+    const isDim = div.closest('.frame-node') || div.closest('.text-node');
+    div.style.color = isDim ? dimColor : textColor;
+  });
+  clone.querySelectorAll('.card-bg').forEach(r=>{ if(!r.getAttribute('stroke')) r.setAttribute('stroke', borderColor); r.setAttribute('fill', cardColor); });
+  clone.querySelectorAll('.frame-node rect').forEach(r=>{ if(!r.getAttribute('stroke')) r.setAttribute('stroke', borderColor); });
+  clone.querySelectorAll('.edge-path').forEach(p=>p.setAttribute('stroke', dimColor));
+  clone.querySelectorAll('.edge-label-bg').forEach(r=>{ r.setAttribute('fill', bgColor); r.setAttribute('stroke', borderColor); });
+  clone.querySelectorAll('.edge-label').forEach(t=>t.setAttribute('fill', dimColor));
+  clone.querySelectorAll('.frame-tag').forEach(el=>{ el.style.background = cardColor; el.style.borderColor = borderColor; });
+  clone.querySelectorAll('.lock-badge, .notes-dot, .waypoint-handle').forEach(el=>el.remove());
+
+  const svgOut = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minY} ${w} ${h}" width="${Math.round(w)}" height="${Math.round(h)}">
+    <rect x="${minX}" y="${minY}" width="${w}" height="${h}" fill="${bgColor}"></rect>
+    ${document.getElementById('dgSvg').querySelector('defs').outerHTML}
+    ${clone.innerHTML}
+  </svg>`;
+  return svgOut;
+}
+function downloadBlob(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+function exportSvg(){
+  const svgStr = buildExportSvgString();
+  if(!svgStr){ toast('Nothing to export yet.'); return; }
+  downloadBlob(new Blob([svgStr], {type:'image/svg+xml'}), `${slugify(proj?proj.name:'architecture')}-diagram.svg`);
+}
+function exportPng(){
+  const svgStr = buildExportSvgString();
+  if(!svgStr){ toast('Nothing to export yet.'); return; }
+  const img = new Image();
+  const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
+  const url = URL.createObjectURL(svgBlob);
+  img.onload = ()=>{
+    const scale = 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width*scale; canvas.height = img.height*scale;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0);
+    canvas.toBlob(blob=>{ downloadBlob(blob, `${slugify(proj?proj.name:'architecture')}-diagram.png`); URL.revokeObjectURL(url); }, 'image/png');
+  };
+  img.onerror = ()=>{ toast('Could not render export — try SVG instead.'); URL.revokeObjectURL(url); };
+  img.src = url;
+}
+function pngCanvasFromSvg(svgStr, scale){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
+    const url = URL.createObjectURL(svgBlob);
+    img.onload = ()=>{
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width*scale; canvas.height = img.height*scale;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(scale, scale);
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      resolve(canvas);
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error('render failed')); };
+    img.src = url;
+  });
+}
+let _jsPdfLoading = null;
+function loadJsPdf(){
+  if(window.jspdf) return Promise.resolve();
+  if(_jsPdfLoading) return _jsPdfLoading;
+  _jsPdfLoading = new Promise((resolve, reject)=>{
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+    s.onload = resolve; s.onerror = ()=>reject(new Error('Could not load PDF library — check your connection.'));
+    document.head.appendChild(s);
+  });
+  return _jsPdfLoading;
+}
+async function exportPdf(){
+  const svgStr = buildExportSvgString();
+  if(!svgStr){ toast('Nothing to export yet.'); return; }
+  try{
+    await loadJsPdf();
+    const canvas = await pngCanvasFromSvg(svgStr, 2);
+    const { jsPDF } = window.jspdf;
+    const orientation = canvas.width >= canvas.height ? 'landscape' : 'portrait';
+    const pdf = new jsPDF({ orientation, unit:'pt', format:[canvas.width/2, canvas.height/2] });
+    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, canvas.width/2, canvas.height/2);
+    pdf.save(`${slugify(proj?proj.name:'architecture')}-diagram.pdf`);
+  }catch(err){
+    toast(err.message || 'PDF export failed — try SVG or PNG instead.');
+  }
+}
+// ---- Written documentation export (Markdown) ------------------------------
+// Walks the current diagram's nodes/frames/connectors and writes a plain
+// architecture-doc summary: components grouped by category, group
+// membership, and every connector with its label and direction. This is a
+// text artifact meant to sit alongside the visual export (e.g. in a wiki
+// page or PR description), not a replacement for it.
+function buildMarkdownDoc(){
+  if(state.nodes.length === 0) return null;
+  const title = proj ? proj.name : 'Architecture';
+  const lines = [`# ${title} — Architecture Documentation`, '', `_Generated ${new Date().toISOString().slice(0,10)}_`, ''];
+
+  const frames = state.nodes.filter(n=>n.kind==='frame');
+  const icons = state.nodes.filter(n=>n.kind==='icon');
+  const shapes = state.nodes.filter(n=>n.kind==='shape');
+  const byCat = {};
+  icons.forEach(n=>{
+    const def = ICONS_BY_ID[n.icon] || {};
+    const cat = def.cat || 'Other';
+    (byCat[cat] = byCat[cat] || []).push({ node:n, def });
+  });
+
+  lines.push('## Components', '');
+  CATEGORY_ORDER.filter(c=>byCat[c]).forEach(cat=>{
+    lines.push(`### ${cat}`, '');
+    byCat[cat].forEach(({node,def})=>{
+      const frame = node.parentId ? nodeById(node.parentId) : null;
+      const notes = node.notes && node.notes.trim() ? ` — _${node.notes.trim()}_` : '';
+      lines.push(`- **${node.label}** (${def.name || 'component'})${frame ? ` — part of group "${frame.label}"` : ''}${notes}`);
+    });
+    lines.push('');
+  });
+
+  if(shapes.length){
+    lines.push('## Shapes', '');
+    shapes.forEach(n=>{
+      const def = SHAPE_DEFS[n.shapeType] || SHAPE_DEFS.rectangle;
+      const notes = n.notes && n.notes.trim() ? ` — _${n.notes.trim()}_` : '';
+      lines.push(`- **${n.label}** (${def.name})${notes}`);
+    });
+    lines.push('');
+  }
+
+  if(frames.length){
+    lines.push('## Groups', '');
+    frames.forEach(f=>{
+      const members = childrenOf(f.id).map(m=>m.label);
+      lines.push(`- **${f.label}**: ${members.length ? members.join(', ') : '(empty)'}`);
+    });
+    lines.push('');
+  }
+
+  if(state.edges.length){
+    lines.push('## Connections', '');
+    state.edges.forEach(e=>{
+      const a = nodeById(e.from), b = nodeById(e.to);
+      if(!a || !b) return;
+      const arrow = e.arrowStart && e.arrowEnd ? '<->' : e.arrowStart ? '<-' : e.arrowEnd===false ? '--' : '->';
+      const label = e.label ? ` — ${e.label}` : '';
+      lines.push(`- ${a.label} ${arrow} ${b.label}${label}`);
+    });
+    lines.push('');
+  }
+
+  const textNotes = state.nodes.filter(n=>n.kind==='text' && n.label && n.label.trim());
+  if(textNotes.length){
+    lines.push('## Notes', '');
+    textNotes.forEach(n=>lines.push(`- ${n.label}`));
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+function exportMarkdown(){
+  const md = buildMarkdownDoc();
+  if(!md){ toast('Nothing to document yet.'); return; }
+  downloadBlob(new Blob([md], {type:'text/markdown'}), `${slugify(proj?proj.name:'architecture')}-documentation.md`);
+}
+document.getElementById('btnExport').addEventListener('click', (e)=>{
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.innerHTML = `<button class="ctx-item" id="expSvg">Export as SVG</button><button class="ctx-item" id="expPng">Export as PNG</button><button class="ctx-item" id="expPdf">Export as PDF</button><button class="ctx-item" id="expMd">Export documentation (Markdown)</button>`;
+  document.body.appendChild(menu);
+  const rect = e.target.closest('button').getBoundingClientRect();
+  menu.style.left = rect.left + 'px'; menu.style.top = (rect.bottom+6) + 'px';
+  const close = ()=>{ menu.remove(); document.removeEventListener('click', close); };
+  setTimeout(()=>document.addEventListener('click', close), 0);
+  menu.querySelector('#expSvg').addEventListener('click', exportSvg);
+  menu.querySelector('#expPdf').addEventListener('click', exportPdf);
+  menu.querySelector('#expMd').addEventListener('click', exportMarkdown);
+  menu.querySelector('#expPng').addEventListener('click', exportPng);
+});
+
+/* ==================== Boot / load / publish ==================== */
+function findProjectBySlug(slug){
+  const list = Object.values(workspace.projects || {});
+  if(!slug) return null;
+  return list.find(p=>slugify(p.name) === slug) || null;
+}
+
+function loadDiagramIntoState(diagram){
+  suppressHistory = true;
+  state.nodes = (diagram && Array.isArray(diagram.nodes)) ? diagram.nodes.map(n=>({...n})) : [];
+  state.edges = (diagram && Array.isArray(diagram.edges)) ? diagram.edges.map(e=>({...e})) : [];
+  state.selection.clear();
+  render();
+  history = [snapshot()]; historyIdx = 0;
+  suppressHistory = false;
+}
+
+function showConflict(freshDiagram){
+  const who = (freshDiagram && freshDiagram.updatedBy) || 'someone else';
+  const when = freshDiagram ? formatDateTime(freshDiagram.updatedAt) : '';
+  document.getElementById('conflictMsg').textContent = `This diagram was published by ${who}${when ? ' at ' + when : ''} since you opened it.`;
+  document.getElementById('conflictBanner').classList.remove('hidden');
+}
+function hideConflict(){ document.getElementById('conflictBanner').classList.add('hidden'); }
+document.getElementById('conflictReload').addEventListener('click', ()=>window.location.reload());
+document.getElementById('conflictForce').addEventListener('click', ()=>{ hideConflict(); performPublish(true); });
+
+function showDraftBanner(savedAt){
+  document.getElementById('draftMsg').textContent = `Showing unpublished local edits from ${formatDateTime(savedAt)}.`;
+  document.getElementById('draftBanner').classList.remove('hidden');
+}
+document.getElementById('draftRestore').addEventListener('click', ()=>{ document.getElementById('draftBanner').classList.add('hidden'); });
+document.getElementById('draftDiscard').addEventListener('click', ()=>{
+  clearLocalDraft();
+  loadDiagramIntoState(proj ? proj.architectureDiagram : null);
+  markClean(proj && proj.architectureDiagram ? 'Published ' + formatDateTime(proj.architectureDiagram.updatedAt) : 'Not published yet');
+  document.getElementById('draftBanner').classList.add('hidden');
+  fitToScreen();
+  toast('Reverted to the published diagram.');
+});
+
+async function performPublish(force){
+  if(!proj){ toast('No project loaded.'); return; }
+  if(saving) return;
+  saving = true;
+  document.getElementById('btnPublish').disabled = true;
+  try{
+    const fresh = await apiGet('');
+    const freshProj = Object.values(fresh.projects||{}).find(p=>p.id===proj.id);
+    if(!freshProj){ toast('This project could not be found — it may have been deleted.'); return; }
+    if(freshProj._readonly){ toast("You can only view this project — it's public content from someone else in your organisation."); return; }
+    if(!force && freshProj.architectureDiagram && publishedSnapshotAt && freshProj.architectureDiagram.updatedAt !== publishedSnapshotAt){
+      showConflict(freshProj.architectureDiagram);
+      return;
+    }
+    proj = freshProj;
+    const now = new Date().toISOString();
+    // The Overview page's preview (studio.html) doesn't have this file's icon
+    // library loaded, so it can't look up a badge's gradient/glyph from an
+    // icon id alone — that's why published diagrams used to show as plain
+    // grey boxes. Snapshot each icon node's rendered badge markup + color
+    // here at publish time so the preview can drop it straight in.
+    const nodesForPublish = state.nodes.map(n=>{
+      if(n.kind !== 'icon') return n;
+      const def = ICONS_BY_ID[n.icon] || ICON_DEFS[0];
+      return { ...n, iconSvg: def.svg, iconColor: def.color, iconName: def.name };
+    });
+    proj.architectureDiagram = { nodes: nodesForPublish, edges: state.edges, updatedAt: now, updatedBy: AUTH_USER.username || 'Unknown' };
+    proj.updatedAt = now;
+    await apiSend('PUT', '/projects', { projects: { [proj.id]: proj } });
+    publishedSnapshotAt = now;
+    clearLocalDraft();
+    markClean('Published ' + formatDateTime(now));
+    if(syncChannel) syncChannel.postMessage({ type:'architecture-diagram-saved', projectId: proj.id, at: now });
+    hideConflict();
+    toast('Published — visible on the project overview page.');
+  }catch(e){
+    console.error(e);
+    toast('Could not publish — check your connection and try again.');
+  }finally{
+    saving = false;
+    document.getElementById('btnPublish').disabled = false;
+  }
+}
+
+const publishModal = document.getElementById('publishModal');
+document.getElementById('btnPublish').addEventListener('click', ()=>{
+  if(!proj) return;
+  document.getElementById('publishProjName').textContent = proj.name;
+  publishModal.classList.add('show');
+});
+document.getElementById('publishCancel').addEventListener('click', ()=>publishModal.classList.remove('show'));
+document.getElementById('publishConfirm').addEventListener('click', ()=>{ publishModal.classList.remove('show'); performPublish(false); });
+
+/* ==================== Custom icon upload ==================== */
+const customIconModal = document.getElementById('customIconModal');
+let ciPendingDataUrl = null;
+
+function openCustomIconModal(){
+  ciPendingDataUrl = null;
+  document.getElementById('ciNameInput').value = '';
+  document.getElementById('ciFileInput').value = '';
+  document.getElementById('ciPreviewWrap').style.display = 'none';
+  document.getElementById('ciDropLabel').textContent = 'Click to choose an image, or drag one here';
+  document.getElementById('ciError').style.display = 'none';
+  document.getElementById('ciSave').disabled = true;
+  customIconModal.classList.add('show');
+}
+function closeCustomIconModal(){ customIconModal.classList.remove('show'); }
+function ciShowError(msg){
+  const el = document.getElementById('ciError');
+  el.textContent = msg; el.style.display = 'block';
+}
+function updateCiSaveEnabled(){
+  document.getElementById('ciSave').disabled = !(ciPendingDataUrl && document.getElementById('ciNameInput').value.trim());
+}
+
+// Raster images get downscaled to a small square on a canvas before they're
+// ever turned into a dataUrl — a person will typically drop in a phone-camera
+// photo of a logo or a full-res export, and these only ever render at badge
+// size (~34px) in the editor, so there's no reason to carry megabytes of
+// pixels through the server and every future page load. SVGs pass through
+// untouched since they're already tiny and resolution-independent.
+//
+// Reads the file as a data: URL rather than a blob: URL for the <img> we
+// decode it through — this page's CSP only allows img-src 'self' and data:,
+// not blob:, so a blob: URL here would silently fail to load and land in
+// onerror ("Could not read that image.") on every single upload.
+const CUSTOM_ICON_TARGET_PX = 128;
+function fileToProcessedDataUrl(file){
+  return new Promise((resolve, reject)=>{
+    if(file.size > 5 * 1024 * 1024) return reject(new Error('That file is too large to even read in (max 5MB before compression).'));
+    const reader = new FileReader();
+    reader.onerror = ()=>reject(new Error('Could not read that file.'));
+    if(file.type === 'image/svg+xml'){
+      reader.onload = ()=>resolve(reader.result);
+      reader.readAsDataURL(file);
+      return;
+    }
+    reader.onload = ()=>{
+      const img = new Image();
+      img.onload = ()=>{
+        const scale = Math.min(1, CUSTOM_ICON_TARGET_PX / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        // PNG keeps transparency (most logos need it); quality param is ignored for PNG but harmless.
+        resolve(canvas.toDataURL('image/png', 0.92));
+      };
+      img.onerror = ()=>reject(new Error('Could not read that image.'));
+      img.src = reader.result; // data: URL — always allowed by this page's CSP
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleCiFile(file){
+  document.getElementById('ciError').style.display = 'none';
+  if(!file) return;
+  const okType = ['image/png','image/jpeg','image/webp','image/svg+xml'].includes(file.type);
+  if(!okType){ ciShowError('Please choose a PNG, JPEG, WebP, or SVG file.'); return; }
+  try{
+    const dataUrl = await fileToProcessedDataUrl(file);
+    if(dataUrl.length > MAX_CUSTOM_ICON_BYTES_CLIENT){
+      ciShowError('That image is still too large after compression — try a smaller or simpler source image.');
+      return;
+    }
+    ciPendingDataUrl = dataUrl;
+    document.getElementById('ciPreview').src = dataUrl;
+    document.getElementById('ciPreviewWrap').style.display = 'block';
+    document.getElementById('ciDropLabel').textContent = file.name;
+    if(!document.getElementById('ciNameInput').value.trim()){
+      document.getElementById('ciNameInput').value = file.name.replace(/\.[a-z0-9]+$/i, '');
+    }
+    updateCiSaveEnabled();
+  }catch(e){
+    ciShowError(e.message || 'Could not process that image.');
+  }
+}
+const MAX_CUSTOM_ICON_BYTES_CLIENT = 300 * 1024; // mirrors the server-side cap in routes/workspace.js
+
+document.getElementById('ciDropZone').addEventListener('click', ()=>document.getElementById('ciFileInput').click());
+document.getElementById('ciFileInput').addEventListener('change', (e)=>handleCiFile(e.target.files[0]));
+document.getElementById('ciDropZone').addEventListener('dragover', (e)=>{ e.preventDefault(); });
+document.getElementById('ciDropZone').addEventListener('drop', (e)=>{ e.preventDefault(); handleCiFile(e.dataTransfer.files[0]); });
+document.getElementById('ciNameInput').addEventListener('input', updateCiSaveEnabled);
+document.getElementById('ciCancel').addEventListener('click', closeCustomIconModal);
+document.getElementById('ciSave').addEventListener('click', async ()=>{
+  const name = document.getElementById('ciNameInput').value.trim();
+  if(!ciPendingDataUrl || !name) return;
+  const saveBtn = document.getElementById('ciSave');
+  saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+  const newIcon = { id: 'custom-' + uid(), name, dataUrl: ciPendingDataUrl };
+  const nextIcons = [...(workspace.customIcons||[]), newIcon];
+  try{
+    await apiSend('PUT', '/custom-icons', { customIcons: nextIcons });
+    workspace.customIcons = nextIcons;
+    registerCustomIcons(workspace.customIcons);
+    renderPalette(document.getElementById('paletteSearch').value);
+    closeCustomIconModal();
+    toast(`Saved "${name}" — it'll show up in every project's palette now.`);
+  }catch(e){
+    console.error(e);
+    ciShowError('Could not save this icon — check your connection and try again.');
+  }finally{
+    saveBtn.disabled = false; saveBtn.textContent = 'Save icon';
+  }
+});
+
+async function boot(){
+  document.getElementById('userLabel').textContent = AUTH_USER.username || 'Unknown';
+  document.getElementById('userDot').textContent = userInitials(AUTH_USER.username);
+  setTool('select');
+
+  try{
+    workspace = await apiGet('');
+  }catch(e){
+    console.error(e);
+    toast('Could not load your workspace — check your connection and reload.');
+    document.getElementById('topSaveState').textContent = 'Could not load workspace';
+    renderPalette('');
+    return;
+  }
+  registerCustomIcons(workspace.customIcons);
+  renderPalette('');
+
+  proj = findProjectBySlug(PROJECT_SLUG);
+  if(!proj){
+    document.getElementById('topProjName').textContent = 'Project not found';
+    document.getElementById('topSaveState').textContent = 'Open this tool from a project\u2019s Overview page or Project settings.';
+    document.getElementById('btnPublish').disabled = true;
+    return;
+  }
+  document.getElementById('topProjName').textContent = proj.name;
+  if(proj._readonly){
+    document.getElementById('btnPublish').disabled = true;
+    document.getElementById('topSaveState').textContent = "View only — you don't own this project";
+  }
+
+  publishedSnapshotAt = (proj.architectureDiagram && proj.architectureDiagram.updatedAt) || null;
+  const localDraft = loadLocalDraft();
+  const publishedStr = proj.architectureDiagram ? JSON.stringify({nodes:proj.architectureDiagram.nodes||[], edges:proj.architectureDiagram.edges||[]}) : JSON.stringify({nodes:[],edges:[]});
+  const draftStr = localDraft ? JSON.stringify({nodes:localDraft.nodes||[], edges:localDraft.edges||[]}) : null;
+
+  if(localDraft && draftStr !== publishedStr){
+    loadDiagramIntoState(localDraft);
+    markDirty();
+    showDraftBanner(localDraft.savedAt);
+  } else {
+    loadDiagramIntoState(proj.architectureDiagram);
+    if(proj.architectureDiagram){
+      markClean('Published ' + formatDateTime(proj.architectureDiagram.updatedAt) + (proj.architectureDiagram.updatedBy ? ' by ' + proj.architectureDiagram.updatedBy : ''));
+    } else {
+      document.getElementById('saveDot').className = 'savedot';
+      document.getElementById('topSaveState').textContent = 'Not published yet';
+    }
+  }
+  fitToScreen();
+}
+
+boot();
+</script>
+</body>
+</html>
