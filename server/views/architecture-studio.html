@@ -172,6 +172,7 @@ svg{ display:block; }
 }
 .tb-icon-btn:hover{ background:var(--surface-2); color:var(--text); }
 .tb-icon-btn.active{ background:var(--accent-soft); color:var(--accent); }
+.tb-icon-btn:active{ transform:scale(.92); }
 /* Undo/Redo (and any other icon button) had no :disabled treatment, so a
    disabled button still rendered at full opacity with a pointer cursor and
    still lit up on hover — it looked clickable and "broken" rather than
@@ -179,10 +180,22 @@ svg{ display:block; }
    when both Undo and Redo start disabled. */
 .tb-icon-btn:disabled{ opacity:.32; cursor:not-allowed; }
 .tb-icon-btn:disabled:hover{ background:none; color:var(--text-dim); }
-.tb-group{ display:flex; align-items:center; background:var(--surface-2); border:1px solid var(--border); border-radius:9px; overflow:hidden; }
-.tb-group .tb-icon-btn:hover{ background:var(--surface-3, rgba(255,255,255,.06)); }
+.tb-icon-btn:disabled:active{ transform:none; }
+/* Undo/Redo group: was a flat, unshadowed outline box that visually
+   disappeared into the toolbar — same weight as every other control, no
+   depth, nothing to make it read as a distinct, purposeful cluster. Gave it
+   its own raised surface (background + shadow, like a segmented control in
+   Figma/Linear) so it reads as one cohesive unit rather than two loose
+   buttons touching by accident. */
+.tb-group{
+  display:flex; align-items:center; background:var(--surface-2);
+  border:1px solid var(--border); border-radius:10px; overflow:hidden;
+  box-shadow:0 1px 2px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.03);
+}
+.tb-group .tb-icon-btn{ width:30px; height:30px; border-radius:0; }
+.tb-group .tb-icon-btn:hover{ background:var(--surface-hover); }
 .tb-group-btn{ border-radius:0; }
-.tb-group-div{ width:1px; height:18px; background:var(--border); flex:none; }
+.tb-group-div{ width:1px; height:16px; background:var(--border-strong); flex:none; }
 
 .btn-publish{
   display:flex; align-items:center; gap:7px; padding:8px 16px; border-radius:10px;
@@ -216,6 +229,29 @@ svg{ display:block; }
   transition:margin-left .18s ease;
 }
 .palette.collapsed{ margin-left:-268px; }
+/* Sidebar collapse handle. Previous version was a plain 32px square button
+   with position:absolute; left:8px; top:64px inline styles — a floating box
+   dropped on top of the palette's own content (it overlapped the search
+   row, see screenshot), it never moved when the panel collapsed, and its
+   icon (a static two-rect glyph) never indicated which way it would toggle.
+   This version is a small tab attached to the panel's right edge, half
+   overlapping the border the way collapse handles work in VS Code / Notion
+   / Figma: it slides with the panel and its chevron rotates 180° so it
+   always points in the direction the next click will move things. */
+.palette-toggle{
+  position:absolute; z-index:16; top:72px; left:257px;
+  width:20px; height:46px; border-radius:7px;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--surface-solid); border:1px solid var(--border);
+  color:var(--text-faint);
+  box-shadow:0 2px 8px -2px rgba(0,0,0,.35), 0 0 0 1px rgba(0,0,0,.02);
+  transition:left .18s ease, background .15s, color .15s, border-color .15s, box-shadow .15s;
+}
+.palette-toggle:hover{ background:var(--surface-hover); color:var(--accent); border-color:var(--accent); box-shadow:0 2px 12px -1px rgba(34,229,255,.3); }
+.palette-toggle:active{ transform:scale(.94); }
+.palette-toggle svg{ transition:transform .18s ease; }
+.palette.collapsed + .palette-toggle{ left:8px; }
+.palette.collapsed + .palette-toggle svg{ transform:rotate(180deg); }
 .palette-head{ padding:14px 14px 10px; }
 .palette-head h3{ font-family:var(--display); font-size:13px; font-weight:700; margin-bottom:2px; }
 .palette-head .hint{ font-size:11px; color:var(--text-faint); }
@@ -510,9 +546,10 @@ svg{ display:block; }
       </div>
       <div class="palette-body" id="paletteBody"></div>
     </div>
-    <button type="button" class="tb-icon-btn" id="btnTogglePalette" title="Toggle component library" style="position:absolute; left:8px; top:64px; z-index:16; background:var(--surface); border:1px solid var(--border); backdrop-filter:var(--glass-blur);">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="18" rx="1.5"></rect><path d="M14 3h7v18h-7z" opacity=".35"></path></svg>
+    <button type="button" class="palette-toggle" id="btnTogglePalette" title="Hide component library">
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>
     </button>
+
 
     <!-- ===================== CANVAS ===================== -->
     <div class="canvas-wrap" id="canvasWrap">
@@ -1554,7 +1591,8 @@ document.getElementById('btnDuplicate').addEventListener('click', duplicateSelec
 document.getElementById('btnUndo').addEventListener('click', undo);
 document.getElementById('btnRedo').addEventListener('click', redo);
 document.getElementById('btnTogglePalette').addEventListener('click', ()=>{
-  document.getElementById('palette').classList.toggle('collapsed');
+  const collapsed = document.getElementById('palette').classList.toggle('collapsed');
+  document.getElementById('btnTogglePalette').title = collapsed ? 'Show component library' : 'Hide component library';
 });
 
 window.addEventListener('keydown', (e)=>{
