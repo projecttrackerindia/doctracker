@@ -7,6 +7,14 @@ if (!process.env.DATABASE_URL) {
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  // Was unset before (pg's default is 10). At higher concurrency — several
+  // Node instances each wanting their own pool — 10 per instance adds up
+  // fast on Postgres's own connection ceiling. Put a connection pooler
+  // (PgBouncer, in transaction mode) in front of Postgres when running more
+  // than one instance, and size this per-instance pool to what the pooler
+  // expects, not to Postgres's raw max_connections. See DB_POOL_MAX in the
+  // Railway deployment notes.
+  max: parseInt(process.env.DB_POOL_MAX || '10', 10),
 });
 
 async function initDb() {

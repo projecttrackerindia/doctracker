@@ -8434,7 +8434,7 @@ function renderProjectDocsList(proj){
         <div class="doc-row-meta">${formatFileSize(d.size)} · Uploaded ${formatDateTime(d.uploadedAt)}${d.uploadedBy ? ' by ' + escapeHtml(d.uploadedBy) : ''}</div>
       </div>
       <div class="doc-row-actions">
-        <a class="icon-btn" href="${d.dataUrl}" download="${escapeHtml(d.name)}" title="Download">${ICON_DOWNLOAD}</a>
+        <a class="icon-btn" href="${d.dataUrl ? d.dataUrl : `/api/workspace/projects/${proj.id}/attachments/${d.id}`}" download="${escapeHtml(d.name)}" title="Download">${ICON_DOWNLOAD}</a>
         <span class="icon-btn del" data-del-doc="${d.id}" title="Delete">${ICON_TRASH}</span>
       </div>
     </div>`;

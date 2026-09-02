@@ -3,6 +3,8 @@ const { pool } = require('../db');
 const { authenticate } = require('../middleware/authGuard');
 const { recordAuditEvent } = require('../auditService');
 const dataCrypto = require('../crypto');
+const storage = require('../storage');
+const cache = require('../cache');
 
 const router = express.Router();
 router.use(authenticate);
@@ -24,8 +26,12 @@ function attachmentSizeError(projectData) {
   const attachments = Array.isArray(projectData && projectData.attachments) ? projectData.attachments : [];
   let total = 0;
   for (const att of attachments) {
-    const len = att && typeof att.dataUrl === 'string' ? att.dataUrl.length : 0;
-    if (len > MAX_ATTACHMENT_BYTES) {
+    // Inline (not-yet-offloaded) attachments are measured by their raw
+    // dataUrl length; already-offloaded ones (storageKey, no dataUrl) are
+    // measured by their recorded `size` so the per-project quota still
+    // means something once object storage is in use.
+    const len = att && typeof att.dataUrl === 'string' ? att.dataUrl.length : (att && Number(att.size)) || 0;
+    if (att && typeof att.dataUrl === 'string' && len > MAX_ATTACHMENT_BYTES) {
       return `Attachment "${(att && att.name) || 'file'}" is too large (max ${Math.floor(MAX_ATTACHMENT_BYTES / (1024 * 1024))}MB per file).`;
     }
     total += len;
@@ -43,6 +49,34 @@ function attachmentSizeError(projectData) {
 function computeHasPublicEndpoint(projectData) {
   return Array.isArray(projectData && projectData.endpoints)
     && projectData.endpoints.some((ep) => ep && ep.visibility === 'public');
+}
+
+// Moves any newly-uploaded attachment (still carrying its raw base64
+// `dataUrl` from the browser) out of the project blob and into S3-compatible
+// object storage — see storage.js for why. Attachments already offloaded on
+// a previous save (no `dataUrl`, just a `storageKey`) are left untouched. If
+// object storage isn't configured (storage.isEnabled() === false), this is a
+// no-op and attachments keep working exactly as before, inline.
+async function offloadAttachments(projectData, projectId) {
+  if (!storage.isEnabled()) return;
+  const attachments = Array.isArray(projectData.attachments) ? projectData.attachments : [];
+  for (let i = 0; i < attachments.length; i++) {
+    const att = attachments[i];
+    if (!att || typeof att.dataUrl !== 'string') continue; // already offloaded, or malformed — leave alone
+    const match = /^data:([^;]+);base64,(.+)$/s.exec(att.dataUrl);
+    const buffer = Buffer.from(match ? match[2] : att.dataUrl, 'base64');
+    const uploaded = await storage.uploadAttachment({
+      projectId,
+      name: att.name,
+      contentType: att.type || (match ? match[1] : 'application/octet-stream'),
+      buffer,
+    });
+    attachments[i] = {
+      id: att.id, name: att.name, size: att.size, type: att.type,
+      uploadedAt: att.uploadedAt, uploadedBy: att.uploadedBy,
+      storageKey: uploaded.storageKey,
+    };
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -173,6 +207,13 @@ router.get('/', async (req, res) => {
     const userId = req.authUser.sub;
     const org = req.authUser.organisation;
 
+    // Short-TTL cache (see cache.js) — GET /api/workspace is called on every
+    // dashboard load and usually returns the same thing it did moments ago.
+    // A cache miss (including when Redis isn't configured at all) falls
+    // straight through to the same query that always ran here.
+    const cached = await cache.getWorkspace(org, userId);
+    if (cached) return res.json(cached);
+
     // `data` is encrypted, so we can't ask Postgres to peek inside it with a
     // jsonb path EXISTS check — but `has_public_endpoint` is a plaintext
     // column kept in sync on every write (see computeHasPublicEndpoint()),
@@ -205,12 +246,14 @@ router.get('/', async (req, res) => {
     // Audit log is no longer part of this payload — it's fetched separately
     // from GET /api/audit/events, which returns server-authoritative entries
     // from the audit_logs table instead of a client-writable JSONB blob.
-    res.json({
+    const payload = {
       projects,
       environments: decryptOrgBlob(ws.environments_enc, ws.environments, org, 'environments', []),
       requestHistory: decryptOrgBlob(ws.request_history_enc, ws.request_history, org, 'request_history', {}),
       customFlowDirections: ws.custom_flow_directions || [],
-    });
+    };
+    await cache.setWorkspace(org, userId, payload);
+    res.json(payload);
   } catch (err) {
     console.error('GET /api/workspace failed:', err);
     res.status(500).json({ error: 'Could not load workspace.' });
@@ -256,6 +299,7 @@ router.put('/projects', async (req, res) => {
         await client.query('ROLLBACK');
         return res.status(400).json({ error: sizeError, projectId: id });
       }
+      await offloadAttachments(dataToStore, id);
 
       const hasPublicEndpoint = computeHasPublicEndpoint(dataToStore);
       const { legacyPlaceholder, enc, version } = encryptProjectData(dataToStore, id);
@@ -276,6 +320,7 @@ router.put('/projects', async (req, res) => {
       saved.push(id);
     }
     await client.query('COMMIT');
+    await cache.invalidateOrg(org);
     res.json({ ok: true, saved, skipped });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -310,6 +355,7 @@ router.patch('/projects/:id/visibility', async (req, res) => {
        WHERE id = $5 AND owner_id = $6`,
       [visibility, legacyPlaceholder, enc, version, req.params.id, userId]
     );
+    await cache.invalidateOrg(req.authUser.organisation);
     res.json({ ok: true });
   } catch (err) {
     console.error('PATCH visibility failed:', err);
@@ -325,10 +371,51 @@ router.delete('/projects/:id', async (req, res) => {
       [req.params.id, req.authUser.sub]
     );
     if (!rows.length) return res.status(404).json({ error: 'Project not found, or you are not the owner.' });
+    await cache.invalidateOrg(req.authUser.organisation);
     res.json({ ok: true });
   } catch (err) {
     console.error('DELETE project failed:', err);
     res.status(500).json({ error: 'Could not delete project.' });
+  }
+});
+
+// GET /api/workspace/projects/:id/attachments/:docId — streams one attachment
+// back to the browser. Needed now that attachments live in object storage
+// instead of as an inline dataUrl the browser could link to directly (see
+// storage.js). Same visibility rule as reading the project itself: the
+// owner, or anyone if the project is public.
+router.get('/projects/:id/attachments/:docId', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, owner_id, visibility, data, data_enc FROM projects WHERE id = $1',
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Project not found.' });
+    const row = rows[0];
+    if (row.owner_id !== req.authUser.sub && row.visibility !== 'public') {
+      return res.status(403).json({ error: 'This project is private.' });
+    }
+    const data = decryptProjectData(row);
+    const doc = (data.attachments || []).find((a) => a && a.id === req.params.docId);
+    if (!doc) return res.status(404).json({ error: 'Attachment not found.' });
+
+    let buffer;
+    if (doc.storageKey) {
+      if (!storage.isEnabled()) return res.status(500).json({ error: 'Object storage is not configured on this server.' });
+      buffer = await storage.downloadAttachment({ projectId: row.id, storageKey: doc.storageKey });
+    } else if (typeof doc.dataUrl === 'string') {
+      const match = /^data:([^;]+);base64,(.+)$/s.exec(doc.dataUrl);
+      buffer = Buffer.from(match ? match[2] : doc.dataUrl, 'base64');
+    } else {
+      return res.status(404).json({ error: 'Attachment has no stored content.' });
+    }
+
+    res.setHeader('Content-Type', doc.type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${(doc.name || 'file').replace(/"/g, '')}"`);
+    res.send(buffer);
+  } catch (err) {
+    console.error('GET attachment failed:', err);
+    res.status(500).json({ error: 'Could not load attachment.' });
   }
 });
 
@@ -431,6 +518,7 @@ router.post('/migrate', async (req, res) => {
         await client.query('ROLLBACK');
         return res.status(400).json({ error: sizeError, projectId: oldId });
       }
+      await offloadAttachments(dataToStore, id);
 
       const hasPublicEndpoint = computeHasPublicEndpoint(dataToStore);
       const { legacyPlaceholder, enc, version } = encryptProjectData(dataToStore, id);
@@ -516,6 +604,7 @@ router.post('/migrate', async (req, res) => {
     }
 
     await client.query('COMMIT');
+    await cache.invalidateOrg(org);
     res.json({ ok: true, imported });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -710,6 +799,7 @@ router.post('/projects/:id/promote', async (req, res) => {
     }
 
     await client.query('COMMIT');
+    await cache.invalidateOrg(project.organisation);
 
     await recordAuditEvent(req.authUser, req, {
       action: 'PROJECT_PROMOTED',
