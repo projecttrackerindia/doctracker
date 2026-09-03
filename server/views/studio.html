@@ -1242,7 +1242,12 @@ pre.code-block{
   overflow-y:auto; padding:26px; box-shadow:var(--shadow-modal);
 }
 .modal.wide{ width:1040px; max-width:96vw; }
-.modal.xwide{ width:1180px; max-width:96vw; max-height:92vh; padding:32px 36px; }
+/* min-height keeps the dialog a consistent size across tabs — otherwise a
+   short tab like Architecture (a couple lines + one button) collapses the
+   whole modal to a fraction of General/Release Pipeline's height, and the
+   dialog visibly jumps size every time you switch tabs. */
+.modal.xwide{ width:1180px; max-width:96vw; max-height:92vh; min-height:600px; padding:32px 36px; display:flex; flex-direction:column; }
+.modal.xwide .modal-pane.active{ flex:1; }
 .field-grid-2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
 .field-grid-3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
 /* project description toolbar (Overview / Flow / Authentication quick-insert) */
@@ -2149,6 +2154,145 @@ pre.json-raw{ max-height:360px; margin:0; }
       </div>
     </div>
 
+    <!-- Project-level details — the same fields as Project settings ▸
+         General (minus the name, already covered by "Project / API name"
+         above). Editing them here updates that same shared project record,
+         so this modal can be the one place to create or edit everything. -->
+    <div class="builder-section">
+      <div class="builder-head">
+        <span class="builder-title">Project details <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— shared across every endpoint in this project, same as Project settings ▸ General</span></span>
+      </div>
+      <div class="builder-body" style="padding:14px 14px 4px;">
+        <div class="field-grid-2">
+          <div class="field">
+            <label>Lifecycle stage</label>
+            <select id="mLifecycle"></select>
+          </div>
+          <div class="field">
+            <label>Owner</label>
+            <input type="text" id="mOwner" placeholder="e.g. Jane Smith">
+          </div>
+        </div>
+        <div class="field-grid-2">
+          <div class="field">
+            <label>Team</label>
+            <input type="text" id="mTeam" placeholder="e.g. Payments Platform">
+          </div>
+          <div class="field">
+            <label>Terms of service URL <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— optional</span></label>
+            <input type="text" id="mTerms" placeholder="https://example.com/terms">
+          </div>
+        </div>
+        <div class="field-grid-2">
+          <div class="field">
+            <label>Contact name <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— optional</span></label>
+            <input type="text" id="mContactName" placeholder="e.g. Developer Support">
+          </div>
+          <div class="field">
+            <label>Contact email <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— optional</span></label>
+            <input type="text" id="mContactEmail" placeholder="e.g. dev-support@example.com">
+          </div>
+        </div>
+        <div class="field-grid-2">
+          <div class="field">
+            <label>License name <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— optional</span></label>
+            <input type="text" id="mLicenseName" placeholder="e.g. Proprietary">
+          </div>
+          <div class="field">
+            <label>License URL <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— optional</span></label>
+            <input type="text" id="mLicenseUrl" placeholder="https://example.com/license">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Authentication — the same fields as Project settings ▸ Auth. One
+         project has one shared auth config, so editing it here updates
+         that same config rather than a separate per-endpoint copy. -->
+    <div class="builder-section">
+      <div class="builder-head">
+        <span class="builder-title">Authentication <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— shared across every endpoint in this project, same as Project settings ▸ Auth</span></span>
+      </div>
+      <div class="builder-body" style="padding:14px 14px 4px;">
+        <div class="field">
+          <label>Auth type</label>
+          <input type="text" id="mAuthType" placeholder="e.g. Bearer token, API key, JWT">
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Method</label>
+            <select id="mAuthMethod">
+              <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+            </select>
+          </div>
+          <div class="field" style="flex:2">
+            <label>Endpoint / path</label>
+            <input type="text" id="mAuthPath" placeholder="/auth/jwt/token">
+          </div>
+        </div>
+        <div class="field">
+          <label>Header name</label>
+          <input type="text" id="mAuthHeader" placeholder="Authorization">
+        </div>
+        <div class="field">
+          <label>Notes</label>
+          <textarea id="mAuthDesc" placeholder="How to obtain a token, expiry, scopes…" style="min-height:56px; font-family:var(--sans);"></textarea>
+        </div>
+
+        <div class="builder-section">
+          <div class="builder-head">
+            <span class="builder-title">Request parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what's needed to authenticate</span></span>
+            <div class="auth-param-toolbar">
+              <button type="button" class="builder-add" id="addMAuthReqRow">+ Add parameter</button>
+            </div>
+          </div>
+          <div class="builder-body">
+            <table class="dyn-table req-table">
+              <thead><tr><th class="col-name">Name</th><th class="col-type">Type</th><th class="col-req">Required</th><th class="col-example">Example</th><th class="col-desc">Description</th><th class="col-del"></th></tr></thead>
+              <tbody id="mAuthReqRows"></tbody>
+            </table>
+            <div class="json-preview-wrap">
+              <div class="json-preview-label">
+                <span>Request JSON (default example) <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— auto-generated, editable</span></span>
+                <button type="button" class="ghost icon" data-auth-json-regen="req" data-auth-scope="endpoint" title="Regenerate from parameters" style="width:auto;padding:3px 8px;font-size:10.5px;">↻ Regenerate</button>
+              </div>
+              <textarea class="mono json-preview-editable" id="mAuthReqJsonPreview" placeholder='{ "user": "string", "password": "string" }'></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div class="builder-section">
+          <div class="builder-head">
+            <span class="builder-title">Response parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what auth returns (token, expiry…)</span></span>
+            <div class="auth-param-toolbar">
+              <button type="button" class="builder-add" id="addMAuthRespRow">+ Add parameter</button>
+            </div>
+          </div>
+          <div class="builder-body">
+            <table class="dyn-table req-table">
+              <thead><tr><th class="col-name">Name</th><th class="col-type">Type</th><th class="col-req">Required</th><th class="col-example">Example</th><th class="col-desc">Description</th><th class="col-del"></th></tr></thead>
+              <tbody id="mAuthRespRows"></tbody>
+            </table>
+            <div class="json-preview-wrap">
+              <div class="json-preview-label">
+                <span>Response JSON (default example) <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— auto-generated, editable</span></span>
+                <button type="button" class="ghost icon" data-auth-json-regen="resp" data-auth-scope="endpoint" title="Regenerate from parameters" style="width:auto;padding:3px 8px;font-size:10.5px;">↻ Regenerate</button>
+              </div>
+              <textarea class="mono json-preview-editable" id="mAuthRespJsonPreview" placeholder='{ "token": "string", "expiration": "string" }'></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div class="field auth-include-field">
+          <label>Include auth parameters in</label>
+          <div class="auth-include-row">
+            <label class="checkbox-row"><input type="checkbox" id="mAuthIncludeDocs"> Documentation <span class="item-sub">Overview page &amp; PDF export</span></label>
+            <label class="checkbox-row"><input type="checkbox" id="mAuthIncludeSwagger"> Swagger / OpenAPI <span class="item-sub">Generated spec &amp; security scheme</span></label>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Request parameters -->
     <div class="builder-section">
       <div class="builder-head">
@@ -2370,10 +2514,9 @@ pre.json-raw{ max-height:360px; margin:0; }
 <div class="modal-overlay" id="projectModal">
   <div class="modal xwide">
     <h2>Project settings</h2>
-    <div class="modal-sub" id="projSubtitle">Configure environments and authentication.</div>
+    <div class="modal-sub" id="projSubtitle">Configure this project's details and authentication.</div>
     <div class="modal-tabs">
       <div class="modal-tab active" data-mtab="general">General</div>
-      <div class="modal-tab" data-mtab="envs">Environments</div>
       <div class="modal-tab" data-mtab="release">Release Pipeline</div>
       <div class="modal-tab" data-mtab="auth">Auth</div>
       <div class="modal-tab" data-mtab="docs">Documents</div>
@@ -2463,11 +2606,6 @@ pre.json-raw{ max-height:360px; margin:0; }
           <input type="text" id="pgLicenseUrl" placeholder="https://example.com/license">
         </div>
       </div>
-    </div>
-    <div class="modal-pane" data-mpane="envs">
-      <div class="hint" style="margin-top:0;">Base URL used for this project in each environment. Powers the code samples and request URL shown for every endpoint.</div>
-      <div class="env-settings-summary" id="envSettingsSummary"></div>
-      <div id="envInputs" class="env-settings-grid"></div>
     </div>
     <div class="modal-pane" data-mpane="release">
       <div class="hint" style="margin-top:0;">Pick a From and To stage to see exactly what changed, then merge — like a diff before a promote. Changes move forward one stage at a time; each stage keeps its own frozen, versioned copy until it's promoted again.</div>
@@ -7924,6 +8062,55 @@ document.getElementById('addReqExample').addEventListener('click', ()=>{
 
 let editingEndpointId = null;
 
+// Populates the endpoint modal's "Project details" and "Authentication"
+// sections from a real project record — used both when editing an existing
+// endpoint and when the typed project name in "Add endpoint" matches one.
+// Mirrors openProjectModal's own hydration line-for-line so the two surfaces
+// never drift apart.
+function hydrateEndpointProjectFields(proj){
+  document.getElementById('mLifecycle').innerHTML = LIFECYCLE_STAGES.map(s=>`<option value="${s}">${s}</option>`).join('');
+  document.getElementById('mLifecycle').value = proj.lifecycle || 'PRODUCTION';
+  document.getElementById('mOwner').value = proj.owner || '';
+  document.getElementById('mTeam').value = proj.team || '';
+  document.getElementById('mTerms').value = proj.termsOfService || '';
+  document.getElementById('mContactName').value = (proj.contact && proj.contact.name) || '';
+  document.getElementById('mContactEmail').value = (proj.contact && proj.contact.email) || '';
+  document.getElementById('mLicenseName').value = (proj.license && proj.license.name) || '';
+  document.getElementById('mLicenseUrl').value = (proj.license && proj.license.url) || '';
+
+  document.getElementById('mAuthType').value = (proj.auth && proj.auth.type) || '';
+  document.getElementById('mAuthMethod').value = (proj.auth && proj.auth.method) || 'POST';
+  document.getElementById('mAuthPath').value = (proj.auth && proj.auth.path) || '';
+  document.getElementById('mAuthHeader').value = (proj.auth && proj.auth.headerName) || '';
+  document.getElementById('mAuthDesc').value = (proj.auth && proj.auth.description) || '';
+  document.getElementById('mAuthIncludeDocs').checked = !!(proj.auth && proj.auth.includeInDocs);
+  document.getElementById('mAuthIncludeSwagger').checked = !!(proj.auth && proj.auth.includeInSwagger);
+  authParamsStore.endpoint.req = cloneAuthParams(proj.auth && proj.auth.requestParams);
+  authParamsStore.endpoint.resp = cloneAuthParams(proj.auth && proj.auth.responseParams);
+  renderAuthParamRows('endpoint', 'req');
+  renderAuthParamRows('endpoint', 'resp');
+  ['req','resp'].forEach(kind=>{
+    const saved = kind === 'req' ? (proj.auth && proj.auth.requestExample) : (proj.auth && proj.auth.responseExample);
+    const ta = document.getElementById(kind === 'req' ? 'mAuthReqJsonPreview' : 'mAuthRespJsonPreview');
+    if(ta) ta.value = saved || ta.value;
+  });
+}
+
+// Blank-slate version for "Add endpoint" when no matching project exists yet.
+function clearEndpointProjectFields(){
+  document.getElementById('mLifecycle').innerHTML = LIFECYCLE_STAGES.map(s=>`<option value="${s}">${s}</option>`).join('');
+  document.getElementById('mLifecycle').value = 'PRODUCTION';
+  ['mOwner','mTeam','mTerms','mContactName','mContactEmail','mLicenseName','mLicenseUrl',
+   'mAuthType','mAuthPath','mAuthHeader','mAuthDesc'].forEach(id=>document.getElementById(id).value = '');
+  document.getElementById('mAuthMethod').value = 'POST';
+  document.getElementById('mAuthIncludeDocs').checked = false;
+  document.getElementById('mAuthIncludeSwagger').checked = false;
+  authParamsStore.endpoint.req = [];
+  authParamsStore.endpoint.resp = [];
+  renderAuthParamRows('endpoint', 'req');
+  renderAuthParamRows('endpoint', 'resp');
+}
+
 function openManualModal(epId){
   if(!canEditHere()){ toast(isViewingDraftEnv() ? `Your role (${roleMeta(state.authorRole).label}) is read-only` : `Switch to ${envMeta(draftEnvId()).label} to make changes`); return; }
   editingEndpointId = epId || null;
@@ -7946,6 +8133,7 @@ function openManualModal(epId){
     document.getElementById('mDesc').value = ep.description || '';
     document.getElementById('mApiDesc').value = proj.description || '';
     document.getElementById('mVisibility').value = ep.visibility === 'public' ? 'public' : 'private';
+    hydrateEndpointProjectFields(proj);
 
     builderParams = (ep.parameters||[]).map(p=>({ id:uid(), name:p.name||'', type:normalizeTypeLabel(p.type), required:!!p.required, example: p.example!==undefined?String(p.example):'', description:p.description||'' }));
     builderHeaders = (ep.headers||[]).map(p=>({ id:uid(), name:p.name||'', type:normalizeTypeLabel(p.type), required:!!p.required, example: p.example!==undefined?String(p.example):'', description:p.description||'' }));
@@ -7964,11 +8152,13 @@ function openManualModal(epId){
     document.getElementById('mMethod').value = 'GET';
     document.getElementById('mContentType').value = 'application/json';
     document.getElementById('mVisibility').value = 'private';
+    clearEndpointProjectFields();
     if(state.selected && state.selected.type==='overview'){
       const proj = state.projects[state.selected.projectId];
       if(proj){
         document.getElementById('mProject').value = proj.name;
         document.getElementById('mApiDesc').value = proj.description || '';
+        hydrateEndpointProjectFields(proj);
       }
     }
     builderParams = [];
@@ -8007,11 +8197,43 @@ function saveManualEndpoint(){
   const fields = gatherFormAsEndpoint();
   fields.path = path;
 
-  // The API-level description lives on the project, not the endpoint — persist
-  // it here so it always lands in info.description of every generated YAML,
-  // no separate trip to Project settings required.
+  // The API-level description and all "Project details" / "Authentication"
+  // fields below live on the project, not the endpoint — persisting them
+  // here means this modal is the one place to create or edit everything,
+  // same shared record Project settings ▸ General/Auth reads and writes.
   const apiDesc = document.getElementById('mApiDesc').value.trim();
   if(apiDesc) proj.description = apiDesc;
+
+  if(LIFECYCLE_STAGES.includes(document.getElementById('mLifecycle').value)){
+    proj.lifecycle = document.getElementById('mLifecycle').value;
+  }
+  proj.owner = document.getElementById('mOwner').value.trim();
+  proj.team = document.getElementById('mTeam').value.trim();
+  proj.termsOfService = document.getElementById('mTerms').value.trim();
+  proj.contact = {
+    name: document.getElementById('mContactName').value.trim(),
+    email: document.getElementById('mContactEmail').value.trim(),
+  };
+  proj.license = {
+    name: document.getElementById('mLicenseName').value.trim(),
+    url: document.getElementById('mLicenseUrl').value.trim(),
+  };
+  const cleanMAuthParams = (list)=> list.filter(r=>r.name.trim()).map(r=>(
+    { name:r.name.trim(), type:r.type, required:!!r.required, example:r.example.trim(), description:r.description.trim() }
+  ));
+  proj.auth = {
+    type: document.getElementById('mAuthType').value.trim(),
+    method: document.getElementById('mAuthMethod').value,
+    path: document.getElementById('mAuthPath').value.trim(),
+    headerName: document.getElementById('mAuthHeader').value.trim(),
+    description: document.getElementById('mAuthDesc').value.trim(),
+    requestParams: cleanMAuthParams(authParamsStore.endpoint.req),
+    responseParams: cleanMAuthParams(authParamsStore.endpoint.resp),
+    requestExample: (document.getElementById('mAuthReqJsonPreview').value || '').trim(),
+    responseExample: (document.getElementById('mAuthRespJsonPreview').value || '').trim(),
+    includeInDocs: document.getElementById('mAuthIncludeDocs').checked,
+    includeInSwagger: document.getElementById('mAuthIncludeSwagger').checked,
+  };
 
   const authorName = ensureAuthorName(true) || 'Unknown';
   const now = new Date().toISOString();
@@ -8102,40 +8324,11 @@ function insertAtCursor(textarea, text){
   textarea.focus();
 }
 
-function updateEnvSettingsSummary(){
-  const total = environments().length;
-  const configured = document.querySelectorAll('#envInputs [data-env-input]').length
-    ? Array.from(document.querySelectorAll('#envInputs [data-env-input]')).filter(i=>i.value.trim()).length
-    : 0;
-  const summary = document.getElementById('envSettingsSummary');
-  if(!summary) return;
-  const pct = total ? Math.round((configured/total)*100) : 0;
-  summary.innerHTML = `<span class="n">${configured}/${total}</span> environments configured
-    <span class="bar"><span class="bar-fill" style="width:${pct}%;"></span></span>`;
-}
-
-function renderEnvSettingsCards(proj){
-  const envInputs = document.getElementById('envInputs');
-  envInputs.innerHTML = environments().map(e=>{
-    const val = proj.environments[e.id] || '';
-    const has = !!val;
-    return `
-    <div class="env-settings-card" style="--esc-accent:${envAccentColor(e.id)};">
-      <div class="esc-head">
-        <div class="esc-label-wrap">
-          <span class="esc-dot"></span>
-          <span class="esc-label">${e.label}</span>
-        </div>
-        <span class="esc-status ${has ? 'set' : 'unset'}" data-esc-status>${has ? 'Configured' : 'Not set'}</span>
-      </div>
-      <div class="esc-body">
-        <input type="text" data-env-input="${e.id}" placeholder="https://api.example.com" value="${escapeHtml(val)}">
-        <button type="button" class="esc-copy" data-env-copy="${e.id}" title="Copy base URL">⧉</button>
-      </div>
-    </div>`;
-  }).join('');
-  updateEnvSettingsSummary();
-}
+/* NOTE: the per-project "Environments" base-URL editor (settings-tab cards +
+   summary bar) was removed along with the Project settings ▸ Environments
+   tab. proj.environments is still read elsewhere (code samples, request
+   URLs, the read-only cards on the Overview page) — it's just no longer
+   editable from this modal. */
 
 /* ---------- Release Pipeline (Project settings ▸ Release Pipeline) ----------
    Server-authoritative: the pipeline order and the "DR mirrors the last
@@ -8334,14 +8527,29 @@ function populateFlowDirectionSelect(selectedId){
 }
 
 /* ---------- Auth tab: request/response parameters (table view only) ---------- */
-let authReqParams = [];
-let authRespParams = [];
-// Tracks the last auto-generated JSON string per box, so we only overwrite the
-// editable textarea when the user hasn't typed their own custom example — the
-// same "auto-generated but you can hand-edit it" behavior as the endpoint's
-// Request JSON box (regenerateRequestJson), just tracked explicitly here since
-// this box doesn't regenerate on every keystroke.
-const authJsonAutoValue = { req: '', resp: '' };
+// Auth's request/response parameter tables are edited from two surfaces now
+// — Project settings ▸ Auth, and the new Authentication section inside the
+// Add/Edit endpoint modal — both of which read from and write to the same
+// underlying `proj.auth`. Everything below is scope-aware ('settings' or
+// 'endpoint') so the two surfaces can each keep their own in-memory rows and
+// DOM elements without colliding, while still saving to the one shared field.
+const authParamsStore = { settings: { req: [], resp: [] }, endpoint: { req: [], resp: [] } };
+// Tracks the last auto-generated JSON string per (scope, box), so we only
+// overwrite the editable textarea when the user hasn't typed their own
+// custom example — the same "auto-generated but you can hand-edit it"
+// behavior as the endpoint's Request JSON box (regenerateRequestJson), just
+// tracked explicitly here since these boxes don't regenerate on every
+// keystroke.
+const authJsonAutoValue = { settings: { req: '', resp: '' }, endpoint: { req: '', resp: '' } };
+
+function authRowsElId(scope, kind){
+  if(scope === 'endpoint') return kind === 'req' ? 'mAuthReqRows' : 'mAuthRespRows';
+  return kind === 'req' ? 'authReqRows' : 'authRespRows';
+}
+function authJsonElId(scope, kind){
+  if(scope === 'endpoint') return kind === 'req' ? 'mAuthReqJsonPreview' : 'mAuthRespJsonPreview';
+  return kind === 'req' ? 'authReqJsonPreview' : 'authRespJsonPreview';
+}
 
 function newAuthParamRow(){ return { id:uid(), name:'', type:'String', required:false, example:'', description:'' }; }
 
@@ -8352,9 +8560,9 @@ function cloneAuthParams(list){
   }));
 }
 
-function renderAuthParamRows(kind){
-  const rows = kind === 'req' ? authReqParams : authRespParams;
-  const tbody = document.getElementById(kind === 'req' ? 'authReqRows' : 'authRespRows');
+function renderAuthParamRows(scope, kind){
+  const rows = authParamsStore[scope][kind];
+  const tbody = document.getElementById(authRowsElId(scope, kind));
   if(!tbody) return;
   if(!rows.length){
     tbody.innerHTML = `<tr><td colspan="6" class="dyn-empty-row">No ${kind==='req'?'request':'response'} parameters yet — click "+ Add parameter" to define one.</td></tr>`;
@@ -8374,18 +8582,17 @@ function renderAuthParamRows(kind){
       const row = rows.find(r=>r.id===inp.closest('tr').getAttribute('data-row-id'));
       if(!row) return;
       row[inp.getAttribute('data-f')] = inp.type === 'checkbox' ? inp.checked : inp.value;
-      updateAuthJsonPreview(kind);
+      updateAuthJsonPreview(scope, kind);
     });
   });
   tbody.querySelectorAll('[data-del]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const id = btn.getAttribute('data-del');
-      if(kind === 'req') authReqParams = authReqParams.filter(r=>r.id!==id);
-      else authRespParams = authRespParams.filter(r=>r.id!==id);
-      renderAuthParamRows(kind);
+      authParamsStore[scope][kind] = authParamsStore[scope][kind].filter(r=>r.id!==id);
+      renderAuthParamRows(scope, kind);
     });
   });
-  updateAuthJsonPreview(kind);
+  updateAuthJsonPreview(scope, kind);
 }
 
 // The Request/Response JSON boxes are editable textareas that auto-fill from the
@@ -8394,15 +8601,15 @@ function renderAuthParamRows(kind){
 // clobbering it (same idea as the endpoint's "auto-generated — editable" body,
 // minus the intentional every-keystroke overwrite, since these two textareas
 // don't have a form field driving them the way mBody drives request params).
-function updateAuthJsonPreview(kind){
-  const ta = document.getElementById(kind === 'req' ? 'authReqJsonPreview' : 'authRespJsonPreview');
+function updateAuthJsonPreview(scope, kind){
+  const ta = document.getElementById(authJsonElId(scope, kind));
   if(!ta) return;
-  const rows = kind === 'req' ? authReqParams : authRespParams;
+  const rows = authParamsStore[scope][kind];
   const generated = JSON.stringify(buildJsonFromRows(rows), null, 2);
-  if(ta.value === '' || ta.value === authJsonAutoValue[kind]){
+  if(ta.value === '' || ta.value === authJsonAutoValue[scope][kind]){
     ta.value = generated;
   }
-  authJsonAutoValue[kind] = generated;
+  authJsonAutoValue[scope][kind] = generated;
 }
 
 // Explicit "↻ Regenerate" button — force the box back to what the table says,
@@ -8410,16 +8617,19 @@ function updateAuthJsonPreview(kind){
 document.querySelectorAll('[data-auth-json-regen]').forEach(btn=>{
   btn.addEventListener('click', ()=>{
     const kind = btn.getAttribute('data-auth-json-regen');
-    const rows = kind === 'req' ? authReqParams : authRespParams;
-    const ta = document.getElementById(kind === 'req' ? 'authReqJsonPreview' : 'authRespJsonPreview');
+    const scope = btn.getAttribute('data-auth-scope') || 'settings';
+    const rows = authParamsStore[scope][kind];
+    const ta = document.getElementById(authJsonElId(scope, kind));
     const generated = JSON.stringify(buildJsonFromRows(rows), null, 2);
     if(ta) ta.value = generated;
-    authJsonAutoValue[kind] = generated;
+    authJsonAutoValue[scope][kind] = generated;
   });
 });
 
-document.getElementById('addAuthReqRow').addEventListener('click', ()=>{ authReqParams.push(newAuthParamRow()); renderAuthParamRows('req'); });
-document.getElementById('addAuthRespRow').addEventListener('click', ()=>{ authRespParams.push(newAuthParamRow()); renderAuthParamRows('resp'); });
+document.getElementById('addAuthReqRow').addEventListener('click', ()=>{ authParamsStore.settings.req.push(newAuthParamRow()); renderAuthParamRows('settings','req'); });
+document.getElementById('addAuthRespRow').addEventListener('click', ()=>{ authParamsStore.settings.resp.push(newAuthParamRow()); renderAuthParamRows('settings','resp'); });
+document.getElementById('addMAuthReqRow').addEventListener('click', ()=>{ authParamsStore.endpoint.req.push(newAuthParamRow()); renderAuthParamRows('endpoint','req'); });
+document.getElementById('addMAuthRespRow').addEventListener('click', ()=>{ authParamsStore.endpoint.resp.push(newAuthParamRow()); renderAuthParamRows('endpoint','resp'); });
 
 function openProjectModal(projectId, initialTab){
   if(!isAdmin()){
@@ -8455,10 +8665,10 @@ function openProjectModal(projectId, initialTab){
   document.getElementById('paDesc').value = (proj.auth && proj.auth.description) || '';
   document.getElementById('paIncludeDocs').checked = !!(proj.auth && proj.auth.includeInDocs);
   document.getElementById('paIncludeSwagger').checked = !!(proj.auth && proj.auth.includeInSwagger);
-  authReqParams = cloneAuthParams(proj.auth && proj.auth.requestParams);
-  authRespParams = cloneAuthParams(proj.auth && proj.auth.responseParams);
-  renderAuthParamRows('req');
-  renderAuthParamRows('resp');
+  authParamsStore.settings.req = cloneAuthParams(proj.auth && proj.auth.requestParams);
+  authParamsStore.settings.resp = cloneAuthParams(proj.auth && proj.auth.responseParams);
+  renderAuthParamRows('settings', 'req');
+  renderAuthParamRows('settings', 'resp');
   // Restore any hand-edited JSON example saved with the project (falls back to
   // what renderAuthParamRows already auto-generated above if none was saved).
   ['req','resp'].forEach(kind=>{
@@ -8469,7 +8679,6 @@ function openProjectModal(projectId, initialTab){
     }
   });
 
-  renderEnvSettingsCards(proj);
   renderProjectDocsList(proj);
   renderReleasePipeline(proj);
 
@@ -8628,8 +8837,8 @@ function saveProjectSettings(){
     path: document.getElementById('paPath').value.trim(),
     headerName: document.getElementById('paHeader').value.trim(),
     description: document.getElementById('paDesc').value.trim(),
-    requestParams: cleanAuthParams(authReqParams),
-    responseParams: cleanAuthParams(authRespParams),
+    requestParams: cleanAuthParams(authParamsStore.settings.req),
+    responseParams: cleanAuthParams(authParamsStore.settings.resp),
     // Whatever's currently sitting in the editable JSON boxes — auto-generated
     // or hand-edited, same as how the endpoint's Request JSON body is saved.
     requestExample: (document.getElementById('authReqJsonPreview').value || '').trim(),
@@ -8637,9 +8846,6 @@ function saveProjectSettings(){
     includeInDocs: document.getElementById('paIncludeDocs').checked,
     includeInSwagger: document.getElementById('paIncludeSwagger').checked,
   };
-  document.querySelectorAll('[data-env-input]').forEach(inp=>{
-    proj.environments[inp.getAttribute('data-env-input')] = inp.value.trim();
-  });
   const after = snapshot();
   const changedFields = Object.keys(before).filter(k=>before[k]!==after[k]);
   if(changedFields.length){
@@ -9761,6 +9967,12 @@ document.getElementById('mProject').addEventListener('input', (e)=>{
   if(match && !apiDescEl.value.trim()){
     apiDescEl.value = match.description || '';
   }
+  // Pull in that project's real "Project details" / "Authentication" fields
+  // too, so typing an existing project's name shows its actual shared
+  // settings instead of leaving stale/blank values that would overwrite them
+  // on save.
+  if(match) hydrateEndpointProjectFields(match);
+  else clearEndpointProjectFields();
 });
 document.getElementById('mCancel').addEventListener('click', closeManualModal);
 document.getElementById('mSave').addEventListener('click', saveManualEndpoint);
@@ -9820,29 +10032,9 @@ document.getElementById('flowCustomAdd').addEventListener('click', ()=>{
   toast('Custom flow direction added');
 });
 
-/* ---------- Environments tab: live status + copy-to-clipboard ---------- */
-document.getElementById('envInputs').addEventListener('input', (e)=>{
-  const inp = e.target.closest('[data-env-input]');
-  if(!inp) return;
-  const card = inp.closest('.env-settings-card');
-  const status = card && card.querySelector('[data-esc-status]');
-  const has = !!inp.value.trim();
-  if(status){
-    status.textContent = has ? 'Configured' : 'Not set';
-    status.classList.toggle('set', has);
-    status.classList.toggle('unset', !has);
-  }
-  updateEnvSettingsSummary();
-});
-document.getElementById('envInputs').addEventListener('click', (e)=>{
-  const btn = e.target.closest('[data-env-copy]');
-  if(!btn) return;
-  const id = btn.getAttribute('data-env-copy');
-  const inp = document.querySelector(`[data-env-input="${id}"]`);
-  if(inp && inp.value.trim() && navigator.clipboard){
-    navigator.clipboard.writeText(inp.value.trim()).then(()=> toast('Base URL copied')).catch(()=>{});
-  }
-});
+/* Environments tab (live status + copy-to-clipboard) was removed along with
+   Project settings ▸ Environments — see the note near renderEnvSettingsCards'
+   old location for what still reads proj.environments elsewhere. */
 
 document.querySelectorAll('[data-md-insert]').forEach(btn=>{
   btn.addEventListener('click', ()=>{
