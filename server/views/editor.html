@@ -115,6 +115,14 @@ button{ cursor:pointer; }
 .field input:focus, .field select:focus, .field textarea:focus{ outline:none; border-color:var(--accent); }
 .hint{ font-size:11px; color:var(--text-faint); }
 
+/* Project details / Authentication — shared project-level sections */
+.checkbox-row{ display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text-dim); }
+.checkbox-row input{ width:auto; }
+.flow-custom-builder{ margin-top:10px; padding:12px; background:var(--surface-2); border:1px dashed var(--border-strong); border-radius:8px; }
+.subsection{ margin-top:16px; }
+.subsection-head{ display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.subsection-title{ font-weight:700; font-size:12px; flex:1; }
+
 .badge{ font-family:var(--mono); font-size:10.5px; font-weight:800; padding:2px 7px; border-radius:5px; text-transform:uppercase; }
 .badge.get{ color:var(--get); background:rgba(56,199,147,.14); }
 .badge.post{ color:var(--post); background:rgba(109,141,255,.14); }
@@ -258,6 +266,142 @@ button{ cursor:pointer; }
     </div>
   </div>
 
+  <!-- Project details — shared across every endpoint in this project. Editing
+       these here updates the same project record (Project settings only
+       covers Release Pipeline, Documents and Architecture now). -->
+  <div class="card">
+    <div class="card-head"><div class="card-title">Project details</div></div>
+    <div class="hint" style="margin-bottom:12px;">Shared across every endpoint in this project.</div>
+    <div class="field-grid">
+      <div class="field">
+        <label>Lifecycle stage</label>
+        <select id="fLifecycle"></select>
+      </div>
+      <div class="field">
+        <label>Owner</label>
+        <input type="text" id="fOwner" placeholder="e.g. Jane Smith">
+      </div>
+      <div class="field">
+        <label>Team</label>
+        <input type="text" id="fTeam" placeholder="e.g. Payments Platform">
+      </div>
+      <div class="field">
+        <label>Terms of service URL</label>
+        <input type="text" id="fTerms" placeholder="https://example.com/terms">
+      </div>
+      <div class="field">
+        <label>Contact name</label>
+        <input type="text" id="fContactName" placeholder="e.g. Developer Support">
+      </div>
+      <div class="field">
+        <label>Contact email</label>
+        <input type="text" id="fContactEmail" placeholder="e.g. dev-support@example.com">
+      </div>
+      <div class="field">
+        <label>License name</label>
+        <input type="text" id="fLicenseName" placeholder="e.g. Proprietary">
+      </div>
+      <div class="field">
+        <label>License URL</label>
+        <input type="text" id="fLicenseUrl" placeholder="https://example.com/license">
+      </div>
+      <div class="field span2">
+        <label>Request flow direction <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— how the Request flow diagram on the overview page renders</span></label>
+        <select id="fFlowDirection"></select>
+        <div class="flow-custom-builder hidden" id="fFlowCustomBuilder">
+          <div class="hint" style="margin-bottom:8px;">Describe your own flow direction — it's saved and reusable across every project.</div>
+          <div class="field-grid">
+            <div class="field">
+              <label>Label</label>
+              <input type="text" id="fFlowCustomLabel" placeholder="e.g. Three-way — request, response &amp; async callback">
+            </div>
+            <div class="field">
+              <label>Arrow style</label>
+              <select id="fFlowCustomPattern">
+                <option value="1-way">One-way (forward only)</option>
+                <option value="2-way">Two-way (forward + return)</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+            <button type="button" class="btn-ghost" id="fFlowCustomCancel">Cancel</button>
+            <button type="button" class="btn-primary" id="fFlowCustomAdd">Add direction</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Authentication — shared across every endpoint in this project. One
+       project has one auth config, so editing it here updates that same
+       config rather than a separate per-endpoint copy. -->
+  <div class="card">
+    <div class="card-head"><div class="card-title">Authentication</div></div>
+    <div class="hint" style="margin-bottom:12px;">Shared across every endpoint in this project.</div>
+    <div class="field-grid">
+      <div class="field">
+        <label>Auth type</label>
+        <input type="text" id="fAuthType" placeholder="e.g. Bearer token, API key, JWT">
+      </div>
+      <div class="field">
+        <label>Method</label>
+        <select id="fAuthMethod">
+          <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Endpoint / path</label>
+        <input type="text" id="fAuthPath" placeholder="/auth/jwt/token">
+      </div>
+      <div class="field">
+        <label>Header name</label>
+        <input type="text" id="fAuthHeader" placeholder="Authorization">
+      </div>
+      <div class="field span2">
+        <label>Notes</label>
+        <textarea id="fAuthDesc" placeholder="How to obtain a token, expiry, scopes…" style="min-height:56px; font-family:inherit;"></textarea>
+      </div>
+    </div>
+
+    <div class="subsection">
+      <div class="subsection-head">
+        <div class="subsection-title">Request parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what's needed to authenticate</span></div>
+        <button type="button" class="add-row-btn" id="addAuthReqRow" style="margin-top:0;">+ Add parameter</button>
+      </div>
+      <div id="authReqTableWrap"></div>
+      <div class="json-paste" style="margin-top:10px;">
+        <div class="json-paste-actions" style="justify-content:space-between; margin-top:0; margin-bottom:6px;">
+          <span class="hint">Request JSON (auto-generated — editable)</span>
+          <button type="button" class="add-row-btn" data-auth-json-regen="req" style="margin-top:0;">↻ Regenerate</button>
+        </div>
+        <textarea id="fAuthReqJsonPreview" placeholder='{ "user": "string", "password": "string" }'></textarea>
+      </div>
+    </div>
+
+    <div class="subsection">
+      <div class="subsection-head">
+        <div class="subsection-title">Response parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what auth returns (token, expiry…)</span></div>
+        <button type="button" class="add-row-btn" id="addAuthRespRow" style="margin-top:0;">+ Add parameter</button>
+      </div>
+      <div id="authRespTableWrap"></div>
+      <div class="json-paste" style="margin-top:10px;">
+        <div class="json-paste-actions" style="justify-content:space-between; margin-top:0; margin-bottom:6px;">
+          <span class="hint">Response JSON (auto-generated — editable)</span>
+          <button type="button" class="add-row-btn" data-auth-json-regen="resp" style="margin-top:0;">↻ Regenerate</button>
+        </div>
+        <textarea id="fAuthRespJsonPreview" placeholder='{ "token": "string", "expiration": "string" }'></textarea>
+      </div>
+    </div>
+
+    <div class="field" style="margin-top:16px;">
+      <label>Include auth parameters in</label>
+      <div style="display:flex; gap:18px; margin-top:4px;">
+        <label class="checkbox-row"><input type="checkbox" id="fAuthIncludeDocs"> Documentation</label>
+        <label class="checkbox-row"><input type="checkbox" id="fAuthIncludeSwagger"> Swagger / OpenAPI</label>
+      </div>
+    </div>
+  </div>
+
   <!-- Dynamic blocks render here -->
   <div id="blocksContainer"></div>
 
@@ -380,6 +524,214 @@ function inferFieldsFromJson(obj){
   return rows;
 }
 
+/* ==================== Project details / Authentication ====================
+   Shared across every endpoint in a project — editing these here updates the
+   same project record. Mirrors server/views/studio.html's now-removed
+   Project settings ▸ General/Auth tabs; this editor tab is now the one place
+   these shared project fields are created or edited (Project settings only
+   covers Release Pipeline, Documents and Architecture). */
+const LIFECYCLE_STAGES = ['DRAFT','DESIGN','DEVELOPMENT','SIT','UAT','PRE-PROD','PRODUCTION','DEPRECATED','RETIRED'];
+const FLOW_DIRECTION_PRESETS = [
+  { id:'1-way', label:'One-way — request only (Client → Gateway → Flow → Downstream)', pattern:'1-way' },
+  { id:'2-way', label:'Two-way — request and response (Client ⇄ Gateway ⇄ Flow ⇄ Downstream)', pattern:'2-way' },
+];
+function allFlowDirections(){ return FLOW_DIRECTION_PRESETS.concat((workspace && workspace.customFlowDirections) || []); }
+function populateFlowDirectionSelect(selectedId){
+  const sel = document.getElementById('fFlowDirection');
+  const dirs = allFlowDirections();
+  sel.innerHTML = dirs.map(d=>`<option value="${d.id}">${escapeHtml(d.label)}</option>`).join('')
+    + `<option value="__add_custom__">+ Add custom direction…</option>`;
+  sel.value = dirs.some(d=>d.id===selectedId) ? selectedId : dirs[0].id;
+}
+function saveCustomFlowDirections(list){
+  workspace.customFlowDirections = list;
+  apiSend('PUT', '/custom-flow-directions', { customFlowDirections: list })
+    .catch(e=>{ console.error('Save flow direction presets failed', e); toast('Could not save flow direction presets to the server.'); });
+}
+
+function exampleValueFor(type, example){
+  if(example !== undefined && example !== '' && example !== null) return coerceByType(type, example);
+  switch((type||'String').toLowerCase()){
+    case 'integer': return 0;
+    case 'number': return 0.0;
+    case 'boolean': return true;
+    case 'object': return {};
+    case 'array': return [];
+    default: return 'string';
+  }
+}
+function coerceByType(type, val){
+  switch((type||'String').toLowerCase()){
+    case 'integer': { const n = parseInt(val,10); return isNaN(n) ? 0 : n; }
+    case 'number': { const n = parseFloat(val); return isNaN(n) ? 0 : n; }
+    case 'boolean': return val === true || val === 'true';
+    case 'object': try{ return JSON.parse(val); }catch(e){ return {}; }
+    case 'array': try{ const p = JSON.parse(val); return Array.isArray(p)?p:[val]; }catch(e){ return [val]; }
+    default: return String(val);
+  }
+}
+function buildJsonFromRows(rows){
+  const obj = {};
+  rows.filter(r=>r.name.trim()).forEach(r=>{ obj[r.name.trim()] = exampleValueFor(r.type, r.example); });
+  return obj;
+}
+
+// The project record currently backing these two sections (set on load, or
+// when the typed project name in "New endpoint" matches one) — used so the
+// flow-direction custom-preset builder's Cancel can fall back to the
+// project's saved direction.
+let currentProjectForFields = null;
+const authRows = { req: [], resp: [] };
+const authJsonAutoValue = { req: '', resp: '' };
+
+function newAuthParamRow(){ return { id:uid(), name:'', type:'String', required:false, example:'', description:'' }; }
+function cloneAuthParams(list){
+  return (Array.isArray(list) ? list : []).map(p=>({
+    id: uid(), name: p.name || '', type: PARAM_TYPES.includes(p.type) ? p.type : 'String',
+    required: !!p.required, example: p.example || '', description: p.description || '',
+  }));
+}
+
+function renderAuthRows(kind){
+  const rows = authRows[kind];
+  const wrap = document.getElementById(kind==='req' ? 'authReqTableWrap' : 'authRespTableWrap');
+  wrap.innerHTML = `
+    <div class="rows-table-wrap">
+    <table class="rows-table">
+      <thead><tr>
+        <th style="width:18%;">Name</th><th style="width:12%;">Type</th><th style="width:7%;">Req.</th>
+        <th style="width:20%;">Example</th><th style="width:auto;">Description</th><th style="width:28px;"></th>
+      </tr></thead>
+      <tbody>
+        ${rows.length ? rows.map(r=>`
+          <tr data-row="${r.id}">
+            <td><input type="text" data-f="name" value="${escapeHtml(r.name)}" placeholder="${kind==='req'?'apiKey':'access_token'}"></td>
+            <td><select data-f="type">${PARAM_TYPES.map(t=>`<option ${t===r.type?'selected':''}>${t}</option>`).join('')}</select></td>
+            <td style="text-align:center;"><input type="checkbox" data-f="required" ${r.required?'checked':''}></td>
+            <td><input type="text" data-f="example" value="${escapeHtml(r.example)}" placeholder="e.g. xxxxx"></td>
+            <td><input type="text" data-f="description" value="${escapeHtml(r.description)}" placeholder="What this is for"></td>
+            <td><button type="button" class="row-del" data-del-row="${r.id}" title="Remove row">✕</button></td>
+          </tr>`).join('') : `<tr><td colspan="6" class="hint" style="padding:8px;">No ${kind==='req'?'request':'response'} parameters yet.</td></tr>`}
+      </tbody>
+    </table>
+    </div>`;
+  wrap.querySelectorAll('input,select').forEach(inp=>{
+    const evt = inp.type==='checkbox' ? 'change' : 'input';
+    inp.addEventListener(evt, ()=>{
+      const row = rows.find(r=>r.id===inp.closest('tr').getAttribute('data-row'));
+      if(!row) return;
+      row[inp.getAttribute('data-f')] = inp.type === 'checkbox' ? inp.checked : inp.value;
+      updateAuthJsonPreview(kind);
+    });
+  });
+  wrap.querySelectorAll('[data-del-row]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const id = btn.getAttribute('data-del-row');
+      authRows[kind] = authRows[kind].filter(r=>r.id!==id);
+      renderAuthRows(kind);
+    });
+  });
+  updateAuthJsonPreview(kind);
+}
+
+function updateAuthJsonPreview(kind){
+  const ta = document.getElementById(kind==='req' ? 'fAuthReqJsonPreview' : 'fAuthRespJsonPreview');
+  const generated = JSON.stringify(buildJsonFromRows(authRows[kind]), null, 2);
+  if(ta.value === '' || ta.value === authJsonAutoValue[kind]){ ta.value = generated; }
+  authJsonAutoValue[kind] = generated;
+}
+
+document.getElementById('addAuthReqRow').addEventListener('click', ()=>{ authRows.req.push(newAuthParamRow()); renderAuthRows('req'); });
+document.getElementById('addAuthRespRow').addEventListener('click', ()=>{ authRows.resp.push(newAuthParamRow()); renderAuthRows('resp'); });
+document.querySelectorAll('[data-auth-json-regen]').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    const kind = btn.getAttribute('data-auth-json-regen');
+    const ta = document.getElementById(kind==='req' ? 'fAuthReqJsonPreview' : 'fAuthRespJsonPreview');
+    const generated = JSON.stringify(buildJsonFromRows(authRows[kind]), null, 2);
+    ta.value = generated;
+    authJsonAutoValue[kind] = generated;
+  });
+});
+
+// Populates Project details + Authentication from a real project record —
+// used both when editing an existing endpoint and when the typed project
+// name in "New endpoint" matches one.
+function hydrateProjectFields(proj){
+  currentProjectForFields = proj;
+  document.getElementById('fLifecycle').innerHTML = LIFECYCLE_STAGES.map(s=>`<option value="${s}">${s}</option>`).join('');
+  document.getElementById('fLifecycle').value = proj.lifecycle || 'PRODUCTION';
+  document.getElementById('fOwner').value = proj.owner || '';
+  document.getElementById('fTeam').value = proj.team || '';
+  document.getElementById('fTerms').value = proj.termsOfService || '';
+  document.getElementById('fContactName').value = (proj.contact && proj.contact.name) || '';
+  document.getElementById('fContactEmail').value = (proj.contact && proj.contact.email) || '';
+  document.getElementById('fLicenseName').value = (proj.license && proj.license.name) || '';
+  document.getElementById('fLicenseUrl').value = (proj.license && proj.license.url) || '';
+  populateFlowDirectionSelect(proj.requestFlowDirection || '1-way');
+  document.getElementById('fFlowCustomBuilder').classList.add('hidden');
+
+  document.getElementById('fAuthType').value = (proj.auth && proj.auth.type) || '';
+  document.getElementById('fAuthMethod').value = (proj.auth && proj.auth.method) || 'POST';
+  document.getElementById('fAuthPath').value = (proj.auth && proj.auth.path) || '';
+  document.getElementById('fAuthHeader').value = (proj.auth && proj.auth.headerName) || '';
+  document.getElementById('fAuthDesc').value = (proj.auth && proj.auth.description) || '';
+  document.getElementById('fAuthIncludeDocs').checked = !!(proj.auth && proj.auth.includeInDocs);
+  document.getElementById('fAuthIncludeSwagger').checked = !!(proj.auth && proj.auth.includeInSwagger);
+  authRows.req = cloneAuthParams(proj.auth && proj.auth.requestParams);
+  authRows.resp = cloneAuthParams(proj.auth && proj.auth.responseParams);
+  renderAuthRows('req');
+  renderAuthRows('resp');
+  const savedReq = proj.auth && proj.auth.requestExample;
+  const savedResp = proj.auth && proj.auth.responseExample;
+  if(savedReq) document.getElementById('fAuthReqJsonPreview').value = savedReq;
+  if(savedResp) document.getElementById('fAuthRespJsonPreview').value = savedResp;
+}
+
+// Blank-slate version for "New endpoint" when no matching project exists yet.
+function clearProjectFields(){
+  currentProjectForFields = null;
+  document.getElementById('fLifecycle').innerHTML = LIFECYCLE_STAGES.map(s=>`<option value="${s}">${s}</option>`).join('');
+  document.getElementById('fLifecycle').value = 'PRODUCTION';
+  ['fOwner','fTeam','fTerms','fContactName','fContactEmail','fLicenseName','fLicenseUrl',
+   'fAuthType','fAuthPath','fAuthHeader','fAuthDesc'].forEach(id=>document.getElementById(id).value = '');
+  document.getElementById('fAuthMethod').value = 'POST';
+  document.getElementById('fAuthIncludeDocs').checked = false;
+  document.getElementById('fAuthIncludeSwagger').checked = false;
+  populateFlowDirectionSelect('1-way');
+  document.getElementById('fFlowCustomBuilder').classList.add('hidden');
+  authRows.req = [];
+  authRows.resp = [];
+  renderAuthRows('req');
+  renderAuthRows('resp');
+}
+
+document.getElementById('fFlowDirection').addEventListener('change', (e)=>{
+  const builder = document.getElementById('fFlowCustomBuilder');
+  if(e.target.value === '__add_custom__'){
+    builder.classList.remove('hidden');
+    document.getElementById('fFlowCustomLabel').focus();
+  } else {
+    builder.classList.add('hidden');
+  }
+});
+document.getElementById('fFlowCustomCancel').addEventListener('click', ()=>{
+  document.getElementById('fFlowCustomBuilder').classList.add('hidden');
+  populateFlowDirectionSelect(currentProjectForFields ? (currentProjectForFields.requestFlowDirection || '1-way') : '1-way');
+});
+document.getElementById('fFlowCustomAdd').addEventListener('click', ()=>{
+  const label = document.getElementById('fFlowCustomLabel').value.trim();
+  if(!label){ toast('Enter a label for the custom direction'); return; }
+  const pattern = document.getElementById('fFlowCustomPattern').value === '2-way' ? '2-way' : '1-way';
+  const id = 'custom_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const list = (workspace.customFlowDirections || []).slice();
+  list.push({ id, label, pattern });
+  saveCustomFlowDirections(list);
+  document.getElementById('fFlowCustomBuilder').classList.add('hidden');
+  document.getElementById('fFlowCustomLabel').value = '';
+  populateFlowDirectionSelect(id);
+  toast('Custom flow direction added');
+});
+
 /* ==================== Application state ==================== */
 let workspace = null;          // last-fetched { projects, environments, ... }
 let projectId = null;          // resolved existing project id, or null = new project
@@ -426,6 +778,9 @@ async function boot(){
   if(proj){
     projectId = proj.id;
     document.getElementById('fProject').value = proj.name;
+    hydrateProjectFields(proj);
+  } else {
+    clearProjectFields();
   }
 
   if(ep){
@@ -869,6 +1224,43 @@ async function performSave(force){
     if(!proj){ proj = blankProjectStub(projectName); }
     if(proj._readonly){ toast("You can only view this project — it's public content from someone else in your organisation."); saving=false; document.getElementById('btnSave').disabled=false; return; }
 
+    // Project details / Authentication fields live on the project, not the
+    // endpoint — persisting them here means this editor tab is the one place
+    // these shared project fields are created or edited (Project settings
+    // only covers Release Pipeline, Documents and Architecture now).
+    if(LIFECYCLE_STAGES.includes(document.getElementById('fLifecycle').value)){
+      proj.lifecycle = document.getElementById('fLifecycle').value;
+    }
+    proj.owner = document.getElementById('fOwner').value.trim();
+    proj.team = document.getElementById('fTeam').value.trim();
+    proj.termsOfService = document.getElementById('fTerms').value.trim();
+    proj.contact = {
+      name: document.getElementById('fContactName').value.trim(),
+      email: document.getElementById('fContactEmail').value.trim(),
+    };
+    proj.license = {
+      name: document.getElementById('fLicenseName').value.trim(),
+      url: document.getElementById('fLicenseUrl').value.trim(),
+    };
+    const flowVal = document.getElementById('fFlowDirection').value;
+    proj.requestFlowDirection = (flowVal && flowVal !== '__add_custom__') ? flowVal : (proj.requestFlowDirection || '1-way');
+    const cleanAuthRows = (list)=> list.filter(r=>r.name.trim()).map(r=>(
+      { name:r.name.trim(), type:r.type, required:!!r.required, example:r.example.trim(), description:r.description.trim() }
+    ));
+    proj.auth = {
+      type: document.getElementById('fAuthType').value.trim(),
+      method: document.getElementById('fAuthMethod').value,
+      path: document.getElementById('fAuthPath').value.trim(),
+      headerName: document.getElementById('fAuthHeader').value.trim(),
+      description: document.getElementById('fAuthDesc').value.trim(),
+      requestParams: cleanAuthRows(authRows.req),
+      responseParams: cleanAuthRows(authRows.resp),
+      requestExample: (document.getElementById('fAuthReqJsonPreview').value || '').trim(),
+      responseExample: (document.getElementById('fAuthRespJsonPreview').value || '').trim(),
+      includeInDocs: document.getElementById('fAuthIncludeDocs').checked,
+      includeInSwagger: document.getElementById('fAuthIncludeSwagger').checked,
+    };
+
     const now = new Date().toISOString();
     const fields = gatherEndpointFromForm();
     const actor = AUTH_USER.username || 'Unknown';
@@ -934,6 +1326,16 @@ function showSavedBanner(visibility){
 }
 
 document.getElementById('btnSave').addEventListener('click', ()=>performSave(false));
+
+// When adding a NEW endpoint and the typed project name matches an existing
+// project, pull in that project's real Project details / Authentication
+// fields — otherwise it's easy to leave stale/blank values that would
+// overwrite them on save.
+document.getElementById('fProject').addEventListener('input', (e)=>{
+  if(endpointId) return; // don't clobber an existing endpoint's loaded project
+  const match = Object.values((workspace && workspace.projects)||{}).find(p=>p.name.toLowerCase() === e.target.value.trim().toLowerCase());
+  if(match) hydrateProjectFields(match); else clearProjectFields();
+});
 
 /* ==================== Theme ====================
    Mirrors the main Studio tab's toggle (server/views/studio.html) and shares
