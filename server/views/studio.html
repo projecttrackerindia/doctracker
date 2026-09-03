@@ -591,6 +591,10 @@ kbd{
 .ep-actions-btn{ display:flex; align-items:center; gap:6px; }
 .ep-actions-btn .dd-chev{ font-size:8px; color:var(--text-faint); transition:transform .15s ease; }
 .ep-actions-dd.open .ep-actions-btn .dd-chev{ transform:rotate(180deg); }
+/* "Project actions" trigger — filled accent/blue, same treatment as button.primary */
+#projActionsBtn{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+#projActionsBtn:hover{ filter:brightness(1.08); color:var(--accent-ink); border-color:var(--accent); }
+#projActionsBtn .dd-chev{ color:var(--accent-ink); }
 .ep-actions-panel{
   position:absolute; top:calc(100% + 8px); right:0; width:224px; max-width:calc(100vw - 24px); z-index:80;
   background:var(--glass-bg-strong); backdrop-filter:saturate(180%) blur(20px); -webkit-backdrop-filter:saturate(180%) blur(20px);
@@ -7153,21 +7157,6 @@ function renderProjectOverview(main, projectId){
             </tr>`).join('')}
         </tbody>
       </table>` : `<div class="empty-field">${viewingDraft ? 'No endpoints in this project yet.' : `Nothing promoted to ${escapeHtml(env.label)} yet.`}</div>`}
-    </div>
-
-    <div class="section">
-      <div class="section-title">Authentication</div>
-      ${proj.auth && proj.auth.type ? `
-        <div class="auth-card">
-          <div class="ic">🔑</div>
-          <div>
-            <div class="h">${escapeHtml(proj.auth.type)}${proj.auth.headerName ? ' · '+escapeHtml(proj.auth.headerName)+' header' : ''}</div>
-            ${proj.auth.path ? `<div class="d" style="margin-top:4px;"><span class="badge ${methodClass(proj.auth.method||'POST')}" style="margin-right:8px;">${escapeHtml(proj.auth.method||'POST')}</span><span class="mono" style="font-size:12px;">${escapeHtml(proj.auth.path)}</span></div>` : ''}
-            <div class="d">${proj.auth.description ? escapeHtml(proj.auth.description) : 'No further notes.'}</div>
-          </div>
-        </div>
-        ${proj.auth.includeInDocs ? paramSection('Auth request parameters', proj.auth.requestParams||[]) : ''}
-        ${proj.auth.includeInDocs ? paramSection('Auth response parameters', proj.auth.responseParams||[]) : ''}` : `<div class="auth-card"><div class="ic">🔓</div><div><div class="h">No auth configured</div><div class="d">Add authentication details in project settings.</div></div></div>`}
     </div>
 
     <div class="section">
