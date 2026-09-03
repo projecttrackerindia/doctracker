@@ -620,10 +620,15 @@ kbd{
 .ep-actions-divider{ height:1px; background:var(--border); margin:5px 2px; }
 
 /* ---------- Project overview action menu (Edit settings / Export PDF) ---------- */
-.proj-actions-panel{ width:224px; }
+.proj-actions-panel{ width:264px; }
 .proj-actions-item .item-ic{ display:inline-flex; color:var(--text-faint); flex-shrink:0; }
 .proj-actions-item:hover .item-ic{ color:var(--accent); }
-.proj-actions-item{ display:flex; align-items:center; gap:9px; justify-content:flex-start; }
+/* Labels like "Open in Swagger Editor" + a sub-label ("10-min link, masked")
+   don't both fit on one row without truncating, so stack the sub-label onto
+   its own line under the label instead of clipping it with an ellipsis. */
+.proj-actions-item{ display:flex; flex-direction:column; align-items:flex-start; gap:2px; justify-content:flex-start; }
+.proj-actions-item .item-label{ width:100%; white-space:normal; overflow:visible; text-overflow:clip; }
+.proj-actions-item .item-sub{ max-width:none; width:100%; white-space:normal; overflow:visible; text-overflow:clip; margin-left:21px; }
 .proj-actions-item.locked{ opacity:.45; cursor:not-allowed; }
 .proj-actions-item.locked:hover .item-ic{ color:var(--text-faint); }
 
@@ -7062,13 +7067,17 @@ function renderProjectOverview(main, projectId){
               </button>`}
               <div class="ep-actions-divider"></div>
               <button type="button" class="ep-actions-item proj-actions-item" id="btnOpenArchStudioMenu" role="menuitem">
-                <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.4"></rect><rect x="14" y="3" width="7" height="7" rx="1.4"></rect><rect x="14" y="14" width="7" height="7" rx="1.4"></rect><rect x="3" y="14" width="7" height="7" rx="1.4"></rect><path d="M10 6.5h4M17.5 10v4M14 17.5h-4M6.5 14v-4"></path></svg></span>
-                Open Architecture Studio
+                <span class="item-label">
+                  <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.4"></rect><rect x="14" y="3" width="7" height="7" rx="1.4"></rect><rect x="14" y="14" width="7" height="7" rx="1.4"></rect><rect x="3" y="14" width="7" height="7" rx="1.4"></rect><path d="M10 6.5h4M17.5 10v4M14 17.5h-4M6.5 14v-4"></path></svg></span>
+                  <span>Open Architecture Studio</span>
+                </span>
               </button>
               <div class="ep-actions-divider"></div>
               <button type="button" class="ep-actions-item proj-actions-item" id="btnExportPdf" role="menuitem">
-                <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M9 15l3 3 3-3"></path><path d="M12 11v7"></path></svg></span>
-                Export as PDF
+                <span class="item-label">
+                  <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M9 15l3 3 3-3"></path><path d="M12 11v7"></path></svg></span>
+                  <span>Export as PDF</span>
+                </span>
               </button>
               <button type="button" class="ep-actions-item proj-actions-item" id="btnOpenSwaggerEditor" role="menuitem">
                 <span class="item-label">
@@ -7333,6 +7342,26 @@ function renderEndpointDoc(main, proj, ep){
     ? `<div class="section"><div class="section-title">API overview <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— applies to every endpoint in ${escapeHtml(proj.name)}</span></div><div class="api-overview-box">${renderMarkdown(proj.description)}</div></div>`
     : `<div class="section"><div class="section-title">API overview</div><div class="empty-field">No API-level description yet — add one from Edit ▸ API-level description, or in Project settings.</div></div>`;
 
+  // Same Authentication block as the project Overview page (auth-card +
+  // Auth request/response parameter tables) — shown here too since auth is
+  // shared across every endpoint in the project and shouldn't require a trip
+  // back to Overview to see the JWT/token details.
+  const authSectionHtml = `
+    <div class="section">
+      <div class="section-title">Authentication <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— applies to every endpoint in ${escapeHtml(proj.name)}</span></div>
+      ${proj.auth && proj.auth.type ? `
+        <div class="auth-card">
+          <div class="ic">🔑</div>
+          <div>
+            <div class="h">${escapeHtml(proj.auth.type)}${proj.auth.headerName ? ' · '+escapeHtml(proj.auth.headerName)+' header' : ''}</div>
+            ${proj.auth.path ? `<div class="d" style="margin-top:4px;"><span class="badge ${methodClass(proj.auth.method||'POST')}" style="margin-right:8px;">${escapeHtml(proj.auth.method||'POST')}</span><span class="mono" style="font-size:12px;">${escapeHtml(proj.auth.path)}</span></div>` : ''}
+            <div class="d">${proj.auth.description ? escapeHtml(proj.auth.description) : 'No further notes.'}</div>
+          </div>
+        </div>
+        ${proj.auth.includeInDocs ? paramSection('Auth request parameters', proj.auth.requestParams||[]) : ''}
+        ${proj.auth.includeInDocs ? paramSection('Auth response parameters', proj.auth.responseParams||[]) : ''}` : `<div class="auth-card"><div class="ic">🔓</div><div><div class="h">No auth configured</div><div class="d">Add authentication details in project settings.</div></div></div>`}
+    </div>`;
+
   main.innerHTML = `
     <div class="crumb">${escapeHtml(proj.name)} <span class="sep">/</span> ${escapeHtml(ep.tag)} <span class="env-chip">${envMeta(state.env).label}</span></div>
     ${!isViewingDraftEnv() ? `
@@ -7377,6 +7406,8 @@ function renderEndpointDoc(main, proj, ep){
     </div>
 
     ${apiOverviewHtml}
+
+    ${authSectionHtml}
 
     ${headersHtml ? `<div class="section"><div class="section-title">Headers</div>${headersHtml}</div>` : ''}
 
