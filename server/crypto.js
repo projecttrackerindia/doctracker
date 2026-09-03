@@ -183,6 +183,36 @@ function decryptOrgToken(token) {
   }
 }
 
+// ---- Generic signed, time-limited share tokens ----
+// Same shape as encryptOrgToken/decryptOrgToken above, just carrying an
+// arbitrary JSON payload instead of a fixed organisation string. Used for
+// links that need to work for a caller with NO session cookie at all (e.g.
+// a public "Open in Swagger Editor" link a third-party site fetches) —
+// the token itself is the only thing standing in for auth, so callers of
+// decryptShareToken must still check any `exp` field themselves.
+function encryptShareToken(payload) {
+  const dek = getDek(activeVersion);
+  const { iv, ct, tag } = aesEncrypt(dek, Buffer.from(JSON.stringify(payload), 'utf8'), 'share-url');
+  return [activeVersion, iv.toString('base64url'), ct.toString('base64url'), tag.toString('base64url')].join('.');
+}
+function decryptShareToken(token) {
+  try {
+    const parts = String(token).split('.');
+    if (parts.length !== 4) return null;
+    const [versionStr, ivB64, ctB64, tagB64] = parts;
+    const version = parseInt(versionStr, 10);
+    if (!Number.isFinite(version)) return null;
+    const dek = getDek(version);
+    const iv = Buffer.from(ivB64, 'base64url');
+    const ct = Buffer.from(ctB64, 'base64url');
+    const tag = Buffer.from(tagB64, 'base64url');
+    const json = aesDecrypt(dek, { iv, ct, tag }, 'share-url').toString('utf8');
+    return JSON.parse(json);
+  } catch {
+    return null; // wrong key, corrupted/expired-looking token, tampering — never throw for user input
+  }
+}
+
 // ---- Admin-triggered rotation: new DEK, wrapped with the SAME master key ----
 // No redeploy needed. Old DEK stays cached (deactivated) so existing
 // ciphertexts keep decrypting; new writes use the new version immediately.
@@ -235,6 +265,8 @@ module.exports = {
   currentKeyVersion,
   encryptOrgToken,
   decryptOrgToken,
+  encryptShareToken,
+  decryptShareToken,
   rotateDataKey,
   listKeyVersions,
 };

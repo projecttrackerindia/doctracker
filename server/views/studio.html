@@ -311,8 +311,9 @@ kbd{
 .role-hint{ color:var(--text-faint); font-size:11.5px; margin-top:6px; max-width:480px; line-height:1.5; }
 
 /* ---------- Floating "new endpoint" button (replaces the old topbar + Endpoint button) ---------- */
+.fab-dd{ position:fixed; right:24px; bottom:24px; z-index:45; }
 .fab{
-  position:fixed; right:24px; bottom:24px; z-index:45;
+  position:relative;
   display:flex; align-items:center; gap:9px;
   height:52px; padding:0 20px 0 18px; border-radius:999px;
   background:var(--accent); color:var(--accent-ink); border:1px solid var(--accent);
@@ -324,17 +325,30 @@ kbd{
 .fab:active{ transform:translateY(0); }
 .fab-plus{ display:flex; align-items:center; justify-content:center; width:20px; height:20px; flex-shrink:0; }
 .fab-label{ white-space:nowrap; }
+/* Opens upward, anchored to the FAB's own corner, since the button sits pinned
+   to the bottom of the viewport — a downward panel (like ep-actions-panel) would
+   run off-screen. Same visual language as ep-actions-panel/proj-actions-panel. */
+.fab-menu{
+  position:absolute; bottom:calc(100% + 10px); right:0; width:240px; max-width:calc(100vw - 24px); z-index:80;
+  background:var(--glass-bg-strong); backdrop-filter:saturate(180%) blur(20px); -webkit-backdrop-filter:saturate(180%) blur(20px);
+  border:1px solid var(--glass-border); border-radius:12px; box-shadow:var(--shadow-modal);
+  padding:6px; opacity:0; visibility:hidden; transform:translateY(4px) scale(.98); pointer-events:none;
+  transition:opacity .13s ease, transform .13s ease, visibility .13s ease;
+}
+.fab-dd.open .fab-menu{ opacity:1; visibility:visible; transform:translateY(0) scale(1); pointer-events:auto; }
+.fab-menu .item-sub{ max-width:104px; }
 @media (max-width:640px){
-  .fab{ right:16px; bottom:16px; height:48px; padding:0 16px 0 14px; }
+  .fab-dd{ right:16px; bottom:16px; }
+  .fab{ height:48px; padding:0 16px 0 14px; }
   .fab-label{ display:none; }
 }
 /* Keep the FAB clear of the code-samples rail when it's open on the right */
-.app:has(.rail.show) .fab{ right:424px; }
+.app:has(.rail.show) .fab-dd{ right:424px; }
 @media (max-width:900px){
   /* On narrow viewports the rail becomes a near-full-width drawer; rather than hiding
      the FAB entirely (which made it disappear with no obvious way to bring it back),
      keep it floating above the drawer content so "+ New endpoint" is always reachable. */
-  .app:has(.rail.show) .fab{ right:24px; bottom:24px; }
+  .app:has(.rail.show) .fab-dd{ right:24px; bottom:24px; }
 }
 
 /* ============================================================
@@ -2037,10 +2051,35 @@ pre.json-raw{ max-height:360px; margin:0; }
     </div>
   </div>
 
-  <button class="fab" id="btnFab" title="New endpoint">
-    <span class="fab-plus"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></span>
-    <span class="fab-label">New endpoint</span>
-  </button>
+  <div class="fab-dd" id="fabDD">
+    <button class="fab" id="btnFab" title="New endpoint" aria-haspopup="true" aria-expanded="false" aria-controls="fabMenu">
+      <span class="fab-plus"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></span>
+      <span class="fab-label">New endpoint</span>
+    </button>
+    <!-- Only shown when there's an actual "current project" to disambiguate against
+         (see currentProjectForEnvContext) — otherwise clicking the FAB skips this
+         menu and goes straight to a blank project, same as before. Added because the
+         FAB used to always silently reuse whichever project was last viewed (name,
+         owner, team, auth type/config, etc.) with no way to signal "no, a genuinely
+         new project" short of retyping every shared field by hand. -->
+    <div class="fab-menu" id="fabMenu" role="menu">
+      <button type="button" class="ep-actions-item" id="fabAddEndpoint" role="menuitem">
+        <span class="item-label">
+          <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></span>
+          <span>Add endpoint</span>
+        </span>
+        <span class="item-sub" id="fabAddEndpointSub"></span>
+      </button>
+      <div class="ep-actions-divider"></div>
+      <button type="button" class="ep-actions-item" id="fabNewProject" role="menuitem">
+        <span class="item-label">
+          <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg></span>
+          <span>New project</span>
+        </span>
+        <span class="item-sub">Starts blank</span>
+      </button>
+    </div>
+  </div>
 
   <div class="sidebar" id="sidebar">
     <button type="button" class="sidebar-edge-toggle" id="btnSidebarEdgeToggle" aria-expanded="true" aria-controls="sidebar" title="Collapse sidebar (Ctrl/Cmd+B)">
@@ -7031,6 +7070,13 @@ function renderProjectOverview(main, projectId){
                 <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M9 15l3 3 3-3"></path><path d="M12 11v7"></path></svg></span>
                 Export as PDF
               </button>
+              <button type="button" class="ep-actions-item proj-actions-item" id="btnOpenSwaggerEditor" role="menuitem">
+                <span class="item-label">
+                  <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></span>
+                  <span>Open in Swagger Editor</span>
+                </span>
+                <span class="item-sub">10-min link, masked</span>
+              </button>
             </div>
           </div>
         </div>
@@ -7139,6 +7185,10 @@ function renderProjectOverview(main, projectId){
   document.getElementById('btnOpenArchStudioMenu').addEventListener('click', ()=>{
     document.getElementById('projActionsDD').classList.remove('open');
     openArchitectureStudioTab(proj);
+  });
+  document.getElementById('btnOpenSwaggerEditor').addEventListener('click', ()=>{
+    document.getElementById('projActionsDD').classList.remove('open');
+    openInSwaggerEditor(proj.id);
   });
   const btnOpenArchStudio = document.getElementById('btnOpenArchStudio');
   if(btnOpenArchStudio) btnOpenArchStudio.addEventListener('click', ()=>openArchitectureStudioTab(proj));
@@ -9291,6 +9341,41 @@ function openArchitectureStudioTab(proj){
   const w = window.open(buildArchitectureStudioUrl(proj), '_blank');
   if(!w){ toast('Please allow popups to open Architecture Studio in a new tab.'); }
 }
+// "Open in Swagger Editor" — mints a signed, 10-minute public link to this
+// project's combined OpenAPI spec (POST /projects/:id/openapi-link, see
+// routes/workspace.js) and hands it to editor.swagger.io via its `?url=`
+// param. editor.swagger.io fetches that URL itself, from the visitor's own
+// browser — it never sees our session cookie, which is exactly why the link
+// has to be a signed token instead of a normal authenticated request. The
+// spec it renders is always the masked version (fake {{ENV-DNS}} hosts, no
+// real secrets) — see openapiExport.js on the server.
+//
+// The blank tab is opened FIRST, synchronously, inside the click handler —
+// not after the await below — because most browsers only allow window.open
+// to succeed without being flagged as a popup when it happens directly
+// inside a user gesture's call stack. Opening it early and redirecting it
+// once the link is ready keeps that guarantee instead of racing against
+// popup blockers.
+async function openInSwaggerEditor(projectId){
+  const w = window.open('', '_blank');
+  if(w && w.document){
+    w.document.title = 'Opening Swagger Editor…';
+    w.document.body.style.cssText = 'font:14px -apple-system,sans-serif;color:#666;padding:32px;';
+    w.document.body.textContent = 'Preparing your Swagger spec…';
+  }
+  try{
+    const { url } = await apiSend('POST', `/projects/${projectId}/openapi-link`, {});
+    const target = `https://editor.swagger.io/?url=${encodeURIComponent(url)}`;
+    if(w && !w.closed) w.location.href = target;
+    else {
+      const w2 = window.open(target, '_blank');
+      if(!w2) toast('Please allow popups to open Swagger Editor.');
+    }
+  }catch(e){
+    if(w && !w.closed) w.close();
+    toast('Could not generate a Swagger Editor link — try again.');
+  }
+}
 // Renders a compact read-only preview of a published architecture diagram
 // for the project overview page (the full icon library only lives in
 // architecture-studio.html — this is just boxes, labels and connector lines,
@@ -9735,9 +9820,39 @@ document.getElementById('btnSecurityCenter').addEventListener('click', ()=>{
   state.securityTab = state.securityTab || 'summary';
   renderMain();
 });
-document.getElementById('btnFab').addEventListener('click', ()=>{
+// The FAB used to always call openEditorTab(currentProjectForEnvContext(), null) —
+// meaning if you'd last viewed (or were viewing) some project, EVERY field shared
+// across that project (name, owner, team, auth type, auth params, everything under
+// "Project details"/"Authentication") got silently pre-filled into what you might
+// have intended as a brand-new project. There was no explicit way to say "no,
+// start fresh" — only retyping the project name and hoping the input listener in
+// editor.html (fProject's 'input' handler) cleared everything else in time. Now the
+// FAB asks, whenever there's an actual current project to disambiguate against.
+document.getElementById('btnFab').addEventListener('click', (e)=>{
+  e.stopPropagation();
   if(!canEditHere()){ toast(isViewingDraftEnv() ? `Your role (${roleMeta(state.authorRole).label}) is read-only` : `Switch to ${envMeta(draftEnvId()).label} to make changes`); return; }
+  const ctxProj = currentProjectForEnvContext();
+  if(!ctxProj){
+    // Nothing is currently in view to confuse this with — go straight to blank,
+    // same as clicking "New project" below.
+    openEditorTab(null, null);
+    return;
+  }
+  const dd = document.getElementById('fabDD');
+  const willOpen = !dd.classList.contains('open');
+  if(willOpen) document.getElementById('fabAddEndpointSub').textContent = ctxProj.name;
+  dd.classList.toggle('open', willOpen);
+  document.getElementById('btnFab').setAttribute('aria-expanded', String(willOpen));
+});
+document.getElementById('fabAddEndpoint').addEventListener('click', ()=>{
+  document.getElementById('fabDD').classList.remove('open');
+  document.getElementById('btnFab').setAttribute('aria-expanded', 'false');
   openEditorTab(currentProjectForEnvContext(), null);
+});
+document.getElementById('fabNewProject').addEventListener('click', ()=>{
+  document.getElementById('fabDD').classList.remove('open');
+  document.getElementById('btnFab').setAttribute('aria-expanded', 'false');
+  openEditorTab(null, null);
 });
 
 // When adding a NEW endpoint and the typed project name matches an existing
@@ -9986,6 +10101,11 @@ document.addEventListener('click', (e)=>{
   if(epDD && epDD.classList.contains('open') && !epDD.contains(e.target)) epDD.classList.remove('open');
   const projDD = document.getElementById('projActionsDD');
   if(projDD && projDD.classList.contains('open') && !projDD.contains(e.target)) projDD.classList.remove('open');
+  const fabDD = document.getElementById('fabDD');
+  if(fabDD && fabDD.classList.contains('open') && !fabDD.contains(e.target)){
+    fabDD.classList.remove('open');
+    document.getElementById('btnFab').setAttribute('aria-expanded', 'false');
+  }
   if(envRowMenu.id !== null){
     const openDD = document.querySelector(`.row-actions-dd[data-row-dd="${envRowMenu.id}"]`);
     if(openDD && !openDD.contains(e.target)){ envRowMenu = { id:null, mode:'menu' }; renderEnvTableSection(); }

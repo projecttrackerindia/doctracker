@@ -7,8 +7,9 @@ const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 
-const { initDb } = require('./db');
+const { initDb, pool } = require('./db');
 const dataCrypto = require('./crypto');
+const openapiExport = require('./openapiExport');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const workspaceRoutes = require('./routes/workspace');
@@ -94,6 +95,47 @@ app.use('/api/pii', piiRoutes);
 app.use('/api/security', securityRoutes);
 
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
+// GET /public/openapi/:token.yaml — the one deliberately unauthenticated
+// route in this app. Backs the "Open in Swagger Editor" project action:
+// editor.swagger.io fetches this URL directly from the visitor's browser, so
+// it can never carry our session cookie — the signed, 10-minute token
+// (minted by POST /api/workspace/projects/:id/openapi-link, see
+// routes/workspace.js) is what stands in for auth here instead. No other
+// route in this app works this way; this one exists precisely because a
+// meaningful chunk of the value of "open in Swagger Editor" is "don't require
+// the third party to be logged in as you." The spec it serves is always the
+// masked one from openapiExport.js — real environment URLs and secret
+// values never appear here, no matter who minted the link or what their
+// admin "reveal" state was at the time.
+app.get('/public/openapi/:token', async (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*'); // must be fetchable cross-origin by editor.swagger.io
+  try {
+    const rawToken = String(req.params.token || '').replace(/\.ya?ml$/i, '');
+    const payload = dataCrypto.decryptShareToken(rawToken);
+    if (!payload || !payload.pid || !payload.exp) {
+      return res.status(404).type('text/plain').send('This link is invalid.');
+    }
+    if (Date.now() > payload.exp) {
+      return res.status(410).type('text/plain').send('This link has expired — generate a new one from Project actions > Open in Swagger Editor.');
+    }
+    const { rows } = await pool.query(
+      `SELECT id, organisation, data, data_enc FROM projects WHERE id = $1`,
+      [payload.pid]
+    );
+    if (!rows.length || rows[0].organisation !== payload.org) {
+      return res.status(404).type('text/plain').send('This project could no longer be found.');
+    }
+    const project = workspaceRoutes.decryptProjectData(rows[0]);
+    const envList = await workspaceRoutes.getOrgEnvironments(rows[0].organisation);
+    const specYaml = openapiExport.buildProjectOpenApiSpecYaml(project, envList);
+    res.set('Content-Type', 'text/yaml; charset=utf-8');
+    res.send(specYaml);
+  } catch (err) {
+    console.error('GET /public/openapi failed:', err);
+    res.status(500).type('text/plain').send('Could not generate this spec.');
+  }
+});
 
 // ---- Auth guard for the studio app ----
 // Same DB-backed check as the API's authenticate() middleware (see

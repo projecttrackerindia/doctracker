@@ -1071,6 +1071,48 @@ router.get('/projects/:id/diff', async (req, res) => {
   }
 });
 
+// POST /api/workspace/projects/:id/openapi-link — mints a short-lived,
+// signed public URL for this project's full combined OpenAPI spec, meant to
+// be handed straight to a third-party tool (editor.swagger.io) that can't
+// carry our session cookie. Anyone who can already view this project inside
+// the app can mint one (same visibility rule as GET /versions and /diff
+// above) — this isn't a new access grant, just a differently-shaped export
+// of data the caller can already see and already export via "View > Swagger"
+// per endpoint or "Export as PDF" for the whole project.
+//
+// The link itself expires in 10 minutes (enforced in server.js on read) and
+// only ever serves the always-masked spec built by openapiExport.js — never
+// real host URLs or secret values — regardless of whether an Admin currently
+// has "reveal" turned on in their own session.
+router.post('/projects/:id/openapi-link', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, owner_id, organisation, visibility, data, data_enc FROM projects WHERE id = $1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Project not found.' });
+    const project = rows[0];
+    if (project.organisation !== req.authUser.organisation) return res.status(404).json({ error: 'Project not found.' });
+    const isOwner = project.owner_id === req.authUser.sub;
+    if (!isOwner && project.visibility !== 'public') {
+      return res.status(404).json({ error: 'Project not found.' });
+    }
+
+    const token = dataCrypto.encryptShareToken({
+      pid: project.id,
+      org: project.organisation,
+      exp: Date.now() + 10 * 60 * 1000,
+    });
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    res.json({ url: `${baseUrl}/public/openapi/${encodeURIComponent(token)}.yaml`, expiresInSeconds: 600 });
+  } catch (err) {
+    console.error('POST openapi-link failed:', err);
+    res.status(500).json({ error: 'Could not generate a share link.' });
+  }
+});
+
 module.exports = router;
 module.exports.MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_BYTES;
 module.exports.reencryptOrganisation = reencryptOrganisation;
+module.exports.decryptProjectData = decryptProjectData;
+module.exports.getOrgEnvironments = getOrgEnvironments;
