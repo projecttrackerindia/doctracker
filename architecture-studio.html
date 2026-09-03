@@ -1895,16 +1895,6 @@ function wireEdgeEvents(g, edge){
 // Canvas background: marquee-select, pan (space/middle-click), or place text/frame tool
 canvasWrap.addEventListener('pointerdown', (e)=>{
   if(e.target.closest('.node-card, .frame-node, .text-node, .shape-node, .edge-group')) return;
-  // The floating toolbar and zoom controls are overlay chrome that lives
-  // inside #canvasWrap for positioning purposes — they are NOT the canvas
-  // itself. Without this guard, a click on any toolbar button (especially
-  // the shape flyout's ellipse/diamond/cylinder icons) also bubbles into
-  // this handler and, whenever a placement tool is already active, drops a
-  // stray node at the toolbar's screen position using the *previous*
-  // currentShapeType (the flyout button's own click handler, which updates
-  // currentShapeType, only runs after this pointerdown). That's why every
-  // shape picked from the flyout was landing on the canvas as a Rectangle.
-  if(e.target.closest('.floating-toolbar, .zoom-controls')) return;
   const canvasPt = screenToCanvas(e.clientX, e.clientY);
   if(e.button === 1 || spaceDown){
     ptr = { mode:'pan', startClient:{x:e.clientX,y:e.clientY}, startPan:{...state.pan} };
