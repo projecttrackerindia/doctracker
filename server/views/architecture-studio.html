@@ -1894,7 +1894,12 @@ function wireEdgeEvents(g, edge){
 
 // Canvas background: marquee-select, pan (space/middle-click), or place text/frame tool
 canvasWrap.addEventListener('pointerdown', (e)=>{
-  if(e.target.closest('.node-card, .frame-node, .text-node, .shape-node, .edge-group')) return;
+  // The floating toolbar, its shape flyout, and the zoom controls all live
+  // inside #canvasWrap for positioning, so a pointerdown on any of them
+  // would otherwise bubble up here too — and fire before that button's own
+  // click handler runs, placing a stray node at the click position using
+  // whatever tool/shape was already active. Bail out for any UI chrome.
+  if(e.target.closest('.node-card, .frame-node, .text-node, .shape-node, .edge-group, .floating-toolbar, .zoom-controls')) return;
   const canvasPt = screenToCanvas(e.clientX, e.clientY);
   if(e.button === 1 || spaceDown){
     ptr = { mode:'pan', startClient:{x:e.clientX,y:e.clientY}, startPan:{...state.pan} };
