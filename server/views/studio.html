@@ -2203,6 +2203,33 @@ pre.json-raw{ max-height:360px; margin:0; }
             <input type="text" id="mLicenseUrl" placeholder="https://example.com/license">
           </div>
         </div>
+        <div class="field">
+          <label>Request flow direction <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— how the Request flow diagram on the overview page renders</span></label>
+          <select id="mFlowDirection"></select>
+          <div class="flow-custom-builder" id="mFlowCustomBuilder" style="display:none;">
+            <div class="hint" style="margin-top:0;">Describe your own flow direction — it's saved and reusable across every project.</div>
+            <div class="field-row">
+              <div class="field" style="flex:2;">
+                <label>Label</label>
+                <input type="text" id="mFlowCustomLabel" placeholder="e.g. Three-way — request, response &amp; async callback">
+              </div>
+              <div class="field" style="flex:1;">
+                <label>Arrow style</label>
+                <select id="mFlowCustomPattern">
+                  <option value="1-way">One-way (forward only)</option>
+                  <option value="2-way">Two-way (forward + return)</option>
+                </select>
+              </div>
+            </div>
+            <div class="modal-actions">
+              <div></div>
+              <div class="right">
+                <button type="button" id="mFlowCustomCancel">Cancel</button>
+                <button type="button" class="primary" id="mFlowCustomAdd">Add direction</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2514,183 +2541,15 @@ pre.json-raw{ max-height:360px; margin:0; }
 <div class="modal-overlay" id="projectModal">
   <div class="modal xwide">
     <h2>Project settings</h2>
-    <div class="modal-sub" id="projSubtitle">Configure this project's details and authentication.</div>
+    <div class="modal-sub" id="projSubtitle">Release pipeline, documents and architecture for this project.</div>
     <div class="modal-tabs">
-      <div class="modal-tab active" data-mtab="general">General</div>
-      <div class="modal-tab" data-mtab="release">Release Pipeline</div>
-      <div class="modal-tab" data-mtab="auth">Auth</div>
+      <div class="modal-tab active" data-mtab="release">Release Pipeline</div>
       <div class="modal-tab" data-mtab="docs">Documents</div>
       <div class="modal-tab" data-mtab="architecture">Architecture</div>
     </div>
-    <div class="modal-pane active" data-mpane="general">
-      <div class="field">
-        <label>Project / API name</label>
-        <input type="text" id="pgName">
-      </div>
-      <div class="field">
-        <label>Description <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— shown on the project overview page. Supports Markdown.</span></label>
-        <div class="md-toolbar">
-          <button type="button" data-md-insert="overview" data-md-target="pgDesc">+ Overview</button>
-          <button type="button" data-md-insert="flow" data-md-target="pgDesc">+ Flow (numbered steps)</button>
-          <button type="button" data-md-insert="auth" data-md-target="pgDesc">+ Authentication</button>
-          <span class="spacer"></span>
-          <button type="button" class="md-preview-toggle" id="pgDescPreviewToggle">Preview</button>
-        </div>
-        <textarea id="pgDesc" style="min-height:240px; font-family:var(--mono); font-size:12.5px;"></textarea>
-        <div class="md-preview-pane" id="pgDescPreview"></div>
-      </div>
-      <div class="field-grid-2">
-        <div class="field">
-          <label>Lifecycle stage</label>
-          <select id="pgLifecycle"></select>
-        </div>
-        <div class="field">
-          <label>Owner</label>
-          <input type="text" id="pgOwner" placeholder="e.g. Jane Smith">
-        </div>
-      </div>
-      <div class="field-grid-2">
-        <div class="field">
-          <label>Team</label>
-          <input type="text" id="pgTeam" placeholder="e.g. Payments Platform">
-        </div>
-        <div class="field">
-          <label>Terms of service URL <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— optional</span></label>
-          <input type="text" id="pgTerms" placeholder="https://example.com/terms">
-        </div>
-      </div>
-      <div class="field">
-        <label>Request flow direction <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— how the Request flow diagram on the overview page renders</span></label>
-        <select id="pgFlowDirection"></select>
-        <div class="flow-custom-builder" id="flowCustomBuilder" style="display:none;">
-          <div class="hint" style="margin-top:0;">Describe your own flow direction — it's saved and reusable across every project.</div>
-          <div class="field-row">
-            <div class="field" style="flex:2;">
-              <label>Label</label>
-              <input type="text" id="flowCustomLabel" placeholder="e.g. Three-way — request, response &amp; async callback">
-            </div>
-            <div class="field" style="flex:1;">
-              <label>Arrow style</label>
-              <select id="flowCustomPattern">
-                <option value="1-way">One-way (forward only)</option>
-                <option value="2-way">Two-way (forward + return)</option>
-              </select>
-            </div>
-          </div>
-          <div class="modal-actions">
-            <div></div>
-            <div class="right">
-              <button type="button" id="flowCustomCancel">Cancel</button>
-              <button type="button" class="primary" id="flowCustomAdd">Add direction</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="field-grid-2">
-        <div class="field">
-          <label>Contact name <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— optional</span></label>
-          <input type="text" id="pgContactName" placeholder="e.g. Developer Support">
-        </div>
-        <div class="field">
-          <label>Contact email <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— optional</span></label>
-          <input type="text" id="pgContactEmail" placeholder="e.g. dev-support@example.com">
-        </div>
-      </div>
-      <div class="field-grid-2">
-        <div class="field">
-          <label>License name <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— optional</span></label>
-          <input type="text" id="pgLicenseName" placeholder="e.g. Proprietary">
-        </div>
-        <div class="field">
-          <label>License URL <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— optional</span></label>
-          <input type="text" id="pgLicenseUrl" placeholder="https://example.com/license">
-        </div>
-      </div>
-    </div>
-    <div class="modal-pane" data-mpane="release">
+    <div class="modal-pane active" data-mpane="release">
       <div class="hint" style="margin-top:0;">Pick a From and To stage to see exactly what changed, then merge — like a diff before a promote. Changes move forward one stage at a time; each stage keeps its own frozen, versioned copy until it's promoted again.</div>
       <div id="releasePipelineBody">Loading…</div>
-    </div>
-    <div class="modal-pane" data-mpane="auth">
-      <div class="field">
-        <label>Auth type</label>
-        <input type="text" id="paType" placeholder="e.g. Bearer token, API key, JWT">
-      </div>
-      <div class="field-row">
-        <div class="field">
-          <label>Method</label>
-          <select id="paMethod">
-            <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
-          </select>
-        </div>
-        <div class="field" style="flex:2">
-          <label>Endpoint / path</label>
-          <input type="text" id="paPath" placeholder="/auth/jwt/token">
-        </div>
-      </div>
-      <div class="field">
-        <label>Header name</label>
-        <input type="text" id="paHeader" placeholder="Authorization">
-      </div>
-      <div class="field">
-        <label>Notes</label>
-        <textarea id="paDesc" placeholder="How to obtain a token, expiry, scopes…" style="min-height:56px; font-family:var(--sans);"></textarea>
-      </div>
-
-      <!-- Auth request parameters -->
-      <div class="builder-section">
-        <div class="builder-head">
-          <span class="builder-title">Request parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what's needed to authenticate</span></span>
-          <div class="auth-param-toolbar">
-            <button type="button" class="builder-add" id="addAuthReqRow">+ Add parameter</button>
-          </div>
-        </div>
-        <div class="builder-body">
-          <table class="dyn-table req-table" id="authReqTable">
-            <thead><tr><th class="col-name">Name</th><th class="col-type">Type</th><th class="col-req">Required</th><th class="col-example">Example</th><th class="col-desc">Description</th><th class="col-del"></th></tr></thead>
-            <tbody id="authReqRows"></tbody>
-          </table>
-          <div class="json-preview-wrap">
-            <div class="json-preview-label">
-              <span>Request JSON (default example) <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— auto-generated, editable</span></span>
-              <button type="button" class="ghost icon" data-auth-json-regen="req" title="Regenerate from parameters" style="width:auto;padding:3px 8px;font-size:10.5px;">↻ Regenerate</button>
-            </div>
-            <textarea class="mono json-preview-editable" id="authReqJsonPreview" placeholder='{ "user": "string", "password": "string" }'></textarea>
-          </div>
-        </div>
-      </div>
-
-      <!-- Auth response parameters -->
-      <div class="builder-section">
-        <div class="builder-head">
-          <span class="builder-title">Response parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what auth returns (token, expiry…)</span></span>
-          <div class="auth-param-toolbar">
-            <button type="button" class="builder-add" id="addAuthRespRow">+ Add parameter</button>
-          </div>
-        </div>
-        <div class="builder-body">
-          <table class="dyn-table req-table" id="authRespTable">
-            <thead><tr><th class="col-name">Name</th><th class="col-type">Type</th><th class="col-req">Required</th><th class="col-example">Example</th><th class="col-desc">Description</th><th class="col-del"></th></tr></thead>
-            <tbody id="authRespRows"></tbody>
-          </table>
-          <div class="json-preview-wrap">
-            <div class="json-preview-label">
-              <span>Response JSON (default example) <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— auto-generated, editable</span></span>
-              <button type="button" class="ghost icon" data-auth-json-regen="resp" title="Regenerate from parameters" style="width:auto;padding:3px 8px;font-size:10.5px;">↻ Regenerate</button>
-            </div>
-            <textarea class="mono json-preview-editable" id="authRespJsonPreview" placeholder='{ "token": "string", "expiration": "string" }'></textarea>
-          </div>
-        </div>
-      </div>
-
-      <div class="field auth-include-field">
-        <label>Include auth parameters in</label>
-        <div class="auth-include-row">
-          <label class="checkbox-row"><input type="checkbox" id="paIncludeDocs"> Documentation <span class="item-sub">Overview page &amp; PDF export</span></label>
-          <label class="checkbox-row"><input type="checkbox" id="paIncludeSwagger"> Swagger / OpenAPI <span class="item-sub">Generated spec &amp; security scheme</span></label>
-        </div>
-      </div>
-
     </div>
     <div class="modal-pane" data-mpane="docs">
       <div class="hint" style="margin-top:0;">Upload reference material for this project — Postman collections, architecture PDFs, sample payloads, contracts, anything teammates should be able to grab. Shown as downloadable files on the project's overview page. Stored locally in this browser.</div>
@@ -2711,8 +2570,7 @@ pre.json-raw{ max-height:360px; margin:0; }
     <div class="modal-actions">
       <div></div>
       <div class="right">
-        <button id="pgCancel">Cancel</button>
-        <button class="primary" id="pgSave">Save settings</button>
+        <button id="pgCancel">Close</button>
       </div>
     </div>
   </div>
@@ -8061,13 +7919,19 @@ document.getElementById('addReqExample').addEventListener('click', ()=>{
 });
 
 let editingEndpointId = null;
+// The project record currently backing the endpoint modal's "Project details"
+// fields (set whenever they're hydrated from a real project, cleared for a
+// brand-new one). Used so the "Request flow direction" custom-preset builder
+// can fall back to this project's saved direction on Cancel, the same way it
+// used to read editingProjectId in Project settings.
+let currentEndpointProject = null;
 
 // Populates the endpoint modal's "Project details" and "Authentication"
 // sections from a real project record — used both when editing an existing
 // endpoint and when the typed project name in "Add endpoint" matches one.
-// Mirrors openProjectModal's own hydration line-for-line so the two surfaces
-// never drift apart.
+// This modal is now the only place these shared project fields are edited.
 function hydrateEndpointProjectFields(proj){
+  currentEndpointProject = proj;
   document.getElementById('mLifecycle').innerHTML = LIFECYCLE_STAGES.map(s=>`<option value="${s}">${s}</option>`).join('');
   document.getElementById('mLifecycle').value = proj.lifecycle || 'PRODUCTION';
   document.getElementById('mOwner').value = proj.owner || '';
@@ -8077,6 +7941,8 @@ function hydrateEndpointProjectFields(proj){
   document.getElementById('mContactEmail').value = (proj.contact && proj.contact.email) || '';
   document.getElementById('mLicenseName').value = (proj.license && proj.license.name) || '';
   document.getElementById('mLicenseUrl').value = (proj.license && proj.license.url) || '';
+  populateFlowDirectionSelect(proj.requestFlowDirection || '1-way', 'mFlowDirection');
+  document.getElementById('mFlowCustomBuilder').style.display = 'none';
 
   document.getElementById('mAuthType').value = (proj.auth && proj.auth.type) || '';
   document.getElementById('mAuthMethod').value = (proj.auth && proj.auth.method) || 'POST';
@@ -8098,6 +7964,7 @@ function hydrateEndpointProjectFields(proj){
 
 // Blank-slate version for "Add endpoint" when no matching project exists yet.
 function clearEndpointProjectFields(){
+  currentEndpointProject = null;
   document.getElementById('mLifecycle').innerHTML = LIFECYCLE_STAGES.map(s=>`<option value="${s}">${s}</option>`).join('');
   document.getElementById('mLifecycle').value = 'PRODUCTION';
   ['mOwner','mTeam','mTerms','mContactName','mContactEmail','mLicenseName','mLicenseUrl',
@@ -8105,6 +7972,8 @@ function clearEndpointProjectFields(){
   document.getElementById('mAuthMethod').value = 'POST';
   document.getElementById('mAuthIncludeDocs').checked = false;
   document.getElementById('mAuthIncludeSwagger').checked = false;
+  populateFlowDirectionSelect('1-way', 'mFlowDirection');
+  document.getElementById('mFlowCustomBuilder').style.display = 'none';
   authParamsStore.endpoint.req = [];
   authParamsStore.endpoint.resp = [];
   renderAuthParamRows('endpoint', 'req');
@@ -8199,8 +8068,9 @@ function saveManualEndpoint(){
 
   // The API-level description and all "Project details" / "Authentication"
   // fields below live on the project, not the endpoint — persisting them
-  // here means this modal is the one place to create or edit everything,
-  // same shared record Project settings ▸ General/Auth reads and writes.
+  // here means this modal is the one and only place these shared project
+  // fields are created or edited (Project settings only covers Release
+  // Pipeline, Documents and Architecture now).
   const apiDesc = document.getElementById('mApiDesc').value.trim();
   if(apiDesc) proj.description = apiDesc;
 
@@ -8218,6 +8088,8 @@ function saveManualEndpoint(){
     name: document.getElementById('mLicenseName').value.trim(),
     url: document.getElementById('mLicenseUrl').value.trim(),
   };
+  const mFlowVal = document.getElementById('mFlowDirection').value;
+  proj.requestFlowDirection = (mFlowVal && mFlowVal !== '__add_custom__') ? mFlowVal : (proj.requestFlowDirection || '1-way');
   const cleanMAuthParams = (list)=> list.filter(r=>r.name.trim()).map(r=>(
     { name:r.name.trim(), type:r.type, required:!!r.required, example:r.example.trim(), description:r.description.trim() }
   ));
@@ -8518,8 +8390,9 @@ function renderReleaseDiffField(c){
   return `<div class="rp-diff-field"><div class="rp-diff-field-path mono">${escapeHtml(c.path || '(root)')}</div>${lines}</div>`;
 }
 
-function populateFlowDirectionSelect(selectedId){
-  const sel = document.getElementById('pgFlowDirection');
+function populateFlowDirectionSelect(selectedId, selectId){
+  const sel = document.getElementById(selectId || 'mFlowDirection');
+  if(!sel) return;
   const dirs = allFlowDirections();
   sel.innerHTML = dirs.map(d=>`<option value="${d.id}">${escapeHtml(d.label)}</option>`).join('')
     + `<option value="__add_custom__">+ Add custom direction…</option>`;
@@ -8626,8 +8499,6 @@ document.querySelectorAll('[data-auth-json-regen]').forEach(btn=>{
   });
 });
 
-document.getElementById('addAuthReqRow').addEventListener('click', ()=>{ authParamsStore.settings.req.push(newAuthParamRow()); renderAuthParamRows('settings','req'); });
-document.getElementById('addAuthRespRow').addEventListener('click', ()=>{ authParamsStore.settings.resp.push(newAuthParamRow()); renderAuthParamRows('settings','resp'); });
 document.getElementById('addMAuthReqRow').addEventListener('click', ()=>{ authParamsStore.endpoint.req.push(newAuthParamRow()); renderAuthParamRows('endpoint','req'); });
 document.getElementById('addMAuthRespRow').addEventListener('click', ()=>{ authParamsStore.endpoint.resp.push(newAuthParamRow()); renderAuthParamRows('endpoint','resp'); });
 
@@ -8641,43 +8512,6 @@ function openProjectModal(projectId, initialTab){
   if(!proj) return;
 
   document.getElementById('projSubtitle').textContent = proj.name;
-  document.getElementById('pgName').value = proj.name;
-  document.getElementById('pgDesc').value = proj.description || '';
-  document.getElementById('pgDesc').classList.remove('hidden-src');
-  document.getElementById('pgDescPreview').classList.remove('show');
-  document.getElementById('pgDescPreviewToggle').textContent = 'Preview';
-  document.getElementById('pgLifecycle').innerHTML = LIFECYCLE_STAGES.map(s=>`<option value="${s}">${s}</option>`).join('');
-  document.getElementById('pgLifecycle').value = proj.lifecycle || 'PRODUCTION';
-  populateFlowDirectionSelect(proj.requestFlowDirection || '1-way');
-  document.getElementById('flowCustomBuilder').style.display = 'none';
-  document.getElementById('flowCustomLabel').value = '';
-  document.getElementById('pgOwner').value = proj.owner || '';
-  document.getElementById('pgTeam').value = proj.team || '';
-  document.getElementById('pgTerms').value = proj.termsOfService || '';
-  document.getElementById('pgContactName').value = (proj.contact && proj.contact.name) || '';
-  document.getElementById('pgContactEmail').value = (proj.contact && proj.contact.email) || '';
-  document.getElementById('pgLicenseName').value = (proj.license && proj.license.name) || '';
-  document.getElementById('pgLicenseUrl').value = (proj.license && proj.license.url) || '';
-  document.getElementById('paType').value = (proj.auth && proj.auth.type) || '';
-  document.getElementById('paMethod').value = (proj.auth && proj.auth.method) || 'POST';
-  document.getElementById('paPath').value = (proj.auth && proj.auth.path) || '';
-  document.getElementById('paHeader').value = (proj.auth && proj.auth.headerName) || '';
-  document.getElementById('paDesc').value = (proj.auth && proj.auth.description) || '';
-  document.getElementById('paIncludeDocs').checked = !!(proj.auth && proj.auth.includeInDocs);
-  document.getElementById('paIncludeSwagger').checked = !!(proj.auth && proj.auth.includeInSwagger);
-  authParamsStore.settings.req = cloneAuthParams(proj.auth && proj.auth.requestParams);
-  authParamsStore.settings.resp = cloneAuthParams(proj.auth && proj.auth.responseParams);
-  renderAuthParamRows('settings', 'req');
-  renderAuthParamRows('settings', 'resp');
-  // Restore any hand-edited JSON example saved with the project (falls back to
-  // what renderAuthParamRows already auto-generated above if none was saved).
-  ['req','resp'].forEach(kind=>{
-    const saved = kind === 'req' ? (proj.auth && proj.auth.requestExample) : (proj.auth && proj.auth.responseExample);
-    if(saved){
-      const ta = document.getElementById(kind === 'req' ? 'authReqJsonPreview' : 'authRespJsonPreview');
-      if(ta) ta.value = saved;
-    }
-  });
 
   renderProjectDocsList(proj);
   renderReleasePipeline(proj);
@@ -8688,7 +8522,7 @@ function openProjectModal(projectId, initialTab){
       ? `Last published${proj.architectureDiagram.updatedBy ? ' by ' + proj.architectureDiagram.updatedBy : ''}${proj.architectureDiagram.updatedAt ? ' · ' + formatDateTime(proj.architectureDiagram.updatedAt) : ''}.`
       : 'Not published yet.';
   }
-  const tab = initialTab || 'general';
+  const tab = initialTab || 'release';
   document.querySelectorAll('.modal-tab').forEach(t=>t.classList.remove('active'));
   document.querySelector(`.modal-tab[data-mtab="${tab}"]`).classList.add('active');
   document.querySelectorAll('.modal-pane').forEach(p=>p.classList.remove('active'));
@@ -8797,66 +8631,15 @@ function closeProjectModal(){
   editingProjectId = null;
 }
 
-function saveProjectSettings(){
-  const proj = state.projects[editingProjectId];
-  if(!proj) return;
-  const AUDIT_FIELD_LABELS = { name:'Name', description:'Description', lifecycle:'Lifecycle', owner:'Owner', team:'Team',
-    termsOfService:'Terms of service', contact:'Contact', license:'License', auth:'Auth', environments:'Environment URLs',
-    requestFlowDirection:'Request flow direction' };
-  const snapshot = () => ({
-    name: proj.name, description: proj.description, lifecycle: proj.lifecycle,
-    owner: proj.owner, team: proj.team, termsOfService: proj.termsOfService,
-    contact: JSON.stringify(proj.contact), license: JSON.stringify(proj.license),
-    auth: JSON.stringify(proj.auth), environments: JSON.stringify(proj.environments),
-    requestFlowDirection: proj.requestFlowDirection,
-  });
-  const before = snapshot();
-  proj.name = document.getElementById('pgName').value.trim() || proj.name;
-  proj.description = document.getElementById('pgDesc').value.trim();
-  proj.lifecycle = LIFECYCLE_STAGES.includes(document.getElementById('pgLifecycle').value)
-    ? document.getElementById('pgLifecycle').value : proj.lifecycle;
-  const flowVal = document.getElementById('pgFlowDirection').value;
-  proj.requestFlowDirection = (flowVal && flowVal !== '__add_custom__') ? flowVal : (proj.requestFlowDirection || '1-way');
-  proj.owner = document.getElementById('pgOwner').value.trim();
-  proj.team = document.getElementById('pgTeam').value.trim();
-  proj.termsOfService = document.getElementById('pgTerms').value.trim();
-  proj.contact = {
-    name: document.getElementById('pgContactName').value.trim(),
-    email: document.getElementById('pgContactEmail').value.trim(),
-  };
-  proj.license = {
-    name: document.getElementById('pgLicenseName').value.trim(),
-    url: document.getElementById('pgLicenseUrl').value.trim(),
-  };
-  const cleanAuthParams = (list)=> list.filter(r=>r.name.trim()).map(r=>(
-    { name:r.name.trim(), type:r.type, required:!!r.required, example:r.example.trim(), description:r.description.trim() }
-  ));
-  proj.auth = {
-    type: document.getElementById('paType').value.trim(),
-    method: document.getElementById('paMethod').value,
-    path: document.getElementById('paPath').value.trim(),
-    headerName: document.getElementById('paHeader').value.trim(),
-    description: document.getElementById('paDesc').value.trim(),
-    requestParams: cleanAuthParams(authParamsStore.settings.req),
-    responseParams: cleanAuthParams(authParamsStore.settings.resp),
-    // Whatever's currently sitting in the editable JSON boxes — auto-generated
-    // or hand-edited, same as how the endpoint's Request JSON body is saved.
-    requestExample: (document.getElementById('authReqJsonPreview').value || '').trim(),
-    responseExample: (document.getElementById('authRespJsonPreview').value || '').trim(),
-    includeInDocs: document.getElementById('paIncludeDocs').checked,
-    includeInSwagger: document.getElementById('paIncludeSwagger').checked,
-  };
-  const after = snapshot();
-  const changedFields = Object.keys(before).filter(k=>before[k]!==after[k]);
-  if(changedFields.length){
-    logAudit('updated', 'project', proj.name, `Updated ${changedFields.map(f=>AUDIT_FIELD_LABELS[f]||f).join(', ')}`, proj.name);
-  }
-  proj.updatedAt = new Date().toISOString();
-  saveState();
-  closeProjectModal();
-  renderAll();
-  toast('Project settings saved');
-}
+/* saveProjectSettings() was removed along with the General and Auth tabs —
+   Release Pipeline, Documents and Architecture (the only tabs left) all
+   already save immediately on their own (promote/merge, per-file upload,
+   and the separate Architecture Studio tab, respectively), so this modal
+   no longer needs an explicit "Save settings" step. Project name,
+   description, lifecycle, owner, team, terms, contact, license, request
+   flow direction and auth config are now edited from the Add/Edit endpoint
+   modal's "Project details" and "Authentication" sections instead — see
+   saveManualEndpoint(). */
 /* ==================== SECTION:RENDERVIEW ==================== */
 const HERO_GRAD = {
   get:'linear-gradient(135deg, var(--get), transparent)',
@@ -9998,37 +9781,39 @@ document.getElementById('pdfExportGenerate').addEventListener('click', generateP
 document.getElementById('pdfExportModal').addEventListener('click', (e)=>{ if(e.target.id === 'pdfExportModal') closeExportPdfModal(); });
 
 document.getElementById('pgCancel').addEventListener('click', closeProjectModal);
-document.getElementById('pgSave').addEventListener('click', saveProjectSettings);
 document.getElementById('btnOpenArchStudioSettings').addEventListener('click', ()=>{
   if(editingProjectId && state.projects[editingProjectId]) openArchitectureStudioTab(state.projects[editingProjectId]);
 });
 
-/* ---------- Request flow direction: custom preset builder wiring ---------- */
-document.getElementById('pgFlowDirection').addEventListener('change', (e)=>{
-  const builder = document.getElementById('flowCustomBuilder');
+/* ---------- Request flow direction: custom preset builder wiring ----------
+   Lives in the Add/Edit endpoint modal's "Project details" section now
+   (Project settings no longer edits this) — falls back to whatever project
+   is currently backing that modal (see currentEndpointProject, set by
+   hydrateEndpointProjectFields/clearEndpointProjectFields). */
+document.getElementById('mFlowDirection').addEventListener('change', (e)=>{
+  const builder = document.getElementById('mFlowCustomBuilder');
   if(e.target.value === '__add_custom__'){
     builder.style.display = 'block';
-    document.getElementById('flowCustomLabel').focus();
+    document.getElementById('mFlowCustomLabel').focus();
   } else {
     builder.style.display = 'none';
   }
 });
-document.getElementById('flowCustomCancel').addEventListener('click', ()=>{
-  document.getElementById('flowCustomBuilder').style.display = 'none';
-  const proj = state.projects[editingProjectId];
-  populateFlowDirectionSelect(proj ? (proj.requestFlowDirection || '1-way') : '1-way');
+document.getElementById('mFlowCustomCancel').addEventListener('click', ()=>{
+  document.getElementById('mFlowCustomBuilder').style.display = 'none';
+  populateFlowDirectionSelect(currentEndpointProject ? (currentEndpointProject.requestFlowDirection || '1-way') : '1-way', 'mFlowDirection');
 });
-document.getElementById('flowCustomAdd').addEventListener('click', ()=>{
-  const label = document.getElementById('flowCustomLabel').value.trim();
+document.getElementById('mFlowCustomAdd').addEventListener('click', ()=>{
+  const label = document.getElementById('mFlowCustomLabel').value.trim();
   if(!label){ toast('Enter a label for the custom direction'); return; }
-  const pattern = document.getElementById('flowCustomPattern').value === '2-way' ? '2-way' : '1-way';
+  const pattern = document.getElementById('mFlowCustomPattern').value === '2-way' ? '2-way' : '1-way';
   const id = 'custom_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const list = (state.customFlowDirections || []).slice();
   list.push({ id, label, pattern });
   saveCustomFlowDirections(list);
-  document.getElementById('flowCustomBuilder').style.display = 'none';
-  document.getElementById('flowCustomLabel').value = '';
-  populateFlowDirectionSelect(id);
+  document.getElementById('mFlowCustomBuilder').style.display = 'none';
+  document.getElementById('mFlowCustomLabel').value = '';
+  populateFlowDirectionSelect(id, 'mFlowDirection');
   toast('Custom flow direction added');
 });
 
@@ -10039,7 +9824,7 @@ document.getElementById('flowCustomAdd').addEventListener('click', ()=>{
 document.querySelectorAll('[data-md-insert]').forEach(btn=>{
   btn.addEventListener('click', ()=>{
     const tpl = MD_TEMPLATES[btn.getAttribute('data-md-insert')];
-    const targetId = btn.getAttribute('data-md-target') || 'pgDesc';
+    const targetId = btn.getAttribute('data-md-target') || 'mApiDesc';
     if(tpl) insertAtCursor(document.getElementById(targetId), tpl);
   });
 });
@@ -10059,7 +9844,6 @@ function wireMdPreviewToggle(toggleId, textareaId, previewId){
     }
   });
 }
-wireMdPreviewToggle('pgDescPreviewToggle', 'pgDesc', 'pgDescPreview');
 wireMdPreviewToggle('mApiDescPreviewToggle', 'mApiDesc', 'mApiDescPreview');
 document.getElementById('projectModal').addEventListener('click', (e)=>{ if(e.target.id === 'projectModal') closeProjectModal(); });
 document.querySelectorAll('.modal-tab').forEach(tab=>{
