@@ -1462,6 +1462,19 @@ pre.code-block{
 .rp-envbanner-v{ font-family:var(--mono); font-weight:700; color:var(--text); margin-left:6px; }
 .rp-envbanner-hint{ font-size:11px; color:var(--text-faint); flex-shrink:0; }
 
+/* "Not explicitly documented" warning in Try It — shown only when the response
+   came from a closest/fallback guess rather than a scenario the request truly
+   matches (see sendTryIt()'s match-transparency logic). Kept visually distinct
+   (amber, not the neutral gray of .hint) so a guess never reads the same as a
+   documented, verified response. */
+.tryit-mismatch{ margin-top:10px; padding:10px 12px; border-radius:10px; border:1px solid var(--put); background:var(--put-bg); }
+.tryit-mismatch-head{ display:flex; align-items:center; gap:7px; font-size:12px; font-weight:700; color:var(--put); }
+.tryit-mismatch-ic{ font-size:13px; }
+.tryit-mismatch-body{ margin-top:6px; font-size:12px; color:var(--text-dim); line-height:1.5; }
+.tryit-mismatch-body .mono{ font-family:var(--mono); }
+.tryit-mismatch-action{ margin-top:8px; padding:5px 10px; font-size:11.5px; font-weight:600; border-radius:7px; border:1px solid var(--put); background:transparent; color:var(--put); cursor:pointer; }
+.tryit-mismatch-action:hover{ background:var(--put-bg); }
+
 /* ---------- Your Profile — environment management (add/delete global environments) ---------- */
 /* ---------- Endpoint table (Environment / Endpoint / Access / Color / Actions) ---------- */
 .env-table-toolbar{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:12px; }
@@ -2555,12 +2568,19 @@ pre.json-raw{ max-height:360px; margin:0; }
     </div>
 
     <div id="tryItResult" style="display:none;">
+      <div class="hint" style="margin:0 0 4px;">Request sent</div>
+      <pre class="code-block" id="tryItRequestPreview" style="max-height:160px; overflow:auto; margin-bottom:10px;"></pre>
       <div style="display:flex; align-items:center; gap:10px; margin:14px 0 8px; flex-wrap:wrap;">
         <span class="resp-code" id="tryItStatusCode"></span>
         <span class="hint" id="tryItLatency" style="margin:0;"></span>
         <span class="hint" id="tryItMatchNote" style="margin:0;"></span>
       </div>
       <pre class="code-block" id="tryItResponseBody" style="max-height:280px; overflow:auto;"></pre>
+      <div class="tryit-mismatch" id="tryItMismatchWarning" style="display:none;">
+        <div class="tryit-mismatch-head"><span class="tryit-mismatch-ic">⚠</span><span>Not explicitly documented</span></div>
+        <div class="tryit-mismatch-body" id="tryItMismatchBody"></div>
+        <button type="button" class="tryit-mismatch-action" id="tryItDocumentScenario">Document this scenario →</button>
+      </div>
     </div>
 
     <div class="modal-actions">
@@ -5214,8 +5234,28 @@ function renderMain(){
   }
 
   const found = findEndpointForView(state.selected.id);
-  if(!found){ state.selected = null; renderMain(); return; }
+  if(!found){
+    // A Try It deep link into a non-draft environment depends on that
+    // environment's release-pipeline snapshot, which loads asynchronously
+    // (see snapshotEntry) — give it a few renders to arrive before giving up.
+    if(state.selected.tryIt){
+      state.selected._tryItAttempts = (state.selected._tryItAttempts || 0) + 1;
+      if(state.selected._tryItAttempts > 6){
+        toast(`This endpoint isn't available in ${envMeta(state.env).label}.`);
+        state.selected = { type:'home' };
+        renderMain();
+        return;
+      }
+      main.innerHTML = `<div class="welcome"><div class="mark-lg">{ }</div><h1>Loading endpoint…</h1><p>Fetching the ${escapeHtml(envMeta(state.env).label)} snapshot for this API.</p></div>`;
+      return;
+    }
+    state.selected = null; renderMain(); return;
+  }
   renderEndpointDoc(main, found.proj, found.ep);
+  if(state.selected.tryIt){
+    state.selected.tryIt = false; // auto-open once per deep link, not on every re-render
+    openTryItModal(found.proj, found.ep);
+  }
 }
 
 function kpiCard(label, value, color, sub){
@@ -7421,7 +7461,7 @@ function renderEndpointDoc(main, proj, ep){
     </div>
   `;
 
-  document.getElementById('btnTryIt').addEventListener('click', ()=>openTryItModal(proj, ep));
+  document.getElementById('btnTryIt').addEventListener('click', ()=>openTryItTab(ep));
   document.getElementById('epActionsBtn').addEventListener('click', (e)=>{
     e.stopPropagation();
     document.getElementById('epActionsDD').classList.toggle('open');
@@ -8776,8 +8816,11 @@ function openTryItModal(proj, ep){
   document.getElementById('tryItMethodBadge').textContent = ep.method;
   document.getElementById('tryItPath').textContent = ep.path;
 
-  const baseUrl = proj.environments[state.env] || '';
-  document.getElementById('tryItUrlPreview').textContent = `${envMeta(state.env).label} → ${baseUrl}${ep.path}`;
+  // Same masked-host convention as everywhere else in the app (see displayUrl) —
+  // Try It shouldn't be the one place that leaks the real environment host to
+  // a non-Admin viewer just because they opened the tester.
+  document.getElementById('tryItUrlPreview').textContent =
+    `${envMeta(state.env).label} → ${envVarToken(state.env)}${pathWithParams(ep)}${queryString(ep)}`;
 
   const pathParams = (ep.parameters||[]).filter(p=>p.in==='path');
   const queryParams = (ep.parameters||[]).filter(p=>!p.in || p.in==='query');
@@ -8953,7 +8996,21 @@ function sendTryIt(){
 
     const responseScenarios = tryItResponseScenarios(ep);
     let matched = null;
-    let matchKind = null; // 'exact' | 'picked' | 'closest'
+    let matchKind = null; // 'exact' | 'picked' | 'closest' | 'fallback'
+
+    // Closest documented request scenario by field diff, computed up front
+    // (regardless of how close it actually is) — used both to pick a
+    // 'closest' match below AND, when the match ends up being only a guess,
+    // to explain exactly which fields made this request not truly documented.
+    let closestRequestScenario = null, closestRequestScore = Infinity;
+    if(typedBody !== null && requestScenarios.length){
+      requestScenarios.forEach(s=>{
+        const p = tryParseJson(s.value);
+        if(!p.ok) return;
+        const score = jsonDiffScore(p.value, typedBody);
+        if(score < closestRequestScore){ closestRequestScore = score; closestRequestScenario = s; }
+      });
+    }
 
     if(typedBody !== null){
       // 1) Exact match against a named request example → use the response
@@ -8970,21 +9027,13 @@ function sendTryIt(){
         if(picked){ matched = picked; matchKind = 'picked'; }
       }
 
-      // 3) Otherwise, find the closest documented request example by field
-      //    diff and use its paired response, if the match is close enough
-      //    to be meaningful (not just "everything's different").
-      if(!matched && requestScenarios.length){
-        let best = null, bestScore = Infinity;
-        requestScenarios.forEach(s=>{
-          const p = tryParseJson(s.value);
-          if(!p.ok) return;
-          const score = jsonDiffScore(p.value, typedBody);
-          if(score < bestScore){ bestScore = score; best = s; }
-        });
-        if(best && bestScore <= 2){
-          const closestResp = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === best.name.trim().toLowerCase());
-          if(closestResp){ matched = closestResp; matchKind = 'closest'; }
-        }
+      // 3) Otherwise, use the closest documented request example's paired
+      //    response, if the match is close enough to be meaningful (not just
+      //    "everything's different"). This is still only a guess — see the
+      //    "Not explicitly documented" warning below, which fires here.
+      if(!matched && closestRequestScenario && closestRequestScore <= 2){
+        const closestResp = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === closestRequestScenario.name.trim().toLowerCase());
+        if(closestResp){ matched = closestResp; matchKind = 'closest'; }
       }
     }
 
@@ -8993,6 +9042,8 @@ function sendTryIt(){
       const fallback = responseScenarios.find(rs=>String(rs.code)[0]==='2') || responseScenarios[0];
       if(fallback){ matched = fallback; matchKind = 'fallback'; }
     }
+
+    document.getElementById('tryItRequestPreview').textContent = buildTryItResolvedRequestPreview(proj, ep, typedBody);
 
     if(!matched){
       codeEl.textContent = '—';
@@ -9007,11 +9058,94 @@ function sendTryIt(){
       else if(matchKind === 'picked') matchNoteEl.textContent = `Matched scenario: ${matched.name} (selected)`;
       else if(matchKind === 'closest') matchNoteEl.textContent = `Closest documented match: ${matched.name}`;
     }
+
+    // "Not explicitly documented" warning — fires whenever the response shown
+    // is only a guess (closest/fallback), not a scenario this exact request
+    // actually matches. Never silently relabels a partial match as a real one.
+    const mismatchEl = document.getElementById('tryItMismatchWarning');
+    const mismatchBodyEl = document.getElementById('tryItMismatchBody');
+    let showMismatch = false;
+    if(matched && typedBody !== null && matchKind === 'closest' && closestRequestScenario){
+      const p = tryParseJson(closestRequestScenario.value);
+      const diffs = p.ok ? describeJsonDiff(p.value, typedBody) : [];
+      if(diffs.length){
+        showMismatch = true;
+        mismatchBodyEl.innerHTML = `This request doesn't exactly match the "${escapeHtml(closestRequestScenario.name)}" scenario documented for this response — it differs in:
+          <ul style="margin:6px 0 0; padding-left:18px;">
+            ${diffs.map(d=>`<li><span class="mono">${escapeHtml(d.path)}</span> — documented example: <span class="mono">${escapeHtml(d.docLabel)}</span>, you sent: <span class="mono">${escapeHtml(d.sentLabel)}</span></li>`).join('')}
+          </ul>
+          This exact combination hasn't been documented yet, so this response is a best guess, not a verified one.`;
+      }
+    } else if(matched && typedBody !== null && matchKind === 'fallback' && requestScenarios.length){
+      showMismatch = true;
+      mismatchBodyEl.textContent = `No documented request scenario resembles this request closely enough to match with confidence — showing the first documented response as a fallback, not a verified one for this input.`;
+    }
+    if(showMismatch){
+      mismatchEl.style.display = '';
+      document.getElementById('tryItDocumentScenario').onclick = ()=>documentTryItScenario(proj, ep, typedBody);
+    } else {
+      mismatchEl.style.display = 'none';
+    }
+
     latencyEl.textContent = `Simulated from documented example · ${Math.round(180 + Math.random()*140)} ms`;
     resultEl.style.display = '';
     sendBtn.disabled = false;
     sendBtn.textContent = 'Send again';
   }, 450);
+}
+
+/* One-level field diff for the Try It "not explicitly documented" warning —
+   deliberately shallow (nested objects/arrays are compared as whole values,
+   not key-by-key) since this drives a human-readable summary, not a merge. */
+function describeJsonDiff(documented, sent){
+  if(typeof documented !== 'object' || documented === null || typeof sent !== 'object' || sent === null) return [];
+  const labelFor = v => v === undefined ? '(missing)' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+  const keys = new Set([...Object.keys(documented), ...Object.keys(sent)]);
+  const diffs = [];
+  keys.forEach(k=>{
+    if(!deepEqualJson(documented[k], sent[k])) diffs.push({ path:k, docLabel:labelFor(documented[k]), sentLabel:labelFor(sent[k]) });
+  });
+  return diffs;
+}
+
+/* Postman-style "what actually got sent" preview shown above the simulated
+   response — resolves path/query params from the live input fields and pulls
+   headers from the same headerList() used everywhere else, so it's masked
+   exactly the same way (no leaking real hosts/secrets just because a request
+   was 'sent'). */
+function buildTryItResolvedRequestPreview(proj, ep, typedBody){
+  const pathParams = {};
+  const queryParams = [];
+  document.querySelectorAll('[data-try-param]').forEach(input=>{
+    const name = input.getAttribute('data-try-param');
+    if(input.getAttribute('data-try-in') === 'path') pathParams[name] = input.value;
+    else queryParams.push([name, input.value]);
+  });
+  let path = pathWithParams(ep);
+  Object.keys(pathParams).forEach(name=>{ path = path.replace(`{${name}}`, encodeURIComponent(pathParams[name] || `{${name}}`)); });
+  const qs = queryParams.filter(([,v])=>v).map(([k,v])=>`${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+  const url = `${envVarToken(state.env)}${path}${qs ? '?'+qs : ''}`;
+  const lines = [`${ep.method} ${url}`, ...headerList(proj, ep).map(([k,v])=>`${k}: ${v}`)];
+  if(typedBody !== null) lines.push('', JSON.stringify(typedBody, null, 2));
+  return lines.join('\n');
+}
+
+/* "Document this scenario" — stashes the request the person actually tried as
+   a one-shot prefill for the endpoint editor (read once and deleted there —
+   see applyTryItPrefillIfAny in editor.html), then opens the editor in its
+   own tab, same as every other edit action in this app. Deliberately never
+   guesses or saves a response: only someone who knows what the real API
+   actually returns for this case can document that correctly, which is the
+   whole reason this scenario wasn't already covered. */
+function documentTryItScenario(proj, ep, typedBody){
+  try{
+    localStorage.setItem(`apiStudio_tryitPrefill_${ep.id}`, JSON.stringify({
+      name: (typedBody && typeof typedBody === 'object' && typedBody.currency) ? `Currency ${typedBody.currency}` : 'New scenario from Try It',
+      requestJson: JSON.stringify(typedBody, null, 2),
+      ts: Date.now(),
+    }));
+  }catch(e){ /* localStorage full/unavailable — editor still opens, just without the prefill */ }
+  openEditorTab(proj, ep);
 }
 
 document.getElementById('tryItSend').addEventListener('click', sendTryIt);
@@ -9514,6 +9648,26 @@ function buildEditorUrl(proj, ep){
 function openEditorTab(proj, ep){
   const w = window.open(buildEditorUrl(proj, ep), '_blank');
   if(!w){ toast('Please allow popups to open the endpoint editor in a new tab.'); }
+}
+/* ---------- Try it: opens in its own tab, same session cookie as the above ----------
+   Rather than a separate page, this reuses the exact page it was launched from — the
+   new tab lands on this endpoint's full docs (same crumb, same profile chip and theme
+   toggle in the topbar) with the Try It panel already open on top, which is also how
+   it always inherits the currently active light/dark theme (it's the same page reading
+   the same localStorage key, not a copy that could drift out of sync). See the
+   `tryit`/`env` query-param handling in boot() and renderMain(). The environment carries
+   over from whichever was active when "Try it" was clicked, but only for this tab —
+   it's never written back to this browser's saved env preference. */
+function buildTryItUrl(ep){
+  const url = new URL(location.href);
+  url.search = '';
+  url.searchParams.set('tryit', ep.id);
+  url.searchParams.set('env', state.env);
+  return url.pathname + url.search;
+}
+function openTryItTab(ep){
+  const w = window.open(buildTryItUrl(ep), '_blank');
+  if(!w){ toast('Please allow popups to open Try it in a new tab.'); }
 }
 // The draw.io-style diagram editor (server/views/architecture-studio.html) —
 // opens in its own tab the same way edit.studio does, authenticated by the
@@ -10334,6 +10488,20 @@ document.getElementById('railScrim').addEventListener('click', ()=>{
   await loadState();
   renderAuthorLabel();
   document.getElementById('btnSecurityCenter').style.display = isAdmin() ? '' : 'none';
+
+  // Landed here via a "Try it" new-tab link (see openTryItTab/buildTryItUrl) —
+  // jump straight to that endpoint's docs with Try It already open, in
+  // whichever environment the link carried, without touching this browser's
+  // saved env preference (no saveEnv() call — see renderMain()'s handling of
+  // state.selected.tryIt for where the modal actually gets opened).
+  const deepLinkParams = new URLSearchParams(location.search);
+  const tryItEpId = deepLinkParams.get('tryit');
+  if(tryItEpId){
+    const envParam = deepLinkParams.get('env');
+    if(envParam && envIds().includes(envParam) && roleAllowsEnv(envParam)) state.env = envParam;
+    state.selected = { type:'endpoint', id: tryItEpId, tryIt:true };
+  }
+
   renderAll();
 })();
 </script>

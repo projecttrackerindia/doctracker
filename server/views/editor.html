@@ -901,6 +901,27 @@ function findEndpointBySlug(proj, slug){
   return (proj.endpoints||[]).find(ep=>endpointSlug(ep.method, ep.path) === slug) || null;
 }
 
+/* One-shot prefill from Try It's "Document this scenario" button (see
+   documentTryItScenario() in studio.html) — the request body the person
+   actually tried, dropped in as a new named example on the request body
+   block. Never fabricates a response: the whole point is that only a human
+   who knows what the real API returns for this case can document it. */
+function applyTryItPrefillIfAny(epId){
+  const key = `apiStudio_tryitPrefill_${epId}`;
+  let raw;
+  try{ raw = localStorage.getItem(key); }catch(e){ return; }
+  if(!raw) return;
+  try{ localStorage.removeItem(key); }catch(e){}
+  let payload;
+  try{ payload = JSON.parse(raw); }catch(e){ return; }
+  if(!payload || !payload.requestJson) return;
+
+  const bodyBlock = addBlock('requestBody', {});
+  bodyBlock.examples = bodyBlock.examples || [];
+  bodyBlock.examples.push({ id: uid(), name: payload.name || 'New scenario from Try It', value: payload.requestJson });
+  toast('Pulled in the request you tried in Try It — add the matching response below and save.');
+}
+
 function userInitials(name){
   const w = (name||'?').trim().split(/\s+/).slice(0,2);
   return (w.map(x=>x[0]).join('') || '?').toUpperCase();
@@ -937,6 +958,7 @@ async function boot(){
     endpointId = ep.id;
     loadedUpdatedAt = ep.updatedAt || null;
     fillFormFromEndpoint(proj, ep);
+    applyTryItPrefillIfAny(ep.id);
   } else {
     // Brand new endpoint — start from one empty response block, same default
     // shape the rest of the app expects an endpoint to have.
