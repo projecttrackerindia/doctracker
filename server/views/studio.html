@@ -2540,15 +2540,25 @@ pre.json-raw{ max-height:360px; margin:0; }
       <div class="hint" id="tryItNoParams" style="display:none;">This endpoint takes no path or query parameters.</div>
     </div>
 
+    <div class="field" id="tryItBodyField" style="margin-top:14px; display:none;">
+      <label style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+        <span>Request body</span>
+        <select id="tryItScenarioPicker" style="font-size:11.5px; max-width:220px;"></select>
+      </label>
+      <textarea id="tryItBodyInput" class="code-block" style="width:100%; min-height:110px; font-family:var(--mono); font-size:12px; resize:vertical;"></textarea>
+      <span class="hint" id="tryItBodyErr" style="display:none; color:var(--danger);"></span>
+    </div>
+
     <div style="display:flex; align-items:center; justify-content:space-between; margin:16px 0 8px;">
       <span class="hint" id="tryItHint" style="margin:0;">Uses the response documented for this endpoint — nothing leaves your browser.</span>
       <button class="primary" id="tryItSend">Send</button>
     </div>
 
     <div id="tryItResult" style="display:none;">
-      <div style="display:flex; align-items:center; gap:10px; margin:14px 0 8px;">
+      <div style="display:flex; align-items:center; gap:10px; margin:14px 0 8px; flex-wrap:wrap;">
         <span class="resp-code" id="tryItStatusCode"></span>
         <span class="hint" id="tryItLatency" style="margin:0;"></span>
+        <span class="hint" id="tryItMatchNote" style="margin:0;"></span>
       </div>
       <pre class="code-block" id="tryItResponseBody" style="max-height:280px; overflow:auto;"></pre>
     </div>
@@ -8791,21 +8801,111 @@ function openTryItModal(proj, ep){
       </div>`).join('');
   }
 
+  /* ---- Request body + scenario picker ----
+     ep.requestBody.example is the "Default" scenario; ep.requestBody.examples
+     is a list of named alternates (e.g. "Amount too low"). Each response can
+     carry the same names in its own .examples list — that's how a request
+     scenario gets paired to the response it should produce. */
+  const bodyFieldEl = document.getElementById('tryItBodyField');
+  const bodyInputEl = document.getElementById('tryItBodyInput');
+  const bodyErrEl = document.getElementById('tryItBodyErr');
+  const scenarioPickerEl = document.getElementById('tryItScenarioPicker');
+  bodyErrEl.style.display = 'none';
+
+  const namedRequestExamples = tryItRequestScenarios(ep);
+  if(namedRequestExamples.length){
+    bodyFieldEl.style.display = '';
+    scenarioPickerEl.innerHTML = namedRequestExamples.map(s=>`<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('');
+    scenarioPickerEl.style.display = namedRequestExamples.length > 1 ? '' : 'none';
+    scenarioPickerEl.value = namedRequestExamples[0].name;
+    bodyInputEl.value = namedRequestExamples[0].value;
+  } else {
+    bodyFieldEl.style.display = 'none';
+    bodyInputEl.value = '';
+  }
+
   document.getElementById('tryItResult').style.display = 'none';
   document.getElementById('tryItSend').disabled = false;
   document.getElementById('tryItSend').textContent = 'Send';
   document.getElementById('tryItModal').classList.add('show');
 }
 
+/* Named request-body scenarios for an endpoint: "Default" (the main example)
+   plus any named alternates. Skips "Default" if there's no main example but
+   named ones exist, so the picker never opens on an empty body. */
+function tryItRequestScenarios(ep){
+  const rb = ep.requestBody;
+  if(!rb) return [];
+  const list = [];
+  if(rb.example && rb.example.trim()) list.push({ name:'Default', value:rb.example });
+  (rb.examples||[]).forEach(ex=>{ if(ex.name && ex.value) list.push({ name:ex.name, value:ex.value }); });
+  return list;
+}
+
+document.getElementById('tryItScenarioPicker').addEventListener('change', ()=>{
+  const scenarios = tryItRequestScenarios(tryItContext ? tryItContext.ep : {});
+  const match = scenarios.find(s=>s.name===document.getElementById('tryItScenarioPicker').value);
+  if(match) document.getElementById('tryItBodyInput').value = match.value;
+});
+
 function closeTryItModal(){
   document.getElementById('tryItModal').classList.remove('show');
   tryItContext = null;
+}
+
+/* Deep-equality on parsed JSON — order-independent for object keys, so
+   scenario matching isn't thrown off by re-ordering fields while editing. */
+function deepEqualJson(a, b){
+  if(a === b) return true;
+  if(typeof a !== typeof b || a === null || b === null) return a === b;
+  if(Array.isArray(a) || Array.isArray(b)){
+    if(!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v,i)=>deepEqualJson(v, b[i]));
+  }
+  if(typeof a === 'object'){
+    const ka = Object.keys(a), kb = Object.keys(b);
+    if(ka.length !== kb.length) return false;
+    return ka.every(k=>Object.prototype.hasOwnProperty.call(b,k) && deepEqualJson(a[k], b[k]));
+  }
+  return a === b;
+}
+
+/* Rough "how different are these two JSON values" score — counts keys that
+   are missing, added, or hold a different value, recursing into nested
+   objects. Used only as a tiebreaker when nothing matches exactly. Lower
+   is closer; 0 means identical (deepEqualJson would already have caught that). */
+function jsonDiffScore(a, b){
+  if(deepEqualJson(a,b)) return 0;
+  if(typeof a !== 'object' || typeof b !== 'object' || a===null || b===null || Array.isArray(a) !== Array.isArray(b)) return 1;
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  let score = 0;
+  keys.forEach(k=>{
+    if(!(k in a) || !(k in b)) { score += 1; return; }
+    if(typeof a[k]==='object' && typeof b[k]==='object' && a[k] && b[k]) score += jsonDiffScore(a[k], b[k]);
+    else if(a[k] !== b[k]) score += 1;
+  });
+  return score;
+}
+
+/* Every response tagged with a scenario name: the response's own "Default"
+   (its main code/description/example) plus any named alternates in
+   response.examples — each carrying a reference back to its parent response
+   so we know what status code + description to show. */
+function tryItResponseScenarios(ep){
+  const out = [];
+  (ep.responses||[]).forEach(r=>{
+    if(r.example && r.example.trim()) out.push({ name:'Default', code:r.code, description:r.description, value:r.example, response:r });
+    (r.examples||[]).forEach(ex=>{ if(ex.name && ex.value) out.push({ name:ex.name, code:r.code, description:r.description, value:ex.value, response:r }); });
+  });
+  return out;
 }
 
 function sendTryIt(){
   if(!tryItContext) return;
   const { proj, ep } = tryItContext;
   const sendBtn = document.getElementById('tryItSend');
+  const bodyErrEl = document.getElementById('tryItBodyErr');
+  bodyErrEl.style.display = 'none';
 
   // Basic required-field validation before "sending"
   const inputs = document.querySelectorAll('[data-try-param]');
@@ -8820,25 +8920,88 @@ function sendTryIt(){
     input.style.borderColor = '';
   }
 
+  // Parse the request body, if this endpoint documents one
+  const requestScenarios = tryItRequestScenarios(ep);
+  let typedBody = null;
+  if(requestScenarios.length){
+    const raw = document.getElementById('tryItBodyInput').value;
+    if(raw.trim()){
+      const parsed = tryParseJson(raw);
+      if(!parsed.ok){
+        bodyErrEl.textContent = "Request body isn't valid JSON — check for a missing comma or quote.";
+        bodyErrEl.style.display = '';
+        return;
+      }
+      typedBody = parsed.value;
+    }
+  }
+
   sendBtn.disabled = true;
   sendBtn.textContent = 'Sending…';
 
   setTimeout(()=>{
-    const r = (ep.responses||[]).find(r=>String(r.code)[0]==='2') || (ep.responses||[])[0];
     const resultEl = document.getElementById('tryItResult');
     const bodyEl = document.getElementById('tryItResponseBody');
     const codeEl = document.getElementById('tryItStatusCode');
     const latencyEl = document.getElementById('tryItLatency');
+    const matchNoteEl = document.getElementById('tryItMatchNote');
+    matchNoteEl.textContent = '';
 
-    if(!r){
+    const responseScenarios = tryItResponseScenarios(ep);
+    let matched = null;
+    let matchKind = null; // 'exact' | 'picked' | 'closest'
+
+    if(typedBody !== null){
+      // 1) Exact match against a named request example → use the response
+      //    scenario that shares that name, if one's documented.
+      const exactReq = requestScenarios.find(s=>{ const p = tryParseJson(s.value); return p.ok && deepEqualJson(p.value, typedBody); });
+      if(exactReq) matched = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === exactReq.name.trim().toLowerCase());
+      if(matched) matchKind = 'exact';
+
+      // 2) Otherwise, honour whichever scenario is selected in the picker
+      //    (the body may have been hand-edited but the intent is clear).
+      if(!matched){
+        const pickerName = (document.getElementById('tryItScenarioPicker').value || '').trim().toLowerCase();
+        const picked = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === pickerName);
+        if(picked){ matched = picked; matchKind = 'picked'; }
+      }
+
+      // 3) Otherwise, find the closest documented request example by field
+      //    diff and use its paired response, if the match is close enough
+      //    to be meaningful (not just "everything's different").
+      if(!matched && requestScenarios.length){
+        let best = null, bestScore = Infinity;
+        requestScenarios.forEach(s=>{
+          const p = tryParseJson(s.value);
+          if(!p.ok) return;
+          const score = jsonDiffScore(p.value, typedBody);
+          if(score < bestScore){ bestScore = score; best = s; }
+        });
+        if(best && bestScore <= 2){
+          const closestResp = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === best.name.trim().toLowerCase());
+          if(closestResp){ matched = closestResp; matchKind = 'closest'; }
+        }
+      }
+    }
+
+    // 4) Last resort: first documented 2xx response (old default behaviour).
+    if(!matched){
+      const fallback = responseScenarios.find(rs=>String(rs.code)[0]==='2') || responseScenarios[0];
+      if(fallback){ matched = fallback; matchKind = 'fallback'; }
+    }
+
+    if(!matched){
       codeEl.textContent = '—';
       codeEl.className = 'resp-code';
       bodyEl.textContent = 'No response documented for this endpoint yet — add one from Edit.';
     } else {
-      codeEl.textContent = String(r.code);
-      codeEl.className = 'resp-code ' + respClass(r.code);
-      const parsed = r.example ? tryParseJson(r.example) : { ok:false };
-      bodyEl.textContent = parsed.ok ? JSON.stringify(parsed.value, null, 2) : (r.example || 'No example body documented for this response.');
+      codeEl.textContent = String(matched.code);
+      codeEl.className = 'resp-code ' + respClass(matched.code);
+      const parsed = matched.value ? tryParseJson(matched.value) : { ok:false };
+      bodyEl.textContent = parsed.ok ? JSON.stringify(parsed.value, null, 2) : (matched.value || 'No example body documented for this response.');
+      if(matchKind === 'exact' && matched.name !== 'Default') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
+      else if(matchKind === 'picked') matchNoteEl.textContent = `Matched scenario: ${matched.name} (selected)`;
+      else if(matchKind === 'closest') matchNoteEl.textContent = `Closest documented match: ${matched.name}`;
     }
     latencyEl.textContent = `Simulated from documented example · ${Math.round(180 + Math.random()*140)} ms`;
     resultEl.style.display = '';

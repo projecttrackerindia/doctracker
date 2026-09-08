@@ -158,6 +158,18 @@ button{ cursor:pointer; }
 .json-paste-actions{ display:flex; align-items:center; gap:8px; margin-top:8px; }
 .json-paste-actions .err{ color:var(--danger); font-size:11.5px; }
 
+/* Named examples (scenarios) — alternate JSON payloads for a request body
+   or a response, tagged with a name so Try It can match a request example
+   to the response example that shares its name. */
+.examples-section{ margin-top:2px; }
+.examples-section-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.examples-section-head .hint{ margin:0; }
+.example-item{ background:var(--surface-2); border:1px solid var(--border-strong); border-radius:8px; padding:10px; margin-bottom:8px; }
+.example-item-head{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.example-item-head input[data-f="name"]{ flex:1; background:var(--bg); border:1px solid var(--border-strong); border-radius:6px; padding:6px 8px; font-size:12.5px; }
+.example-item textarea{ width:100%; min-height:64px; background:var(--bg); border:1px solid var(--border-strong); border-radius:6px; padding:8px; font-family:var(--mono); font-size:12px; color:var(--text); }
+.example-item-err{ color:var(--danger); font-size:11px; margin-top:4px; display:block; }
+
 /* Rows table */
 .rows-table-wrap{ overflow-x:auto; margin:0 -2px; }
 .rows-table{ width:100%; min-width:640px; border-collapse:collapse; }
@@ -981,17 +993,19 @@ function fillFormFromEndpoint(proj, ep){
   if((ep.headers||[]).length){
     addBlock('headers', { rows: ep.headers.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'' })) });
   }
-  if(ep.requestBody && (ep.requestBody.example || (ep.requestBody.fields||[]).length)){
+  if(ep.requestBody && (ep.requestBody.example || (ep.requestBody.fields||[]).length || (ep.requestBody.examples||[]).length)){
     addBlock('requestBody', {
       example: ep.requestBody.example || '',
       fields: (ep.requestBody.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+      examples: (ep.requestBody.examples||[]).map(ex=>({ id:uid(), name:ex.name||'', value:ex.value||'' })),
     });
   }
-  const responses = (ep.responses && ep.responses.length) ? ep.responses : [{ code:200, description:'', example:'', fields:[] }];
+  const responses = (ep.responses && ep.responses.length) ? ep.responses : [{ code:200, description:'', example:'', fields:[], examples:[] }];
   responses.forEach(r=>{
     addBlock('response', {
       code: r.code || 200, description: r.description || '', example: r.example || '',
       fields: (r.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+      examples: (r.examples||[]).map(ex=>({ id:uid(), name:ex.name||'', value:ex.value||'' })),
     });
   });
 }
@@ -1006,8 +1020,8 @@ function addBlock(type, data){
   const block = Object.assign({ id: uid(), type }, data || {});
   if(type==='summary'){ block.summary = block.summary || ''; block.description = block.description || ''; }
   if(type==='parameters' || type==='headers'){ block.rows = block.rows || []; }
-  if(type==='requestBody'){ block.example = block.example || ''; block.fields = block.fields || []; }
-  if(type==='response'){ block.code = block.code || 200; block.description = block.description || ''; block.example = block.example || ''; block.fields = block.fields || []; }
+  if(type==='requestBody'){ block.example = block.example || ''; block.fields = block.fields || []; block.examples = block.examples || []; }
+  if(type==='response'){ block.code = block.code || 200; block.description = block.description || ''; block.example = block.example || ''; block.fields = block.fields || []; block.examples = block.examples || []; }
   // Summary & description reads best pinned right under Basic info, ahead of
   // parameters/headers/body/response — insert it first regardless of click order.
   if(type==='summary') blocks.unshift(block); else blocks.push(block);
@@ -1065,6 +1079,26 @@ function jsonPasteHtml(block, fieldKey){
     </div>`;
 }
 
+function namedExamplesHtml(block){
+  const examples = block.examples || [];
+  return `
+    <div class="examples-section" data-examples="${block.id}">
+      <div class="examples-section-head">
+        <span class="hint">Named examples — extra scenarios beyond the default above (e.g. "Amount too low"). Give a Request-body example and a Response example the same name to pair them in Try It.</span>
+      </div>
+      ${examples.map(ex=>`
+        <div class="example-item" data-example="${ex.id}">
+          <div class="example-item-head">
+            <input type="text" data-ef="name" value="${escapeHtml(ex.name)}" placeholder="Scenario name, e.g. Amount too low">
+            <button type="button" class="row-del" data-del-example="${ex.id}" title="Remove example">✕</button>
+          </div>
+          <textarea data-ef="value" placeholder='{ "amount": 10, "currency": "INR" }'>${escapeHtml(ex.value)}</textarea>
+          <span class="example-item-err hidden" data-example-err="${ex.id}"></span>
+        </div>`).join('')}
+      <button type="button" class="add-row-btn" data-add-example="${block.id}">+ Add named example</button>
+    </div>`;
+}
+
 const DRAG_HANDLE = `<span class="drag-handle" data-drag-handle title="Drag to reorder">⠿</span>`;
 
 function renderBlockHtml(block){
@@ -1100,6 +1134,7 @@ function renderBlockHtml(block){
       <div class="card-head">${DRAG_HANDLE}<div class="card-title">Request body (JSON)</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
       ${jsonPasteHtml(block, 'requestBody')}
       ${block.fields.length ? rowsTableHtml({ id:block.id, rows:block.fields }, false) : `<div class="hint">No fields yet — paste JSON above, or add rows once inferred.</div>`}
+      ${namedExamplesHtml(block)}
     </div>`;
   }
   if(block.type==='response'){
@@ -1121,6 +1156,7 @@ function renderBlockHtml(block){
       </div>
       ${jsonPasteHtml(block, 'response')}
       ${block.fields.length ? rowsTableHtml({ id:block.id, rows:block.fields }, false) : `<div class="hint">No fields yet — paste a JSON example above, or add rows once inferred.</div>`}
+      ${namedExamplesHtml(block)}
     </div>`;
   }
   return '';
@@ -1176,6 +1212,45 @@ function bindBlockEvents(container){
         input.addEventListener('input', ()=>{ block[key] = input.value; });
       });
     }
+  });
+  container.querySelectorAll('[data-add-example]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const block = blockById(btn.getAttribute('data-add-example'));
+      block.examples = block.examples || [];
+      block.examples.push({ id: uid(), name: '', value: '' });
+      renderBlocks();
+    });
+  });
+  container.querySelectorAll('[data-del-example]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const exId = btn.getAttribute('data-del-example');
+      blocks.forEach(b=>{
+        if(!b.examples) return;
+        const i = b.examples.findIndex(ex=>ex.id===exId);
+        if(i>=0) b.examples.splice(i,1);
+      });
+      renderBlocks();
+    });
+  });
+  container.querySelectorAll('[data-example]').forEach(exEl=>{
+    const exId = exEl.getAttribute('data-example');
+    const block = blocks.find(b=>(b.examples||[]).some(ex=>ex.id===exId));
+    const ex = block && block.examples.find(e=>e.id===exId);
+    if(!ex) return;
+    exEl.querySelectorAll('[data-ef]').forEach(input=>{
+      const key = input.getAttribute('data-ef');
+      input.addEventListener('input', ()=>{
+        ex[key] = input.value;
+        const errEl = container.querySelector(`[data-example-err="${exId}"]`);
+        if(key==='value' && errEl) errEl.classList.add('hidden');
+      });
+      input.addEventListener('blur', ()=>{
+        if(key!=='value' || !input.value.trim()) return;
+        const errEl = container.querySelector(`[data-example-err="${exId}"]`);
+        try{ JSON.parse(input.value); errEl.classList.add('hidden'); }
+        catch(e){ errEl.textContent = "Couldn't parse that as JSON — check for a missing comma or quote."; errEl.classList.remove('hidden'); }
+      });
+    });
   });
   container.querySelectorAll('[data-paste-target]').forEach(ta=>{
     ta.addEventListener('input', ()=>{
@@ -1285,6 +1360,7 @@ document.addEventListener('click', (e)=>{
 /* ==================== Save / publish ==================== */
 function gatherEndpointFromForm(){
   const cleanRows = rows => (rows||[]).filter(r=>r.name.trim()).map(r=>({ name:r.name.trim(), type:r.type, required:!!r.required, example:r.example||'', description:r.description||'' }));
+  const cleanExamples = examples => (examples||[]).filter(ex=>ex.name.trim() && ex.value.trim()).map(ex=>({ name:ex.name.trim(), value:ex.value.trim() }));
   const path = document.getElementById('fPath').value.trim() || '/untitled';
   const pathParamNames = new Set([...path.matchAll(/\{([^}]+)\}/g)].map(m=>m[1]));
   const summaryBlock = blocks.find(b=>b.type==='summary');
@@ -1304,15 +1380,15 @@ function gatherEndpointFromForm(){
     description: (summaryBlock && summaryBlock.description || '').trim(),
     parameters: cleanRows(paramsBlock && paramsBlock.rows).map(p=>({ ...p, in: pathParamNames.has(p.name) ? 'path' : 'query' })),
     headers: cleanRows(headersBlock && headersBlock.rows),
-    requestBody: (bodyBlock && (bodyBlock.example.trim() || (bodyBlock.fields||[]).length))
-      ? { example: bodyBlock.example.trim(), fields: cleanRows(bodyBlock.fields), examples: [] }
+    requestBody: (bodyBlock && (bodyBlock.example.trim() || (bodyBlock.fields||[]).length || (bodyBlock.examples||[]).some(ex=>ex.name.trim() || ex.value.trim())))
+      ? { example: bodyBlock.example.trim(), fields: cleanRows(bodyBlock.fields), examples: cleanExamples(bodyBlock.examples) }
       : null,
     responses: responseBlocks.map(r=>({
       code: parseInt(r.code,10) || 200,
       description: r.description || '',
       fields: cleanRows(r.fields),
       example: r.example || '',
-      examples: [],
+      examples: cleanExamples(r.examples),
     })),
   };
 }
