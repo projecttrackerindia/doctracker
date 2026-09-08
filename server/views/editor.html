@@ -160,15 +160,20 @@ button{ cursor:pointer; }
 
 /* Named examples (scenarios) — alternate JSON payloads for a request body
    or a response, tagged with a name so Try It can match a request example
-   to the response example that shares its name. */
-.examples-section{ margin-top:2px; }
-.examples-section-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+   to the response example that shares its name. Response-side examples
+   also carry their own status code, so a single Response block can host
+   several status codes without needing a new block per code. */
+.examples-section{ margin-top:14px; padding-top:14px; border-top:1px dashed var(--border-strong); }
+.examples-section-head{ margin-bottom:10px; }
 .examples-section-head .hint{ margin:0; }
-.example-item{ background:var(--surface-2); border:1px solid var(--border-strong); border-radius:8px; padding:10px; margin-bottom:8px; }
-.example-item-head{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }
-.example-item-head input[data-f="name"]{ flex:1; background:var(--bg); border:1px solid var(--border-strong); border-radius:6px; padding:6px 8px; font-size:12.5px; }
-.example-item textarea{ width:100%; min-height:64px; background:var(--bg); border:1px solid var(--border-strong); border-radius:6px; padding:8px; font-family:var(--mono); font-size:12px; color:var(--text); }
+.example-item{ background:var(--surface-2); border:1px solid var(--border-strong); border-radius:10px; padding:14px; margin-bottom:12px; }
+.example-item-top{ display:flex; align-items:flex-start; gap:10px; margin-bottom:12px; }
+.example-item-top .field-grid{ flex:1; }
+.example-item-kill{ background:none; border:none; color:var(--text-faint); padding:6px; border-radius:6px; margin-top:18px; flex-shrink:0; }
+.example-item-kill:hover{ color:var(--danger); background:var(--danger-soft); }
+.example-item .json-paste{ margin-bottom:12px; }
 .example-item-err{ color:var(--danger); font-size:11px; margin-top:4px; display:block; }
+.example-item .rows-table-wrap{ margin-top:2px; }
 
 /* Rows table */
 .rows-table-wrap{ overflow-x:auto; margin:0 -2px; }
@@ -204,6 +209,9 @@ button{ cursor:pointer; }
 .add-block-menu button:hover{ background:var(--surface-hover); }
 .add-block-menu button:disabled{ opacity:.35; cursor:not-allowed; }
 .add-block-menu button .sub{ font-size:10.5px; color:var(--text-faint); }
+.add-block-menu button .menu-added-badge{ font-size:9.5px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; color:var(--accent); margin-top:2px; }
+@keyframes cardFlash{ 0%{ box-shadow:0 0 0 2px var(--accent); } 100%{ box-shadow:0 0 0 0 transparent; } }
+.card.card-flash{ animation:cardFlash 1s ease-out; }
 @media (max-width:640px){
   .add-block{ right:16px; bottom:82px; }
   .add-block-btn{ height:48px; padding:0 16px 0 14px; }
@@ -997,7 +1005,10 @@ function fillFormFromEndpoint(proj, ep){
     addBlock('requestBody', {
       example: ep.requestBody.example || '',
       fields: (ep.requestBody.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
-      examples: (ep.requestBody.examples||[]).map(ex=>({ id:uid(), name:ex.name||'', value:ex.value||'' })),
+      examples: (ep.requestBody.examples||[]).map(ex=>({
+        id:uid(), name:ex.name||'', description:ex.description||'', value:ex.value||'',
+        fields: (ex.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+      })),
     });
   }
   const responses = (ep.responses && ep.responses.length) ? ep.responses : [{ code:200, description:'', example:'', fields:[], examples:[] }];
@@ -1005,7 +1016,10 @@ function fillFormFromEndpoint(proj, ep){
     addBlock('response', {
       code: r.code || 200, description: r.description || '', example: r.example || '',
       fields: (r.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
-      examples: (r.examples||[]).map(ex=>({ id:uid(), name:ex.name||'', value:ex.value||'' })),
+      examples: (r.examples||[]).map(ex=>({
+        id:uid(), name:ex.name||'', statusCode:ex.statusCode||'', description:ex.description||'', value:ex.value||'',
+        fields: (ex.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+      })),
     });
   });
 }
@@ -1016,7 +1030,11 @@ function fillFormFromEndpoint(proj, ep){
 // being capped at one.
 const SINGLETON_BLOCKS = ['parameters','headers','requestBody'];
 function addBlock(type, data){
-  if(SINGLETON_BLOCKS.includes(type) && blocks.some(b=>b.type===type)) return; // singleton blocks
+  if(SINGLETON_BLOCKS.includes(type) && blocks.some(b=>b.type===type)){
+    const existing = blocks.find(b=>b.type===type);
+    highlightBlock(existing.id);
+    return existing;
+  }
   const block = Object.assign({ id: uid(), type }, data || {});
   if(type==='summary'){ block.summary = block.summary || ''; block.description = block.description || ''; }
   if(type==='parameters' || type==='headers'){ block.rows = block.rows || []; }
@@ -1026,6 +1044,18 @@ function addBlock(type, data){
   // parameters/headers/body/response — insert it first regardless of click order.
   if(type==='summary') blocks.unshift(block); else blocks.push(block);
   return block;
+}
+// Menu items are never disabled (see updateAddMenuAvailability) — clicking a
+// singleton block type that already exists scrolls to it and flashes its
+// border instead of silently doing nothing, so "why won't this add" never
+// happens without an answer.
+function highlightBlock(id){
+  requestAnimationFrame(()=>{
+    const el = document.querySelector(`[data-block="${id}"]`);
+    if(!el) return;
+    el.scrollIntoView({ behavior:'smooth', block:'center' });
+    el.classList.remove('card-flash'); void el.offsetWidth; el.classList.add('card-flash');
+  });
 }
 function removeBlock(id){
   const idx = blocks.findIndex(b=>b.id===id);
@@ -1080,22 +1110,49 @@ function jsonPasteHtml(block, fieldKey){
 }
 
 function namedExamplesHtml(block){
+  const isResponse = block.type === 'response';
   const examples = block.examples || [];
   return `
     <div class="examples-section" data-examples="${block.id}">
       <div class="examples-section-head">
-        <span class="hint">Named examples — extra scenarios beyond the default above (e.g. "Amount too low"). Give a Request-body example and a Response example the same name to pair them in Try It.</span>
+        <span class="hint">Named examples — extra scenarios beyond the default above (e.g. "Amount too low"). ${isResponse ? 'Each can have its own status code — no need to add another Response block just to vary the code within this scenario.' : 'Give a request-body example and a response example the same name to pair them in Try It.'}</span>
       </div>
-      ${examples.map(ex=>`
-        <div class="example-item" data-example="${ex.id}">
-          <div class="example-item-head">
-            <input type="text" data-ef="name" value="${escapeHtml(ex.name)}" placeholder="Scenario name, e.g. Amount too low">
-            <button type="button" class="row-del" data-del-example="${ex.id}" title="Remove example">✕</button>
-          </div>
-          <textarea data-ef="value" placeholder='{ "amount": 10, "currency": "INR" }'>${escapeHtml(ex.value)}</textarea>
-          <span class="example-item-err hidden" data-example-err="${ex.id}"></span>
-        </div>`).join('')}
+      ${examples.map(ex=>namedExampleItemHtml(ex, isResponse)).join('')}
       <button type="button" class="add-row-btn" data-add-example="${block.id}">+ Add named example</button>
+    </div>`;
+}
+
+function namedExampleItemHtml(ex, isResponse){
+  const fields = ex.fields || [];
+  return `
+    <div class="example-item" data-example="${ex.id}">
+      <div class="example-item-top">
+        <div class="field-grid">
+          <div class="field">
+            <label>Scenario name</label>
+            <input type="text" data-ef="name" value="${escapeHtml(ex.name)}" placeholder="e.g. Amount too low">
+          </div>
+          ${isResponse ? `
+          <div class="field">
+            <label>Status code</label>
+            <input type="text" data-ef="statusCode" value="${escapeHtml(ex.statusCode||'')}" placeholder="e.g. 400">
+          </div>` : ''}
+          <div class="field span2">
+            <label>Description</label>
+            <input type="text" data-ef="description" value="${escapeHtml(ex.description||'')}" placeholder="${isResponse ? 'e.g. Order amount below the minimum' : 'When does this request happen?'}">
+          </div>
+        </div>
+        <button type="button" class="example-item-kill" data-del-example="${ex.id}" title="Remove example">✕</button>
+      </div>
+      <div class="json-paste">
+        <div class="hint" style="margin-bottom:6px;">Paste a JSON example — fields below will be filled in automatically.</div>
+        <textarea data-ef="value" placeholder='{ "amount": 10, "currency": "INR" }'>${escapeHtml(ex.value)}</textarea>
+        <div class="json-paste-actions">
+          <button type="button" class="add-row-btn" data-infer-example="${ex.id}">Infer fields from JSON</button>
+          <span class="err hidden" data-example-err="${ex.id}"></span>
+        </div>
+      </div>
+      ${fields.length ? rowsTableHtml({ id: ex.id, rows: fields }, false) : `<div class="hint">No fields yet — paste JSON above, or add rows once inferred.</div>`}
     </div>`;
 }
 
@@ -1162,14 +1219,35 @@ function renderBlockHtml(block){
   return '';
 }
 
+/* A "rows" array can live at three levels now: a Parameters/Headers block's
+   own rows, a Request-body/Response block's top-level fields, or a nested
+   named example's own fields. This resolves any of their ids to the right
+   array so add/remove-row handlers don't need to know which level they're at. */
+function findRowsArrayById(id){
+  const block = blocks.find(b=>b.id===id);
+  if(block) return block.type==='parameters'||block.type==='headers' ? block.rows : block.fields;
+  for(const b of blocks){
+    const ex = (b.examples||[]).find(e=>e.id===id);
+    if(ex){ ex.fields = ex.fields || []; return ex.fields; }
+  }
+  return null;
+}
+function findExampleById(id){
+  for(const b of blocks){
+    const ex = (b.examples||[]).find(e=>e.id===id);
+    if(ex) return ex;
+  }
+  return null;
+}
+
 function bindBlockEvents(container){
   container.querySelectorAll('[data-kill]').forEach(btn=>{
     btn.addEventListener('click', ()=> removeBlock(btn.getAttribute('data-kill')));
   });
   container.querySelectorAll('[data-add-row]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      const block = blockById(btn.getAttribute('data-add-row'));
-      const rows = block.type==='parameters'||block.type==='headers' ? block.rows : block.fields;
+      const rows = findRowsArrayById(btn.getAttribute('data-add-row'));
+      if(!rows) return;
       rows.push({ id:uid(), name:'', type:'String', required:false, example:'', description:'' });
       renderBlocks();
     });
@@ -1180,6 +1258,11 @@ function bindBlockEvents(container){
       blocks.forEach(b=>{
         const rows = b.type==='parameters'||b.type==='headers' ? b.rows : (b.fields||null);
         if(rows){ const i = rows.findIndex(r=>r.id===rowId); if(i>=0) rows.splice(i,1); }
+        (b.examples||[]).forEach(ex=>{
+          if(!ex.fields) return;
+          const i = ex.fields.findIndex(r=>r.id===rowId);
+          if(i>=0) ex.fields.splice(i,1);
+        });
       });
       renderBlocks();
     });
@@ -1188,6 +1271,7 @@ function bindBlockEvents(container){
     const block = blockById(cardEl.getAttribute('data-block'));
     if(!block) return;
     cardEl.querySelectorAll('tr[data-row]').forEach(rowEl=>{
+      if(rowEl.closest('.example-item')) return; // nested example rows are bound separately below
       const rowId = rowEl.getAttribute('data-row');
       const rows = block.type==='parameters'||block.type==='headers' ? block.rows : block.fields;
       const row = rows.find(r=>r.id===rowId);
@@ -1217,7 +1301,9 @@ function bindBlockEvents(container){
     btn.addEventListener('click', ()=>{
       const block = blockById(btn.getAttribute('data-add-example'));
       block.examples = block.examples || [];
-      block.examples.push({ id: uid(), name: '', value: '' });
+      const fresh = { id: uid(), name: '', description: '', value: '', fields: [] };
+      if(block.type==='response') fresh.statusCode = '';
+      block.examples.push(fresh);
       renderBlocks();
     });
   });
@@ -1234,8 +1320,7 @@ function bindBlockEvents(container){
   });
   container.querySelectorAll('[data-example]').forEach(exEl=>{
     const exId = exEl.getAttribute('data-example');
-    const block = blocks.find(b=>(b.examples||[]).some(ex=>ex.id===exId));
-    const ex = block && block.examples.find(e=>e.id===exId);
+    const ex = findExampleById(exId);
     if(!ex) return;
     exEl.querySelectorAll('[data-ef]').forEach(input=>{
       const key = input.getAttribute('data-ef');
@@ -1250,6 +1335,38 @@ function bindBlockEvents(container){
         try{ JSON.parse(input.value); errEl.classList.add('hidden'); }
         catch(e){ errEl.textContent = "Couldn't parse that as JSON — check for a missing comma or quote."; errEl.classList.remove('hidden'); }
       });
+    });
+    exEl.querySelectorAll('tr[data-row]').forEach(rowEl=>{
+      const rowId = rowEl.getAttribute('data-row');
+      const row = (ex.fields||[]).find(r=>r.id===rowId);
+      if(!row) return;
+      rowEl.querySelectorAll('[data-f]').forEach(input=>{
+        const key = input.getAttribute('data-f');
+        const evt = input.type==='checkbox' ? 'change' : 'input';
+        input.addEventListener(evt, ()=>{
+          row[key] = input.type==='checkbox' ? input.checked : input.value;
+        });
+      });
+    });
+  });
+  container.querySelectorAll('[data-infer-example]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const exId = btn.getAttribute('data-infer-example');
+      const ex = findExampleById(exId);
+      if(!ex) return;
+      const errEl = container.querySelector(`[data-example-err="${exId}"]`);
+      errEl.classList.add('hidden');
+      try{
+        const parsed = JSON.parse(ex.value || '{}');
+        const fields = inferFieldsFromJson(parsed);
+        if(!fields.length){ errEl.textContent = 'That JSON has no top-level keys to infer.'; errEl.classList.remove('hidden'); return; }
+        ex.fields = fields;
+        renderBlocks();
+        toast(`Inferred ${fields.length} field${fields.length===1?'':'s'} from JSON`);
+      }catch(e){
+        errEl.textContent = "Couldn't parse that as JSON — check for a missing comma or quote.";
+        errEl.classList.remove('hidden');
+      }
     });
   });
   container.querySelectorAll('[data-paste-target]').forEach(ta=>{
@@ -1336,10 +1453,25 @@ function bindBlockDragAndDrop(container){
 
 /* ==================== Add-block menu ==================== */
 function updateAddMenuAvailability(){
-  // Summary & description is never disabled — see SINGLETON_BLOCKS note above.
-  document.getElementById('menuParameters').disabled = blocks.some(b=>b.type==='parameters');
-  document.getElementById('menuHeaders').disabled = blocks.some(b=>b.type==='headers');
-  document.getElementById('menuRequestBody').disabled = blocks.some(b=>b.type==='requestBody');
+  // Nothing is ever disabled here — every block type stays clickable. For the
+  // singleton types (Parameters/Headers/Request body), clicking again when
+  // one already exists just scrolls to and flashes it (see addBlock/highlightBlock)
+  // instead of doing nothing, and this badge tells you why before you click.
+  const singletonMenuIds = { parameters:'menuParameters', headers:'menuHeaders', requestBody:'menuRequestBody' };
+  Object.entries(singletonMenuIds).forEach(([type, id])=>{
+    const btn = document.getElementById(id);
+    const sub = btn.querySelector('.sub');
+    let badge = btn.querySelector('.menu-added-badge');
+    const exists = blocks.some(b=>b.type===type);
+    if(exists && !badge){
+      badge = document.createElement('span');
+      badge.className = 'menu-added-badge';
+      badge.textContent = 'Added — click to jump to it';
+      btn.appendChild(badge);
+    } else if(!exists && badge){
+      badge.remove();
+    }
+  });
 }
 document.getElementById('addBlockBtn').addEventListener('click', (e)=>{
   e.stopPropagation();
@@ -1347,7 +1479,7 @@ document.getElementById('addBlockBtn').addEventListener('click', (e)=>{
 });
 document.getElementById('addBlockMenu').addEventListener('click', (e)=>{
   const btn = e.target.closest('[data-block]');
-  if(!btn || btn.disabled) return;
+  if(!btn) return;
   addBlock(btn.getAttribute('data-block'), {});
   document.getElementById('addBlockMenu').classList.remove('open');
   renderBlocks();
@@ -1360,7 +1492,13 @@ document.addEventListener('click', (e)=>{
 /* ==================== Save / publish ==================== */
 function gatherEndpointFromForm(){
   const cleanRows = rows => (rows||[]).filter(r=>r.name.trim()).map(r=>({ name:r.name.trim(), type:r.type, required:!!r.required, example:r.example||'', description:r.description||'' }));
-  const cleanExamples = examples => (examples||[]).filter(ex=>ex.name.trim() && ex.value.trim()).map(ex=>({ name:ex.name.trim(), value:ex.value.trim() }));
+  const cleanExamples = (examples, isResponse) => (examples||[]).filter(ex=>ex.name.trim() && ex.value.trim()).map(ex=>({
+    name: ex.name.trim(),
+    description: ex.description||'',
+    value: ex.value.trim(),
+    fields: cleanRows(ex.fields),
+    ...(isResponse ? { statusCode: ex.statusCode ? (parseInt(ex.statusCode,10) || ex.statusCode.trim()) : '' } : {}),
+  }));
   const path = document.getElementById('fPath').value.trim() || '/untitled';
   const pathParamNames = new Set([...path.matchAll(/\{([^}]+)\}/g)].map(m=>m[1]));
   const summaryBlock = blocks.find(b=>b.type==='summary');
@@ -1381,14 +1519,14 @@ function gatherEndpointFromForm(){
     parameters: cleanRows(paramsBlock && paramsBlock.rows).map(p=>({ ...p, in: pathParamNames.has(p.name) ? 'path' : 'query' })),
     headers: cleanRows(headersBlock && headersBlock.rows),
     requestBody: (bodyBlock && (bodyBlock.example.trim() || (bodyBlock.fields||[]).length || (bodyBlock.examples||[]).some(ex=>ex.name.trim() || ex.value.trim())))
-      ? { example: bodyBlock.example.trim(), fields: cleanRows(bodyBlock.fields), examples: cleanExamples(bodyBlock.examples) }
+      ? { example: bodyBlock.example.trim(), fields: cleanRows(bodyBlock.fields), examples: cleanExamples(bodyBlock.examples, false) }
       : null,
     responses: responseBlocks.map(r=>({
       code: parseInt(r.code,10) || 200,
       description: r.description || '',
       fields: cleanRows(r.fields),
       example: r.example || '',
-      examples: cleanExamples(r.examples),
+      examples: cleanExamples(r.examples, true),
     })),
   };
 }

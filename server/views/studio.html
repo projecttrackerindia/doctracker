@@ -8889,13 +8889,17 @@ function jsonDiffScore(a, b){
 
 /* Every response tagged with a scenario name: the response's own "Default"
    (its main code/description/example) plus any named alternates in
-   response.examples — each carrying a reference back to its parent response
-   so we know what status code + description to show. */
+   response.examples. A named example can carry its own status code and
+   description now — falls back to the parent response block's when it
+   doesn't, so older/simpler endpoints still work unchanged. */
 function tryItResponseScenarios(ep){
   const out = [];
   (ep.responses||[]).forEach(r=>{
     if(r.example && r.example.trim()) out.push({ name:'Default', code:r.code, description:r.description, value:r.example, response:r });
-    (r.examples||[]).forEach(ex=>{ if(ex.name && ex.value) out.push({ name:ex.name, code:r.code, description:r.description, value:ex.value, response:r }); });
+    (r.examples||[]).forEach(ex=>{
+      if(!ex.name || !ex.value) return;
+      out.push({ name:ex.name, code: ex.statusCode || r.code, description: ex.description || r.description, value:ex.value, response:r });
+    });
   });
   return out;
 }
