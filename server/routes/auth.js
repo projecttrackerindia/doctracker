@@ -126,7 +126,14 @@ router.post('/login', authLimiter, async (req, res) => {
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json(genericError);
 
-    await pool.query('UPDATE users SET last_login_at = now() WHERE id = $1', [user.id]);
+    // Reset last_activity_at here too, not just last_login_at — verifySession()
+    // (authGuard.js) checks last_activity_at on every subsequent request to
+    // decide idle-timeout, and it doesn't know or care that a fresh login just
+    // happened. Without this, anyone who was ever idle-logged-out would log
+    // back in successfully but get bounced straight back to /login.html?reason=idle
+    // on the very next page load, since the DB column would still be ~30+
+    // minutes stale from the session that just timed out.
+    await pool.query('UPDATE users SET last_login_at = now(), last_activity_at = now() WHERE id = $1', [user.id]);
 
     const safeUser = {
       id: user.id, username: user.username, email: user.email, organisation: user.organisation, role: user.role,
