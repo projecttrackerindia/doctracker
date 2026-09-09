@@ -71,6 +71,7 @@
   const form = document.getElementById('registerForm');
   const alertBox = document.getElementById('formAlert');
   const submitBtn = document.getElementById('submitBtn');
+  const submitBtnLabel = document.getElementById('submitBtnLabel');
   const statusPill = document.getElementById('regStatus');
   const consoleBody = document.getElementById('regConsoleBody');
 
@@ -195,9 +196,11 @@
   function showAlert(message) {
     alertBox.textContent = message;
     alertBox.className = 'form-alert error';
+    void alertBox.offsetWidth; // restart the shake animation on repeated errors — see login.js for why
+    alertBox.classList.add('shake');
   }
   function hideAlert() {
-    alertBox.className = 'form-alert error';
+    alertBox.className = 'form-alert';
     alertBox.textContent = '';
   }
 

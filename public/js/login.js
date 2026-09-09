@@ -6,13 +6,16 @@
   const consoleBody = document.getElementById('loginConsoleBody');
   const identifierInput = document.getElementById('identifier');
   const passwordInput = document.getElementById('password');
+  const submitBtnLabel = document.getElementById('submitBtnLabel');
 
   function escapeHtml(str) {
     return str.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  // Masks the identifier for display in the decorative JSON preview only — the
-  // real input box stays plain text so you can proofread what you typed.
+  // Masks the identifier for display in the decorative JSON preview too — the
+  // real input box now hides it by default as well (type="password", with
+  // its own Show/Hide toggle exactly like the password field below), so both
+  // stay consistent instead of the preview being the only masked copy.
   function maskIdentifier(val) {
     if (!val) return '';
     const at = val.indexOf('@');
@@ -54,10 +57,16 @@
 
   function showAlert(message) {
     alertBox.textContent = message;
+    // Restart the shake animation even if an alert is already showing
+    // (e.g. two failed attempts in a row) — removing the class, forcing a
+    // reflow, then re-adding it is what makes a CSS animation replay instead
+    // of being a no-op the second time the same class is set.
     alertBox.className = 'form-alert error';
+    void alertBox.offsetWidth;
+    alertBox.classList.add('shake');
   }
   function hideAlert() {
-    alertBox.className = 'form-alert error';
+    alertBox.className = 'form-alert';
     alertBox.textContent = '';
   }
 
@@ -66,7 +75,8 @@
     hideAlert();
     setStatus('warn', 'sending…');
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Signing in…';
+    submitBtn.classList.add('is-loading');
+    submitBtnLabel.textContent = 'Signing in…';
 
     try {
       const res = await fetch('/api/auth/login', {
@@ -84,21 +94,30 @@
         setStatus('fail', String(res.status));
         showAlert(data.error || 'Sign in failed. Please try again.');
         submitBtn.disabled = false;
-        submitBtn.textContent = 'Sign in';
+        submitBtn.classList.remove('is-loading');
+        submitBtnLabel.textContent = 'Sign in';
         return;
       }
 
       setStatus('ok', '200 OK');
+      // Brief success flourish (checkmark, green button) before navigating —
+      // a beat of positive feedback instead of the page silently jumping the
+      // instant the response lands, which read as the click not registering.
+      submitBtn.classList.remove('is-loading');
+      submitBtn.classList.add('is-success');
+      submitBtnLabel.textContent = 'Signed in';
       // The organisation name never appears in the URL in the clear — the
       // server hands back an encrypted token bound to this account's org
       // (see server/crypto.js), and every tenant-scoped page is addressed as
       // /<token>/... instead of /....
-      window.location.href = data.orgToken ? `/${data.orgToken}/dashboard.html` : '/dashboard.html';
+      const dest = data.orgToken ? `/${data.orgToken}/dashboard.html` : '/dashboard.html';
+      setTimeout(() => { window.location.href = dest; }, 450);
     } catch (err) {
       setStatus('fail', 'network');
       showAlert('Could not reach the server. Check your connection and try again.');
       submitBtn.disabled = false;
-      submitBtn.textContent = 'Sign in';
+      submitBtn.classList.remove('is-loading');
+      submitBtnLabel.textContent = 'Sign in';
     }
   });
 

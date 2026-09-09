@@ -1312,12 +1312,26 @@ body.tryit-standalone .rail-scrim{ display:none !important; }
 body.tryit-standalone #fabDD{ display:none !important; }
 body.tryit-standalone #tryItModal{
   position:fixed; inset:56px 0 0 0; background:var(--bg); backdrop-filter:none; -webkit-backdrop-filter:none;
-  align-items:flex-start; justify-content:center; padding:32px clamp(16px,4vw,56px); overflow-y:auto;
+  align-items:flex-start; justify-content:center; padding:40px clamp(16px,4vw,56px); overflow-y:auto;
 }
+/* Widened from a 760px centered column (which left large dead margins on
+   anything wider than a laptop screen) to fill most of the tab, and given
+   its own card chrome (background/border/shadow) instead of blending flat
+   into the page — a full-tab tool with no visual container read as
+   unfinished, especially next to the still-boxed method/path row. */
 body.tryit-standalone #tryItModal .modal{
-  width:100%; max-width:760px; max-height:none; margin:0 auto; box-shadow:none; border:none;
-  background:transparent; backdrop-filter:none; -webkit-backdrop-filter:none; padding:0;
+  width:100%; max-width:1040px; max-height:none; margin:0 auto;
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-modal); backdrop-filter:none; -webkit-backdrop-filter:none;
+  padding:36px 42px 40px;
 }
+/* Request body / response textareas and <pre> blocks scale up with the
+   wider card instead of staying at the same size as the old 760px layout. */
+body.tryit-standalone #tryItBodyInput{ min-height:170px; font-size:13px; }
+body.tryit-standalone #tryItRequestPreview,
+body.tryit-standalone #tryItResponseBody{ max-height:360px; font-size:13px; }
+body.tryit-standalone #tryItMethodBadge{ font-size:13px; padding:5px 11px; }
+body.tryit-standalone #tryItPath{ font-size:16px; }
 /* No docs page underneath to go "back" to in this tab (the sidebar is gone and
    this is the tab's only content) — closing would just leave an empty shell. */
 body.tryit-standalone #tryItClose{ display:none; }

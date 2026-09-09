@@ -55,25 +55,30 @@
         </button>
       </div>
 
-      <div class="form-alert error" id="formAlert"></div>
+      <div class="form-alert" id="formAlert"></div>
 
       <form id="loginForm" novalidate>
         <div class="field">
           <label for="identifier">Email or username</label>
           <div class="input-wrap">
-            <input id="identifier" name="identifier" type="text" autocomplete="username" placeholder="you@company.com" required>
+            <input id="identifier" name="identifier" type="password" autocomplete="username" placeholder="you@company.com" class="has-toggle" required>
+            <button type="button" class="pw-toggle" data-target="identifier">Show</button>
           </div>
         </div>
 
         <div class="field">
           <label for="password">Password</label>
           <div class="input-wrap">
-            <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required>
+            <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" class="has-toggle" required>
             <button type="button" class="pw-toggle" data-target="password">Show</button>
           </div>
         </div>
 
-        <button type="submit" class="btn-primary" id="submitBtn">Sign in</button>
+        <button type="submit" class="btn-primary" id="submitBtn">
+          <span class="btn-spinner"></span>
+          <svg class="btn-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+          <span id="submitBtnLabel">Sign in</span>
+        </button>
       </form>
 
       <div class="divider-fine"></div>
