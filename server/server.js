@@ -183,6 +183,15 @@ function tokenForUser(user) {
   return dataCrypto.encryptOrgToken(user.organisation);
 }
 
+// Organisation names are free text (2–100 chars, no character restrictions —
+// see validateOrganisation in validators.js), so unlike the JSON.stringify()
+// above, injecting one into raw HTML (the topbar's org-name lockup below)
+// needs escaping — otherwise a company name containing e.g. "<script>" would
+// execute for every user who ever loads their own workspace.
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 // This is the real DocTracker workspace (documentation builder). It's rendered
 // per-request (not served as a static file) so we can inject the signed-in
 // user's identity and a fresh CSP nonce — that's also what keeps it gated by
@@ -200,7 +209,10 @@ function renderDashboard(req, res) {
   const html = studioTemplate
     .replace(/__CSP_NONCE__/g, res.locals.cspNonce)
     .replace('__AUTH_USER_JSON__', JSON.stringify(authUser))
-    .replace(/__ORG_TOKEN__/g, tokenForUser(req.user));
+    .replace(/__ORG_TOKEN__/g, tokenForUser(req.user))
+    // Topbar brand lockup shows the signed-in user's own organisation name
+    // instead of the static "DocTracker" — see server/views/studio.html.
+    .replace(/__ORG_NAME__/g, escapeHtml(req.user.organisation));
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
 }
