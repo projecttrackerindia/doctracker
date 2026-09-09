@@ -1016,7 +1016,7 @@ pre.code-block{
 .resp-tab:hover{ border-color:var(--border-strong); color:var(--text); }
 .resp-tab.active{ background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
 .resp-tab[disabled]{ opacity:.4; cursor:not-allowed; }
-.resp-item{ border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface); margin-bottom:8px; overflow:hidden; }
+.resp-item{ border:1px solid var(--border); border-left:3px solid var(--item-accent, var(--border-strong)); border-radius:var(--radius-md); background:var(--surface); margin-bottom:8px; overflow:hidden; }
 .resp-row{ display:flex; align-items:center; gap:10px; padding:11px 14px; cursor:pointer; }
 .resp-row:hover{ background:var(--surface-hover); }
 .resp-code{ font-family:var(--mono); font-weight:700; font-size:12.5px; width:34px; flex-shrink:0; }
@@ -1033,12 +1033,29 @@ pre.code-block{
 .auth-card .ic{ width:30px; height:30px; border-radius:8px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:14px; }
 .auth-card .h{ font-weight:600; font-size:13px; margin-bottom:3px; }
 .auth-card .d{ color:var(--text-dim); font-size:12px; line-height:1.6; }
+/* Auth card nested inside .doc-section-card (the combined Authentication
+   card) doesn't need its own border/background — it's already inside one. */
+.doc-section-card .auth-card{ border:none; background:transparent; padding:0 0 14px; }
+.doc-section-card .auth-card:last-child{ padding-bottom:0; }
 
 .api-overview-box{
   background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--accent);
   border-radius:var(--radius-md); padding:14px 18px; color:var(--text-dim); font-size:13px; line-height:1.65;
 }
 .api-overview-box .md-h:first-child{ margin-top:0; }
+
+/* ---------- Generic colored section card (endpoint doc viewer) ----------
+   Same treatment as .api-overview-box — a colored left border identifies
+   the section at a glance. Used to combine Authentication / Auth request
+   parameters / Auth response parameters into one card, and to give Header
+   parameters, Request and Responses a matching colored accent instead of
+   plain uncolored labels. Color is set per use via --sec-accent. */
+.doc-section-card{
+  background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--sec-accent, var(--accent));
+  border-radius:var(--radius-md); padding:14px 18px;
+}
+.doc-section-card .section-sub:first-child{ margin-top:0; }
+.doc-section-card table.data-table{ border:1px solid var(--border); }
 
 /* ---------- Control Center / Error Catalog ---------- */
 .cc-hero{ margin-bottom:26px; }
@@ -1737,13 +1754,31 @@ table.env-data-table th .sort-arrow{ font-size:9px; margin-left:3px; color:var(-
 /* ============================================================
    DYNAMIC BUILDER (params / headers / responses / architecture)
    ============================================================ */
-.builder-section{ border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface); margin-bottom:14px; overflow:hidden; }
+.builder-section{ border:1px solid var(--border); border-left:3px solid var(--border); border-radius:var(--radius-md); background:var(--surface); margin-bottom:14px; overflow:hidden; }
 .builder-head{ display:flex; align-items:center; justify-content:space-between; padding:10px 12px; background:var(--surface-2); border-bottom:1px solid var(--border); }
 .builder-title{ font-size:11.5px; font-weight:700; letter-spacing:.3px; text-transform:uppercase; color:var(--text-dim); }
 .builder-title.headers-title{ color:var(--text); font-weight:800; }
 .builder-add{ font-size:11.5px; padding:5px 10px; }
 .builder-body{ padding:8px; overflow-x:auto; }
 .auth-param-toolbar{ display:flex; align-items:center; gap:8px; }
+/* Section accent colors — same palette used for the Authentication / Header
+   parameters / Request / Responses cards in the endpoint doc viewer, applied
+   here too so a builder section reads as "the same colored tab" whether
+   you're viewing docs or editing them in +New endpoint / Edit. */
+.builder-section.accent-auth{ border-left-color:var(--patch); }
+.builder-section.accent-auth > .builder-head{ background:var(--patch-bg); }
+.builder-section.accent-header{ border-left-color:var(--get); }
+.builder-section.accent-header > .builder-head{ background:var(--get-bg); }
+.builder-section.accent-request{ border-left-color:var(--post); }
+.builder-section.accent-request > .builder-head{ background:var(--post-bg); }
+.builder-section.accent-response{ border-left-color:var(--accent); }
+.builder-section.accent-response > .builder-head{ background:var(--accent-soft); }
+/* Sub-headings used to fold what used to be separate nested builder-sections
+   (e.g. Auth "Request parameters" + "Response parameters") into one combined
+   colored card, instead of stacking boxes-within-a-box. */
+.builder-subhead-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin:18px 0 8px; padding-top:14px; border-top:1px dashed var(--border); }
+.builder-subhead-row:first-of-type{ margin-top:2px; padding-top:0; border-top:none; }
+.builder-subhead{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--text-faint); }
 .auth-json-editor{ display:block; width:100%; min-height:140px; font-size:12px; margin-top:4px; }
 .auth-json-editor.hidden{ display:none; }
 .auth-include-field label{ margin-bottom:8px; }
@@ -2371,7 +2406,7 @@ pre.json-raw{ max-height:360px; margin:0; }
     <!-- Authentication — the same fields as Project settings ▸ Auth. One
          project has one shared auth config, so editing it here updates
          that same config rather than a separate per-endpoint copy. -->
-    <div class="builder-section">
+    <div class="builder-section accent-auth">
       <div class="builder-head">
         <span class="builder-title">Authentication <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— shared across every endpoint in this project, same as Project settings ▸ Auth</span></span>
       </div>
@@ -2401,51 +2436,47 @@ pre.json-raw{ max-height:360px; margin:0; }
           <textarea id="mAuthDesc" placeholder="How to obtain a token, expiry, scopes…" style="min-height:56px; font-family:var(--sans);"></textarea>
         </div>
 
-        <div class="builder-section">
-          <div class="builder-head">
-            <span class="builder-title">Request parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what's needed to authenticate</span></span>
-            <div class="auth-param-toolbar">
-              <button type="button" class="builder-add" id="addMAuthReqRow">+ Add parameter</button>
-            </div>
-          </div>
-          <div class="builder-body">
-            <table class="dyn-table req-table">
-              <thead><tr><th class="col-name">Name</th><th class="col-type">Type</th><th class="col-req">Required</th><th class="col-example">Example</th><th class="col-desc">Description</th><th class="col-del"></th></tr></thead>
-              <tbody id="mAuthReqRows"></tbody>
-            </table>
-            <div class="json-preview-wrap">
-              <div class="json-preview-label">
-                <span>Request JSON (default example) <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— auto-generated, editable</span></span>
-                <button type="button" class="ghost icon" data-auth-json-regen="req" data-auth-scope="endpoint" title="Regenerate from parameters" style="width:auto;padding:3px 8px;font-size:10.5px;">↻ Regenerate</button>
-              </div>
-              <textarea class="mono json-preview-editable" id="mAuthReqJsonPreview" placeholder='{ "user": "string", "password": "string" }'></textarea>
-            </div>
+        <!-- Auth request/response parameters used to be two more nested
+             builder-sections (boxes inside this box) — folded into plain
+             sub-headings so the whole thing reads as one Authentication
+             card, same as the combined card on the doc viewer. -->
+        <div class="builder-subhead-row">
+          <span class="builder-subhead">Request parameters <span style="text-transform:none;font-weight:500;">— what's needed to authenticate</span></span>
+          <div class="auth-param-toolbar">
+            <button type="button" class="builder-add" id="addMAuthReqRow">+ Add parameter</button>
           </div>
         </div>
-
-        <div class="builder-section">
-          <div class="builder-head">
-            <span class="builder-title">Response parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what auth returns (token, expiry…)</span></span>
-            <div class="auth-param-toolbar">
-              <button type="button" class="builder-add" id="addMAuthRespRow">+ Add parameter</button>
-            </div>
+        <table class="dyn-table req-table">
+          <thead><tr><th class="col-name">Name</th><th class="col-type">Type</th><th class="col-req">Required</th><th class="col-example">Example</th><th class="col-desc">Description</th><th class="col-del"></th></tr></thead>
+          <tbody id="mAuthReqRows"></tbody>
+        </table>
+        <div class="json-preview-wrap">
+          <div class="json-preview-label">
+            <span>Request JSON (default example) <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— auto-generated, editable</span></span>
+            <button type="button" class="ghost icon" data-auth-json-regen="req" data-auth-scope="endpoint" title="Regenerate from parameters" style="width:auto;padding:3px 8px;font-size:10.5px;">↻ Regenerate</button>
           </div>
-          <div class="builder-body">
-            <table class="dyn-table req-table">
-              <thead><tr><th class="col-name">Name</th><th class="col-type">Type</th><th class="col-req">Required</th><th class="col-example">Example</th><th class="col-desc">Description</th><th class="col-del"></th></tr></thead>
-              <tbody id="mAuthRespRows"></tbody>
-            </table>
-            <div class="json-preview-wrap">
-              <div class="json-preview-label">
-                <span>Response JSON (default example) <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— auto-generated, editable</span></span>
-                <button type="button" class="ghost icon" data-auth-json-regen="resp" data-auth-scope="endpoint" title="Regenerate from parameters" style="width:auto;padding:3px 8px;font-size:10.5px;">↻ Regenerate</button>
-              </div>
-              <textarea class="mono json-preview-editable" id="mAuthRespJsonPreview" placeholder='{ "token": "string", "expiration": "string" }'></textarea>
-            </div>
-          </div>
+          <textarea class="mono json-preview-editable" id="mAuthReqJsonPreview" placeholder='{ "user": "string", "password": "string" }'></textarea>
         </div>
 
-        <div class="field auth-include-field">
+        <div class="builder-subhead-row">
+          <span class="builder-subhead">Response parameters <span style="text-transform:none;font-weight:500;">— what auth returns (token, expiry…)</span></span>
+          <div class="auth-param-toolbar">
+            <button type="button" class="builder-add" id="addMAuthRespRow">+ Add parameter</button>
+          </div>
+        </div>
+        <table class="dyn-table req-table">
+          <thead><tr><th class="col-name">Name</th><th class="col-type">Type</th><th class="col-req">Required</th><th class="col-example">Example</th><th class="col-desc">Description</th><th class="col-del"></th></tr></thead>
+          <tbody id="mAuthRespRows"></tbody>
+        </table>
+        <div class="json-preview-wrap">
+          <div class="json-preview-label">
+            <span>Response JSON (default example) <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— auto-generated, editable</span></span>
+            <button type="button" class="ghost icon" data-auth-json-regen="resp" data-auth-scope="endpoint" title="Regenerate from parameters" style="width:auto;padding:3px 8px;font-size:10.5px;">↻ Regenerate</button>
+          </div>
+          <textarea class="mono json-preview-editable" id="mAuthRespJsonPreview" placeholder='{ "token": "string", "expiration": "string" }'></textarea>
+        </div>
+
+        <div class="field auth-include-field" style="margin-top:16px;">
           <label>Include auth parameters in</label>
           <div class="auth-include-row">
             <label class="checkbox-row"><input type="checkbox" id="mAuthIncludeDocs"> Documentation <span class="item-sub">Overview page &amp; PDF export</span></label>
@@ -2456,7 +2487,7 @@ pre.json-raw{ max-height:360px; margin:0; }
     </div>
 
     <!-- Request parameters -->
-    <div class="builder-section">
+    <div class="builder-section accent-request">
       <div class="builder-head">
         <span class="builder-title">Request parameters</span>
         <button type="button" class="builder-add" id="addParamRow">+ Add parameter</button>
@@ -2470,7 +2501,7 @@ pre.json-raw{ max-height:360px; margin:0; }
     </div>
 
     <!-- Header parameters -->
-    <div class="builder-section">
+    <div class="builder-section accent-header">
       <div class="builder-head">
         <span class="builder-title headers-title">Header parameters</span>
         <button type="button" class="builder-add" id="addHeaderRow">+ Add header</button>
@@ -2505,7 +2536,7 @@ pre.json-raw{ max-height:360px; margin:0; }
     </div>
 
     <!-- Responses -->
-    <div class="builder-section">
+    <div class="builder-section accent-response">
       <div class="builder-head">
         <span class="builder-title">Response structures</span>
         <button type="button" class="builder-add" id="addResponseBlock">+ Add response</button>
@@ -7689,13 +7720,19 @@ function renderProjectOverview(main, projectId){
 }
 
 function paramSection(title, params, variant){
-  // variant: 'header' -> blue tint for Header parameters; a status code (e.g. 200/404) ->
+  // variant: 'header' -> blue tint for Header parameters; 'auth' -> purple tint for
+  // Authentication's request/response parameter tables; 'request' -> green tint for
+  // the Request accordion's path/query parameter tables; a status code (e.g. 200/404) ->
   // tints the table to match that response's status color; undefined/omitted -> plain gray.
   if(!params.length) return '';
   const boldNames = variant === 'header';
   let tintStyle = '';
   if(variant === 'header'){
     tintStyle = ` style="--pt-accent:var(--get); --pt-bg:var(--get-bg);"`;
+  } else if(variant === 'auth'){
+    tintStyle = ` style="--pt-accent:var(--patch); --pt-bg:var(--patch-bg);"`;
+  } else if(variant === 'request'){
+    tintStyle = ` style="--pt-accent:var(--post); --pt-bg:var(--post-bg);"`;
   } else if(variant !== undefined && variant !== null){
     const cls = respClass(variant);
     const colorVar = cls==='c2' ? '--st-2' : cls==='c3' ? '--st-3' : cls==='c4' ? '--st-4' : '--st-5';
@@ -7738,11 +7775,13 @@ function renderEndpointDoc(main, proj, ep){
 
   const hasAnyParams = pathParams.length || queryParams.length;
   const paramsHtml = hasAnyParams ? [
-    paramSection('Path parameters', pathParams),
-    paramSection('Request parameters', queryParams),
+    paramSection('Path parameters', pathParams, 'request'),
+    paramSection('Request parameters', queryParams, 'request'),
   ].join('') : `<div class="empty-field">No parameters documented.</div>`;
 
-  const headersHtml = headerParams.length ? paramSection('Header parameters', headerParams, 'header') : '';
+  const headersHtml = headerParams.length
+    ? `<div class="doc-section-card" style="--sec-accent:var(--get);">${paramSection('Header parameters', headerParams, 'header')}</div>`
+    : '';
   const hasReqJson = !!(ep.requestBody && ep.requestBody.example);
   const reqExampleList = [
     { label:'Default', value: (ep.requestBody && ep.requestBody.example) || '' },
@@ -7750,9 +7789,9 @@ function renderEndpointDoc(main, proj, ep){
   ];
 
   const requestAccordionHtml = `
-    <div class="resp-item open" data-request-item>
+    <div class="resp-item open" data-request-item style="--item-accent:var(--post);">
       <div class="resp-row" data-request-toggle>
-        <span class="resp-code" style="background:var(--accent-soft);color:var(--accent);">REQ</span>
+        <span class="resp-code" style="background:var(--post-bg);color:var(--post);">REQ</span>
         <span class="resp-desc">Path, query &amp; body parameters for this request</span>
         <span class="resp-caret">▶</span>
       </div>
@@ -7769,7 +7808,7 @@ function renderEndpointDoc(main, proj, ep){
     ? ep.responses.map((r,i)=>{
         const respExampleCount = 1 + ((r.examples||[]).length);
         return `
-      <div class="resp-item" data-resp="${i}">
+      <div class="resp-item" data-resp="${i}" style="--item-accent:var(${respColorVar(r.code)});">
         <div class="resp-row" data-resp-toggle="${i}">
           <span class="resp-code ${respClass(r.code)}">${escapeHtml(String(r.code))}</span>
           <span class="resp-desc">${r.description ? escapeHtml(r.description) : '<span class="empty-field">No description</span>'}</span>
@@ -7811,10 +7850,13 @@ function renderEndpointDoc(main, proj, ep){
   // Same Authentication block as the project Overview page (auth-card +
   // Auth request/response parameter tables) — shown here too since auth is
   // shared across every endpoint in the project and shouldn't require a trip
-  // back to Overview to see the JWT/token details.
+  // back to Overview to see the JWT/token details. Folded into a single
+  // colored .doc-section-card (purple accent) instead of three separate-
+  // looking pieces, matching the API overview card treatment.
   const authSectionHtml = `
     <div class="section">
       <div class="section-title">Authentication <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— applies to every endpoint in ${escapeHtml(proj.name)}</span></div>
+      <div class="doc-section-card" style="--sec-accent:var(--patch);">
       ${proj.auth && proj.auth.type ? `
         <div class="auth-card">
           <div class="ic">🔑</div>
@@ -7824,8 +7866,9 @@ function renderEndpointDoc(main, proj, ep){
             <div class="d">${proj.auth.description ? escapeHtml(proj.auth.description) : 'No further notes.'}</div>
           </div>
         </div>
-        ${proj.auth.includeInDocs ? paramSection('Auth request parameters', proj.auth.requestParams||[]) : ''}
-        ${proj.auth.includeInDocs ? paramSection('Auth response parameters', proj.auth.responseParams||[]) : ''}` : `<div class="auth-card"><div class="ic">🔓</div><div><div class="h">No auth configured</div><div class="d">Add authentication details in project settings.</div></div></div>`}
+        ${proj.auth.includeInDocs ? paramSection('Auth request parameters', proj.auth.requestParams||[], 'auth') : ''}
+        ${proj.auth.includeInDocs ? paramSection('Auth response parameters', proj.auth.responseParams||[], 'auth') : ''}` : `<div class="auth-card"><div class="ic">🔓</div><div><div class="h">No auth configured</div><div class="d">Add authentication details in project settings.</div></div></div>`}
+      </div>
     </div>`;
 
   main.innerHTML = `
