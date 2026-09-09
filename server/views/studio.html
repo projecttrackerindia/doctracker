@@ -1035,11 +1035,11 @@ pre.code-block{
 .doc-panel-fade{ animation:docPanelFadeIn .18s ease; }
 @keyframes docPanelFadeIn{ from{ opacity:0; transform:translateY(-3px); } to{ opacity:1; transform:translateY(0); } }
 .resp-status-heading{ display:flex; align-items:center; gap:9px; margin-bottom:10px; padding:8px 12px; border-radius:var(--radius-sm,8px); background:var(--surface-2); border:1px solid var(--border); }
-.resp-status-heading .code-pill{ font-family:var(--mono); font-weight:800; font-size:12.5px; padding:3px 9px; border-radius:999px; flex-shrink:0; }
-.resp-status-heading .code-pill.c2{ color:var(--st-2); background:var(--post-bg); }
-.resp-status-heading .code-pill.c3{ color:var(--st-3); background:var(--get-bg); }
-.resp-status-heading .code-pill.c4{ color:var(--st-4); background:var(--put-bg); }
-.resp-status-heading .code-pill.c5{ color:var(--st-5); background:var(--delete-bg); }
+.resp-status-heading .code-pill, .code-pill{ font-family:var(--mono); font-weight:800; font-size:12.5px; padding:3px 9px; border-radius:999px; flex-shrink:0; }
+.code-pill.c2{ color:var(--st-2); background:var(--post-bg); }
+.code-pill.c3{ color:var(--st-3); background:var(--get-bg); }
+.code-pill.c4{ color:var(--st-4); background:var(--put-bg); }
+.code-pill.c5{ color:var(--st-5); background:var(--delete-bg); }
 .resp-status-heading .txt{ font-size:12.5px; color:var(--text-dim); font-weight:600; }
 .section-title-row{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:4px; }
 .section-title-row .section-title{ margin-bottom:0; }
@@ -1579,6 +1579,46 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-mismatch-body .mono{ font-family:var(--mono); }
 .tryit-mismatch-action{ margin-top:8px; padding:5px 10px; font-size:11.5px; font-weight:600; border-radius:7px; border:1px solid var(--put); background:transparent; color:var(--put); cursor:pointer; }
 .tryit-mismatch-action:hover{ background:var(--put-bg); }
+
+/* ---------- Try It redesign: scenario pills, animated send, coloured result
+   card, and the "Run all scenarios" checklist. Reuses .resp-pill for the
+   scenario picker so it reads as the same control language as the doc
+   viewer's own scenario pills, just wired to drive the request body + a
+   client-side simulated response instead of the doc panels. */
+.tryit-send-btn{ position:relative; display:inline-flex; align-items:center; gap:8px; }
+.tryit-send-spinner{
+  width:12px; height:12px; border-radius:50%; border:2px solid rgba(255,255,255,.35); border-top-color:#fff;
+  display:none; animation:pdfSpin .7s linear infinite; flex-shrink:0;
+}
+.tryit-send-btn.loading .tryit-send-spinner{ display:inline-block; }
+.tryit-run-all-btn{ display:inline-flex; align-items:center; gap:7px; }
+.tryit-run-all-btn svg{ flex-shrink:0; }
+.tryit-run-all-btn.loading{ opacity:.7; pointer-events:none; }
+/* Result card: a plain <div> replaced the old bare status-row + <pre> stack
+   so the whole thing can carry one coloured left border (same --item-accent
+   trick as a Response block) and fade/slide in together instead of content
+   just popping into view mid-layout. */
+.tryit-result-card{
+  border:1px solid var(--border); border-left:3px solid var(--item-accent, var(--border-strong));
+  border-radius:10px; background:var(--surface-2); padding:16px; animation:docPanelFadeIn .22s ease;
+}
+.tryit-result-head{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+.tryit-section-label{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--text-faint); margin:0 0 6px; display:flex; align-items:center; justify-content:space-between; }
+.tryit-copy-btn{ font-size:10.5px; font-weight:600; color:var(--text-faint); background:none; border:1px solid var(--border); border-radius:6px; padding:2px 8px; cursor:pointer; text-transform:none; letter-spacing:0; }
+.tryit-copy-btn:hover{ color:var(--text); border-color:var(--border-strong); }
+/* "Run all scenarios" checklist — one row per documented request scenario,
+   its resolved status colour, and whether that resolution was a verified
+   match or only a guess, so testing every scenario at once still keeps the
+   same "is this actually documented" honesty as sending them one at a time. */
+.tryit-run-all-list{ display:flex; flex-direction:column; gap:6px; margin-top:12px; animation:docPanelFadeIn .22s ease; }
+.tryit-run-all-row{
+  display:flex; align-items:center; gap:10px; padding:9px 12px; border-radius:8px;
+  border:1px solid var(--border); border-left:3px solid var(--item-accent, var(--border-strong)); background:var(--surface-2);
+}
+.tryit-run-all-name{ flex:1; min-width:0; font-size:12px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tryit-run-all-status{ display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-faint); flex-shrink:0; }
+.tryit-run-all-status.verified{ color:var(--post); }
+.tryit-run-all-status.guess{ color:var(--put); }
 
 /* ---------- Your Profile — environment management (add/delete global environments) ---------- */
 /* ---------- Endpoint table (Environment / Endpoint / Access / Color / Actions) ---------- */
@@ -2712,10 +2752,10 @@ pre.json-raw{ max-height:360px; margin:0; }
     </div>
 
     <div class="field" id="tryItBodyField" style="margin-top:14px; display:none;">
-      <label style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+      <label style="display:block; margin-bottom:0;">
         <span>Request body</span>
-        <select id="tryItScenarioPicker" style="font-size:11.5px; max-width:220px;"></select>
       </label>
+      <div id="tryItScenarioPicker" class="resp-pill-row" style="margin:4px 0 10px;"></div>
       <textarea id="tryItBodyInput" class="code-block" style="width:100%; min-height:110px; font-family:var(--mono); font-size:12px; resize:vertical;"></textarea>
       <span class="hint" id="tryItBodyErr" style="display:none; color:var(--danger);"></span>
     </div>
@@ -2733,23 +2773,31 @@ pre.json-raw{ max-height:360px; margin:0; }
           <input type="checkbox" id="tryItLiveToggle" style="accent-color:var(--delete);">
           Live — send a real request
         </label>
-        <button class="primary" id="tryItSend">Send</button>
+        <button type="button" id="tryItRunAll" class="tryit-run-all-btn" style="display:none;" title="Send every documented scenario for this endpoint, one after another">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-14 9V3z"></path></svg>
+          Run all scenarios
+        </button>
+        <button class="primary tryit-send-btn" id="tryItSend"><span class="tryit-send-spinner"></span><span id="tryItSendLabel">Send</span></button>
       </div>
     </div>
 
+    <div id="tryItRunAllResults" class="tryit-run-all-list" style="display:none;"></div>
+
     <div id="tryItResult" style="display:none;">
       <div class="hint" style="margin:0 0 4px;">Request sent</div>
-      <pre class="code-block" id="tryItRequestPreview" style="max-height:160px; overflow:auto; margin-bottom:10px;"></pre>
-      <div style="display:flex; align-items:center; gap:10px; margin:14px 0 8px; flex-wrap:wrap;">
-        <span class="resp-code" id="tryItStatusCode"></span>
-        <span class="hint" id="tryItLatency" style="margin:0;"></span>
-        <span class="hint" id="tryItMatchNote" style="margin:0;"></span>
-      </div>
-      <pre class="code-block" id="tryItResponseBody" style="max-height:280px; overflow:auto;"></pre>
-      <div class="tryit-mismatch" id="tryItMismatchWarning" style="display:none;">
-        <div class="tryit-mismatch-head"><span class="tryit-mismatch-ic">⚠</span><span>Not explicitly documented</span></div>
-        <div class="tryit-mismatch-body" id="tryItMismatchBody"></div>
-        <button type="button" class="tryit-mismatch-action" id="tryItDocumentScenario">Document this scenario →</button>
+      <pre class="code-block" id="tryItRequestPreview" style="max-height:160px; overflow:auto; margin-bottom:14px;"></pre>
+      <div class="tryit-result-card" id="tryItResultCard">
+        <div class="tryit-result-head">
+          <span class="code-pill" id="tryItStatusCode"></span>
+          <span class="hint" id="tryItLatency" style="margin:0;"></span>
+          <span class="hint" id="tryItMatchNote" style="margin:0;"></span>
+        </div>
+        <pre class="code-block" id="tryItResponseBody" style="max-height:280px; overflow:auto;"></pre>
+        <div class="tryit-mismatch" id="tryItMismatchWarning" style="display:none;">
+          <div class="tryit-mismatch-head"><span class="tryit-mismatch-ic">⚠</span><span>Not explicitly documented</span></div>
+          <div class="tryit-mismatch-body" id="tryItMismatchBody"></div>
+          <button type="button" class="tryit-mismatch-action" id="tryItDocumentScenario">Document this scenario →</button>
+        </div>
       </div>
     </div>
 
@@ -9506,20 +9554,34 @@ function openTryItModal(proj, ep){
   bodyErrEl.style.display = 'none';
 
   const namedRequestExamples = tryItRequestScenarios(ep);
+  const responseScenariosForPicker = tryItResponseScenarios(ep);
   if(namedRequestExamples.length){
     bodyFieldEl.style.display = '';
-    scenarioPickerEl.innerHTML = namedRequestExamples.map(s=>`<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('');
+    // Pills instead of a plain <select> — same control language as the doc
+    // viewer's own scenario picker, each dot/border coloured off the status
+    // code that scenario actually resolves to (see respColorVar below).
+    scenarioPickerEl.innerHTML = namedRequestExamples.map((s,i)=>{
+      const matchedResp = responseScenariosForPicker.find(rs=>rs.name.trim().toLowerCase()===s.name.trim().toLowerCase());
+      const accentVar = matchedResp ? respColorVar(matchedResp.code) : '--accent';
+      return `<div class="resp-pill${i===0?' active':''}" data-scenario-name="${escapeHtml(s.name)}" style="--pill-accent:var(${accentVar});"><span class="dot" style="background:var(${accentVar});"></span><span class="mono" style="font-weight:700;">${escapeHtml(s.name)}</span></div>`;
+    }).join('');
     scenarioPickerEl.style.display = namedRequestExamples.length > 1 ? '' : 'none';
-    scenarioPickerEl.value = namedRequestExamples[0].name;
     bodyInputEl.value = namedRequestExamples[0].value;
   } else {
     bodyFieldEl.style.display = 'none';
+    scenarioPickerEl.innerHTML = '';
     bodyInputEl.value = '';
   }
 
+  document.getElementById('tryItRunAll').style.display = namedRequestExamples.length > 1 ? '' : 'none';
+  document.getElementById('tryItRunAllResults').style.display = 'none';
+  document.getElementById('tryItRunAllResults').innerHTML = '';
+
   document.getElementById('tryItResult').style.display = 'none';
-  document.getElementById('tryItSend').disabled = false;
-  document.getElementById('tryItSend').textContent = 'Send';
+  const sendBtnInit = document.getElementById('tryItSend');
+  sendBtnInit.disabled = false;
+  sendBtnInit.classList.remove('loading');
+  document.getElementById('tryItSendLabel').textContent = 'Send';
 
   // Live mode: only offered at all when an Admin has granted THIS user
   // access to THIS environment (see /api/live-mode/my-access, loaded once at
@@ -9569,10 +9631,29 @@ function tryItRequestScenarios(ep){
   return list;
 }
 
-document.getElementById('tryItScenarioPicker').addEventListener('change', ()=>{
+// Returns the name of whichever scenario pill is currently active, or ''
+// when there's no scenario picker for this endpoint (single/no named
+// request examples) — used both when sending and when re-colouring the
+// result card border.
+function tryItSelectedScenarioName(){
+  const active = document.querySelector('#tryItScenarioPicker .resp-pill.active');
+  return active ? active.getAttribute('data-scenario-name') : '';
+}
+
+// Event delegation (not one listener per pill) since the pill row is
+// rebuilt from scratch every time the modal opens for a different endpoint.
+document.getElementById('tryItScenarioPicker').addEventListener('click', (e)=>{
+  const pill = e.target.closest('.resp-pill');
+  if(!pill) return;
+  document.querySelectorAll('#tryItScenarioPicker .resp-pill').forEach(p=>p.classList.remove('active'));
+  pill.classList.add('active');
   const scenarios = tryItRequestScenarios(tryItContext ? tryItContext.ep : {});
-  const match = scenarios.find(s=>s.name===document.getElementById('tryItScenarioPicker').value);
+  const match = scenarios.find(s=>s.name===pill.getAttribute('data-scenario-name'));
   if(match) document.getElementById('tryItBodyInput').value = match.value;
+  // Switching scenarios invalidates whatever was previously sent — hide it
+  // rather than leave a stale response sitting under the newly-picked one.
+  document.getElementById('tryItResult').style.display = 'none';
+  document.getElementById('tryItRunAllResults').style.display = 'none';
 });
 
 function closeTryItModal(){
@@ -9677,10 +9758,12 @@ function sendTryIt(){
   }
 
   sendBtn.disabled = true;
-  sendBtn.textContent = 'Sending…';
+  sendBtn.classList.add('loading');
+  document.getElementById('tryItSendLabel').textContent = 'Sending…';
 
   setTimeout(()=>{
     const resultEl = document.getElementById('tryItResult');
+    const resultCardEl = document.getElementById('tryItResultCard');
     const bodyEl = document.getElementById('tryItResponseBody');
     const codeEl = document.getElementById('tryItStatusCode');
     const latencyEl = document.getElementById('tryItLatency');
@@ -9689,7 +9772,7 @@ function sendTryIt(){
 
     const responseScenarios = tryItResponseScenarios(ep);
     let matched = null;
-    let matchKind = null; // 'exact' | 'picked' | 'closest' | 'fallback'
+    let matchKind = null; // 'picked' | 'exact' | 'closest' | 'fallback'
 
     // Closest documented request scenario by field diff, computed up front
     // (regardless of how close it actually is) — used both to pick a
@@ -9705,20 +9788,26 @@ function sendTryIt(){
       });
     }
 
-    if(typedBody !== null){
-      // 1) Exact match against a named request example → use the response
-      //    scenario that shares that name, if one's documented.
+    // 1) Whichever scenario pill is actively selected wins outright — it's
+    //    the clearest signal of intent there is, so it's checked before any
+    //    body-diffing, not after. Previously this only kicked in once an
+    //    exact-body match had already failed, which meant a body that still
+    //    happened to deep-equal some *other* documented example (or a stale
+    //    comparison) could silently override the scenario the person had
+    //    actually just clicked — the reason picking a scenario could look
+    //    like it did nothing to the status code shown below.
+    const pickerName = tryItSelectedScenarioName().trim().toLowerCase();
+    if(pickerName){
+      const picked = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === pickerName);
+      if(picked){ matched = picked; matchKind = 'picked'; }
+    }
+
+    if(!matched && typedBody !== null){
+      // 2) Otherwise, an exact match against a named request example → use
+      //    the response scenario that shares that name, if one's documented.
       const exactReq = requestScenarios.find(s=>{ const p = tryParseJson(s.value); return p.ok && deepEqualJson(p.value, typedBody); });
       if(exactReq) matched = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === exactReq.name.trim().toLowerCase());
       if(matched) matchKind = 'exact';
-
-      // 2) Otherwise, honour whichever scenario is selected in the picker
-      //    (the body may have been hand-edited but the intent is clear).
-      if(!matched){
-        const pickerName = (document.getElementById('tryItScenarioPicker').value || '').trim().toLowerCase();
-        const picked = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === pickerName);
-        if(picked){ matched = picked; matchKind = 'picked'; }
-      }
 
       // 3) Otherwise, use the closest documented request example's paired
       //    response, if the match is close enough to be meaningful (not just
@@ -9740,15 +9829,17 @@ function sendTryIt(){
 
     if(!matched){
       codeEl.textContent = '—';
-      codeEl.className = 'resp-code';
+      codeEl.className = 'code-pill';
       bodyEl.textContent = 'No response documented for this endpoint yet — add one from Edit.';
+      resultCardEl.style.setProperty('--item-accent', 'var(--border-strong)');
     } else {
       codeEl.textContent = String(matched.code);
-      codeEl.className = 'resp-code ' + respClass(matched.code);
+      codeEl.className = 'code-pill ' + respClass(matched.code);
+      resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(matched.code)})`);
       const parsed = matched.value ? tryParseJson(matched.value) : { ok:false };
       bodyEl.textContent = parsed.ok ? JSON.stringify(parsed.value, null, 2) : (matched.value || 'No example body documented for this response.');
-      if(matchKind === 'exact' && matched.name !== 'Default') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
-      else if(matchKind === 'picked') matchNoteEl.textContent = `Matched scenario: ${matched.name} (selected)`;
+      if(matchKind === 'picked') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
+      else if(matchKind === 'exact' && matched.name !== 'Default') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
       else if(matchKind === 'closest') matchNoteEl.textContent = `Closest documented match: ${matched.name}`;
     }
 
@@ -9782,8 +9873,16 @@ function sendTryIt(){
 
     latencyEl.textContent = `Simulated from documented example · ${Math.round(180 + Math.random()*140)} ms`;
     resultEl.style.display = '';
+    // Force the fade/slide-in to replay on every send, not just the first —
+    // the animation class never toggles off/on by itself once the element's
+    // already visible, so without this a "Send again" click would just
+    // update the numbers in place with no visual confirmation anything happened.
+    resultCardEl.style.animation = 'none';
+    void resultCardEl.offsetWidth;
+    resultCardEl.style.animation = '';
     sendBtn.disabled = false;
-    sendBtn.textContent = 'Send again';
+    sendBtn.classList.remove('loading');
+    document.getElementById('tryItSendLabel').textContent = 'Send again';
   }, 450);
 }
 
@@ -9826,8 +9925,8 @@ async function sendTryItLive(proj, ep, typedBody){
   }
 
   sendBtn.disabled = true;
-  sendBtn.textContent = 'Sending…';
-
+  sendBtn.classList.add('loading');
+  document.getElementById('tryItSendLabel').textContent = 'Sending…';
   const pathParams = {}, queryParams = {};
   document.querySelectorAll('[data-try-param]').forEach(input=>{
     const name = input.getAttribute('data-try-param');
@@ -9836,6 +9935,7 @@ async function sendTryItLive(proj, ep, typedBody){
   });
 
   const resultEl = document.getElementById('tryItResult');
+  const resultCardEl = document.getElementById('tryItResultCard');
   const bodyEl = document.getElementById('tryItResponseBody');
   const codeEl = document.getElementById('tryItStatusCode');
   const latencyEl = document.getElementById('tryItLatency');
@@ -9858,12 +9958,14 @@ async function sendTryItLive(proj, ep, typedBody){
     const data = await res.json().catch(()=>({}));
     if(!res.ok){
       codeEl.textContent = String(res.status);
-      codeEl.className = 'resp-code ' + respClass(res.status);
+      codeEl.className = 'code-pill ' + respClass(res.status);
+      resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(res.status)})`);
       bodyEl.textContent = data.error || 'The live request failed.';
       latencyEl.textContent = '';
     } else {
       codeEl.textContent = String(data.status);
-      codeEl.className = 'resp-code ' + respClass(data.status);
+      codeEl.className = 'code-pill ' + respClass(data.status);
+      resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(data.status)})`);
       bodyEl.textContent = typeof data.body === 'string' ? data.body : JSON.stringify(data.body, null, 2);
       latencyEl.textContent = `🔴 Live response from ${envMeta(state.env).label} · ${data.latencyMs} ms — not simulated`;
     }
@@ -9872,7 +9974,8 @@ async function sendTryItLive(proj, ep, typedBody){
     toast('The live request failed — ' + (e.message || 'network error'));
   } finally {
     sendBtn.disabled = false;
-    sendBtn.textContent = 'Send';
+    sendBtn.classList.remove('loading');
+    document.getElementById('tryItSendLabel').textContent = 'Send';
   }
 }
 
@@ -9930,6 +10033,90 @@ function documentTryItScenario(proj, ep, typedBody){
 document.getElementById('tryItSend').addEventListener('click', sendTryIt);
 document.getElementById('tryItClose').addEventListener('click', closeTryItModal);
 document.getElementById('tryItModal').addEventListener('click', (e)=>{ if(e.target.id === 'tryItModal') closeTryItModal(); });
+
+/* Resolves the response a given (named) request scenario would produce,
+   using the same priority a real send uses once a scenario is picked
+   (exact name match first) with the same closest/fallback guesses sendTryIt
+   falls back to — factored out here so "Run all scenarios" and a normal
+   single Send stay in agreement instead of drifting into two competing
+   ideas of what a scenario "resolves to". */
+function resolveTryItScenarioResponse(ep, scenarioName, requestValue){
+  const responseScenarios = tryItResponseScenarios(ep);
+  const requestScenarios = tryItRequestScenarios(ep);
+  let matched = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === scenarioName.trim().toLowerCase());
+  let matchKind = matched ? 'picked' : null;
+  if(!matched && requestValue){
+    const parsed = tryParseJson(requestValue);
+    if(parsed.ok){
+      let closest = null, closestScore = Infinity;
+      requestScenarios.forEach(s=>{
+        const p = tryParseJson(s.value);
+        if(!p.ok) return;
+        const score = jsonDiffScore(p.value, parsed.value);
+        if(score < closestScore){ closestScore = score; closest = s; }
+      });
+      if(closest && closestScore <= 2){
+        const cr = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === closest.name.trim().toLowerCase());
+        if(cr){ matched = cr; matchKind = 'closest'; }
+      }
+    }
+  }
+  if(!matched){
+    matched = responseScenarios.find(rs=>String(rs.code)[0]==='2') || responseScenarios[0];
+    matchKind = matched ? 'fallback' : null;
+  }
+  return { matched, matchKind };
+}
+
+/* "Run all scenarios" — sends every documented request scenario for this
+   endpoint back-to-back (simulated, same as a single Send) and lays the
+   resolved status/verification out as a checklist, so a whole endpoint can
+   be spot-checked in one click instead of picking, sending, and reading
+   each scenario one at a time. */
+async function runAllTryItScenarios(){
+  if(!tryItContext) return;
+  const { ep } = tryItContext;
+  const requestScenarios = tryItRequestScenarios(ep);
+  if(!requestScenarios.length) return;
+
+  const runBtn = document.getElementById('tryItRunAll');
+  const resultsEl = document.getElementById('tryItRunAllResults');
+  document.getElementById('tryItResult').style.display = 'none';
+  runBtn.disabled = true;
+  runBtn.classList.add('loading');
+  resultsEl.style.display = '';
+  resultsEl.innerHTML = requestScenarios.map(s=>`
+    <div class="tryit-run-all-row" data-run-row="${escapeHtml(s.name)}" style="--item-accent:var(--border-strong);">
+      <span class="tryit-run-all-name">${escapeHtml(s.name)}</span>
+      <span class="tryit-run-all-status"><span class="env-skel-bar" style="width:60px; height:9px;"></span></span>
+    </div>`).join('');
+
+  // Staggered, not simultaneous — resolving + rendering each row with a
+  // small delay reads as the endpoint actually being exercised scenario by
+  // scenario, rather than a table that just materializes all at once.
+  for(const s of requestScenarios){
+    await new Promise(r=>setTimeout(r, 220));
+    const { matched, matchKind } = resolveTryItScenarioResponse(ep, s.name, s.value);
+    const row = resultsEl.querySelector(`[data-run-row="${CSS.escape(s.name)}"]`);
+    if(!row) continue;
+    if(!matched){
+      row.querySelector('.tryit-run-all-status').innerHTML = `<span>No response documented</span>`;
+      continue;
+    }
+    const accentVar = respColorVar(matched.code);
+    row.style.setProperty('--item-accent', `var(${accentVar})`);
+    const verified = matchKind === 'picked';
+    const statusClass = verified ? 'verified' : 'guess';
+    const statusLabel = verified ? 'Documented' : (matchKind === 'closest' ? 'Closest guess' : 'Fallback guess');
+    row.querySelector('.tryit-run-all-status').innerHTML = `
+      <span class="code-pill ${respClass(matched.code)}" style="font-size:10.5px; padding:2px 8px;">${escapeHtml(String(matched.code))}</span>
+      <span class="${statusClass}">${verified ? '✓' : '⚠'} ${statusLabel}</span>`;
+  }
+
+  runBtn.disabled = false;
+  runBtn.classList.remove('loading');
+}
+document.getElementById('tryItRunAll').addEventListener('click', runAllTryItScenarios);
 
 function openRenderView(source){
   let proj, ep;
