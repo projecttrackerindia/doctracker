@@ -4870,10 +4870,34 @@ function currentProjectForEnvContext(){
   return null;
 }
 
+// Makes the FAB's own label say what a click will actually do on THIS page,
+// instead of always reading "New endpoint" regardless of context. On a
+// project overview or endpoint page there's a project to disambiguate
+// against, so it reads "New endpoint" and opens the small menu (add here /
+// start a new project instead). Everywhere else — API Control Center,
+// Security, Error catalog, Profile — there's no project in view, a click
+// goes straight to a blank project (see the FAB click handler below), so the
+// label reads "New project" instead of promising something it won't do.
+function updateFabIntent(ctxProj){
+  const btn = document.getElementById('btnFab');
+  const label = btn && btn.querySelector('.fab-label');
+  if(!btn || !label) return;
+  if(ctxProj){
+    label.textContent = 'New endpoint';
+    btn.title = `New endpoint in ${ctxProj.name}`;
+    btn.setAttribute('aria-haspopup', 'true');
+  } else {
+    label.textContent = 'New project';
+    btn.title = 'New project — starts blank';
+    btn.setAttribute('aria-haspopup', 'false');
+  }
+}
+
 function renderEnvSwitcher(){
   const el = document.getElementById('envSwitcher');
   const current = envMeta(state.env);
   const ctxProj = currentProjectForEnvContext();
+  updateFabIntent(ctxProj);
   el.innerHTML = `
     <div class="env-dd" id="envDD">
       <button type="button" class="env-dd-btn" id="envDDBtn" aria-haspopup="listbox" aria-expanded="false" aria-controls="envDDPanel" title="Switch environment">

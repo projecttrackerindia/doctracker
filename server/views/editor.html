@@ -26,6 +26,8 @@
   --ok:#38c793; --ok-soft:rgba(56,199,147,.14);
   --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
   --get:#38c793; --post:#6d8dff; --put:#e8a33d; --delete:#ef5a6f; --patch:#b988f0;
+  --get-bg:rgba(56,199,147,.14); --post-bg:rgba(109,141,255,.14); --put-bg:rgba(232,163,61,.14);
+  --delete-bg:rgba(239,90,111,.14); --patch-bg:rgba(185,136,240,.14);
   --glass-strong:rgba(17,21,29,.94);
 }
 /* Same light palette as the main Studio tab (server/views/studio.html
@@ -39,6 +41,8 @@
   --warn:#a06f10; --warn-soft:rgba(160,111,16,.10);
   --ok:#1c8f66; --ok-soft:rgba(28,143,102,.10);
   --get:#1f6fd6; --post:#1c8f66; --put:#a06f10; --delete:#d13750; --patch:#7a4fd1;
+  --get-bg:rgba(31,111,214,.10); --post-bg:rgba(28,143,102,.10); --put-bg:rgba(160,111,16,.10);
+  --delete-bg:rgba(209,55,80,.10); --patch-bg:rgba(122,79,209,.10);
   --glass-strong:rgba(255,255,255,.86);
 }
 *{ box-sizing:border-box; }
@@ -90,6 +94,13 @@ button{ cursor:pointer; }
   background:var(--surface); border:1px solid var(--border); border-radius:12px;
   padding:18px 22px; margin-bottom:16px;
 }
+/* Section accent colors — same palette as the endpoint doc viewer and the
+   +New endpoint modal (studio.html), so a section reads as "the same
+   colored tab" whether you're viewing docs or editing them here. */
+.card.accent-auth{ border-left:3px solid var(--patch); }
+.card.accent-header{ border-left:3px solid var(--get); }
+.card.accent-request{ border-left:3px solid var(--post); }
+.card.accent-response{ border-left:3px solid var(--item-accent, var(--accent)); }
 .card-head{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
 .card-title{ font-weight:700; font-size:13px; flex:1; }
 .drag-handle{
@@ -397,7 +408,7 @@ button{ cursor:pointer; }
   <!-- Authentication — shared across every endpoint in this project. One
        project has one auth config, so editing it here updates that same
        config rather than a separate per-endpoint copy. -->
-  <div class="card">
+  <div class="card accent-auth">
     <div class="card-head"><div class="card-title">Authentication</div></div>
     <div class="hint" style="margin-bottom:12px;">Shared across every endpoint in this project.</div>
     <div class="field-grid">
@@ -515,6 +526,16 @@ function toast(msg){
   t._timer = setTimeout(()=>t.classList.remove('show'), 2800);
 }
 function methodClass(m){ return (m||'get').toLowerCase(); }
+// Same 2xx/3xx/4xx/5xx → color mapping as the endpoint doc viewer's
+// respColorVar (studio.html) — 2xx green, 3xx blue, 4xx amber, 5xx+ red —
+// so a Response block's left-border accent matches its status code.
+function respAccentVar(code){
+  const c = String(code||'')[0];
+  if(c==='2') return '--post';
+  if(c==='3') return '--get';
+  if(c==='4') return '--put';
+  return '--delete';
+}
 async function apiGet(path){
   const res = await fetch('/api/workspace' + path, { credentials:'same-origin' });
   if(!res.ok) throw new Error('Request failed: ' + res.status);
@@ -1232,19 +1253,19 @@ function renderBlockHtml(block){
     </div>`;
   }
   if(block.type==='parameters'){
-    return `<div class="card" data-block="${block.id}" draggable="true">
+    return `<div class="card accent-request" data-block="${block.id}" draggable="true">
       <div class="card-head">${DRAG_HANDLE}<div class="card-title">Parameters</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
       ${rowsTableHtml(block, false, true)}
     </div>`;
   }
   if(block.type==='headers'){
-    return `<div class="card" data-block="${block.id}" draggable="true">
+    return `<div class="card accent-header" data-block="${block.id}" draggable="true">
       <div class="card-head">${DRAG_HANDLE}<div class="card-title">Headers</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
       ${rowsTableHtml(block, true)}
     </div>`;
   }
   if(block.type==='requestBody'){
-    return `<div class="card" data-block="${block.id}" draggable="true">
+    return `<div class="card accent-request" data-block="${block.id}" draggable="true">
       <div class="card-head">${DRAG_HANDLE}<div class="card-title">Request body (JSON)</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
       ${jsonPasteHtml(block, 'requestBody')}
       ${block.fields.length ? rowsTableHtml({ id:block.id, rows:block.fields }, false) : `<div class="hint">No fields yet — paste JSON above, or add rows once inferred.</div>`}
@@ -1252,7 +1273,7 @@ function renderBlockHtml(block){
     </div>`;
   }
   if(block.type==='response'){
-    return `<div class="card" data-block="${block.id}" draggable="true">
+    return `<div class="card accent-response" data-block="${block.id}" draggable="true" style="--item-accent:var(${respAccentVar(block.code)});">
       <div class="card-head">
         ${DRAG_HANDLE}
         <div class="card-title">Response</div>
@@ -1344,7 +1365,12 @@ function bindBlockEvents(container){
     if(block.type==='response'){
       cardEl.querySelectorAll('[data-f="code"], [data-f="description"]').forEach(input=>{
         const key = input.getAttribute('data-f');
-        input.addEventListener('input', ()=>{ block[key] = input.value; });
+        input.addEventListener('input', ()=>{
+          block[key] = input.value;
+          // Live-update the card's colored left border as the status code
+          // changes, without a full re-render (which would drop focus).
+          if(key==='code') cardEl.style.setProperty('--item-accent', `var(${respAccentVar(input.value)})`);
+        });
       });
     }
     if(block.type==='summary'){
