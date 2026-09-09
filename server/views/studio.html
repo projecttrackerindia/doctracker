@@ -1747,7 +1747,7 @@ table.env-data-table th .sort-arrow{ font-size:9px; margin-left:3px; color:var(-
 .resp-pill{ display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:999px; border:1px solid var(--border); background:var(--surface); cursor:pointer; font-size:12px; transition:border-color .15s ease, background .15s ease, transform .1s ease; }
 .resp-pill:hover{ border-color:var(--border-strong); }
 .resp-pill:active{ transform:scale(.97); }
-.resp-pill.active{ border-color:currentColor; background:var(--accent-soft); }
+.resp-pill.active{ border-color:var(--pill-accent, currentColor); background:var(--accent-soft); }
 .resp-pill .dot{ width:8px; height:8px; border-radius:50%; }
 .resp-pill-panel{ margin-top:12px; }
 .render-empty{ color:var(--text-faint); font-size:12.5px; font-style:italic; }
@@ -2589,11 +2589,31 @@ pre.json-raw{ max-height:360px; margin:0; }
 
 <div class="modal-overlay" id="piiRevealModal">
   <div class="modal" style="width:420px;">
-    <h2>Reveal sensitive value?</h2>
-    <div class="modal-sub" style="margin-bottom:14px;">This action will be recorded in the audit log.</div>
-    <label style="display:block; font-size:12px; font-weight:600; margin-bottom:6px; color:var(--text-soft);">Reason</label>
-    <textarea id="piiRevealReason" rows="2" placeholder="e.g. Troubleshooting a customer issue" style="width:100%; resize:vertical; margin-bottom:6px; font:inherit;"></textarea>
-    <div style="font-size:11px; color:var(--text-faint); margin-bottom:18px;" id="piiRevealTimeoutNote"></div>
+    <div style="display:flex; gap:12px; align-items:flex-start; margin-bottom:18px;">
+      <span style="flex-shrink:0; width:34px; height:34px; border-radius:9px; display:flex; align-items:center; justify-content:center; background:var(--put-bg); color:var(--put);">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>
+      </span>
+      <div>
+        <h2 style="margin-bottom:2px;">Reveal sensitive value?</h2>
+        <div class="modal-sub" style="margin-bottom:0;">You're about to unmask a protected field.</div>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; align-items:flex-start; padding:10px 12px; border-radius:8px; border:1px solid var(--put); background:var(--put-bg); color:var(--put); font-size:11.5px; font-weight:600; line-height:1.5; margin-bottom:16px;">
+      <span style="flex-shrink:0; margin-top:1px; display:inline-flex;">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6l8-4z"></path></svg>
+      </span>
+      <span>This action will be recorded in the audit log, along with the reason you give below.</span>
+    </div>
+    <div class="field" style="margin-bottom:6px;">
+      <label>Reason</label>
+      <textarea id="piiRevealReason" rows="2" placeholder="e.g. Troubleshooting a customer issue"></textarea>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-faint); margin-bottom:18px;">
+      <span style="display:inline-flex; flex-shrink:0;">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2.5 1.5"></path><path d="M9 2h6"></path></svg>
+      </span>
+      <span id="piiRevealTimeoutNote"></span>
+    </div>
     <div class="modal-actions" style="justify-content:flex-end;">
       <div class="right">
         <button type="button" id="piiRevealCancel">Cancel</button>
@@ -7848,7 +7868,15 @@ function renderEndpointDoc(main, proj, ep){
   responseScenarios.forEach(s=>{ if(!scenarioNames.includes(s.name)) scenarioNames.push(s.name); });
   const scenarioPickerHtml = scenarioNames.length > 1 ? `
     <div class="resp-pill-row" id="docScenarioPicker" style="margin-bottom:16px;">
-      ${scenarioNames.map((name,i)=>`<div class="resp-pill${i===0?' active':''}" data-scenario-pick="${escapeHtml(name)}"><span class="dot" style="background:var(--accent);"></span><span class="mono" style="font-weight:700;">${escapeHtml(name)}</span></div>`).join('')}
+      ${scenarioNames.map((name,i)=>{
+        // Colour each scenario pill the same way a Response accordion item is
+        // coloured — off the status code that scenario actually resolves to
+        // (2xx green / 3xx blue / 4xx amber / 5xx red) — instead of every
+        // pill showing the same flat accent dot regardless of what it documents.
+        const matched = responseScenarios.find(s=>s.name===name);
+        const accentVar = matched ? respColorVar(matched.code) : '--accent';
+        return `<div class="resp-pill${i===0?' active':''}" data-scenario-pick="${escapeHtml(name)}" style="--pill-accent:var(${accentVar});"><span class="dot" style="background:var(${accentVar});"></span><span class="mono" style="font-weight:700;">${escapeHtml(name)}</span></div>`;
+      }).join('')}
     </div>` : '';
 
   // A single Parameters/JSON toggle now drives BOTH the Request panel and

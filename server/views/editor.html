@@ -180,7 +180,12 @@ button{ cursor:pointer; }
 .examples-section-head{ margin-bottom:10px; }
 .examples-section-head .hint{ margin:0; }
 .example-item{ background:var(--surface-2); border:1px solid var(--border-strong); border-radius:10px; padding:14px; margin-bottom:12px; }
+/* Coloured the same way the parent Response card is (2xx green / 3xx blue /
+   4xx amber / 5xx red) — so a scenario documenting a 400 reads as amber at a
+   glance instead of every named example looking identical regardless of code. */
+.example-item.accent-response{ border-left:3px solid var(--item-accent, var(--border-strong)); }
 .example-item-top{ display:flex; align-items:flex-start; gap:10px; margin-bottom:12px; }
+.example-item-top .code-pill{ font-family:var(--mono); font-weight:800; font-size:11.5px; padding:6px 10px; border-radius:999px; flex-shrink:0; margin-top:18px; }
 .example-item-top .field-grid{ flex:1; }
 .example-item-kill{ background:none; border:none; color:var(--text-faint); padding:6px; border-radius:6px; margin-top:18px; flex-shrink:0; }
 .example-item-kill:hover{ color:var(--danger); background:var(--danger-soft); }
@@ -1195,16 +1200,23 @@ function namedExamplesHtml(block){
       <div class="examples-section-head">
         <span class="hint">Named examples — extra scenarios beyond the default above (e.g. "Amount too low"). ${isResponse ? 'Each can have its own status code — no need to add another Response block just to vary the code within this scenario.' : 'Give a request-body example and a response example the same name to pair them in Try It.'}</span>
       </div>
-      ${examples.map(ex=>namedExampleItemHtml(ex, isResponse)).join('')}
+      ${examples.map(ex=>namedExampleItemHtml(ex, isResponse, block.code)).join('')}
       <button type="button" class="add-row-btn" data-add-example="${block.id}">+ Add named example</button>
     </div>`;
 }
 
-function namedExampleItemHtml(ex, isResponse){
+// fallbackCode is the parent Response block's own status code — an example
+// that hasn't set its own status code yet still documents *some* response,
+// so it's coloured/labelled off the block's code rather than looking blank
+// until the person fills one in.
+function namedExampleItemHtml(ex, isResponse, fallbackCode){
   const fields = ex.fields || [];
+  const effectiveCode = isResponse ? (ex.statusCode || fallbackCode) : null;
+  const accentStyle = isResponse ? ` style="--item-accent:var(${respAccentVar(effectiveCode)});"` : '';
   return `
-    <div class="example-item" data-example="${ex.id}">
+    <div class="example-item${isResponse?' accent-response':''}" data-example="${ex.id}"${accentStyle}>
       <div class="example-item-top">
+        ${isResponse ? `<span class="code-pill" data-example-code-pill style="background:var(${respAccentVar(effectiveCode)}-bg, var(--surface-2));color:var(${respAccentVar(effectiveCode)});">${escapeHtml(String(effectiveCode||'—'))}</span>` : ''}
         <div class="field-grid">
           <div class="field">
             <label>Scenario name</label>
@@ -1411,6 +1423,21 @@ function bindBlockEvents(container){
         ex[key] = input.value;
         const errEl = container.querySelector(`[data-example-err="${exId}"]`);
         if(key==='value' && errEl) errEl.classList.add('hidden');
+        // Live-update this example's colored left border + status pill as
+        // its code changes, same idea as the parent Response block's own
+        // code input — no full re-render, so focus/cursor position survives.
+        if(key==='statusCode'){
+          const parentBlock = blocks.find(b=>(b.examples||[]).includes(ex));
+          const effectiveCode = input.value || (parentBlock && parentBlock.code) || '';
+          const accentVar = respAccentVar(effectiveCode);
+          exEl.style.setProperty('--item-accent', `var(${accentVar})`);
+          const pill = exEl.querySelector('[data-example-code-pill]');
+          if(pill){
+            pill.textContent = effectiveCode || '—';
+            pill.style.color = `var(${accentVar})`;
+            pill.style.background = `var(${accentVar}-bg, var(--surface-2))`;
+          }
+        }
       });
       input.addEventListener('blur', ()=>{
         if(key!=='value' || !input.value.trim()) return;
