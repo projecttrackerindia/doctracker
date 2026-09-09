@@ -1012,20 +1012,37 @@ pre.code-block{
 .resp-tab{
   font-size:11px; font-weight:700; padding:6px 13px; border-radius:999px;
   border:1px solid var(--border); background:var(--surface-2); color:var(--text-dim); cursor:pointer;
+  transition:background .15s ease, border-color .15s ease, color .15s ease;
 }
 .resp-tab:hover{ border-color:var(--border-strong); color:var(--text); }
 .resp-tab.active{ background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
 .resp-tab[disabled]{ opacity:.4; cursor:not-allowed; }
-.resp-item{ border:1px solid var(--border); border-left:3px solid var(--item-accent, var(--border-strong)); border-radius:var(--radius-md); background:var(--surface); margin-bottom:8px; overflow:hidden; }
+.resp-item{ border:1px solid var(--border); border-left:3px solid var(--item-accent, var(--border-strong)); border-radius:var(--radius-md); background:var(--surface); margin-bottom:8px; overflow:hidden; transition:border-color .2s ease; }
 .resp-row{ display:flex; align-items:center; gap:10px; padding:11px 14px; cursor:pointer; }
 .resp-row:hover{ background:var(--surface-hover); }
-.resp-code{ font-family:var(--mono); font-weight:700; font-size:12.5px; width:34px; flex-shrink:0; }
+.resp-code{ font-family:var(--mono); font-weight:700; font-size:12.5px; width:34px; flex-shrink:0; transition:color .2s ease; }
 .resp-code.c2{ color:var(--st-2); } .resp-code.c3{ color:var(--st-3); } .resp-code.c4{ color:var(--st-4); } .resp-code.c5{ color:var(--st-5); }
 .resp-desc{ color:var(--text-dim); font-size:12.5px; flex:1; }
 .resp-caret{ color:var(--text-faint); font-size:9px; transition:.15s; }
 .resp-item.open .resp-caret{ transform:rotate(90deg); }
 .resp-body{ display:none; padding:0 14px 14px; }
 .resp-item.open .resp-body{ display:block; }
+
+/* Shared Request/Response panel content (Parameters<->JSON, scenario switch)
+   fades+lifts in on change instead of hard-swapping, and the status pill
+   shown above a Response JSON block reads clearly at a glance instead of
+   just via a small colored code in the accordion row. */
+.doc-panel-fade{ animation:docPanelFadeIn .18s ease; }
+@keyframes docPanelFadeIn{ from{ opacity:0; transform:translateY(-3px); } to{ opacity:1; transform:translateY(0); } }
+.resp-status-heading{ display:flex; align-items:center; gap:9px; margin-bottom:10px; padding:8px 12px; border-radius:var(--radius-sm,8px); background:var(--surface-2); border:1px solid var(--border); }
+.resp-status-heading .code-pill{ font-family:var(--mono); font-weight:800; font-size:12.5px; padding:3px 9px; border-radius:999px; flex-shrink:0; }
+.resp-status-heading .code-pill.c2{ color:var(--st-2); background:var(--post-bg); }
+.resp-status-heading .code-pill.c3{ color:var(--st-3); background:var(--get-bg); }
+.resp-status-heading .code-pill.c4{ color:var(--st-4); background:var(--put-bg); }
+.resp-status-heading .code-pill.c5{ color:var(--st-5); background:var(--delete-bg); }
+.resp-status-heading .txt{ font-size:12.5px; color:var(--text-dim); font-weight:600; }
+.section-title-row{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:4px; }
+.section-title-row .section-title{ margin-bottom:0; }
 
 .empty-field{ color:var(--text-faint); font-style:italic; }
 
@@ -1727,9 +1744,10 @@ table.env-data-table th .sort-arrow{ font-size:9px; margin-left:3px; color:var(-
 .render-code-head{ padding:9px 16px; font-family:var(--mono); font-size:10.5px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; background:var(--surface-2); color:var(--text-dim); display:flex; justify-content:space-between; align-items:center; }
 .render-code-card pre{ margin:0; border:none; border-radius:0; background:var(--surface); }
 .resp-pill-row{ display:flex; flex-wrap:wrap; gap:8px; }
-.resp-pill{ display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:999px; border:1px solid var(--border); background:var(--surface); cursor:pointer; font-size:12px; }
+.resp-pill{ display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:999px; border:1px solid var(--border); background:var(--surface); cursor:pointer; font-size:12px; transition:border-color .15s ease, background .15s ease, transform .1s ease; }
 .resp-pill:hover{ border-color:var(--border-strong); }
-.resp-pill.active{ border-color:currentColor; }
+.resp-pill:active{ transform:scale(.97); }
+.resp-pill.active{ border-color:currentColor; background:var(--accent-soft); }
 .resp-pill .dot{ width:8px; height:8px; border-radius:50%; }
 .resp-pill-panel{ margin-top:12px; }
 .render-empty{ color:var(--text-faint); font-size:12.5px; font-style:italic; }
@@ -7814,74 +7832,108 @@ function renderEndpointDoc(main, proj, ep){
   const headersHtml = headerParams.length
     ? `<div class="doc-section-card" style="--sec-accent:var(--get);">${paramSection('Header parameters', headerParams, 'header')}</div>`
     : '';
-  const hasReqJson = !!(ep.requestBody && ep.requestBody.example);
-  const reqExampleList = [
-    { label:'Default', value: (ep.requestBody && ep.requestBody.example) || '' },
-    ...((ep.requestBody && ep.requestBody.examples) || []).map(ex=>({ label: ex.name || 'Example', value: ex.value })),
-  ];
+  const hasReqJson = !!(ep.requestBody && (ep.requestBody.example || (ep.requestBody.examples||[]).length));
 
   // Unified "Scenario" selector. Request JSON examples and response JSON
-  // examples are already pairable by sharing the same name (see "Named
-  // examples" in the editor, and tryItRequestScenarios/tryItResponseScenarios
-  // below, which already do this pairing for the "Try it" panel) — but on
-  // this static docs page the Request JSON dropdown and each response's own
-  // JSON dropdown were three completely independent controls, so picking
-  // "Minimum Payment Amount is ₹100" on the request side did nothing to the
-  // response below even when a same-named response example existed for it.
-  // This picker sits above both sections and drives them together: choosing
-  // a scenario selects the matching example in the Request JSON tab (if
-  // there is one) and opens + selects the matching example in whichever
-  // Response documents that scenario (if any does).
+  // examples are pairable by sharing the same name (see "Named examples" in
+  // the editor, and tryItRequestScenarios/tryItResponseScenarios below,
+  // which already do this pairing for the "Try it" panel). Picking a
+  // scenario here drives both the Request panel and whichever Response
+  // documents that same scenario — no separate per-panel "pick an example"
+  // dropdown needed, so those have been removed from both JSON views.
   const requestScenarios = tryItRequestScenarios(ep);
   const responseScenarios = tryItResponseScenarios(ep);
   const scenarioNames = [];
   requestScenarios.forEach(s=>{ if(!scenarioNames.includes(s.name)) scenarioNames.push(s.name); });
   responseScenarios.forEach(s=>{ if(!scenarioNames.includes(s.name)) scenarioNames.push(s.name); });
   const scenarioPickerHtml = scenarioNames.length > 1 ? `
-    <div class="section scenario-picker-section">
-      <div class="section-title">Scenario <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— pick one to line up its request &amp; response</span></div>
-      <div class="resp-pill-row" id="docScenarioPicker">
-        ${scenarioNames.map(name=>`<div class="resp-pill" data-scenario-pick="${escapeHtml(name)}"><span class="dot" style="background:var(--accent);"></span><span class="mono" style="font-weight:700;">${escapeHtml(name)}</span></div>`).join('')}
-      </div>
+    <div class="resp-pill-row" id="docScenarioPicker" style="margin-bottom:16px;">
+      ${scenarioNames.map((name,i)=>`<div class="resp-pill${i===0?' active':''}" data-scenario-pick="${escapeHtml(name)}"><span class="dot" style="background:var(--accent);"></span><span class="mono" style="font-weight:700;">${escapeHtml(name)}</span></div>`).join('')}
     </div>` : '';
 
-  const requestAccordionHtml = `
-    <div class="resp-item open" data-request-item style="--item-accent:var(--post);">
-      <div class="resp-row" data-request-toggle>
-        <span class="resp-code" style="background:var(--post-bg);color:var(--post);">REQ</span>
-        <span class="resp-desc">Path, query &amp; body parameters for this request</span>
-        <span class="resp-caret">▶</span>
-      </div>
-      <div class="resp-body">
-        <div class="resp-tabs">
-          <button type="button" class="resp-tab active" data-request-tab="params">Request parameters</button>
-          <button type="button" class="resp-tab" data-request-tab="json"${hasReqJson ? '' : ' disabled title="No request JSON documented"'}>Request JSON${reqExampleList.length>1 ? ` (${reqExampleList.length} examples)` : ''}</button>
-        </div>
-        <div class="resp-tab-panel" data-request-panel>${paramsHtml}</div>
-      </div>
-    </div>`;
+  // A single Parameters/JSON toggle now drives BOTH the Request panel and
+  // every Response panel together, instead of each accordion item carrying
+  // its own independent pair of tabs. `activeTab`/`activeScenario` are local
+  // render state — reset to the defaults every time this doc is (re)opened.
+  let activeTab = 'params';
+  let activeScenario = scenarioNames[0] || 'Default';
 
-  const responsesHtml = ep.responses && ep.responses.length
-    ? ep.responses.map((r,i)=>{
-        const respExampleCount = 1 + ((r.examples||[]).length);
-        return `
-      <div class="resp-item" data-resp="${i}" style="--item-accent:var(${respColorVar(r.code)});">
-        <div class="resp-row" data-resp-toggle="${i}">
-          <span class="resp-code ${respClass(r.code)}">${escapeHtml(String(r.code))}</span>
-          <span class="resp-desc">${r.description ? escapeHtml(r.description) : '<span class="empty-field">No description</span>'}</span>
+  function requestJsonValue(){
+    const s = requestScenarios.find(s=>s.name===activeScenario);
+    if(s) return s.value;
+    return (requestScenarios[0] && requestScenarios[0].value) || '';
+  }
+  function requestPanelContent(){
+    if(activeTab === 'json'){
+      if(!hasReqJson) return `<div class="empty-field">No request JSON documented.</div>`;
+      const value = requestJsonValue();
+      const matched = requestScenarios.some(s=>s.name===activeScenario);
+      return `
+        <div class="json-preview-label"><span>Request JSON${matched && activeScenario!=='Default' ? ` — ${escapeHtml(activeScenario)}` : ''}</span></div>
+        <div class="code-wrap"><pre class="code-block" data-req-json>${escapeHtml(maskedJsonString(value))}</pre><button class="copy-btn" data-copy-block="reqbody">Copy</button></div>`;
+    }
+    return paramsHtml;
+  }
+  function buildRequestItemHtml(){
+    return `
+      <div class="resp-item open" data-request-item style="--item-accent:var(--post);">
+        <div class="resp-row" data-request-toggle>
+          <span class="resp-code" style="background:var(--post-bg);color:var(--post);">REQ</span>
+          <span class="resp-desc">Path, query &amp; body parameters for this request</span>
           <span class="resp-caret">▶</span>
         </div>
-        <div class="resp-body">
-          <div class="resp-tabs">
-            <button type="button" class="resp-tab active" data-resp-tab="params" data-resp-idx="${i}">Response parameters</button>
-            <button type="button" class="resp-tab" data-resp-tab="json" data-resp-idx="${i}">Response JSON${respExampleCount>1 ? ` (${respExampleCount} examples)` : ''}</button>
-          </div>
-          <div class="resp-tab-panel" data-resp-panel="${i}">
-            ${r.fields && r.fields.length ? paramSection('Response parameters', r.fields, r.code) : `<div class="empty-field">No response parameters documented.</div>`}
-          </div>
+        <div class="resp-body" data-request-panel><div class="doc-panel-fade">${requestPanelContent()}</div></div>
+      </div>`;
+  }
+
+  // Effective status for response i under the current scenario: a scenario
+  // can override the code/description/body for one specific named example
+  // (e.g. the same 201 response block also documents a 400 "Minimum Payment
+  // Amount" example) — previously the accordion header kept showing the
+  // response block's own default code/colour no matter which example was
+  // selected, so a documented 400 still displayed green "201". This now
+  // resolves + colours the header from whichever example is actually active.
+  function effectiveFor(i){
+    const r = ep.responses[i];
+    const s = responseScenarios.find(s=>s.name===activeScenario && s.response===r);
+    return {
+      r,
+      code: s ? s.code : r.code,
+      description: s ? s.description : r.description,
+      value: s ? s.value : r.example,
+      matchedScenario: s,
+    };
+  }
+  function responsePanelContent(i){
+    const { r, code, value, matchedScenario } = effectiveFor(i);
+    if(activeTab === 'json'){
+      if(!value) return `<div class="empty-field">No example body${matchedScenario ? '' : ' for this response'}.</div>`;
+      return `
+        <div class="resp-status-heading"><span class="code-pill ${respClass(code)}">${escapeHtml(String(code))}</span><span class="txt">${matchedScenario ? escapeHtml(matchedScenario.description || matchedScenario.name) : (r.description ? escapeHtml(r.description) : 'Response JSON')}</span></div>
+        <div class="code-wrap"><pre class="code-block" data-resp-json="${i}">${escapeHtml(maskedJsonString(value))}</pre><button class="copy-btn" data-copy-resp="${i}">Copy</button></div>`;
+    }
+    return r.fields && r.fields.length
+      ? paramSection('Response parameters', r.fields, code)
+      : `<div class="empty-field">No response parameters documented.</div>`;
+  }
+  function buildResponseItemHtml(i, isOpen){
+    const { code, description } = effectiveFor(i);
+    return `
+      <div class="resp-item${isOpen?' open':''}" data-resp="${i}" style="--item-accent:var(${respColorVar(code)});">
+        <div class="resp-row" data-resp-toggle="${i}">
+          <span class="resp-code ${respClass(code)}">${escapeHtml(String(code))}</span>
+          <span class="resp-desc">${description ? escapeHtml(description) : '<span class="empty-field">No description</span>'}</span>
+          <span class="resp-caret">▶</span>
         </div>
-      </div>`;}).join('')
-    : `<div class="empty-field">No responses documented.</div>`;
+        <div class="resp-body" data-resp-panel="${i}"><div class="doc-panel-fade">${responsePanelContent(i)}</div></div>
+      </div>`;
+  }
+  function buildResponsesHtml(openSet){
+    return ep.responses && ep.responses.length
+      ? ep.responses.map((r,i)=>buildResponseItemHtml(i, openSet.has(i))).join('')
+      : `<div class="empty-field">No responses documented.</div>`;
+  }
+
 
   const metaChipsHtml = `
     <div class="endpoint-meta-chips">
@@ -7977,16 +8029,19 @@ function renderEndpointDoc(main, proj, ep){
 
     ${headersHtml ? `<div class="section"><div class="section-title">Headers</div>${headersHtml}</div>` : ''}
 
-    ${scenarioPickerHtml}
-
     <div class="section">
-      <div class="section-title">Request</div>
-      ${requestAccordionHtml}
-    </div>
-
-    <div class="section">
-      <div class="section-title">Responses</div>
-      ${responsesHtml}
+      <div class="section-title-row">
+        <div class="section-title">Request &amp; Response</div>
+        <div class="resp-tabs" id="docViewTabs">
+          <button type="button" class="resp-tab active" data-view-tab="params">Parameters</button>
+          <button type="button" class="resp-tab" data-view-tab="json">JSON</button>
+        </div>
+      </div>
+      ${scenarioPickerHtml}
+      <div class="section-sub">Request</div>
+      <div data-request-wrap>${buildRequestItemHtml()}</div>
+      <div class="section-sub" style="margin-top:18px;">Responses</div>
+      <div data-responses-wrap>${buildResponsesHtml(new Set())}</div>
     </div>
   `;
 
@@ -8015,120 +8070,75 @@ function renderEndpointDoc(main, proj, ep){
     btn.addEventListener('click', ()=> toggleSensitiveRevealed());
   });
 
-  // Applying a scenario reuses the existing tab buttons rather than
-  // duplicating their rendering logic: it clicks the Request "JSON" tab and
-  // the matching response's "JSON" tab (each already knows how to render
-  // itself with its own example dropdown), then, once that dropdown exists,
-  // picks the option whose label matches this scenario's name.
+  // Re-renders the Request panel + all Response panels from current
+  // activeTab/activeScenario, preserving which response items were already
+  // expanded/collapsed by the person. Re-binding toggle/copy listeners after
+  // each pass is safe (and matches the rest of this file's convention)
+  // because innerHTML replacement discards the old nodes — nothing to leak.
+  function rerenderReqResp(){
+    const openSet = new Set();
+    main.querySelectorAll('[data-resp].open').forEach(el=> openSet.add(parseInt(el.getAttribute('data-resp'),10)));
+    const reqWrap = main.querySelector('[data-request-wrap]');
+    if(reqWrap) reqWrap.innerHTML = buildRequestItemHtml();
+    const respWrap = main.querySelector('[data-responses-wrap]');
+    if(respWrap) respWrap.innerHTML = buildResponsesHtml(openSet);
+    wireReqRespPanels();
+  }
+
+  function wireReqRespPanels(){
+    const reqToggle = main.querySelector('[data-request-toggle]');
+    if(reqToggle) reqToggle.addEventListener('click', ()=>{ reqToggle.closest('.resp-item').classList.toggle('open'); });
+    main.querySelectorAll('[data-resp-toggle]').forEach(el=>{
+      el.addEventListener('click', ()=>{ el.closest('.resp-item').classList.toggle('open'); });
+    });
+    const reqCopy = main.querySelector('[data-copy-block="reqbody"]');
+    if(reqCopy) reqCopy.addEventListener('click', (ev)=>{
+      const pre = main.querySelector('[data-req-json]');
+      if(pre) copyToClipboard(pre.textContent, ev.currentTarget);
+    });
+    main.querySelectorAll('[data-copy-resp]').forEach(btn=>{
+      btn.addEventListener('click', (ev)=>{
+        const idx = btn.getAttribute('data-copy-resp');
+        const pre = main.querySelector(`[data-resp-json="${idx}"]`);
+        if(pre) copyToClipboard(pre.textContent, ev.currentTarget);
+      });
+    });
+  }
+  wireReqRespPanels();
+
+  // The single Parameters/JSON toggle drives both panels at once — no more
+  // hunting for the right tab in two separate places to see a request body
+  // next to its response body.
+  main.querySelectorAll('[data-view-tab]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const tab = btn.getAttribute('data-view-tab');
+      if(tab === activeTab) return;
+      activeTab = tab;
+      main.querySelectorAll('[data-view-tab]').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      rerenderReqResp();
+    });
+  });
+
+  // Picking a scenario re-renders both panels together: the Request side
+  // shows that scenario's JSON (Parameters view is schema-level and doesn't
+  // change per example), and whichever Response documents that same
+  // scenario name gets its header code/colour + body updated to match and
+  // is scrolled into view — this is what actually fixes a scenario's
+  // overridden status code (e.g. 400) showing up instead of the response
+  // block's own default code always winning.
   main.querySelectorAll('[data-scenario-pick]').forEach(pill=>{
     pill.addEventListener('click', ()=>{
+      const name = pill.getAttribute('data-scenario-pick');
+      if(name === activeScenario) return;
+      activeScenario = name;
       main.querySelectorAll('[data-scenario-pick]').forEach(p=>p.classList.remove('active'));
       pill.classList.add('active');
-      const name = pill.getAttribute('data-scenario-pick');
-
-      const reqScenario = requestScenarios.find(s=>s.name===name);
-      if(reqScenario && hasReqJson){
-        const reqTabBtn = main.querySelector('[data-request-tab="json"]');
-        if(reqTabBtn && !reqTabBtn.disabled){
-          reqTabBtn.click();
-          const idx = reqExampleList.findIndex(e=>e.label===name);
-          const sel = main.querySelector('#docReqExampleSelect');
-          if(idx > -1 && sel){ sel.value = String(idx); sel.dispatchEvent(new Event('change')); }
-        }
-      }
-
+      rerenderReqResp();
       const respScenario = responseScenarios.find(s=>s.name===name);
-      const item = respScenario ? main.querySelector(`[data-resp="${ep.responses.indexOf(respScenario.response)}"]`) : null;
-      if(item){
-        const respIdx = ep.responses.indexOf(respScenario.response);
-        item.classList.add('open');
-        const jsonTabBtn = item.querySelector('[data-resp-tab="json"]');
-        if(jsonTabBtn){
-          jsonTabBtn.click();
-          const respExampleList = [{ label:'Default', value: respScenario.response.example }, ...((respScenario.response.examples)||[]).map(ex=>({ label: ex.name || 'Example', value: ex.value }))];
-          const ridx = respExampleList.findIndex(e=>e.label===name);
-          const rsel = item.querySelector(`#docRespExampleSelect-${respIdx}`);
-          if(ridx > -1 && rsel){ rsel.value = String(ridx); rsel.dispatchEvent(new Event('change')); }
-        }
-        item.scrollIntoView({ behavior:'smooth', block:'nearest' });
-      }
-    });
-  });
-
-  const reqToggle = main.querySelector('[data-request-toggle]');
-  if(reqToggle) reqToggle.addEventListener('click', ()=>{ reqToggle.closest('.resp-item').classList.toggle('open'); });
-
-  main.querySelectorAll('[data-request-tab]').forEach(btn=>{
-    btn.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      if(btn.disabled) return;
-      const tab = btn.getAttribute('data-request-tab');
-      const panel = main.querySelector('[data-request-panel]');
-      btn.parentElement.querySelectorAll('.resp-tab').forEach(b=>b.classList.remove('active'));
-      btn.classList.add('active');
-      if(tab === 'json'){
-        if(!hasReqJson){
-          panel.innerHTML = `<div class="empty-field">No request JSON documented.</div>`;
-          return;
-        }
-        panel.innerHTML = `
-          <div class="json-preview-label">
-            <span>Request JSON${reqExampleList.length>1 ? ' — pick an example' : ''}</span>
-            ${reqExampleList.length>1 ? `<select class="render-example-select" id="docReqExampleSelect">${reqExampleList.map((ex,i)=>`<option value="${i}">${escapeHtml(ex.label)}</option>`).join('')}</select>` : ''}
-          </div>
-          <div class="code-wrap"><pre class="code-block" id="docReqJsonBlock">${escapeHtml(maskedJsonString(reqExampleList[0].value))}</pre><button class="copy-btn" data-copy-block="reqbody">Copy</button></div>`;
-        let current = maskedJsonString(reqExampleList[0].value);
-        const cp = panel.querySelector('[data-copy-block="reqbody"]');
-        if(cp) cp.addEventListener('click', (ev)=>copyToClipboard(current, ev.currentTarget));
-        const sel = panel.querySelector('#docReqExampleSelect');
-        if(sel) sel.addEventListener('change', ()=>{
-          current = maskedJsonString(reqExampleList[parseInt(sel.value,10)].value);
-          panel.querySelector('#docReqJsonBlock').textContent = current;
-        });
-      } else {
-        panel.innerHTML = paramsHtml;
-      }
-    });
-  });
-
-  main.querySelectorAll('[data-resp-toggle]').forEach(el=>{
-    el.addEventListener('click', ()=>{
-      el.closest('.resp-item').classList.toggle('open');
-    });
-  });
-  main.querySelectorAll('[data-resp-tab]').forEach(btn=>{
-    btn.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      const idx = parseInt(btn.getAttribute('data-resp-idx'),10);
-      const tab = btn.getAttribute('data-resp-tab');
-      const r = ep.responses[idx];
-      const panel = main.querySelector(`[data-resp-panel="${idx}"]`);
-      btn.parentElement.querySelectorAll('.resp-tab').forEach(b=>b.classList.remove('active'));
-      btn.classList.add('active');
-      if(tab === 'json'){
-        if(!r.example){
-          panel.innerHTML = `<div class="empty-field">No example body.</div>`;
-          return;
-        }
-        const respExampleList = [{ label:'Default', value: r.example }, ...((r.examples)||[]).map(ex=>({ label: ex.name || 'Example', value: ex.value }))];
-        panel.innerHTML = `
-          <div class="json-preview-label">
-            <span>Response JSON${respExampleList.length>1 ? ' — pick an example' : ''}</span>
-            ${respExampleList.length>1 ? `<select class="render-example-select" id="docRespExampleSelect-${idx}">${respExampleList.map((ex,i)=>`<option value="${i}">${escapeHtml(ex.label)}</option>`).join('')}</select>` : ''}
-          </div>
-          <div class="code-wrap"><pre class="code-block" id="docRespJsonBlock-${idx}">${escapeHtml(maskedJsonString(respExampleList[0].value))}</pre><button class="copy-btn" data-copy-resp="${idx}">Copy</button></div>`;
-        let current = maskedJsonString(respExampleList[0].value);
-        const cp = panel.querySelector(`[data-copy-resp="${idx}"]`);
-        if(cp) cp.addEventListener('click', (ev)=>copyToClipboard(current, ev.currentTarget));
-        const sel = panel.querySelector(`#docRespExampleSelect-${idx}`);
-        if(sel) sel.addEventListener('change', ()=>{
-          current = maskedJsonString(respExampleList[parseInt(sel.value,10)].value);
-          panel.querySelector(`#docRespJsonBlock-${idx}`).textContent = current;
-        });
-      } else {
-        panel.innerHTML = r.fields && r.fields.length
-          ? paramSection('Response parameters', r.fields, r.code)
-          : `<div class="empty-field">No response parameters documented.</div>`;
+      if(respScenario){
+        const item = main.querySelector(`[data-resp="${ep.responses.indexOf(respScenario.response)}"]`);
+        if(item) item.scrollIntoView({ behavior:'smooth', block:'nearest' });
       }
     });
   });
