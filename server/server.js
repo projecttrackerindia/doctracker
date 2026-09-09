@@ -17,7 +17,7 @@ const auditRoutes = require('./routes/audit');
 const piiRoutes = require('./routes/pii');
 const securityRoutes = require('./routes/security');
 const liveModeRoutes = require('./routes/liveMode');
-const { verifySession } = require('./middleware/authGuard');
+const { verifySession, IdleTimeoutError } = require('./middleware/authGuard');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -152,6 +152,12 @@ async function requireAuth(req, res, next) {
     req.user = authUser;
     next();
   } catch (err) {
+    if (err instanceof IdleTimeoutError) {
+      // Not a real failure — an expected, common outcome — so this doesn't
+      // go through console.error like the catch-all below.
+      res.clearCookie(COOKIE_NAME, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
+      return res.redirect('/login.html?reason=idle');
+    }
     console.error('requireAuth() failed:', err);
     res.redirect('/login.html');
   }

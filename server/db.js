@@ -62,6 +62,18 @@ async function initDb() {
   // every admin at once.
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS access_schedule JSONB;`);
 
+  // Sliding idle-timeout tracker. Set on login and touched (throttled — see
+  // IDLE_TOUCH_THROTTLE_MS in middleware/authGuard.js) on every authenticated
+  // request/page load. verifySession() compares "now" against this column on
+  // every call and treats the session as expired once it's been untouched for
+  // longer than IDLE_TIMEOUT_MS, independent of the JWT's own 7-day expiry.
+  // This is deliberately a DB column, not something read off the JWT: the
+  // token is static once signed, so only a server-side, continuously-updated
+  // value can implement "log out after N minutes of *inactivity*" rather than
+  // "log out N minutes after login" or "log out on the browser's own timer,"
+  // either of which a client could just... not enforce.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ;`);
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(email));
   `);

@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const { createRateLimiter } = require('../rateLimitStore');
 const { pool } = require('../db');
 const dataCrypto = require('../crypto');
+const { verifySession, IdleTimeoutError } = require('../middleware/authGuard');
 const {
   validateEmail,
   validateUsername,
@@ -147,18 +148,30 @@ router.post('/logout', (req, res) => {
 });
 
 // ---- GET /api/auth/me ----
-router.get('/me', (req, res) => {
+// Previously just decoded the JWT's own signature and echoed its payload —
+// which meant a demoted/deleted/password-reset/idle-timed-out session still
+// read back as "signed in" here for up to 7 days, even though every other
+// route in the app (authenticate(), requireAuth()) re-checks the database on
+// every call. Routed through the same verifySession() now so this endpoint
+// can't disagree with the rest of the app about whether a session is valid.
+router.get('/me', async (req, res) => {
   const token = req.cookies?.[COOKIE_NAME];
   if (!token) return res.status(401).json({ error: 'Not signed in.' });
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const authUser = await verifySession(token);
+    if (!authUser) return res.status(401).json({ error: 'Session expired. Please sign in again.' });
     res.json({
       user: {
-        username: payload.username, role: payload.role, organisation: payload.organisation,
-        ...(payload.role === 'custom' ? { customPermissions: payload.customPermissions || null } : {}),
+        username: authUser.username, role: authUser.role, organisation: authUser.organisation,
+        ...(authUser.role === 'custom' ? { customPermissions: authUser.customPermissions || null } : {}),
       },
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof IdleTimeoutError) {
+      res.clearCookie(COOKIE_NAME, { ...COOKIE_OPTS, maxAge: undefined });
+      return res.status(401).json({ error: 'idle_timeout', message: "You've been signed out after 30 minutes of inactivity." });
+    }
+    console.error('GET /api/auth/me failed:', err);
     res.status(401).json({ error: 'Session expired. Please sign in again.' });
   }
 });

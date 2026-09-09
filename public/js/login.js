@@ -101,4 +101,16 @@
       submitBtn.textContent = 'Sign in';
     }
   });
+
+  // Landed here via an idle-timeout logout (see public/js/idle-session.js
+  // and IDLE_TIMEOUT_MS in server/middleware/authGuard.js) rather than a
+  // manual "Log out" click — say so, instead of silently dropping them back
+  // on a blank login form with no explanation.
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('reason') === 'idle') {
+    showAlert("You've been signed out after 30 minutes of inactivity. Please sign in again.");
+    params.delete('reason');
+    const cleanUrl = window.location.pathname + (params.toString() ? `?${params.toString()}` : '');
+    window.history.replaceState({}, document.title, cleanUrl);
+  }
 })();
