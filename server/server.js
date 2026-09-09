@@ -16,6 +16,7 @@ const workspaceRoutes = require('./routes/workspace');
 const auditRoutes = require('./routes/audit');
 const piiRoutes = require('./routes/pii');
 const securityRoutes = require('./routes/security');
+const liveModeRoutes = require('./routes/liveMode');
 const { verifySession } = require('./middleware/authGuard');
 
 const app = express();
@@ -93,6 +94,7 @@ app.use('/api/workspace', workspaceRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/pii', piiRoutes);
 app.use('/api/security', securityRoutes);
+app.use('/api/live-mode', liveModeRoutes);
 
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 

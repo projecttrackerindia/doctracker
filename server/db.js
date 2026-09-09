@@ -139,6 +139,17 @@ async function initDb() {
     }'::jsonb;
   `);
 
+  // ---- Live Mode (Try It → real outbound calls) ----
+  // Per-user allow-list of environment ids that user may fire a REAL request
+  // against from Try It, managed entirely by an Admin (Security ▸ Live Mode
+  // Access) — deliberately independent of role, so an Admin can grant a
+  // Viewer access to DEV without touching their role, or withhold PROD from
+  // an Editor. Shape: { "<userId>": ["DEV","SIT"], ... }. Org-wide (like
+  // pii_settings above) rather than per-project, since the grant is about how
+  // much real-world blast radius a *person* is trusted with, not which
+  // project they happen to be looking at. See server/routes/liveMode.js.
+  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS live_mode_grants JSONB NOT NULL DEFAULT '{}';`);
+
   // ---- Admin-managed sensitive-field masking rules (Admin ▸ Security ▸ PII & Data Masking) ----
   // Every request/response parameter table consults this list (merged with the
   // client's built-in field/pattern detectors) before ever rendering an example
