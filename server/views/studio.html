@@ -1300,6 +1300,14 @@ pre.code-block{
    `tryItEpId` handling for where the `tryit-standalone` class gets added. */
 body.tryit-standalone #app{ grid-template-columns:0 1fr; }
 body.tryit-standalone .sidebar{ display:none; }
+/* Strict Try It tab: nothing besides the Try It panel itself should be
+   reachable here — no code-samples rail, no "+ New endpoint" FAB. These
+   aren't hidden by the sidebar rule above (they're separate fixed-position
+   elements), so they need their own rule or they can still be opened on top
+   of/behind the Try It overlay. */
+body.tryit-standalone .rail{ display:none !important; }
+body.tryit-standalone .rail-scrim{ display:none !important; }
+body.tryit-standalone #fabDD{ display:none !important; }
 body.tryit-standalone #tryItModal{
   position:fixed; inset:56px 0 0 0; background:var(--bg); backdrop-filter:none; -webkit-backdrop-filter:none;
   align-items:flex-start; justify-content:center; padding:32px clamp(16px,4vw,56px); overflow-y:auto;
@@ -5383,7 +5391,20 @@ function renderMain(){
     }
     state.selected = null; renderMain(); return;
   }
-  renderEndpointDoc(main, found.proj, found.ep);
+  // A standalone Try It tab (see boot()'s tryit deep-link handling) should be
+  // strictly a Try It page — nothing else. Previously this still rendered the
+  // full endpoint doc (summary, auth, headers, Edit/Duplicate/Delete actions…)
+  // into #main and relied purely on the Try It panel's CSS overlay to cover
+  // it, which meant the doc page really was sitting in the DOM the whole
+  // time — one CSS/z-index edge case (or the panel not covering the full
+  // scroll height once the response section grows after Send) away from
+  // showing through. Skipping the doc render entirely means there's nothing
+  // to leak, regardless of how the overlay is styled.
+  if(state.standaloneTryIt){
+    main.innerHTML = '';
+  } else {
+    renderEndpointDoc(main, found.proj, found.ep);
+  }
   if(state.selected.tryIt){
     state.selected.tryIt = false; // auto-open once per deep link, not on every re-render
     openTryItModal(found.proj, found.ep);
@@ -10981,6 +11002,9 @@ document.getElementById('railScrim').addEventListener('click', ()=>{
     const envParam = deepLinkParams.get('env');
     if(envParam && envIds().includes(envParam) && roleAllowsEnv(envParam)) state.env = envParam;
     state.selected = { type:'endpoint', id: tryItEpId, tryIt:true };
+    // Drives renderMain()'s decision to skip the full endpoint-doc render
+    // entirely (not just hide it under the overlay) — see the comment there.
+    state.standaloneTryIt = true;
     // Re-skins #tryItModal from a floating dialog into this tab's actual full
     // page — see the `body.tryit-standalone` CSS above. Added before renderAll()
     // so the layout is correct on first paint, not applied after a flash of

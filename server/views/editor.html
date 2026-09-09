@@ -1018,7 +1018,7 @@ function fillFormFromEndpoint(proj, ep){
     addBlock('summary', { summary: ep.summary || '', description: ep.description || '' });
   }
   if((ep.parameters||[]).length){
-    addBlock('parameters', { rows: ep.parameters.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'' })) });
+    addBlock('parameters', { rows: ep.parameters.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'', sendAs:'query' })) });
   }
   if((ep.headers||[]).length){
     addBlock('headers', { rows: ep.headers.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'' })) });
@@ -1093,29 +1093,62 @@ function renderBlocks(){
   updateAddMenuAvailability();
 }
 
-function rowsTableHtml(block, isHeaderStyle){
+/* Live path-param names, read straight from the Path input on every call —
+   deliberately not cached/state-tracked so it can never drift out of sync
+   with what's actually typed. Only used to decide, at render time, whether a
+   Parameters row's "Sends as" column shows the fixed "Path" label or the
+   Query/Payload picker below. Not re-evaluated on every keystroke of a row's
+   own name (that would force a renderBlocks() on every keypress there, which
+   is exactly the cursor-jumping regression the search/render logic was fixed
+   for elsewhere) — it only refreshes whenever renderBlocks() next runs, same
+   as the path/query split already worked at save time. */
+function livePathParamNames(){
+  const pathInput = document.getElementById('fPath');
+  const path = pathInput ? pathInput.value : '';
+  return new Set([...path.matchAll(/\{([^}]+)\}/g)].map(m=>m[1].trim()).filter(Boolean));
+}
+
+/* showSendAs is only passed true for the top-level Parameters block. It adds
+   a "Sends as" column so a row can be marked Query param (goes into the
+   endpoint's query string / ?in=query, same as before) or Payload (folded
+   into the Request body block instead at save time — see
+   gatherEndpointFromForm). Path parameters are still detected automatically
+   from {name} in the path above and aren't affected by this picker. */
+function rowsTableHtml(block, isHeaderStyle, showSendAs){
   const rows = block.rows;
+  const pathNames = showSendAs ? livePathParamNames() : null;
   return `
     <div class="rows-table-wrap">
     <table class="rows-table">
       <thead><tr>
         <th style="width:18%;">Name</th><th style="width:12%;">Type</th><th style="width:7%;">Req.</th>
+        ${showSendAs ? `<th style="width:15%;">Sends as</th>` : ''}
         <th style="width:20%;">Example</th><th style="width:auto;">Description</th><th style="width:28px;"></th>
       </tr></thead>
       <tbody>
-        ${rows.map(r=>`
+        ${rows.map(r=>{
+          const isPathRow = showSendAs && pathNames.has((r.name||'').trim());
+          const sendAsCell = !showSendAs ? '' : isPathRow
+            ? `<td><span class="mono" style="font-size:11px; color:var(--text-faint);" title="Detected automatically from {${escapeHtml((r.name||'').trim())}} in the path above">Path</span></td>`
+            : `<td><select data-f="sendAs">
+                 <option value="query" ${r.sendAs!=='payload'?'selected':''}>Query param</option>
+                 <option value="payload" ${r.sendAs==='payload'?'selected':''}>Payload (JSON)</option>
+               </select></td>`;
+          return `
           <tr data-row="${r.id}">
             <td><input type="text" data-f="name" value="${escapeHtml(r.name)}" placeholder="${isHeaderStyle?'X-Request-Id':'orderId'}"></td>
             <td><select data-f="type">${PARAM_TYPES.map(t=>`<option ${t===r.type?'selected':''}>${t}</option>`).join('')}</select></td>
             <td style="text-align:center;"><input type="checkbox" data-f="required" ${r.required?'checked':''}></td>
+            ${sendAsCell}
             <td><input type="text" data-f="example" value="${escapeHtml(r.example)}" placeholder="e.g. 12345"></td>
             <td><input type="text" data-f="description" value="${escapeHtml(r.description)}" placeholder="What this is for"></td>
             <td><button type="button" class="row-del" data-del-row="${r.id}" title="Remove row">✕</button></td>
-          </tr>`).join('')}
+          </tr>`;}).join('')}
       </tbody>
     </table>
     </div>
     <button type="button" class="add-row-btn" data-add-row="${block.id}">+ Add row</button>
+    ${showSendAs ? `<div class="hint" style="margin-top:8px;">Path parameters are detected automatically from <span class="mono">{like-this}</span> in the path above. For everything else, choose whether it's sent as a query string parameter or folded into the JSON request payload — payload rows show up under Request body once saved.</div>` : ''}
   `;
 }
 
@@ -1199,7 +1232,7 @@ function renderBlockHtml(block){
   if(block.type==='parameters'){
     return `<div class="card" data-block="${block.id}" draggable="true">
       <div class="card-head">${DRAG_HANDLE}<div class="card-title">Parameters</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
-      ${rowsTableHtml(block, false)}
+      ${rowsTableHtml(block, false, true)}
     </div>`;
   }
   if(block.type==='headers'){
@@ -1270,7 +1303,7 @@ function bindBlockEvents(container){
     btn.addEventListener('click', ()=>{
       const rows = findRowsArrayById(btn.getAttribute('data-add-row'));
       if(!rows) return;
-      rows.push({ id:uid(), name:'', type:'String', required:false, example:'', description:'' });
+      rows.push({ id:uid(), name:'', type:'String', required:false, example:'', description:'', sendAs:'query' });
       renderBlocks();
     });
   });
@@ -1529,6 +1562,55 @@ function gatherEndpointFromForm(){
   const bodyBlock = blocks.find(b=>b.type==='requestBody');
   const responseBlocks = blocks.filter(b=>b.type==='response');
 
+  // Split the Parameters block's rows three ways: anything whose name matches
+  // a {placeholder} in the path above is always a path param regardless of
+  // its "Sends as" picker; everything else follows what that picker says —
+  // "Query param" (default, same as the old always-query behaviour) or
+  // "Payload", which doesn't belong in `parameters` at all and instead gets
+  // folded into requestBody below, right alongside anything already entered
+  // directly in the Request body block.
+  const allParamRows = (paramsBlock && paramsBlock.rows || []).filter(r=>r.name.trim());
+  const pathRows = [], queryRows = [], payloadRows = [];
+  allParamRows.forEach(r=>{
+    const name = r.name.trim();
+    if(pathParamNames.has(name)) pathRows.push(r);
+    else if(r.sendAs === 'payload') payloadRows.push(r);
+    else queryRows.push(r);
+  });
+  const cleanParam = r => ({ name:r.name.trim(), type:r.type, required:!!r.required, example:r.example||'', description:r.description||'' });
+
+  const hasExplicitBody = !!(bodyBlock && (bodyBlock.example.trim() || (bodyBlock.fields||[]).length || (bodyBlock.examples||[]).some(ex=>ex.name.trim() || ex.value.trim())));
+  let requestBody = null;
+  if(hasExplicitBody || payloadRows.length){
+    const existingFields = cleanRows(bodyBlock && bodyBlock.fields);
+    // A payload row with the same name as a field already in the Request
+    // body block loses to that explicit field — it was documented there on
+    // purpose, so a same-named Parameters row shouldn't silently override it.
+    const existingNames = new Set(existingFields.map(f=>f.name));
+    const mergedFields = [...existingFields, ...payloadRows.map(cleanParam).filter(f=>!existingNames.has(f.name))];
+
+    // Merge into the example JSON too, so a payload row someone only typed
+    // into the Parameters table still shows up in Try It and the docs'
+    // Request JSON tab, not just in the fields list.
+    const rawExample = (bodyBlock && bodyBlock.example || '').trim();
+    let exampleObj = null;
+    if(rawExample){ try{ const parsed = JSON.parse(rawExample); if(parsed && typeof parsed==='object' && !Array.isArray(parsed)) exampleObj = parsed; }catch(e){ /* not a JSON object — leave as-is, don't guess */ } }
+    let example = rawExample;
+    if(payloadRows.length){
+      const base = exampleObj || {};
+      payloadRows.forEach(r=>{
+        const name = r.name.trim();
+        if(!(name in base)) base[name] = exampleValueFor(r.type, r.example);
+      });
+      // Only rewrite the example text when we actually had (or now have) a
+      // JSON object to merge into — an existing non-JSON/non-object example
+      // is left untouched rather than clobbered with a guess.
+      if(exampleObj || !rawExample) example = JSON.stringify(base, null, 2);
+    }
+
+    requestBody = { example, fields: mergedFields, examples: cleanExamples(bodyBlock && bodyBlock.examples, false) };
+  }
+
   return {
     method: document.getElementById('fMethod').value,
     path,
@@ -1538,11 +1620,12 @@ function gatherEndpointFromForm(){
     contentType: document.getElementById('fContentType').value.trim() || 'application/json',
     summary: (summaryBlock && summaryBlock.summary || '').trim(),
     description: (summaryBlock && summaryBlock.description || '').trim(),
-    parameters: cleanRows(paramsBlock && paramsBlock.rows).map(p=>({ ...p, in: pathParamNames.has(p.name) ? 'path' : 'query' })),
+    parameters: [
+      ...pathRows.map(p=>({ ...cleanParam(p), in:'path' })),
+      ...queryRows.map(p=>({ ...cleanParam(p), in:'query' })),
+    ],
     headers: cleanRows(headersBlock && headersBlock.rows),
-    requestBody: (bodyBlock && (bodyBlock.example.trim() || (bodyBlock.fields||[]).length || (bodyBlock.examples||[]).some(ex=>ex.name.trim() || ex.value.trim())))
-      ? { example: bodyBlock.example.trim(), fields: cleanRows(bodyBlock.fields), examples: cleanExamples(bodyBlock.examples, false) }
-      : null,
+    requestBody,
     responses: responseBlocks.map(r=>({
       code: parseInt(r.code,10) || 200,
       description: r.description || '',
