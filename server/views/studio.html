@@ -7797,10 +7797,18 @@ function renderEndpointDoc(main, proj, ep){
   const queryParams = (ep.parameters||[]).filter(p=>!p.in || p.in==='query');
   const headerParams = ep.headers || (ep.parameters||[]).filter(p=>p.in==='header');
 
-  const hasAnyParams = pathParams.length || queryParams.length;
+  // Body fields (e.g. from "Infer fields from JSON" on the Request body
+  // block) used to live only in ep.requestBody.fields and never made it into
+  // this panel — the Request parameters tab only ever looked at path/query
+  // params, so an endpoint documented purely via a JSON body example showed
+  // "No parameters documented" even though fields existed. Folded in here as
+  // its own section so all three parameter sources show up in one place.
+  const bodyFields = (ep.requestBody && ep.requestBody.fields) || [];
+  const hasAnyParams = pathParams.length || queryParams.length || bodyFields.length;
   const paramsHtml = hasAnyParams ? [
     paramSection('Path parameters', pathParams, 'request'),
-    paramSection('Request parameters', queryParams, 'request'),
+    paramSection('Query parameters', queryParams, 'request'),
+    paramSection('Body parameters', bodyFields, 'request'),
   ].join('') : `<div class="empty-field">No parameters documented.</div>`;
 
   const headersHtml = headerParams.length
@@ -7811,6 +7819,31 @@ function renderEndpointDoc(main, proj, ep){
     { label:'Default', value: (ep.requestBody && ep.requestBody.example) || '' },
     ...((ep.requestBody && ep.requestBody.examples) || []).map(ex=>({ label: ex.name || 'Example', value: ex.value })),
   ];
+
+  // Unified "Scenario" selector. Request JSON examples and response JSON
+  // examples are already pairable by sharing the same name (see "Named
+  // examples" in the editor, and tryItRequestScenarios/tryItResponseScenarios
+  // below, which already do this pairing for the "Try it" panel) — but on
+  // this static docs page the Request JSON dropdown and each response's own
+  // JSON dropdown were three completely independent controls, so picking
+  // "Minimum Payment Amount is ₹100" on the request side did nothing to the
+  // response below even when a same-named response example existed for it.
+  // This picker sits above both sections and drives them together: choosing
+  // a scenario selects the matching example in the Request JSON tab (if
+  // there is one) and opens + selects the matching example in whichever
+  // Response documents that scenario (if any does).
+  const requestScenarios = tryItRequestScenarios(ep);
+  const responseScenarios = tryItResponseScenarios(ep);
+  const scenarioNames = [];
+  requestScenarios.forEach(s=>{ if(!scenarioNames.includes(s.name)) scenarioNames.push(s.name); });
+  responseScenarios.forEach(s=>{ if(!scenarioNames.includes(s.name)) scenarioNames.push(s.name); });
+  const scenarioPickerHtml = scenarioNames.length > 1 ? `
+    <div class="section scenario-picker-section">
+      <div class="section-title">Scenario <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— pick one to line up its request &amp; response</span></div>
+      <div class="resp-pill-row" id="docScenarioPicker">
+        ${scenarioNames.map(name=>`<div class="resp-pill" data-scenario-pick="${escapeHtml(name)}"><span class="dot" style="background:var(--accent);"></span><span class="mono" style="font-weight:700;">${escapeHtml(name)}</span></div>`).join('')}
+      </div>
+    </div>` : '';
 
   const requestAccordionHtml = `
     <div class="resp-item open" data-request-item style="--item-accent:var(--post);">
@@ -7944,6 +7977,8 @@ function renderEndpointDoc(main, proj, ep){
 
     ${headersHtml ? `<div class="section"><div class="section-title">Headers</div>${headersHtml}</div>` : ''}
 
+    ${scenarioPickerHtml}
+
     <div class="section">
       <div class="section-title">Request</div>
       ${requestAccordionHtml}
@@ -7978,6 +8013,46 @@ function renderEndpointDoc(main, proj, ep){
   });
   main.querySelectorAll('[data-header-reveal]').forEach(btn=>{
     btn.addEventListener('click', ()=> toggleSensitiveRevealed());
+  });
+
+  // Applying a scenario reuses the existing tab buttons rather than
+  // duplicating their rendering logic: it clicks the Request "JSON" tab and
+  // the matching response's "JSON" tab (each already knows how to render
+  // itself with its own example dropdown), then, once that dropdown exists,
+  // picks the option whose label matches this scenario's name.
+  main.querySelectorAll('[data-scenario-pick]').forEach(pill=>{
+    pill.addEventListener('click', ()=>{
+      main.querySelectorAll('[data-scenario-pick]').forEach(p=>p.classList.remove('active'));
+      pill.classList.add('active');
+      const name = pill.getAttribute('data-scenario-pick');
+
+      const reqScenario = requestScenarios.find(s=>s.name===name);
+      if(reqScenario && hasReqJson){
+        const reqTabBtn = main.querySelector('[data-request-tab="json"]');
+        if(reqTabBtn && !reqTabBtn.disabled){
+          reqTabBtn.click();
+          const idx = reqExampleList.findIndex(e=>e.label===name);
+          const sel = main.querySelector('#docReqExampleSelect');
+          if(idx > -1 && sel){ sel.value = String(idx); sel.dispatchEvent(new Event('change')); }
+        }
+      }
+
+      const respScenario = responseScenarios.find(s=>s.name===name);
+      const item = respScenario ? main.querySelector(`[data-resp="${ep.responses.indexOf(respScenario.response)}"]`) : null;
+      if(item){
+        const respIdx = ep.responses.indexOf(respScenario.response);
+        item.classList.add('open');
+        const jsonTabBtn = item.querySelector('[data-resp-tab="json"]');
+        if(jsonTabBtn){
+          jsonTabBtn.click();
+          const respExampleList = [{ label:'Default', value: respScenario.response.example }, ...((respScenario.response.examples)||[]).map(ex=>({ label: ex.name || 'Example', value: ex.value }))];
+          const ridx = respExampleList.findIndex(e=>e.label===name);
+          const rsel = item.querySelector(`#docRespExampleSelect-${respIdx}`);
+          if(ridx > -1 && rsel){ rsel.value = String(ridx); rsel.dispatchEvent(new Event('change')); }
+        }
+        item.scrollIntoView({ behavior:'smooth', block:'nearest' });
+      }
+    });
   });
 
   const reqToggle = main.querySelector('[data-request-toggle]');
@@ -9910,7 +9985,12 @@ function buildRenderSheetHtml(proj, ep){
 function wireRenderSheet(proj, ep){
   const pathParams = (ep.parameters||[]).filter(p=>p.in==='path');
   const queryParams = (ep.parameters||[]).filter(p=>!p.in || p.in==='query');
-  const allParams = [...pathParams.map(p=>({...p, in:'path'})), ...queryParams.map(p=>({...p, in:'query'}))];
+  // Same fix as renderEndpointDoc: body fields (from the Request body block,
+  // including anything from "Infer fields from JSON") belong in this list
+  // too, not just path/query params — otherwise this preview disagrees with
+  // what "Infer fields from JSON" just did.
+  const bodyFieldParams = ((ep.requestBody && ep.requestBody.fields) || []).map(p=>({...p, in:'body'}));
+  const allParams = [...pathParams.map(p=>({...p, in:'path'})), ...queryParams.map(p=>({...p, in:'query'})), ...bodyFieldParams];
   const cardHtml = p=>`
     <div class="param-card${p.in==='header'?' is-header':''}">
       <div class="pc-top">
