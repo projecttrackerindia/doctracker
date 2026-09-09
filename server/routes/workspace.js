@@ -692,6 +692,130 @@ function pipelineStages(allEnvironments) {
   return allEnvironments.filter((e) => String(e.label || '').trim().toUpperCase() !== 'DR');
 }
 
+// GET /api/workspace/environment-metrics — workspace-wide rollup of how many
+// endpoints actually exist "in" each pipeline environment, not just whether a
+// project has a base URL configured for it. Dev/the draft stage always shows
+// what's live in each project's editable draft; every later stage (SIT, UAT,
+// Staging, Production, ...) shows what was actually promoted into that
+// stage's frozen snapshot — so it's completely normal (and expected) for
+// Production's count to be lower than Dev's while endpoints are still being
+// built out and haven't been promoted the whole way down the pipeline yet.
+//
+// Scoped exactly like GET '/' — a project only counts here if the caller
+// owns it, or it (or one of its endpoints) is public. For someone else's
+// project, only its public endpoints are counted, in both the draft and any
+// promoted snapshot, mirroring projectForViewer()'s rule.
+router.get('/environment-metrics', async (req, res) => {
+  try {
+    const userId = req.authUser.sub;
+    const org = req.authUser.organisation;
+
+    const { rows } = await pool.query(
+      `SELECT id, owner_id, organisation, visibility, data, data_enc
+       FROM projects
+       WHERE owner_id = $1
+          OR (organisation = $2 AND (visibility = 'public' OR has_public_endpoint))`,
+      [userId, org]
+    );
+
+    const allEnvs = await getOrgEnvironments(org);
+    const stages = pipelineStages(allEnvs);
+    if (!stages.length) return res.json({ stages: [], mirrors: [], totalProjects: rows.length, baselineTotal: 0 });
+
+    // Stage 0 (the live draft) — counts come straight from each project's
+    // current data, filtered down to what this viewer is allowed to see.
+    const draftCounts = new Map(); // projectId -> count
+    rows.forEach((row) => {
+      const viewerData = projectForViewer(row, userId, decryptProjectData(row));
+      draftCounts.set(row.id, (viewerData.endpoints || []).length);
+    });
+
+    // Promoted stages — one query for every frozen snapshot across these
+    // projects, decrypted and counted the same viewer-scoped way.
+    const promotedCounts = new Map(); // `${projectId}:${environmentId}` -> count
+    const projectIds = rows.map((r) => r.id);
+    if (projectIds.length) {
+      const { rows: verRows } = await pool.query(
+        `SELECT project_id, environment_id, data_enc FROM project_env_versions WHERE project_id = ANY($1::text[])`,
+        [projectIds]
+      );
+      const rowById = new Map(rows.map((r) => [r.id, r]));
+      verRows.forEach((v) => {
+        const projRow = rowById.get(v.project_id);
+        if (!projRow) return;
+        let count = 0;
+        try {
+          const stageData = JSON.parse(dataCrypto.decryptField(v.data_enc, `project-env:${v.project_id}:${v.environment_id}`));
+          const endpoints = Array.isArray(stageData.endpoints) ? stageData.endpoints : [];
+          const isOwner = projRow.owner_id === userId;
+          count = isOwner ? endpoints.length : endpoints.filter((ep) => ep && ep.visibility === 'public').length;
+        } catch (err) {
+          console.error('Failed to decrypt env snapshot for environment-metrics:', err);
+        }
+        promotedCounts.set(`${v.project_id}:${v.environment_id}`, count);
+      });
+    }
+
+    const baselineTotal = Array.from(draftCounts.values()).reduce((s, n) => s + n, 0);
+
+    const buildStageMetric = (env, idx) => {
+      let totalEndpoints = 0, projectsWithEndpoints = 0;
+      rows.forEach((row) => {
+        const count = idx === 0 ? (draftCounts.get(row.id) || 0) : (promotedCounts.get(`${row.id}:${env.id}`) || 0);
+        totalEndpoints += count;
+        if (count > 0) projectsWithEndpoints++;
+      });
+      return {
+        environmentId: env.id,
+        label: env.label,
+        color: env.color,
+        isDraftStage: idx === 0,
+        totalEndpoints,
+        projectsWithEndpoints,
+        totalProjects: rows.length,
+        percentOfBaseline: baselineTotal ? Math.round((totalEndpoints / baselineTotal) * 100) : (idx === 0 ? 0 : 0),
+      };
+    };
+
+    const stageMetrics = stages.map((env, idx) => buildStageMetric(env, idx));
+
+    // "DR" environments auto-mirror the pipeline's last stage rather than
+    // being a manual pipeline stage — see pipelineStages() above — but they
+    // still hold their own project_env_versions rows, so they're reported
+    // the same way, just kept in a separate list.
+    const drEnvs = allEnvs.filter((e) => String(e.label || '').trim().toUpperCase() === 'DR');
+    const mirrorMetrics = drEnvs.map((env) => buildStageMetric(env, -1)); // idx -1 => never the draft stage
+
+    // Per-project breakdown — same counts, just grouped by project instead
+    // of summed across the workspace. Lets the "APIs" table show each
+    // project's own promotion progress instead of the old "has a base URL"
+    // checkbox count.
+    const perProject = rows.map((row) => {
+      const byEnvironment = {};
+      stages.forEach((env, idx) => {
+        byEnvironment[env.id] = idx === 0 ? (draftCounts.get(row.id) || 0) : (promotedCounts.get(`${row.id}:${env.id}`) || 0);
+      });
+      const draftTotal = draftCounts.get(row.id) || 0;
+      const stagesReached = stages.filter((env, idx) => idx > 0 && (byEnvironment[env.id] || 0) > 0).length;
+      const lastStage = stages[stages.length - 1];
+      const fullyPromoted = draftTotal > 0 && lastStage && byEnvironment[lastStage.id] === draftTotal;
+      return { projectId: row.id, byEnvironment, draftTotal, stagesReached, fullyPromoted };
+    });
+
+    res.json({
+      stages: stageMetrics,
+      mirrors: mirrorMetrics,
+      totalProjects: rows.length,
+      baselineTotal,
+      pipelineStageCount: stages.length,
+      perProject,
+    });
+  } catch (err) {
+    console.error('GET environment-metrics failed:', err);
+    res.status(500).json({ error: 'Could not load environment metrics.' });
+  }
+});
+
 // GET /api/workspace/projects/:id/versions — read-only status of every stage
 // for this project. Any org member who can see the project may view it;
 // promoting is Admin-only (enforced in the POST route below).

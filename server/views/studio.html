@@ -2707,12 +2707,17 @@ pre.json-raw{ max-height:360px; margin:0; }
     <div class="modal-sub" id="projSubtitle">Release pipeline, documents and architecture for this project.</div>
     <div class="modal-tabs">
       <div class="modal-tab active" data-mtab="release">Release Pipeline</div>
+      <div class="modal-tab" data-mtab="environments">Environments</div>
       <div class="modal-tab" data-mtab="docs">Documents</div>
       <div class="modal-tab" data-mtab="architecture">Architecture</div>
     </div>
     <div class="modal-pane active" data-mpane="release">
       <div class="hint" style="margin-top:0;">Pick a From and To stage to see exactly what changed, then merge — like a diff before a promote. Changes move forward one stage at a time; each stage keeps its own frozen, versioned copy until it's promoted again.</div>
       <div id="releasePipelineBody">Loading…</div>
+    </div>
+    <div class="modal-pane" data-mpane="environments">
+      <div class="hint" style="margin-top:0;">The base URL this project actually points to in each environment — used for "Try it", the OpenAPI export's server list, and the API Control Center's endpoint-coverage metrics. This doesn't affect what's promoted through the release pipeline, just where requests are sent.</div>
+      <div id="projEnvUrlList" style="display:flex;flex-direction:column;gap:10px;"></div>
     </div>
     <div class="modal-pane" data-mpane="docs">
       <div class="hint" style="margin-top:0;">Upload reference material for this project — Postman collections, architecture PDFs, sample payloads, contracts, anything teammates should be able to grab. Shown as downloadable files on the project's overview page. Stored locally in this browser.</div>
@@ -2909,6 +2914,25 @@ async function apiGet(path){
   const res = await fetch(WORKSPACE_API + path, { credentials:'same-origin' });
   if(!res.ok) throw new Error('Request failed: ' + res.status);
   return res.json();
+}
+// Backs the Control Center's "Environment configuration" table — how many
+// endpoints actually exist in each pipeline stage (Dev/SIT/UAT/Staging/
+// Production/...), not whether a project has a base URL saved for it. See
+// GET /api/workspace/environment-metrics. Cached on `state` and re-fetched
+// on demand; renderControlCenter() kicks this off and re-renders once it
+// lands, same "Loading…" -> fill-in pattern used by the release pipeline panel.
+async function loadEnvironmentMetrics(){
+  state.envMetricsStatus = 'loading';
+  try{
+    state.envMetrics = await apiGet('/environment-metrics');
+    state.envMetricsStatus = 'ready';
+  }catch(err){
+    console.error('Failed to load environment metrics:', err);
+    state.envMetricsStatus = 'error';
+  }
+  if(state.selected.type === 'home'){
+    renderMain();
+  }
 }
 async function apiSend(method, path, body){
   const res = await fetch(WORKSPACE_API + path, {
@@ -3507,6 +3531,8 @@ let state = {
   sensitiveRevealed: false,          // session-only Admin-role toggle: reveals real hosts & secret header values
   envTableUI: { search:'', filterAccess:'', filterColor:'', sortBy:null, sortDir:'asc' },
   envTableStatus: 'ready',           // 'ready' | 'loading' | 'error' — see loadState()
+  envMetrics: null,                  // GET /environment-metrics response cache — see loadEnvironmentMetrics()
+  envMetricsStatus: 'idle',          // 'idle' | 'loading' | 'ready' | 'error'
 };
 
 /* ==================== SECTION:UTIL ==================== */
@@ -5428,32 +5454,61 @@ function renderControlCenter(main){
   const partialPct = Math.round((m.partial/healthTotal)*100);
   const poorPct = 100 - wellPct - partialPct;
 
-  const envRows = environments().map(e=>{
-    let configured = 0;
-    projects.forEach(p=>{
-      if(p.environments[e.id]) configured++;
-    });
-    const pct = projects.length ? Math.round((configured/projects.length)*100) : 0;
-    return `<tr>
-      <td><span class="env-chip" style="--env-accent:${envAccentColor(e.id)};--env-accent-bg:${envBgColor(e.id)};">${e.label}</span></td>
-      <td class="mono">${projects.length}</td>
-      <td class="mono">${pct}%</td>
-      <td class="mono" style="color:${pct===100?'var(--post)':pct===0?'var(--text-faint)':'var(--put)'};">${configured}/${projects.length || 0} APIs</td>
-    </tr>`;
-  }).join('');
+  // Environment configuration + each API's "Environments" column both come
+  // from GET /environment-metrics — endpoints actually promoted into each
+  // pipeline stage, not whether a base URL happens to be set. See
+  // loadEnvironmentMetrics(). Kick off a (re)fetch the first time we land
+  // here or after a promotion may have changed things; render a lightweight
+  // loading state in the meantime rather than blocking the rest of the page.
+  if(state.envMetricsStatus === 'idle') loadEnvironmentMetrics();
+  const em = state.envMetrics;
+  const emLoading = state.envMetricsStatus === 'loading' && !em;
+  const emError = state.envMetricsStatus === 'error' && !em;
+
+  const perProjectById = new Map((em && em.perProject || []).map(p=>[p.projectId, p]));
+  const pipelineStageCount = em ? (em.stages || []).length : 0;
+
+  let envRows;
+  if(emLoading){
+    envRows = `<tr><td colspan="4" class="empty-field" style="padding:16px;">Loading endpoint counts per environment…</td></tr>`;
+  } else if(emError){
+    envRows = `<tr><td colspan="4" class="empty-field" style="padding:16px;">Couldn't load environment metrics. <button type="button" id="ccEnvMetricsRetry" style="background:none;border:none;color:var(--accent);cursor:pointer;text-decoration:underline;padding:0;font:inherit;">Retry</button></td></tr>`;
+  } else if(em && (em.stages||[]).length){
+    envRows = em.stages.map(s=>{
+      return `<tr>
+        <td><span class="env-chip" style="--env-accent:${envAccentColor(s.environmentId)};--env-accent-bg:${envBgColor(s.environmentId)};">${escapeHtml(s.label)}${s.isDraftStage ? ' <span style="opacity:.6;font-weight:500;">(draft)</span>' : ''}</span></td>
+        <td class="mono">${s.totalEndpoints}</td>
+        <td class="mono">${s.percentOfBaseline}%</td>
+        <td class="mono" style="color:${s.totalEndpoints===0?'var(--text-faint)':s.isDraftStage||s.percentOfBaseline===100?'var(--post)':'var(--put)'};">${s.projectsWithEndpoints}/${s.totalProjects} APIs</td>
+      </tr>`;
+    }).join('') + (em.mirrors||[]).map(s=>`<tr>
+        <td><span class="env-chip" style="--env-accent:${envAccentColor(s.environmentId)};--env-accent-bg:${envBgColor(s.environmentId)};">${escapeHtml(s.label)} <span style="opacity:.6;font-weight:500;">(mirrors last stage)</span></span></td>
+        <td class="mono">${s.totalEndpoints}</td>
+        <td class="mono">${s.percentOfBaseline}%</td>
+        <td class="mono" style="color:${s.totalEndpoints===0?'var(--text-faint)':'var(--post)'};">${s.projectsWithEndpoints}/${s.totalProjects} APIs</td>
+      </tr>`).join('');
+  } else {
+    envRows = `<tr><td colspan="4" class="empty-field" style="padding:16px;">No pipeline environments configured yet — add one from Your Profile first.</td></tr>`;
+  }
 
   const projectRows = projects.length ? projects.map(p=>{
     const stats = p.endpoints.length ? Math.round(p.endpoints.reduce((s,ep)=>s+computeDocScore(ep,p).percent,0)/p.endpoints.length) : 0;
-    const envsConfigured = environments().filter(e=>p.environments[e.id]).length;
+    const pp = perProjectById.get(p.id);
+    const envsCell = emLoading ? '<span class="empty-field">…</span>'
+      : pp ? `${pp.stagesReached}/${Math.max(pipelineStageCount-1,0)}`
+      : `0/${Math.max(pipelineStageCount-1,0)}`;
     return `<tr class="cc-proj-row" data-cc-proj="${p.id}">
       <td><span class="cc-proj-name">${escapeHtml(p.name)}</span></td>
       <td><span class="lc-badge lc-${p.lifecycle.toLowerCase().replace(/[^a-z]/g,'')}">${p.lifecycle}</span></td>
       <td class="mono">${p.endpoints.length}</td>
       <td style="min-width:120px;">${docScoreBarHtml(stats,'sm')}<span class="mono" style="font-size:10.5px;color:var(--text-faint);">${stats}%</span></td>
-      <td class="mono">${envsConfigured}/${environments().length}</td>
+      <td class="mono" title="Pipeline stages (past Dev) this API has at least one endpoint promoted to">${envsCell}</td>
       <td>${p.owner ? escapeHtml(p.owner) : '<span class="empty-field">—</span>'}</td>
     </tr>`;
   }).join('') : `<tr><td colspan="6" class="empty-field" style="padding:16px;">No APIs yet — import a spec or add an endpoint to populate the control center.</td></tr>`;
+
+  const fullyPromotedCount = em ? (em.perProject||[]).filter(p=>p.fullyPromoted).length : 0;
+  const lastStageLabel = em && em.stages && em.stages.length ? em.stages[em.stages.length-1].label : 'the last stage';
 
   main.innerHTML = `
     <div class="crumb">API Control Center</div>
@@ -5468,7 +5523,7 @@ function renderControlCenter(main){
       ${kpiCard('Documentation coverage', m.avgDoc+'%', m.avgDoc>=80?'var(--post)':m.avgDoc>=50?'var(--put)':'var(--delete)')}
       ${kpiCard('Well documented', m.wellDocumented, 'var(--post)', '≥80% complete')}
       ${kpiCard('Needs attention', m.partial+m.poor, 'var(--put)', '<80% complete')}
-      ${kpiCard('Fully configured APIs', m.envsFullyConfigured, 'var(--get)', 'all '+environments().length+' environments set')}
+      ${kpiCard('Fully promoted APIs', emLoading ? '…' : fullyPromotedCount, 'var(--get)', 'every draft endpoint reached '+lastStageLabel)}
       ${kpiCard('Missing auth', m.missingAuth, m.missingAuth?'var(--delete)':'var(--post)')}
       ${kpiCard('Deprecated / retired', m.deprecated, m.deprecated?'var(--patch)':'var(--text-dim)')}
     </div>
@@ -5484,8 +5539,9 @@ function renderControlCenter(main){
 
     <div class="section">
       <div class="section-title">Environment configuration</div>
+      <div class="hint" style="margin-top:-4px;">Endpoints actually promoted into each environment — not just whether a base URL is set. It's normal for later stages to be lower than Dev while work is still in progress.</div>
       <table class="data-table">
-        <thead><tr><th>Environment</th><th>APIs</th><th>% configured</th><th>Coverage</th></tr></thead>
+        <thead><tr><th>Environment</th><th>Endpoints</th><th>% of Dev</th><th>Coverage</th></tr></thead>
         <tbody>${envRows}</tbody>
       </table>
     </div>
@@ -5494,12 +5550,15 @@ function renderControlCenter(main){
       <div class="section-title">APIs</div>
       <div class="table-scroll">
       <table class="data-table cc-proj-table">
-        <thead><tr><th>Name</th><th>Lifecycle</th><th>Endpoints</th><th>Documentation</th><th>Environments</th><th>Owner</th></tr></thead>
+        <thead><tr><th>Name</th><th>Lifecycle</th><th>Endpoints</th><th>Documentation</th><th>Stages reached</th><th>Owner</th></tr></thead>
         <tbody>${projectRows}</tbody>
       </table>
       </div>
     </div>
   `;
+
+  const emRetryBtn = document.getElementById('ccEnvMetricsRetry');
+  if(emRetryBtn) emRetryBtn.addEventListener('click', ()=>{ state.envMetricsStatus = 'idle'; renderMain(); });
 
   main.querySelectorAll('[data-cc-proj]').forEach(row=>{
     row.addEventListener('click', ()=>{
@@ -8987,6 +9046,7 @@ function openProjectModal(projectId, initialTab){
 
   renderProjectDocsList(proj);
   renderReleasePipeline(proj);
+  renderProjectEnvUrls(proj);
 
   const archStatusEl = document.getElementById('projArchStatus');
   if(archStatusEl){
@@ -9001,6 +9061,48 @@ function openProjectModal(projectId, initialTab){
   document.querySelector(`.modal-pane[data-mpane="${tab}"]`).classList.add('active');
 
   document.getElementById('projectModal').classList.add('show');
+}
+
+// Project settings ▸ Environments — per-project base URL for each org
+// environment (proj.environments[envId]). This is the field Try It, the
+// OpenAPI export's server list, and the Control Center's per-project
+// environment metrics all read (see server/routes/workspace.js
+// GET /environment-metrics, GET /projects/:id/snapshot's server list, etc.).
+// It was previously edited here too, then the tab was removed while the
+// underlying field stayed load-bearing elsewhere — this restores the editor.
+function renderProjectEnvUrls(proj){
+  const list = document.getElementById('projEnvUrlList');
+  if(!list) return;
+  const envs = environments();
+  if(!envs.length){
+    list.innerHTML = `<div class="empty-field">No environments are configured for this organisation yet — add one from Your Profile first.</div>`;
+    return;
+  }
+  const canEdit = isAdmin();
+  list.innerHTML = envs.map(e=>{
+    const val = (proj.environments && proj.environments[e.id]) || '';
+    return `<div class="field" style="margin:0;">
+      <label style="display:flex;align-items:center;gap:8px;">
+        <span class="env-chip" style="--env-accent:${envAccentColor(e.id)};--env-accent-bg:${envBgColor(e.id)};">${escapeHtml(e.label)}</span>
+      </label>
+      <input type="text" data-proj-env-url="${e.id}" value="${escapeHtml(val)}" placeholder="https://${e.id.toLowerCase()}.example.com" ${canEdit?'':'disabled'}>
+    </div>`;
+  }).join('');
+
+  list.querySelectorAll('[data-proj-env-url]').forEach(input=>{
+    input.addEventListener('change', ()=>{
+      const envId = input.getAttribute('data-proj-env-url');
+      const p = state.projects[editingProjectId];
+      if(!p) return;
+      p.environments = p.environments || {};
+      const val = input.value.trim();
+      if(val) p.environments[envId] = val; else delete p.environments[envId];
+      p.updatedAt = new Date().toISOString();
+      saveState();
+      state.envMetricsStatus = 'idle'; // base URLs don't feed the metric directly, but keep things fresh
+      renderSidebar();
+    });
+  });
 }
 
 /* ---------- Project documents / attachments — settings-tab list + upload ---------- */
