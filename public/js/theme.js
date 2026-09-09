@@ -1,5 +1,5 @@
 (function () {
-  const THEME_KEY = 'apiStudio_theme'; // same key used by the main API Studio app
+  const THEME_KEY = 'apiStudio_theme'; // same key used by the main DocTracker app (kept as-is so existing saved theme preferences don't reset)
   const stored = localStorage.getItem(THEME_KEY);
   const theme = stored === 'light' || stored === 'dark' ? stored : 'dark';
   document.documentElement.setAttribute('data-theme', theme);

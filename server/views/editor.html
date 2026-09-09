@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Endpoint Editor</title>
+<title>Endpoint Editor · DocTracker</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="/js/idle-session.js"></script>
 <script nonce="__CSP_NONCE__">
 // Apply the theme before first paint (same localStorage key the main Studio
@@ -531,7 +532,7 @@ function postAuditEvent(fields){
     .catch(e=>console.error('Audit log write failed', e));
 }
 // Same channel name any tab of this app can listen on to know workspace data changed elsewhere.
-const syncChannel = ('BroadcastChannel' in window) ? new BroadcastChannel('api-studio-sync') : null;
+const syncChannel = ('BroadcastChannel' in window) ? new BroadcastChannel('doctracker-sync') : null;
 
 /* ==================== Type inference from pasted JSON ==================== */
 const PARAM_TYPES = ['String','Integer','Number','Boolean','Object','Array'];

@@ -1,6 +1,6 @@
 # Security Hardening — Implementation Report
 
-Scope note: the uploaded app (API Studio) is a **documentation tool** — endpoint
+Scope note: the uploaded app (DocTracker) is a **documentation tool** — endpoint
 docs with author-entered example values — not a live API console that proxies
 real customer traffic. The changes below adapt the requested PII/audit/storage
 hardening to that reality rather than building a live-data proxy that doesn't

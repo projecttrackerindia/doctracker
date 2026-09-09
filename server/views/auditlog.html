@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Audit Log — API Studio</title>
+<title>Audit Log — DocTracker</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="/js/idle-session.js"></script>
 <script nonce="__CSP_NONCE__">
 // Apply the theme before first paint (same localStorage key the Studio and
@@ -116,7 +117,7 @@ tbody tr.al-hidden{ display:none; }
       <div class="mark">{ }</div>
       <div>
         <h1>Audit Log</h1>
-        <div class="sub" id="alSub">API Studio · every create, edit, and delete — who did it, and when</div>
+        <div class="sub" id="alSub">DocTracker · every create, edit, and delete — who did it, and when</div>
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;">
@@ -341,7 +342,7 @@ tbody tr.al-hidden{ display:none; }
     document.getElementById('kpiUpdated').textContent = entries.filter(e=>e.action==='updated').length;
     document.getElementById('kpiDeleted').textContent = entries.filter(e=>e.action==='deleted').length;
     const lastWhen = entries[0] ? new Date(entries[0].ts).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—';
-    document.getElementById('alSub').textContent = 'API Studio · every create, edit, and delete — who did it, and when · last activity ' + lastWhen;
+    document.getElementById('alSub').textContent = 'DocTracker · every create, edit, and delete — who did it, and when · last activity ' + lastWhen;
 
     if(!entries.length){
       els.body.innerHTML = '';

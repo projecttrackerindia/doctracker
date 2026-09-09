@@ -183,7 +183,7 @@ function tokenForUser(user) {
   return dataCrypto.encryptOrgToken(user.organisation);
 }
 
-// This is the real API Studio workspace (documentation builder). It's rendered
+// This is the real DocTracker workspace (documentation builder). It's rendered
 // per-request (not served as a static file) so we can inject the signed-in
 // user's identity and a fresh CSP nonce — that's also what keeps it gated by
 // requireAuth instead of being publicly reachable like the rest of /public.
@@ -328,7 +328,7 @@ app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 initDb()
   .then(() => dataCrypto.init())
   .then(() => {
-    app.listen(PORT, () => console.log(`API Studio auth service listening on port ${PORT}`));
+    app.listen(PORT, () => console.log(`DocTracker auth service listening on port ${PORT}`));
   })
   .catch((err) => {
     console.error('Failed to initialize database or encryption keys:', err);

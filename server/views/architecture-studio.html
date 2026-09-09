@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Architecture Studio</title>
+<title>Architecture Studio · DocTracker</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="/js/idle-session.js"></script>
 <script nonce="__CSP_NONCE__">
 (function(){
@@ -821,10 +822,10 @@ function userInitials(name){
   const w = (name||'?').trim().split(/\s+/).slice(0,2);
   return (w.map(x=>x[0]).join('') || '?').toUpperCase();
 }
-// Same channel name the rest of API Studio uses so other open tabs (the main
+// Same channel name the rest of DocTracker uses so other open tabs (the main
 // dashboard, the endpoint editor) can pick up a freshly-published diagram
 // without a manual refresh.
-const syncChannel = ('BroadcastChannel' in window) ? new BroadcastChannel('api-studio-sync') : null;
+const syncChannel = ('BroadcastChannel' in window) ? new BroadcastChannel('doctracker-sync') : null;
 
 /* ==================== Icon library ====================
    Every icon renders as a premium gradient "badge" (rounded square or

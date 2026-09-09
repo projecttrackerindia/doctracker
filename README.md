@@ -1,9 +1,9 @@
-# API Studio — Auth Service
+# DocTracker — Auth Service
 
-Login + registration for API Studio: Express/PostgreSQL backend, plain HTML/CSS/JS frontend (no framework, no single-file bundle). Split into separate files so it's a normal app to work on and deploy.
+Login + registration for DocTracker: Express/PostgreSQL backend, plain HTML/CSS/JS frontend (no framework, no single-file bundle). Split into separate files so it's a normal app to work on and deploy.
 
 ```
-api-studio-auth/
+doctracker-auth/
 ├── server/
 │   ├── server.js        # Express app, security middleware, boots DB
 │   ├── db.js             # Postgres pool + schema
@@ -34,7 +34,7 @@ api-studio-auth/
 ## Run it locally
 
 ```bash
-cd api-studio-auth
+cd doctracker-auth
 npm install
 cp .env.example .env
 # edit .env: point DATABASE_URL at a Postgres instance you have, set JWT_SECRET
@@ -46,10 +46,10 @@ Visit `http://localhost:3000/login.html`.
 ## Push to GitHub
 
 ```bash
-cd api-studio-auth
+cd doctracker-auth
 git init
 git add .
-git commit -m "Initial commit: API Studio auth service"
+git commit -m "Initial commit: DocTracker auth service"
 git branch -M main
 git remote add origin https://github.com/<your-username>/<repo-name>.git
 git push -u origin main
@@ -69,4 +69,4 @@ git push -u origin main
 
 ## Next step (not built yet)
 
-`dashboard.html` is a thin placeholder that just proves the session works (`GET /api/auth/me`) and lets you log out. The next piece of work is putting the real API Studio workspace behind that route so a login redirects into the actual projects/environments UI instead of the stub.
+`dashboard.html` is a thin placeholder that just proves the session works (`GET /api/auth/me`) and lets you log out. The next piece of work is putting the real DocTracker workspace behind that route so a login redirects into the actual projects/environments UI instead of the stub.
