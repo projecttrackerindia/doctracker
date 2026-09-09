@@ -107,10 +107,22 @@ body{
   display:flex; align-items:center; gap:10px;
   font-weight:700; font-size:17px; letter-spacing:-.01em;
 }
-.brand-mark .dot{
-  width:9px;height:9px;border-radius:50%;
-  background:var(--brand-accent);
-  box-shadow:0 0 0 4px rgba(92,124,250,.18);
+/* Official mark: same gradient tile + "{ }" glyph as the studio's
+   .brand .mark and public/favicon.svg — kept as one shared design instead
+   of the previous plain dot, so the icon looks the same everywhere it
+   appears (browser tab, sign-in, register, studio topbar). */
+.brand-mark .mark{
+  width:30px; height:30px; border-radius:9px; flex-shrink:0;
+  background:linear-gradient(135deg, var(--brand-accent), #2e4bd6);
+  display:flex; align-items:center; justify-content:center;
+  font-family:var(--mono); font-weight:700; color:#f4f7ff; font-size:14px;
+  box-shadow:0 2px 10px -2px rgba(92,124,250,.45);
+}
+.brand-mark .titles{ line-height:1.15; }
+.brand-mark .title{ font-weight:700; font-size:17px; letter-spacing:-.01em; }
+.brand-mark .sub{
+  color:var(--brand-text-dim); font-size:11px; font-family:var(--mono);
+  font-weight:500; letter-spacing:.01em; margin-top:1px;
 }
 .brand-copy{max-width:440px; margin-top:56px;}
 .brand-eyebrow{
