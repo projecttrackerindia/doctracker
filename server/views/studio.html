@@ -10957,8 +10957,14 @@ document.addEventListener('click', (e)=>{
 // The row-actions panel is position:fixed (see CSS) so it doesn't get clipped by
 // .table-scroll, but that also means it won't track the button if the page or the
 // table scrolls underneath it — close it on any scroll instead of letting it drift.
+// Covers BOTH row-menu panels that use this position:fixed pattern: the
+// environments table (envRowMenu) and the Members table (usersState.rowMenu).
+// Only the former was wired in here before, which is exactly why the Members
+// "⋮" menu kept floating away from its button on scroll while the
+// Environments one closed cleanly.
 document.addEventListener('scroll', (e)=>{
   if(envRowMenu.id !== null){ envRowMenu = { id:null, mode:'menu' }; renderEnvTableSection(); }
+  if(usersState.rowMenu.id !== null){ usersState.rowMenu = { id:null }; renderUsersTableSection(); }
 }, true);
 function openCodeSamplesRail(){
   document.getElementById('rail').classList.add('show');
