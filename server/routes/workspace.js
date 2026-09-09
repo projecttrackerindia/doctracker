@@ -1,6 +1,6 @@
 const express = require('express');
 const { pool } = require('../db');
-const { authenticate } = require('../middleware/authGuard');
+const { authenticate, blockIfScheduleLocked } = require('../middleware/authGuard');
 const { recordAuditEvent } = require('../auditService');
 const dataCrypto = require('../crypto');
 const storage = require('../storage');
@@ -8,6 +8,7 @@ const cache = require('../cache');
 
 const router = express.Router();
 router.use(authenticate);
+router.use(blockIfScheduleLocked); // outside your admin-set hours/days, the whole workspace API is locked
 
 const MAX_PROJECTS_PER_SAVE = 200;
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // hard server-side cap per file (base64 dataUrl length)

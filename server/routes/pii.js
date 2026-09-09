@@ -1,10 +1,11 @@
 const express = require('express');
 const { pool } = require('../db');
-const { authenticate, requireAdmin } = require('../middleware/authGuard');
+const { authenticate, requireAdmin, blockIfScheduleLocked } = require('../middleware/authGuard');
 const { recordAuditEvent } = require('../auditService');
 
 const router = express.Router();
 router.use(authenticate);
+router.use(blockIfScheduleLocked);
 
 const MATCH_MODES = ['exact', 'case_insensitive', 'nested', 'regex'];
 const CATEGORIES = ['PUBLIC', 'INTERNAL', 'CONFIDENTIAL', 'PII', 'SENSITIVE_PII', 'FINANCIAL', 'AUTHENTICATION_SECRET'];

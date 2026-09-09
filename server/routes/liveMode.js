@@ -1,12 +1,13 @@
 const express = require('express');
 const { pool } = require('../db');
-const { authenticate, requireAdmin } = require('../middleware/authGuard');
+const { authenticate, requireAdmin, blockIfScheduleLocked } = require('../middleware/authGuard');
 const { recordAuditEvent } = require('../auditService');
 const { createRateLimiter } = require('../rateLimitStore');
 const { decryptProjectData, getOrgEnvironments } = require('./workspace');
 
 const router = express.Router();
 router.use(authenticate);
+router.use(blockIfScheduleLocked);
 
 // A real outbound call is a fundamentally bigger blast radius than viewing
 // masked docs — this limiter is deliberately tighter than the rest of the

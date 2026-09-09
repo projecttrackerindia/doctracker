@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { pool } = require('../db');
+const { evaluateAccessSchedule } = require('../accessSchedule');
 
 const COOKIE_NAME = 'as_session';
 
@@ -23,18 +24,29 @@ async function verifySession(token) {
     return null;
   }
   const { rows } = await pool.query(
-    `SELECT id, username, organisation, role, custom_permissions, token_version FROM users WHERE id = $1`,
+    `SELECT id, username, organisation, role, custom_permissions, access_schedule, token_version FROM users WHERE id = $1`,
     [decoded.sub]
   );
   if (!rows.length) return null; // account deleted since the token was issued
   const user = rows[0];
   if ((decoded.tokenVersion || 1) !== user.token_version) return null; // revoked (role change / password reset / sign-out-everywhere)
+
+  // Re-evaluated fresh against the server clock on every request — never
+  // cached on the JWT, or a session issued while "open" would stay open for
+  // up to 7 days after the window closed. Admins are exempt: a schedule is
+  // meant to time-box a given account, not risk locking every admin in the
+  // org out at once if one gets misconfigured.
+  const schedule = user.access_schedule || null;
+  const scheduleStatus = evaluateAccessSchedule(schedule, new Date());
+
   return {
     sub: user.id,
     username: user.username,
     organisation: user.organisation,
     role: user.role,
     tokenVersion: user.token_version,
+    accessSchedule: schedule,
+    scheduleLocked: user.role !== 'admin' && scheduleStatus.locked,
     ...(user.role === 'custom' ? { customPermissions: user.custom_permissions || null } : {}),
   };
 }
@@ -63,4 +75,22 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-module.exports = { authenticate, requireAdmin, verifySession, COOKIE_NAME };
+// Mounted after authenticate() on any router whose whole surface counts as
+// "using the workspace" (docs data, live-mode calls, PII rules, audit log) —
+// not on routes/users.js, since that's Admin-only already and an admin must
+// always be able to reach it to extend someone's window. Responds 423
+// (Locked, not 403 Forbidden) specifically so the frontend can tell "you're
+// not allowed, ever" apart from "you're not allowed *right now*" and render
+// the countdown-to-reopen state instead of a hard error.
+function blockIfScheduleLocked(req, res, next) {
+  if (req.authUser && req.authUser.scheduleLocked) {
+    return res.status(423).json({
+      error: 'schedule_locked',
+      message: 'Your access is currently outside the hours your admin has allowed.',
+      accessSchedule: req.authUser.accessSchedule,
+    });
+  }
+  next();
+}
+
+module.exports = { authenticate, requireAdmin, blockIfScheduleLocked, verifySession, COOKIE_NAME };

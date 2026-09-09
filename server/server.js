@@ -187,6 +187,8 @@ function renderDashboard(req, res) {
     username: req.user.username,
     organisation: req.user.organisation,
     role: req.user.role,
+    accessSchedule: req.user.accessSchedule || null,
+    scheduleLocked: !!req.user.scheduleLocked,
     ...(req.user.role === 'custom' ? { customPermissions: req.user.customPermissions || null } : {}),
   };
   const html = studioTemplate
@@ -237,6 +239,8 @@ function renderEditor(req, res, { projectSlug = '', endpointSlug = '' } = {}) {
     username: req.user.username,
     organisation: req.user.organisation,
     role: req.user.role,
+    accessSchedule: req.user.accessSchedule || null,
+    scheduleLocked: !!req.user.scheduleLocked,
     ...(req.user.role === 'custom' ? { customPermissions: req.user.customPermissions || null } : {}),
   };
   const html = editorTemplate
@@ -263,6 +267,8 @@ function renderArchitectureStudio(req, res, { projectSlug = '' } = {}) {
     username: req.user.username,
     organisation: req.user.organisation,
     role: req.user.role,
+    accessSchedule: req.user.accessSchedule || null,
+    scheduleLocked: !!req.user.scheduleLocked,
     ...(req.user.role === 'custom' ? { customPermissions: req.user.customPermissions || null } : {}),
   };
   const html = architectureStudioTemplate

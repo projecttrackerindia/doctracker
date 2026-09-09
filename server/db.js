@@ -53,6 +53,15 @@ async function initDb() {
   // and would otherwise keep working, unmodified, until their 7-day expiry.
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1;`);
 
+  // Optional time-and-day access window an Admin can attach to any account
+  // (any role). Shape: { enabled, days: [0-6], startTime: 'HH:MM', endTime: 'HH:MM' }.
+  // Evaluated fresh on every request in middleware/authGuard.js (see
+  // server/accessSchedule.js) — never trusted from a stale JWT, same reasoning
+  // as token_version above. Applies regardless of role; Admins are exempted
+  // from enforcement in the middleware itself so an org can never lock out
+  // every admin at once.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS access_schedule JSONB;`);
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(email));
   `);

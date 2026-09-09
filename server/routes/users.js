@@ -8,6 +8,7 @@ const {
   validateUsername,
   validateRole,
   validateCustomPermissions,
+  validateAccessSchedule,
   generateTemporaryPassword,
 } = require('../validators');
 
@@ -26,7 +27,7 @@ const adminActionLimiter = createRateLimiter({
 
 router.use(authenticate, requireAdmin, adminActionLimiter);
 
-const SAFE_COLUMNS = 'id, username, email, organisation, role, custom_permissions, created_at, last_login_at';
+const SAFE_COLUMNS = 'id, username, email, organisation, role, custom_permissions, access_schedule, created_at, last_login_at';
 
 // ---- GET /api/users — everyone in the admin's organisation ----
 router.get('/', async (req, res) => {
@@ -48,7 +49,7 @@ router.get('/', async (req, res) => {
 // admin to share with the person directly.
 router.post('/invite', async (req, res) => {
   try {
-    const { username, email, role, customPermissions } = req.body || {};
+    const { username, email, role, customPermissions, accessSchedule } = req.body || {};
 
     const usernameCheck = validateUsername(username);
     if (!usernameCheck.valid) return res.status(400).json({ field: 'username', error: usernameCheck.reason });
@@ -66,6 +67,9 @@ router.post('/invite', async (req, res) => {
       permsToStore = permsCheck.value;
     }
 
+    const scheduleCheck = validateAccessSchedule(accessSchedule);
+    if (!scheduleCheck.valid) return res.status(400).json({ field: 'accessSchedule', error: scheduleCheck.reason });
+
     const existing = await pool.query(
       'SELECT id FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($2)',
       [usernameCheck.value, email.trim()]
@@ -78,12 +82,13 @@ router.post('/invite', async (req, res) => {
     const passwordHash = await bcrypt.hash(temporaryPassword, 12);
 
     const result = await pool.query(
-      `INSERT INTO users (username, email, password_hash, organisation, role, custom_permissions)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO users (username, email, password_hash, organisation, role, custom_permissions, access_schedule)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING ${SAFE_COLUMNS}`,
       [
         usernameCheck.value, email.trim().toLowerCase(), passwordHash, req.authUser.organisation, roleCheck.value,
         permsToStore ? JSON.stringify(permsToStore) : null,
+        scheduleCheck.value ? JSON.stringify(scheduleCheck.value) : null,
       ]
     );
 
@@ -146,6 +151,38 @@ router.patch('/:id/role', async (req, res) => {
   } catch (err) {
     console.error('Change role error:', err);
     res.status(500).json({ error: 'Could not update that role. Please try again.' });
+  }
+});
+
+// ---- PATCH /api/users/:id/access-schedule ----
+// Deliberately its own endpoint, separate from /role above — setting or
+// extending someone's allowed hours/days shouldn't require re-submitting
+// their role and (for custom accounts) every environment/canEdit checkbox
+// just to change a time. Sending `{ accessSchedule: null }` (or
+// `{ enabled: false }`) turns the restriction off entirely, which is also
+// how an Admin "extends" someone past a window that already locked them
+// out — there's no separate extend action, just widen or disable the window.
+router.patch('/:id/access-schedule', async (req, res) => {
+  try {
+    const user = await findManagedUser(req, res);
+    if (!user) return;
+
+    const scheduleCheck = validateAccessSchedule(req.body?.accessSchedule);
+    if (!scheduleCheck.valid) return res.status(400).json({ field: 'accessSchedule', error: scheduleCheck.reason });
+
+    // Not a security boundary the way role/password changes are, so this
+    // doesn't bump token_version — the schedule is re-evaluated against the
+    // server clock on every single request anyway (see authGuard.js), so a
+    // change takes effect on the person's very next request regardless of
+    // how old their session token is.
+    const result = await pool.query(
+      `UPDATE users SET access_schedule = $1 WHERE id = $2 RETURNING ${SAFE_COLUMNS}`,
+      [scheduleCheck.value ? JSON.stringify(scheduleCheck.value) : null, user.id]
+    );
+    res.json({ user: result.rows[0] });
+  } catch (err) {
+    console.error('Update access schedule error:', err);
+    res.status(500).json({ error: 'Could not update that access window. Please try again.' });
   }
 });
 

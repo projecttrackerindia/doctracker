@@ -115,6 +115,42 @@ function validateCustomPermissions(perms) {
   return { valid: true, value: { envs: cleanEnvs, canEdit } };
 }
 
+// Time-and-day access windows an Admin can attach to any account (any role,
+// not just 'custom') — see server/accessSchedule.js for the enforcement side.
+// Shape: { enabled: boolean, days: number[] (0=Sun..6=Sat), startTime: 'HH:MM',
+// endTime: 'HH:MM' }. `days`/`startTime`/`endTime` are only required while
+// `enabled` is true — disabling it (or sending null) just turns the
+// restriction off without losing anything, since the caller re-sends the
+// whole object every time rather than patching individual fields.
+const HHMM_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+function validateAccessSchedule(schedule) {
+  if (schedule === null || schedule === undefined) return { valid: true, value: null };
+  if (typeof schedule !== 'object' || Array.isArray(schedule)) {
+    return { valid: false, reason: 'Invalid access schedule.' };
+  }
+  const enabled = !!schedule.enabled;
+  if (!enabled) return { valid: true, value: { enabled: false, days: [], startTime: null, endTime: null } };
+
+  const days = schedule.days;
+  if (!Array.isArray(days) || days.length === 0) {
+    return { valid: false, reason: 'Pick at least one day for the access window.' };
+  }
+  const cleanDays = [...new Set(days.map((d) => Number(d)))];
+  if (cleanDays.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) {
+    return { valid: false, reason: 'Days must be between Sunday (0) and Saturday (6).' };
+  }
+  if (!HHMM_RE.test(schedule.startTime || '') || !HHMM_RE.test(schedule.endTime || '')) {
+    return { valid: false, reason: 'Start and end time must be in HH:MM format.' };
+  }
+  if (schedule.startTime === schedule.endTime) {
+    return { valid: false, reason: 'Start and end time can\u2019t be the same.' };
+  }
+  return {
+    valid: true,
+    value: { enabled: true, days: cleanDays.sort(), startTime: schedule.startTime, endTime: schedule.endTime },
+  };
+}
+
 // Generates a random password that always satisfies evaluatePassword()'s
 // requirements, for admin-provisioned accounts (invite / reset). Avoids
 // visually ambiguous characters (0/O, 1/l/I) since these get read aloud or
@@ -203,6 +239,7 @@ module.exports = {
   validateOrganisation,
   validateRole,
   validateCustomPermissions,
+  validateAccessSchedule,
   evaluatePassword,
   generateTemporaryPassword,
   VALID_ROLES,

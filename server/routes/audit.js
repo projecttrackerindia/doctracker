@@ -1,11 +1,12 @@
 const express = require('express');
 const { createRateLimiter } = require('../rateLimitStore');
 const { pool } = require('../db');
-const { authenticate } = require('../middleware/authGuard');
+const { authenticate, blockIfScheduleLocked } = require('../middleware/authGuard');
 const { recordAuditEvent, toClientShape } = require('../auditService');
 
 const router = express.Router();
 router.use(authenticate);
+router.use(blockIfScheduleLocked);
 
 // Generous but bounded — this endpoint is called once per user action (endpoint
 // saved, PII revealed, etc.), not per keystroke, so normal use never gets close.

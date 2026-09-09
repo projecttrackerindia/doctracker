@@ -1259,11 +1259,58 @@ pre.code-block{
    ============================================================ */
 .modal-overlay{ position:fixed; inset:0; background:rgba(4,7,12,.6); backdrop-filter:blur(2px); display:none; align-items:center; justify-content:center; z-index:50; padding:20px; }
 .modal-overlay.show{ display:flex; }
+
+/* ---- Access schedule: project-level banner (open window, ticking down) ---- */
+#scheduleBanner{
+  display:flex; align-items:center; gap:10px; padding:9px 20px; font-size:12.5px;
+  background:var(--put-bg); border-bottom:1px solid var(--put); color:var(--put);
+}
+#scheduleBanner .sb-ic{ font-size:13px; }
+#scheduleBanner .sb-count{ margin-left:auto; font-weight:600; font-family:var(--mono); }
+
+/* ---- Access schedule: full lock screen (outside the allowed window) ---- */
+#scheduleLockOverlay{
+  position:fixed; inset:0; z-index:500; background:rgba(4,7,12,.72); backdrop-filter:blur(3px);
+  align-items:center; justify-content:center; padding:20px;
+}
+#scheduleLockOverlay.show{ display:flex; }
+.schedule-lock-card{
+  width:100%; max-width:440px; background:var(--surface-2); border:1px solid var(--border-strong);
+  border-radius:16px; padding:32px; text-align:center; box-shadow:var(--shadow-modal);
+}
+.schedule-lock-ic{ font-size:32px; margin-bottom:12px; }
+.schedule-lock-card h2{ font-size:17px; margin:0 0 8px; }
+.schedule-lock-card p{ font-size:13px; color:var(--text-dim); line-height:1.6; margin:0 0 4px; }
+.schedule-lock-count{ margin-top:16px; font-family:var(--mono); font-size:13px; font-weight:600; color:var(--text-normal); }
+
 .modal{
   background:var(--glass-bg-strong); backdrop-filter:saturate(180%) blur(24px); -webkit-backdrop-filter:saturate(180%) blur(24px);
   border:1px solid var(--glass-border); border-radius:var(--radius-lg); width:560px; max-width:100%; max-height:88vh;
   overflow-y:auto; padding:26px; box-shadow:var(--shadow-modal);
 }
+
+/* ---------- Try it, opened as its own tab (openTryItTab/buildTryItUrl) ----------
+   Structurally this still reuses #tryItModal (same request-builder/response-viewer
+   JS as the "Try it" button inside the endpoint editor's example fields), but a
+   whole browser tab whose only job is Try It shouldn't look like a small dialog
+   floating over a dimmed, blurred copy of the docs page — that read as broken,
+   not intentional. In this tab the sidebar is hidden and the "modal" is
+   re-skinned into the page's actual content: no backdrop dimming, no centered
+   floating card, docked under the topbar edge-to-edge instead. See boot()'s
+   `tryItEpId` handling for where the `tryit-standalone` class gets added. */
+body.tryit-standalone #app{ grid-template-columns:0 1fr; }
+body.tryit-standalone .sidebar{ display:none; }
+body.tryit-standalone #tryItModal{
+  position:fixed; inset:56px 0 0 0; background:var(--bg); backdrop-filter:none; -webkit-backdrop-filter:none;
+  align-items:flex-start; justify-content:center; padding:32px clamp(16px,4vw,56px); overflow-y:auto;
+}
+body.tryit-standalone #tryItModal .modal{
+  width:100%; max-width:760px; max-height:none; margin:0 auto; box-shadow:none; border:none;
+  background:transparent; backdrop-filter:none; -webkit-backdrop-filter:none; padding:0;
+}
+/* No docs page underneath to go "back" to in this tab (the sidebar is gone and
+   this is the tab's only content) — closing would just leave an empty shell. */
+body.tryit-standalone #tryItClose{ display:none; }
 .modal.wide{ width:1040px; max-width:96vw; }
 /* min-height keeps the dialog a consistent size across tabs — otherwise a
    short tab like Architecture (a couple lines + one button) collapses the
@@ -2120,8 +2167,11 @@ pre.json-raw{ max-height:360px; margin:0; }
   </div>
 
   <div class="main-wrap">
+    <div id="scheduleBanner" style="display:none;"></div>
     <div class="main" id="main"></div>
   </div>
+
+  <div id="scheduleLockOverlay" style="display:none;"></div>
 
   <div class="rail" id="rail">
     <div class="rail-inner" id="railInner"></div>
@@ -2528,6 +2578,21 @@ pre.json-raw{ max-height:360px; margin:0; }
         <button type="button" class="toggle-switch" id="userModalEditToggle" role="switch" aria-checked="false"></button>
       </div>
     </div>
+    <div class="field" style="border-top:1px solid var(--border);margin-top:4px;padding-top:14px;">
+      <div class="toggle-field" style="padding:0;">
+        <label>Restrict access to specific days &amp; hours</label>
+        <button type="button" class="toggle-switch" id="userModalScheduleToggle" role="switch" aria-checked="false"></button>
+      </div>
+      <div id="userModalScheduleSection" style="display:none;margin-top:10px;">
+        <div class="day-chip-picker" id="userModalScheduleDays" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:10px;align-items:center;">
+          <input type="time" id="userModalScheduleStart" style="flex:1;">
+          <span style="color:var(--text-faint);font-size:12px;">to</span>
+          <input type="time" id="userModalScheduleEnd" style="flex:1;">
+        </div>
+        <div class="hint" id="userModalScheduleHint" style="margin-top:8px;"></div>
+      </div>
+    </div>
     <div class="hint" id="userModalHint" style="margin-top:-6px;"></div>
     <div class="modal-actions" style="justify-content:flex-end;">
       <div class="right">
@@ -2762,6 +2827,51 @@ pre.json-raw{ max-height:360px; margin:0; }
    Injected server-side from the signed session — see server/server.js.
    Real identity (username/organisation/role) comes from here, not localStorage. */
 const AUTH_USER = __AUTH_USER_JSON__;
+
+// ---- Access schedule: live banner + lock screen ----
+// Mirrors server/accessSchedule.js's evaluate/describe logic — see
+// evaluateAccessScheduleClient/describeAccessScheduleClient above (defined
+// near openUserModal) for why this is a hand-kept duplicate rather than a
+// shared import. The server is still the actual enforcement point (every
+// workspace API call re-checks this fresh — see blockIfScheduleLocked); this
+// just keeps the UI honest between page loads without polling.
+function formatScheduleCountdown(target){
+  if(!target) return '';
+  const ms = new Date(target) - new Date();
+  if(ms <= 0) return 'any moment';
+  const mins = Math.floor(ms/60000);
+  const h = Math.floor(mins/60);
+  if(h >= 24) return `${Math.floor(h/24)}d ${h%24}h`;
+  if(h > 0) return `${h}h ${mins%60}m`;
+  return `${mins}m`;
+}
+function renderScheduleState(){
+  const banner = document.getElementById('scheduleBanner');
+  const overlay = document.getElementById('scheduleLockOverlay');
+  if(!banner || !overlay) return;
+  const schedule = AUTH_USER && AUTH_USER.accessSchedule;
+  if(!AUTH_USER || isAdmin() || !schedule || !schedule.enabled){
+    banner.style.display = 'none';
+    overlay.classList.remove('show');
+    return;
+  }
+  const status = evaluateAccessScheduleClient(schedule);
+  if(status.locked){
+    banner.style.display = 'none';
+    overlay.innerHTML = `<div class="schedule-lock-card">
+      <div class="schedule-lock-ic">🔒</div>
+      <h2>Access locked</h2>
+      <p>Your admin has restricted this account to specific days and hours.</p>
+      <p>Allowed window: <strong>${escapeHtml(describeAccessScheduleClient(schedule))}</strong></p>
+      <div class="schedule-lock-count">${status.nextChangeAt ? 'Unlocks in ' + formatScheduleCountdown(status.nextChangeAt) : 'Ask your admin to extend your access.'}</div>
+    </div>`;
+    overlay.classList.add('show');
+  } else {
+    overlay.classList.remove('show');
+    banner.style.display = 'flex';
+    banner.innerHTML = `<span class="sb-ic">🕒</span><span>Your access window: ${escapeHtml(describeAccessScheduleClient(schedule))}</span><span class="sb-count">${status.nextChangeAt ? 'Locks in ' + formatScheduleCountdown(status.nextChangeAt) : ''}</span>`;
+  }
+}
 // Encrypted, org-scoped URL token for this session (see server/crypto.js +
 // server.js) — used to link to other tenant-scoped pages (the audit log)
 // without ever putting the organisation name itself in a URL.
@@ -2799,6 +2909,16 @@ async function apiSend(method, path, body){
     headers: { 'Content-Type':'application/json' },
     body: JSON.stringify(body),
   });
+  if(res.status === 423){
+    // Locked out by an access schedule (see blockIfScheduleLocked in
+    // middleware/authGuard.js) — refresh AUTH_USER's copy of the schedule
+    // from the response (an admin may have just changed it) and flip
+    // straight to the full lock screen instead of a generic error toast.
+    const err = await res.json().catch(()=>({}));
+    if(err.accessSchedule) AUTH_USER.accessSchedule = err.accessSchedule;
+    renderScheduleState();
+    throw new Error(err.message || 'Your access is currently locked.');
+  }
   if(!res.ok){
     const err = await res.json().catch(()=>({}));
     throw new Error(err.error || ('Request failed: ' + res.status));
@@ -6818,7 +6938,10 @@ function userRowHtml(u){
         </div>
       </div>
     </td>
-    <td><span class="role-pill role-${rMeta.id}"${customTitle}>${rMeta.label}</span></td>
+    <td>
+      <span class="role-pill role-${rMeta.id}"${customTitle}>${rMeta.label}</span>
+      ${u.access_schedule && u.access_schedule.enabled ? `<span class="mono" style="display:block;margin-top:4px;font-size:10.5px;color:var(--text-faint);" title="Access restricted to this window">🕒 ${escapeHtml(describeAccessScheduleClient(u.access_schedule))}</span>` : ''}
+    </td>
     <td><span class="access-badge access-user">Active</span></td>
     <td class="mono" style="font-size:11px;color:var(--text-faint);">${u.last_login_at ? formatDateTime(u.last_login_at) : 'Never signed in'}</td>
     <td>
@@ -6936,16 +7059,65 @@ async function handleUserRowAction(act, id, el){
 }
 
 /* ---- Shared invite / change-role modal ---- */
-let userModalState = { mode:'invite', user:null, role:'viewer', envs:[], canEditFlag:false };
+let userModalState = { mode:'invite', user:null, role:'viewer', envs:[], canEditFlag:false, scheduleEnabled:false, scheduleDays:[], scheduleStart:'09:00', scheduleEnd:'18:00' };
+
+// Mirrors server/accessSchedule.js's describeAccessSchedule() — see the note
+// there about why this logic is duplicated instead of shared: this app ships
+// plain <script> tags with no bundler, so the browser gets its own small copy.
+const SCHEDULE_DAY_LABELS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function formatHHMMClient(hhmm){
+  const [h,m] = String(hhmm||'00:00').split(':').map(Number);
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2,'0')} ${period}`;
+}
+function describeAccessScheduleClient(schedule){
+  if(!schedule || !schedule.enabled) return null;
+  const days = (schedule.days||[]).slice().sort();
+  const dayLabel = days.length === 7 ? 'Every day' : days.map(d=>SCHEDULE_DAY_LABELS[d]).join(', ');
+  return `${dayLabel} \u00b7 ${formatHHMMClient(schedule.startTime)}\u2013${formatHHMMClient(schedule.endTime)}`;
+}
+// Same same-day-window logic as evaluateAccessSchedule() on the server —
+// used only to drive the live banner/countdown; the server is still what
+// actually enforces the lock (every workspace API call re-checks it fresh,
+// see blockIfScheduleLocked). If this drifts out of sync with the server by
+// a few seconds, the worst case is the banner briefly disagrees with an API
+// response, which self-corrects on the next 423.
+function evaluateAccessScheduleClient(schedule, now){
+  now = now || new Date();
+  if(!schedule || !schedule.enabled) return { locked:false, nextChangeAt:null };
+  const toMins = (hhmm)=>{ const [h,m] = String(hhmm||'00:00').split(':').map(Number); return h*60+m; };
+  const day = now.getDay();
+  const mins = now.getHours()*60 + now.getMinutes();
+  const start = toMins(schedule.startTime), end = toMins(schedule.endTime);
+  const days = schedule.days || [];
+  const withinTimeOfDay = start < end ? (mins >= start && mins < end) : false;
+  if(days.includes(day) && withinTimeOfDay){
+    const nextChangeAt = new Date(now); nextChangeAt.setHours(0,0,0,0); nextChangeAt.setMinutes(end);
+    return { locked:false, nextChangeAt };
+  }
+  for(let offset=0; offset<=7; offset++){
+    const d = new Date(now); d.setDate(d.getDate()+offset);
+    if(!days.includes(d.getDay())) continue;
+    const candidateStart = new Date(d); candidateStart.setHours(0,0,0,0); candidateStart.setMinutes(start);
+    if(candidateStart > now) return { locked:true, nextChangeAt: candidateStart };
+  }
+  return { locked:true, nextChangeAt:null };
+}
 
 function openUserModal({ mode, user }){
   const existingPerms = (user && user.custom_permissions) || null;
+  const existingSchedule = (user && user.access_schedule) || null;
   userModalState = {
     mode,
     user: user || null,
     role: user ? user.role : 'viewer',
     envs: existingPerms ? (existingPerms.envs || []).slice() : [],
     canEditFlag: existingPerms ? !!existingPerms.canEdit : false,
+    scheduleEnabled: existingSchedule ? !!existingSchedule.enabled : false,
+    scheduleDays: existingSchedule ? (existingSchedule.days || []).slice() : [1,2,3,4,5],
+    scheduleStart: (existingSchedule && existingSchedule.startTime) || '09:00',
+    scheduleEnd: (existingSchedule && existingSchedule.endTime) || '18:00',
   };
   document.getElementById('userModalTitle').textContent = mode === 'invite' ? 'Invite user' : `Change ${user.username}'s role`;
   document.getElementById('userModalSubtitle').textContent = mode === 'invite'
@@ -7015,6 +7187,51 @@ function renderUserModalBody(){
   } else {
     hintEl.textContent = roleHintText(dbRoleToLocalId(userModalState.role));
   }
+
+  // ---- Access schedule (any role — independent of the custom-role section above) ----
+  const schedToggle = document.getElementById('userModalScheduleToggle');
+  schedToggle.className = 'toggle-switch' + (userModalState.scheduleEnabled ? ' on' : '');
+  schedToggle.setAttribute('aria-checked', String(userModalState.scheduleEnabled));
+  schedToggle.onclick = ()=>{ userModalState.scheduleEnabled = !userModalState.scheduleEnabled; renderUserModalBody(); };
+
+  const schedSection = document.getElementById('userModalScheduleSection');
+  schedSection.style.display = userModalState.scheduleEnabled ? '' : 'none';
+
+  if(userModalState.scheduleEnabled){
+    const daysWrap = document.getElementById('userModalScheduleDays');
+    daysWrap.innerHTML = SCHEDULE_DAY_LABELS.map((label, idx)=>{
+      const sel = userModalState.scheduleDays.includes(idx);
+      return `<span class="env-chip-opt${sel?' sel':''}" data-sched-day="${idx}">${label}</span>`;
+    }).join('');
+    daysWrap.querySelectorAll('[data-sched-day]').forEach(chip=>{
+      chip.addEventListener('click', ()=>{
+        const idx = parseInt(chip.getAttribute('data-sched-day'), 10);
+        const at = userModalState.scheduleDays.indexOf(idx);
+        if(at === -1) userModalState.scheduleDays.push(idx); else userModalState.scheduleDays.splice(at,1);
+        renderUserModalBody();
+      });
+    });
+    const startEl = document.getElementById('userModalScheduleStart');
+    const endEl = document.getElementById('userModalScheduleEnd');
+    startEl.value = userModalState.scheduleStart;
+    endEl.value = userModalState.scheduleEnd;
+    startEl.onchange = ()=>{ userModalState.scheduleStart = startEl.value; renderScheduleHint(); };
+    endEl.onchange = ()=>{ userModalState.scheduleEnd = endEl.value; renderScheduleHint(); };
+    renderScheduleHint();
+  }
+}
+
+function renderScheduleHint(){
+  const hintEl = document.getElementById('userModalScheduleHint');
+  if(!hintEl) return;
+  if(!userModalState.scheduleDays.length){
+    hintEl.textContent = 'Pick at least one day.';
+    return;
+  }
+  const preview = describeAccessScheduleClient({
+    enabled: true, days: userModalState.scheduleDays, startTime: userModalState.scheduleStart, endTime: userModalState.scheduleEnd,
+  });
+  hintEl.textContent = `Outside ${preview}, this account is locked out until you widen or turn off this window.`;
 }
 
 async function saveUserModal(){
@@ -7025,11 +7242,23 @@ async function saveUserModal(){
     customPermissions = { envs: userModalState.envs.slice(), canEdit: userModalState.canEditFlag };
   }
 
+  let accessSchedule = null;
+  if(userModalState.scheduleEnabled){
+    if(!userModalState.scheduleDays.length){ toast('Pick at least one day for the access window.'); return; }
+    if(userModalState.scheduleStart === userModalState.scheduleEnd){ toast('Start and end time can\u2019t be the same.'); return; }
+    accessSchedule = {
+      enabled: true,
+      days: userModalState.scheduleDays.slice(),
+      startTime: userModalState.scheduleStart,
+      endTime: userModalState.scheduleEnd,
+    };
+  }
+
   let url, method, body;
   if(userModalState.mode === 'invite'){
     const username = document.getElementById('userModalUsername').value.trim();
     const email = document.getElementById('userModalEmail').value.trim();
-    body = { username, email, role, customPermissions };
+    body = { username, email, role, customPermissions, accessSchedule };
     url = '/api/users/invite'; method = 'POST';
   } else {
     body = { role, customPermissions };
@@ -7045,8 +7274,24 @@ async function saveUserModal(){
     const data = await res.json().catch(()=>({}));
     if(!res.ok){ toast(data.error || 'Could not save that.'); return; }
 
+    // The access schedule is its own endpoint (see PATCH /api/users/:id/access-schedule)
+    // so that changing just a role or invite doesn't silently touch someone's
+    // window, and vice versa. For an invite it already went out on the same
+    // request above (routes/users.js accepts it on POST /invite directly);
+    // for edit-role it's a second call against the account that call just returned.
+    let finalUser = data.user;
+    if(userModalState.mode !== 'invite'){
+      const schedRes = await fetch(`/api/users/${userModalState.user.id}/access-schedule`, {
+        method:'PATCH', headers:{'Content-Type':'application/json'}, credentials:'include',
+        body: JSON.stringify({ accessSchedule }),
+      });
+      const schedData = await schedRes.json().catch(()=>({}));
+      if(!schedRes.ok){ toast(schedData.error || 'Role saved, but the access window could not be updated.'); }
+      else finalUser = schedData.user;
+    }
+
     if(userModalState.mode === 'invite'){
-      usersState.list.push(data.user);
+      usersState.list.push(finalUser);
       logAudit('created', 'user', body.username, `Invited ${body.username} (${body.email}) as ${roleMeta(dbRoleToLocalId(role)).label}`);
       closeUserModal();
       renderUsersTableSection();
@@ -7057,7 +7302,7 @@ async function saveUserModal(){
       });
     } else {
       const idx = usersState.list.findIndex(u=>u.id===userModalState.user.id);
-      if(idx !== -1) usersState.list[idx] = data.user;
+      if(idx !== -1) usersState.list[idx] = finalUser;
       logAudit('updated', 'user', userModalState.user.username, `Changed role to ${roleMeta(dbRoleToLocalId(role)).label}`);
       toast(`Role updated to ${roleMeta(dbRoleToLocalId(role)).label}`);
       closeUserModal();
@@ -10666,6 +10911,10 @@ document.addEventListener('click', (e)=>{
     const openDD = document.querySelector(`.row-actions-dd[data-row-dd="${envRowMenu.id}"]`);
     if(openDD && !openDD.contains(e.target)){ envRowMenu = { id:null, mode:'menu' }; renderEnvTableSection(); }
   }
+  if(usersState.rowMenu.id !== null){
+    const openUserDD = document.querySelector(`.row-actions-dd[data-urow-dd="${usersState.rowMenu.id}"]`);
+    if(openUserDD && !openUserDD.contains(e.target)){ usersState.rowMenu = { id:null }; renderUsersTableSection(); }
+  }
   const envAddForm = document.getElementById('envAddForm');
   const envAddBtnEl = document.getElementById('envTableAddBtn');
   const envAddBtnEmptyEl = document.getElementById('envTableAddBtnEmpty');
@@ -10704,6 +10953,15 @@ document.getElementById('railScrim').addEventListener('click', ()=>{
   renderAuthorLabel();
   document.getElementById('btnSecurityCenter').style.display = isAdmin() ? '' : 'none';
 
+  // Access-schedule banner/lock state — rendered immediately from the
+  // server-injected AUTH_USER (so it's correct on first paint, before any
+  // API call has round-tripped), then re-evaluated every 30s so a window
+  // opening or closing while the tab is left open doesn't need a reload.
+  // The 30s cadence is a display refresh only; see apiSend()'s 423 handling
+  // for the case that actually matters (a real API call being rejected).
+  renderScheduleState();
+  setInterval(renderScheduleState, 30000);
+
   // Which environments (if any) this signed-in user may fire a REAL request
   // against from Try It — see /api/live-mode and openTryItModal(). Failure
   // here just means Live mode stays hidden (fails closed), never blocks boot.
@@ -10723,6 +10981,11 @@ document.getElementById('railScrim').addEventListener('click', ()=>{
     const envParam = deepLinkParams.get('env');
     if(envParam && envIds().includes(envParam) && roleAllowsEnv(envParam)) state.env = envParam;
     state.selected = { type:'endpoint', id: tryItEpId, tryIt:true };
+    // Re-skins #tryItModal from a floating dialog into this tab's actual full
+    // page — see the `body.tryit-standalone` CSS above. Added before renderAll()
+    // so the layout is correct on first paint, not applied after a flash of
+    // the normal sidebar+modal layout.
+    document.body.classList.add('tryit-standalone');
   }
 
   renderAll();
