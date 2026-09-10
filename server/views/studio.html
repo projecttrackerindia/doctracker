@@ -1626,6 +1626,26 @@ body.tryit-standalone #tryItClose{ display:none; }
 }
 .tryit-icon-btn:hover{ color:var(--text); border-color:var(--border-strong); }
 .tryit-icon-btn.active{ color:var(--accent); border-color:var(--accent); }
+
+/* "Nothing sent yet" empty state, Postman-style. */
+.tryit-empty-state{ display:flex; flex-direction:column; align-items:center; gap:14px; padding:48px 20px; }
+.tryit-empty-link{
+  display:flex; align-items:center; gap:8px; background:none; border:none; cursor:pointer;
+  font-size:13px; color:var(--accent); font-weight:600;
+}
+.tryit-empty-link:hover{ text-decoration:underline; }
+.tryit-empty-link[disabled]{ color:var(--text-faint); cursor:not-allowed; }
+.tryit-empty-link[disabled]:hover{ text-decoration:none; }
+.tryit-empty-ic{ font-size:14px; }
+
+/* Cookies link + response History control, matching Postman's placement —
+   both honest stubs for now, same pattern as the Scripts/Settings tabs. */
+.tryit-tabs-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; }
+.tryit-tabs-row .tryit-tabs{ margin:0; flex:1; min-width:0; }
+.tryit-cookies-link{ font-size:11.5px; font-weight:600; color:var(--text-faint); background:none; border:none; cursor:pointer; white-space:nowrap; flex-shrink:0; }
+.tryit-cookies-link:hover{ color:var(--text-dim); }
+.tryit-resp-history{ font-size:11px; font-weight:600; color:var(--text-faint); background:none; border:1px solid var(--border); border-radius:6px; padding:3px 8px; cursor:pointer; }
+.tryit-resp-history:hover{ color:var(--text-dim); border-color:var(--border-strong); }
 .tryit-headers-row{ display:flex; align-items:baseline; gap:10px; padding:7px 0; border-bottom:1px solid var(--border); font-size:12px; }
 .tryit-headers-row:last-child{ border-bottom:none; }
 .tryit-headers-key{ flex:0 0 38%; font-family:var(--mono); font-weight:700; color:var(--text); word-break:break-all; }
@@ -2883,13 +2903,16 @@ pre.json-raw{ max-height:360px; margin:0; }
          activateTryItTab(). Reuses .lang-tabs (the code-sample language
          switcher) for the tab strip itself so it's the same control
          language, not a new widget. -->
-    <div class="lang-tabs tryit-tabs" id="tryItTabs" style="margin-top:10px;">
-      <div class="lang-tab active" data-trytab="params" id="tryItTabBtnParams">Params</div>
-      <div class="lang-tab" data-trytab="auth" id="tryItTabBtnAuth" style="display:none;">Authorization</div>
-      <div class="lang-tab" data-trytab="headers" id="tryItTabBtnHeaders">Headers</div>
-      <div class="lang-tab" data-trytab="body" id="tryItTabBtnBody" style="display:none;">Body</div>
-      <div class="lang-tab" data-trytab="scripts" id="tryItTabBtnScripts">Scripts</div>
-      <div class="lang-tab" data-trytab="settings" id="tryItTabBtnSettings">Settings</div>
+    <div class="tryit-tabs-row">
+      <div class="lang-tabs tryit-tabs" id="tryItTabs">
+        <div class="lang-tab active" data-trytab="params" id="tryItTabBtnParams">Params</div>
+        <div class="lang-tab" data-trytab="auth" id="tryItTabBtnAuth" style="display:none;">Authorization</div>
+        <div class="lang-tab" data-trytab="headers" id="tryItTabBtnHeaders">Headers</div>
+        <div class="lang-tab" data-trytab="body" id="tryItTabBtnBody" style="display:none;">Body</div>
+        <div class="lang-tab" data-trytab="scripts" id="tryItTabBtnScripts">Scripts</div>
+        <div class="lang-tab" data-trytab="settings" id="tryItTabBtnSettings">Settings</div>
+      </div>
+      <button type="button" class="tryit-cookies-link" id="tryItCookiesLink" title="Not built yet">Cookies</button>
     </div>
 
     <div class="tryit-tabpanel" id="tryItAuthPanel"></div>
@@ -2948,6 +2971,24 @@ pre.json-raw{ max-height:360px; margin:0; }
 
     <div id="tryItRunAllResults" class="tryit-run-all-list" style="display:none;"></div>
 
+    <!-- Empty state shown before the first Send in this session — mirrors
+         Postman's own "nothing sent yet" response panel instead of just
+         leaving blank space under the button. Only the first link actually
+         does anything yet (fires Send); the other two are greyed out with a
+         tooltip rather than faked, same honesty rule as the Scripts/Settings
+         stub tabs. -->
+    <div id="tryItEmptyState" class="tryit-empty-state">
+      <button type="button" class="tryit-empty-link" id="tryItEmptyGetSuccess">
+        <span class="tryit-empty-ic">⟲</span> Send + Get a successful response
+      </button>
+      <button type="button" class="tryit-empty-link" disabled title="Not built yet">
+        <span class="tryit-empty-ic">▤</span> Send + Visualize response
+      </button>
+      <button type="button" class="tryit-empty-link" disabled title="Not built yet">
+        <span class="tryit-empty-ic">✓</span> Send + Write tests
+      </button>
+    </div>
+
     <div id="tryItResult" style="display:none;">
       <div class="hint" style="margin:0 0 4px;">Request sent</div>
       <pre class="code-block" id="tryItRequestPreview" style="max-height:160px; overflow:auto; margin-bottom:14px;"></pre>
@@ -2956,6 +2997,7 @@ pre.json-raw{ max-height:360px; margin:0; }
            this endpoint genuinely documents (see sendTryIt()). -->
       <div class="tryit-result-card" id="tryItResultCard" style="display:none;">
         <div class="tryit-result-head">
+          <button type="button" class="tryit-resp-history" id="tryItRespHistory" title="Not built yet">History ▾</button>
           <span class="code-pill" id="tryItStatusCode"></span>
           <span class="hint" id="tryItLatency" style="margin:0;"></span>
           <span class="hint" id="tryItRespSize" style="margin:0;"></span>
@@ -10060,6 +10102,7 @@ function openTryItModal(proj, ep){
   document.getElementById('tryItRunAllResults').innerHTML = '';
 
   document.getElementById('tryItResult').style.display = 'none';
+  document.getElementById('tryItEmptyState').style.display = '';
   const sendBtnInit = document.getElementById('tryItSend');
   sendBtnInit.disabled = false;
   sendBtnInit.classList.remove('loading');
@@ -10171,9 +10214,17 @@ document.getElementById('tryItScenarioPicker').addEventListener('click', (e)=>{
   // rather than leave a stale response sitting under the newly-picked one.
   document.getElementById('tryItResult').style.display = 'none';
   document.getElementById('tryItRunAllResults').style.display = 'none';
+  document.getElementById('tryItEmptyState').style.display = '';
 });
 
 function closeTryItModal(){
+  // In the standalone Try It tab, #tryItModal IS the tab's entire content
+  // (sidebar hidden, no docs page underneath) — hiding it here would leave
+  // nothing but the topbar. Closing only makes sense for the floating
+  // dialog opened from inside the docs page, so it's a no-op in standalone
+  // mode; the Close button is hidden there too for the same reason (see
+  // the body.tryit-standalone CSS block).
+  if(document.body.classList.contains('tryit-standalone')) return;
   document.getElementById('tryItModal').classList.remove('show');
   tryItContext = null;
 }
@@ -10421,6 +10472,7 @@ function sendTryIt(){
     }
 
     resultEl.style.display = '';
+    document.getElementById('tryItEmptyState').style.display = 'none';
     sendBtn.disabled = false;
     sendBtn.classList.remove('loading');
     document.getElementById('tryItSendLabel').textContent = 'Send again';
@@ -10514,6 +10566,7 @@ async function sendTryItLive(proj, ep, typedBody){
       latencyEl.textContent = `🔴 Live response from ${envMeta(state.env).label} · ${data.latencyMs} ms — not simulated`;
     }
     resultEl.style.display = '';
+    document.getElementById('tryItEmptyState').style.display = 'none';
   }catch(e){
     toast('The live request failed — ' + (e.message || 'network error'));
   } finally {
@@ -10622,6 +10675,9 @@ document.getElementById('tryItRespWrap').addEventListener('click', ()=>{
   body.classList.toggle('tryit-nowrap');
   btn.classList.toggle('active', body.classList.contains('tryit-nowrap'));
 });
+document.getElementById('tryItEmptyGetSuccess').addEventListener('click', ()=>{
+  document.getElementById('tryItSend').click();
+});
 
 /* Resolves the response a given (named) request scenario would produce: a
    documented response scenario with that exact same name, and nothing else.
@@ -10651,6 +10707,7 @@ async function runAllTryItScenarios(){
   const runBtn = document.getElementById('tryItRunAll');
   const resultsEl = document.getElementById('tryItRunAllResults');
   document.getElementById('tryItResult').style.display = 'none';
+  document.getElementById('tryItEmptyState').style.display = 'none';
   runBtn.disabled = true;
   runBtn.classList.add('loading');
   resultsEl.style.display = '';
