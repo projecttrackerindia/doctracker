@@ -1592,6 +1592,40 @@ body.tryit-standalone #tryItClose{ display:none; }
    touching the code-sample tabs. */
 .tryit-tabpanel{ display:none; }
 .tryit-tabpanel.active{ display:block; }
+
+/* Postman-style method+URL bar replacing the old bare badge+text header. */
+.tryit-urlbar{
+  display:flex; align-items:center; gap:10px;
+  border:1px solid var(--border); border-radius:10px;
+  background:var(--surface-2); padding:9px 12px;
+}
+.tryit-urlbar .badge.badge-lg{ flex-shrink:0; }
+.tryit-urlbar-url{ font-family:var(--mono); font-size:13px; color:var(--text); word-break:break-all; flex:1; min-width:0; }
+
+/* Stub tabs (Scripts / Settings) — visibly present, honestly unbuilt. */
+.tryit-stub-panel{ border:1px dashed var(--border); border-radius:10px; padding:18px; }
+.tryit-stub-title{ font-size:12px; font-weight:700; color:var(--text-dim); margin-bottom:4px; }
+.tryit-stub-body{ font-size:11.5px; line-height:1.5; color:var(--text-faint); }
+
+/* Line-numbered code editor shell (body input + response viewer share this). */
+.tryit-editor{ display:flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--surface-2); }
+.tryit-editor-gutter{
+  flex-shrink:0; padding:10px 8px; font-family:var(--mono); font-size:12px; line-height:1.5;
+  color:var(--text-faint); text-align:right; background:var(--surface); border-right:1px solid var(--border);
+  user-select:none; white-space:pre; overflow:hidden;
+}
+.tryit-editor-input{ flex:1; min-width:0; border:none !important; border-radius:0 !important; background:transparent !important; line-height:1.5 !important; padding:10px !important; }
+.tryit-editor-pre{ flex:1; min-width:0; margin:0 !important; border:none !important; border-radius:0 !important; background:transparent !important; line-height:1.5 !important; padding:10px !important; }
+.tryit-editor-pre.tryit-nowrap{ white-space:pre; overflow-x:auto; }
+
+/* Response toolbar: size + copy/wrap icon buttons, Postman-style. */
+.tryit-resp-actions{ margin-left:auto; display:flex; gap:4px; }
+.tryit-icon-btn{
+  border:1px solid var(--border); background:var(--surface); color:var(--text-faint); border-radius:6px;
+  width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; font-size:12px;
+}
+.tryit-icon-btn:hover{ color:var(--text); border-color:var(--border-strong); }
+.tryit-icon-btn.active{ color:var(--accent); border-color:var(--accent); }
 .tryit-headers-row{ display:flex; align-items:baseline; gap:10px; padding:7px 0; border-bottom:1px solid var(--border); font-size:12px; }
 .tryit-headers-row:last-child{ border-bottom:none; }
 .tryit-headers-key{ flex:0 0 38%; font-family:var(--mono); font-weight:700; color:var(--text); word-break:break-all; }
@@ -2820,11 +2854,11 @@ pre.json-raw{ max-height:360px; margin:0; }
 
 <div class="modal-overlay" id="tryItModal">
   <div class="modal">
-    <div style="display:flex; align-items:center; gap:10px; margin-bottom:2px;">
+    <div class="tryit-urlbar">
       <span class="badge badge-lg" id="tryItMethodBadge"></span>
-      <span class="mono" id="tryItPath" style="font-size:13px; word-break:break-all;"></span>
+      <span class="tryit-urlbar-url" id="tryItPath"></span>
     </div>
-    <div class="modal-sub" id="tryItUrlPreview" style="font-family:var(--mono); font-size:11.5px; word-break:break-all;"></div>
+    <div class="modal-sub" id="tryItUrlPreview" style="font-family:var(--mono); font-size:11.5px; word-break:break-all; margin-top:6px;"></div>
 
     <!-- Flow strip: Doc → Condition → Token → Header → Request → Response.
          Every node's state comes from something real that already happened
@@ -2851,9 +2885,11 @@ pre.json-raw{ max-height:360px; margin:0; }
          language, not a new widget. -->
     <div class="lang-tabs tryit-tabs" id="tryItTabs" style="margin-top:10px;">
       <div class="lang-tab active" data-trytab="params" id="tryItTabBtnParams">Params</div>
-      <div class="lang-tab" data-trytab="auth" id="tryItTabBtnAuth" style="display:none;">Auth</div>
+      <div class="lang-tab" data-trytab="auth" id="tryItTabBtnAuth" style="display:none;">Authorization</div>
       <div class="lang-tab" data-trytab="headers" id="tryItTabBtnHeaders">Headers</div>
       <div class="lang-tab" data-trytab="body" id="tryItTabBtnBody" style="display:none;">Body</div>
+      <div class="lang-tab" data-trytab="scripts" id="tryItTabBtnScripts">Scripts</div>
+      <div class="lang-tab" data-trytab="settings" id="tryItTabBtnSettings">Settings</div>
     </div>
 
     <div class="tryit-tabpanel" id="tryItAuthPanel"></div>
@@ -2875,8 +2911,24 @@ pre.json-raw{ max-height:360px; margin:0; }
 
     <div class="tryit-tabpanel" id="tryItBodyPanel">
       <div id="tryItScenarioPicker" class="resp-pill-row" style="margin:0 0 10px;"></div>
-      <textarea id="tryItBodyInput" class="code-block" style="width:100%; min-height:110px; font-family:var(--mono); font-size:12px; resize:vertical;"></textarea>
+      <div class="tryit-editor">
+        <div class="tryit-editor-gutter" id="tryItBodyGutter">1</div>
+        <textarea id="tryItBodyInput" class="tryit-editor-input" style="width:100%; min-height:110px; font-family:var(--mono); font-size:12px; resize:vertical;" spellcheck="false"></textarea>
+      </div>
       <span class="hint" id="tryItBodyErr" style="display:none; color:var(--danger);"></span>
+    </div>
+
+    <div class="tryit-tabpanel" id="tryItScriptsPanel">
+      <div class="tryit-stub-panel">
+        <div class="tryit-stub-title">Pre-request &amp; test scripts</div>
+        <div class="tryit-stub-body">Not built yet. This tab will let you run JS before the request goes out and assert on the response — same idea as Postman's Scripts tab, just scoped to the request/response this app already knows about.</div>
+      </div>
+    </div>
+    <div class="tryit-tabpanel" id="tryItSettingsPanel">
+      <div class="tryit-stub-panel">
+        <div class="tryit-stub-title">Request settings</div>
+        <div class="tryit-stub-body">Not built yet. SSL verification, redirect-following, and encoding options for Live mode will live here.</div>
+      </div>
     </div>
 
     <div style="display:flex; align-items:center; justify-content:space-between; margin:16px 0 8px; flex-wrap:wrap; gap:8px;">
@@ -2906,9 +2958,14 @@ pre.json-raw{ max-height:360px; margin:0; }
         <div class="tryit-result-head">
           <span class="code-pill" id="tryItStatusCode"></span>
           <span class="hint" id="tryItLatency" style="margin:0;"></span>
+          <span class="hint" id="tryItRespSize" style="margin:0;"></span>
           <span class="hint" id="tryItMatchNote" style="margin:0;"></span>
+          <div class="tryit-resp-actions">
+            <button type="button" class="tryit-icon-btn" id="tryItRespCopy" title="Copy response">⧉</button>
+            <button type="button" class="tryit-icon-btn" id="tryItRespWrap" title="Toggle line wrap">↔</button>
+          </div>
         </div>
-        <pre class="code-block" id="tryItResponseBody" style="max-height:280px; overflow:auto;"></pre>
+        <pre class="code-block tryit-editor-pre" id="tryItResponseBody" style="max-height:280px; overflow:auto;"></pre>
       </div>
 
       <!-- Not-documented view: shown INSTEAD of the card above whenever there's
@@ -9792,6 +9849,35 @@ function activateTryItTab(name){
   document.getElementById('tryItAuthPanel').classList.toggle('active', name === 'auth');
   document.getElementById('tryItHeadersPanel').classList.toggle('active', name === 'headers');
   document.getElementById('tryItBodyPanel').classList.toggle('active', name === 'body');
+  document.getElementById('tryItScriptsPanel').classList.toggle('active', name === 'scripts');
+  document.getElementById('tryItSettingsPanel').classList.toggle('active', name === 'settings');
+}
+
+/* ---------- Try It body editor: line-number gutter ----------
+   Keeps a plain <textarea> (so typing/selection/undo all stay native) and
+   renders a synced line-number column next to it — same trick Postman's
+   raw editor uses under the hood. Called on input and every time the body
+   is set programmatically (scenario pick, endpoint open). */
+/* ---------- Try It response toolbar: byte-size readout ----------
+   Same "only show what's real" rule as everything else in this modal —
+   this is the actual byte length of the text just rendered, not an
+   estimate. */
+function tryItSetRespSize(text){
+  const el = document.getElementById('tryItRespSize');
+  if(!el) return;
+  const bytes = new Blob([text||'']).size;
+  el.textContent = bytes < 1024 ? `${bytes} B` : `${(bytes/1024).toFixed(1)} KB`;
+}
+
+function tryItUpdateBodyGutter(){
+  const ta = document.getElementById('tryItBodyInput');
+  const gutter = document.getElementById('tryItBodyGutter');
+  if(!ta || !gutter) return;
+  const lineCount = (ta.value.match(/\n/g)||[]).length + 1;
+  let out = '';
+  for(let i=1;i<=lineCount;i++) out += i + (i<lineCount ? '\n' : '');
+  gutter.textContent = out;
+  gutter.scrollTop = ta.scrollTop;
 }
 
 /* ---------- Try It flow strip state ----------
@@ -9967,6 +10053,7 @@ function openTryItModal(proj, ep){
     scenarioPickerEl.innerHTML = '';
     bodyInputEl.value = '';
   }
+  tryItUpdateBodyGutter();
 
   document.getElementById('tryItRunAll').style.display = namedRequestExamples.length > 1 ? '' : 'none';
   document.getElementById('tryItRunAllResults').style.display = 'none';
@@ -10079,6 +10166,7 @@ document.getElementById('tryItScenarioPicker').addEventListener('click', (e)=>{
   const scenarios = tryItRequestScenarios(tryItContext ? tryItContext.ep : {});
   const match = scenarios.find(s=>s.name===pill.getAttribute('data-scenario-name'));
   if(match) document.getElementById('tryItBodyInput').value = match.value;
+  tryItUpdateBodyGutter();
   // Switching scenarios invalidates whatever was previously sent — hide it
   // rather than leave a stale response sitting under the newly-picked one.
   document.getElementById('tryItResult').style.display = 'none';
@@ -10223,18 +10311,25 @@ function sendTryIt(){
       });
     }
 
-    // 1) Whichever scenario pill is actively selected wins outright — it's
-    //    the clearest signal of intent there is, so it's checked before any
-    //    body-diffing, not after. Previously this only kicked in once an
-    //    exact-body match had already failed, which meant a body that still
-    //    happened to deep-equal some *other* documented example (or a stale
-    //    comparison) could silently override the scenario the person had
-    //    actually just clicked — the reason picking a scenario could look
-    //    like it did nothing to the status code shown below.
+    // 1) Whichever scenario pill is actively selected wins outright, BUT
+    //    only while the body still matches that pill's own documented
+    //    example. The moment someone hand-edits the body away from it (e.g.
+    //    typing 10 under the "Default" pill to probe the ₹100 minimum),
+    //    the pick is stale and step 2's condition check below should decide
+    //    instead — otherwise a highlighted pill can silently override
+    //    whatever the person actually typed, which is what made editing the
+    //    amount look like it did nothing to the status code shown below.
     const pickerName = tryItSelectedScenarioName().trim().toLowerCase();
     if(pickerName){
-      const picked = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === pickerName);
-      if(picked){ matched = picked; matchKind = 'picked'; }
+      const pickedReq = requestScenarios.find(s=>s.name.trim().toLowerCase() === pickerName);
+      const pickedReqParsed = pickedReq ? tryParseJson(pickedReq.value) : { ok:false };
+      const bodyStillMatchesPick = typedBody === null
+        ? !pickedReq // no body at all only "matches" a pick that has no example either
+        : (pickedReqParsed.ok && deepEqualJson(pickedReqParsed.value, typedBody));
+      if(bodyStillMatchesPick){
+        const picked = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === pickerName);
+        if(picked){ matched = picked; matchKind = 'picked'; }
+      }
     }
 
     // 2) Otherwise, check every documented scenario that carries a condition
@@ -10289,6 +10384,7 @@ function sendTryIt(){
       resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(matched.code)})`);
       const parsed = matched.value ? tryParseJson(matched.value) : { ok:false };
       bodyEl.textContent = parsed.ok ? JSON.stringify(parsed.value, null, 2) : (matched.value || 'No example body documented for this response.');
+      tryItSetRespSize(bodyEl.textContent);
       if(matchKind === 'picked') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
       else if(matchKind === 'condition') matchNoteEl.textContent = `Matched scenario: ${matched.name} — condition ${describeCondition(conditionMatch.condition)} was true for this request`;
       else if(matchKind === 'exact' && matched.name !== 'Default') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
@@ -10408,11 +10504,13 @@ async function sendTryItLive(proj, ep, typedBody){
       resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(res.status)})`);
       bodyEl.textContent = data.error || 'The live request failed.';
       latencyEl.textContent = '';
+      tryItSetRespSize(bodyEl.textContent);
     } else {
       codeEl.textContent = String(data.status);
       codeEl.className = 'code-pill ' + respClass(data.status);
       resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(data.status)})`);
       bodyEl.textContent = typeof data.body === 'string' ? data.body : JSON.stringify(data.body, null, 2);
+      tryItSetRespSize(bodyEl.textContent);
       latencyEl.textContent = `🔴 Live response from ${envMeta(state.env).label} · ${data.latencyMs} ms — not simulated`;
     }
     resultEl.style.display = '';
@@ -10503,6 +10601,27 @@ function editInStudioFromTryIt(proj, ep, typedBody, closestScenario){
 document.getElementById('tryItSend').addEventListener('click', sendTryIt);
 document.getElementById('tryItClose').addEventListener('click', closeTryItModal);
 document.getElementById('tryItModal').addEventListener('click', (e)=>{ if(e.target.id === 'tryItModal') closeTryItModal(); });
+
+// Line-number gutter: stay in sync with typing and with scrolling.
+document.getElementById('tryItBodyInput').addEventListener('input', tryItUpdateBodyGutter);
+document.getElementById('tryItBodyInput').addEventListener('scroll', tryItUpdateBodyGutter);
+
+// Response toolbar: copy response JSON, toggle no-wrap for long lines.
+document.getElementById('tryItRespCopy').addEventListener('click', ()=>{
+  const body = document.getElementById('tryItResponseBody');
+  navigator.clipboard.writeText(body.textContent||'').then(()=>{
+    const btn = document.getElementById('tryItRespCopy');
+    const prev = btn.textContent;
+    btn.textContent = '✓';
+    setTimeout(()=>{ btn.textContent = prev; }, 1100);
+  });
+});
+document.getElementById('tryItRespWrap').addEventListener('click', ()=>{
+  const body = document.getElementById('tryItResponseBody');
+  const btn = document.getElementById('tryItRespWrap');
+  body.classList.toggle('tryit-nowrap');
+  btn.classList.toggle('active', body.classList.contains('tryit-nowrap'));
+});
 
 /* Resolves the response a given (named) request scenario would produce: a
    documented response scenario with that exact same name, and nothing else.
