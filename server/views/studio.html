@@ -1671,8 +1671,33 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-tabs-row .tryit-tabs{ margin:0; flex:1; min-width:0; }
 .tryit-cookies-link{ font-size:11.5px; font-weight:600; color:var(--text-faint); background:none; border:none; cursor:pointer; white-space:nowrap; flex-shrink:0; }
 .tryit-cookies-link:hover{ color:var(--text-dim); }
-.tryit-resp-history{ font-size:11px; font-weight:600; color:var(--text-faint); background:none; border:1px solid var(--border); border-radius:6px; padding:3px 8px; cursor:pointer; }
-.tryit-resp-history:hover{ color:var(--text-dim); border-color:var(--border-strong); }
+.tryit-history-wrap{ position:relative; }
+.tryit-resp-history{ font-size:11px; font-weight:600; color:var(--text-faint); background:none; border:1px solid var(--border); border-radius:6px; padding:3px 8px; cursor:pointer; display:inline-flex; align-items:center; gap:5px; }
+.tryit-resp-history:hover, .tryit-resp-history.active{ color:var(--text-dim); border-color:var(--border-strong); }
+.tryit-history-count{
+  font-size:9.5px; font-weight:700; color:var(--accent); background:var(--accent-soft);
+  border-radius:8px; padding:1px 6px; line-height:1.4;
+}
+.tryit-history-panel{
+  position:absolute; top:calc(100% + 6px); left:0; z-index:30; width:320px; max-height:340px; overflow-y:auto;
+  background:var(--surface); border:1px solid var(--border); border-radius:10px;
+  box-shadow:0 10px 28px rgba(0,0,0,.28); padding:6px;
+}
+.tryit-history-empty{ padding:18px 12px; text-align:center; font-size:11.5px; color:var(--text-faint); }
+.tryit-history-item{
+  display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:7px; cursor:pointer;
+}
+.tryit-history-item:hover{ background:var(--surface-2); }
+.tryit-history-item-code{ font-size:11px; font-weight:800; flex-shrink:0; width:30px; text-align:center; padding:2px 0; border-radius:5px; }
+.tryit-history-item-main{ flex:1; min-width:0; }
+.tryit-history-item-method{ font-size:10px; font-weight:800; margin-right:6px; }
+.tryit-history-item-note{ font-size:11.5px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tryit-history-item-time{ font-size:10.5px; color:var(--text-faint); flex-shrink:0; }
+.tryit-history-panel-foot{
+  display:flex; justify-content:flex-end; padding:6px 6px 2px; margin-top:2px; border-top:1px solid var(--border);
+}
+.tryit-history-clear{ font-size:11px; font-weight:600; color:var(--text-faint); background:none; border:none; cursor:pointer; padding:4px 6px; }
+.tryit-history-clear:hover{ color:var(--danger,#e03e3e); }
 
 /* ---------- Standalone Try It collection sidebar ----------
    Only ever shown in the full-tab Try It page (body.tryit-standalone), never
@@ -1732,6 +1757,9 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-headers-trow:last-child{ border-bottom:none; }
 .tryit-headers-trow.disabled .tryit-table-input{ opacity:.4; text-decoration:line-through; }
 .tryit-headers-trow.ghost .tryit-table-input{ font-style:italic; }
+.tryit-headers-trow.error{ background:var(--danger-bg,rgba(224,62,62,.08)); border-radius:6px; box-shadow:inset 0 0 0 1px var(--danger,#e03e3e); }
+.tryit-headers-keycell{ display:flex; align-items:center; gap:0; min-width:0; }
+.tryit-headers-keycell .tryit-table-input{ flex:1; min-width:0; }
 .tryit-headers-tkey{ font-family:var(--mono); font-weight:700; color:var(--text); word-break:break-all; }
 .tryit-headers-tval{ font-family:var(--mono); color:var(--text-dim); word-break:break-all; }
 .tryit-headers-tdesc{ color:var(--text-faint); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -3154,7 +3182,10 @@ pre.json-raw{ max-height:360px; margin:0; }
            this endpoint genuinely documents (see sendTryIt()). -->
       <div class="tryit-result-card" id="tryItResultCard" style="display:none;">
         <div class="tryit-result-head">
-          <button type="button" class="tryit-resp-history" id="tryItRespHistory" title="Not built yet">History ▾</button>
+          <div class="tryit-history-wrap" id="tryItHistoryWrap">
+            <button type="button" class="tryit-resp-history" id="tryItRespHistory" title="Past sends for this endpoint, this session">History <span class="tryit-history-count" id="tryItHistoryCount" style="display:none;">0</span> ▾</button>
+            <div class="tryit-history-panel" id="tryItHistoryPanel" style="display:none;"></div>
+          </div>
           <span class="code-pill" id="tryItStatusCode"></span>
           <span class="hint" id="tryItLatency" style="margin:0;"></span>
           <span class="hint" id="tryItRespSize" style="margin:0;"></span>
@@ -4938,16 +4969,16 @@ function authHeaderValue(proj){
 function headerList(proj, ep){
   const reveal = sensitiveRevealed();
   const headers = [];
-  if(ep.requestBody) headers.push(['Content-Type', ep.contentType || 'application/json', '']);
+  if(ep.requestBody) headers.push(['Content-Type', ep.contentType || 'application/json', '', true]);
   if(proj.auth && proj.auth.headerName){
-    headers.push([proj.auth.headerName, authHeaderValue(proj), '']);
+    headers.push([proj.auth.headerName, authHeaderValue(proj), '', true]);
   }
   const hdrs = ep.headers || (ep.parameters||[]).filter(p=>p.in==='header');
   hdrs.forEach(p=>{
     let val = p.example || `<${p.name}>`;
     const rule = p.example ? piiRuleFor(p.name, p.example) : null;
     if(rule && !reveal) val = maskByStrategy(p.example, rule);
-    headers.push([p.name, val, p.description || '']);
+    headers.push([p.name, val, p.description || '', !!p.required]);
   });
   return headers;
 }
@@ -10419,6 +10450,8 @@ function openTryItModal(proj, ep){
   liveToggle.checked = false; // always opens back to simulated — never remembers "live" as a default
   tryItContext.headerRows = buildInitialHeaderRows(proj, ep);
   renderTryItHeadersTable();
+  closeTryItHistoryPanel();
+  renderTryItHistoryBadge();
   liveToggle.onchange = () => {
     // Flipping the toggle either way clears any typed value for the secret
     // (auth) row — this app never carries a real credential across modes,
@@ -10447,11 +10480,11 @@ function openTryItModal(proj, ep){
        one row tied to this project's auth header is always blanked out
        when Live turns on — this app never stores a real credential, so
        that field is supplied fresh for this one send only. */
-function makeEmptyHeaderRow(){ return { key:'', value:'', description:'', enabled:true, deletable:true, isSecret:false, ghost:true }; }
+function makeEmptyHeaderRow(){ return { key:'', value:'', description:'', enabled:true, deletable:true, isSecret:false, required:false, error:false, ghost:true }; }
 
 function buildInitialHeaderRows(proj, ep){
-  const rows = headerList(proj, ep).map(([k,v,desc])=>({
-    key:k, value:v, description:desc||'', enabled:true, deletable:true,
+  const rows = headerList(proj, ep).map(([k,v,desc,required])=>({
+    key:k, value:v, description:desc||'', enabled:true, deletable:true, required:!!required, error:false,
     isSecret: !!(proj.auth && proj.auth.headerName && k === proj.auth.headerName),
   }));
   rows.push(makeEmptyHeaderRow());
@@ -10480,9 +10513,12 @@ function renderTryItHeadersTable(){
         if(!isGhost && r.isSecret && !liveOn && genTok){
           shownVal = maskSecretValue(r.value.toLowerCase().startsWith('bearer') ? `Bearer ${genTok}` : genTok);
         }
-        return `<div class="tryit-headers-trow${(!isGhost && !r.enabled)?' disabled':''}${isGhost?' ghost':''}" data-row-idx="${i}">
+        return `<div class="tryit-headers-trow${(!isGhost && !r.enabled)?' disabled':''}${isGhost?' ghost':''}${r.error?' error':''}" data-row-idx="${i}">
           ${isGhost ? '<span></span>' : `<input type="checkbox" class="tryit-headers-check" data-hdr-field="enabled" ${r.enabled?'checked':''}>`}
-          <input type="text" class="tryit-table-input mono" data-hdr-field="key" placeholder="${isGhost?'Key':''}" value="${escapeHtml(r.key)}">
+          <div class="tryit-headers-keycell">
+            <input type="text" class="tryit-table-input mono" data-hdr-field="key" placeholder="${isGhost?'Key':''}" value="${escapeHtml(r.key)}">
+            ${(!isGhost && r.required) ? '<span class="req-star" title="This header is documented as required for this endpoint">*</span>' : ''}
+          </div>
           <input type="text" class="tryit-table-input mono" data-hdr-field="value" placeholder="${isGhost?'Value':(!isGhost && r.isSecret && liveOn ? authHeaderValue(proj) : '')}" value="${escapeHtml(shownVal)}">
           <input type="text" class="tryit-table-input" data-hdr-field="description" placeholder="${isGhost?'Description':''}" value="${escapeHtml(r.description)}">
           ${isGhost ? '<span></span>' : '<button type="button" class="tryit-row-delete" data-hdr-del title="Delete header">✕</button>'}
@@ -10516,6 +10552,7 @@ document.getElementById('tryItHeadersReadonly').addEventListener('input', (e)=>{
   if(!row) return;
   const wasGhost = !!row.ghost;
   row[field] = input.value;
+  if(field === 'value' && row.error && input.value.trim()) row.error = false;
   if(wasGhost && field === 'key' && input.value.trim()){
     row.ghost = false;
     row.deletable = true;
@@ -10529,7 +10566,10 @@ document.getElementById('tryItHeadersReadonly').addEventListener('change', (e)=>
   const cb = e.target.closest('[data-hdr-field="enabled"]');
   if(!cb || !tryItContext) return;
   const idx = Number(cb.closest('[data-row-idx]').getAttribute('data-row-idx'));
-  if(tryItContext.headerRows[idx]) tryItContext.headerRows[idx].enabled = cb.checked;
+  if(tryItContext.headerRows[idx]){
+    tryItContext.headerRows[idx].enabled = cb.checked;
+    if(cb.checked) tryItContext.headerRows[idx].error = false;
+  }
   renderTryItHeadersTable();
 });
 document.getElementById('tryItHeadersReadonly').addEventListener('click', (e)=>{
@@ -10586,9 +10626,12 @@ function renderTryItParamsPanel(){
       <div class="tryit-headers-thead"><span></span><span>Key</span><span>Value</span><span>Description</span><span></span></div>
       ${queryRows.length ? queryRows.map((r,i)=>{
         const isGhost = !!r.ghost;
-        return `<div class="tryit-headers-trow${(!isGhost && !r.enabled)?' disabled':''}${isGhost?' ghost':''}" data-row-idx="${i}">
+        return `<div class="tryit-headers-trow${(!isGhost && !r.enabled)?' disabled':''}${isGhost?' ghost':''}${r.error?' error':''}" data-row-idx="${i}">
           ${isGhost ? '<span></span>' : `<input type="checkbox" class="tryit-headers-check" data-param-field="enabled" ${r.enabled?'checked':''}>`}
-          <input type="text" class="tryit-table-input mono" data-param-field="key" placeholder="${isGhost?'Key':''}" value="${escapeHtml(r.key)}">
+          <div class="tryit-headers-keycell">
+            <input type="text" class="tryit-table-input mono" data-param-field="key" placeholder="${isGhost?'Key':''}" value="${escapeHtml(r.key)}">
+            ${(!isGhost && r.required) ? '<span class="req-star" title="Documented as a required query parameter">*</span>' : ''}
+          </div>
           <input type="text" class="tryit-table-input mono" data-param-field="value" placeholder="${isGhost?'Value':''}" value="${escapeHtml(r.value)}">
           <input type="text" class="tryit-table-input" data-param-field="description" placeholder="${isGhost?'Description':''}" value="${escapeHtml(r.description)}">
           ${isGhost ? '<span></span>' : '<button type="button" class="tryit-row-delete" data-param-del title="Delete param">✕</button>'}
@@ -10751,6 +10794,143 @@ function tryItResponseScenarios(ep){
   return out;
 }
 
+/* ---------- Response History (Postman-style, per endpoint) ----------
+   Backed by state.requestHistory[endpointId] — already declared, persisted
+   (PUT /request-history), and loaded on boot; this is the first thing that
+   actually writes and reads it. Newest entry first, capped so it can't grow
+   forever across a long session. */
+const TRYIT_HISTORY_MAX = 25;
+
+function tryItRelativeTime(ts){
+  const diffSec = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if(diffSec < 5) return 'just now';
+  if(diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.round(diffSec / 60);
+  if(diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.round(diffMin / 60);
+  if(diffHr < 24) return `${diffHr}h ago`;
+  const d = new Date(ts);
+  return d.toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+
+function pushTryItHistory(ep, entry){
+  if(!state.requestHistory[ep.id]) state.requestHistory[ep.id] = [];
+  state.requestHistory[ep.id].unshift(entry);
+  if(state.requestHistory[ep.id].length > TRYIT_HISTORY_MAX){
+    state.requestHistory[ep.id].length = TRYIT_HISTORY_MAX;
+  }
+  saveState();
+  renderTryItHistoryBadge();
+  if(document.getElementById('tryItHistoryPanel').style.display !== 'none') renderTryItHistoryPanel();
+}
+
+function renderTryItHistoryBadge(){
+  if(!tryItContext) return;
+  const entries = state.requestHistory[tryItContext.ep.id] || [];
+  const badge = document.getElementById('tryItHistoryCount');
+  badge.textContent = String(entries.length);
+  badge.style.display = entries.length ? '' : 'none';
+}
+
+function renderTryItHistoryPanel(){
+  if(!tryItContext) return;
+  const entries = state.requestHistory[tryItContext.ep.id] || [];
+  const panel = document.getElementById('tryItHistoryPanel');
+  if(!entries.length){
+    panel.innerHTML = `<div class="tryit-history-empty">No requests sent yet for this endpoint this session.<br>Hit Send to build up history here.</div>`;
+    return;
+  }
+  panel.innerHTML = entries.map((h,i)=>{
+    const codeLabel = h.status ? String(h.status) : '—';
+    const accentVar = h.status ? respColorVar(h.status) : '--text-faint';
+    return `<div class="tryit-history-item" data-hist-idx="${i}">
+      <span class="tryit-history-item-code" style="color:var(${accentVar});background:color-mix(in srgb, var(${accentVar}) 16%, transparent);">${escapeHtml(codeLabel)}</span>
+      <div class="tryit-history-item-main">
+        <div class="tryit-history-item-note"><span class="tryit-history-item-method" style="color:var(--${methodClass(h.method)});">${escapeHtml(h.method)}</span>${escapeHtml(h.note || h.path || '')}</div>
+      </div>
+      <span class="tryit-history-item-time">${escapeHtml(tryItRelativeTime(h.timestamp))}</span>
+    </div>`;
+  }).join('') + `<div class="tryit-history-panel-foot"><button type="button" class="tryit-history-clear" id="tryItHistoryClear">Clear history</button></div>`;
+}
+
+function closeTryItHistoryPanel(){
+  document.getElementById('tryItHistoryPanel').style.display = 'none';
+  document.getElementById('tryItRespHistory').classList.remove('active');
+}
+
+document.getElementById('tryItRespHistory').addEventListener('click', (e)=>{
+  e.stopPropagation();
+  const panel = document.getElementById('tryItHistoryPanel');
+  const willOpen = panel.style.display === 'none';
+  if(willOpen){
+    renderTryItHistoryPanel();
+    panel.style.display = '';
+    document.getElementById('tryItRespHistory').classList.add('active');
+  } else {
+    closeTryItHistoryPanel();
+  }
+});
+
+document.getElementById('tryItHistoryPanel').addEventListener('click', (e)=>{
+  e.stopPropagation();
+  if(e.target.id === 'tryItHistoryClear'){
+    if(tryItContext) delete state.requestHistory[tryItContext.ep.id];
+    saveState();
+    renderTryItHistoryBadge();
+    renderTryItHistoryPanel();
+    return;
+  }
+  const item = e.target.closest('[data-hist-idx]');
+  if(!item || !tryItContext) return;
+  const entry = (state.requestHistory[tryItContext.ep.id] || [])[Number(item.getAttribute('data-hist-idx'))];
+  if(!entry) return;
+  restoreTryItHistoryEntry(entry);
+  closeTryItHistoryPanel();
+});
+
+document.addEventListener('click', (e)=>{
+  const wrap = document.getElementById('tryItHistoryWrap');
+  if(wrap && !wrap.contains(e.target)) closeTryItHistoryPanel();
+});
+
+// Re-renders the response card from a stored history entry — read-only
+// playback, not a re-send. Clearly labelled as history so it's never
+// mistaken for a fresh Send.
+function restoreTryItHistoryEntry(entry){
+  const resultEl = document.getElementById('tryItResult');
+  const resultCardEl = document.getElementById('tryItResultCard');
+  const notDocCardEl = document.getElementById('tryItNotDocCard');
+  const codeEl = document.getElementById('tryItStatusCode');
+  const bodyEl = document.getElementById('tryItResponseBody');
+  const latencyEl = document.getElementById('tryItLatency');
+  const matchNoteEl = document.getElementById('tryItMatchNote');
+
+  document.getElementById('tryItEmptyState').style.display = 'none';
+  resultEl.style.display = '';
+  document.getElementById('tryItRequestPreview').textContent = entry.requestPreview || '';
+
+  if(!entry.status){
+    resultCardEl.style.display = 'none';
+    notDocCardEl.style.display = '';
+    document.getElementById('tryItNotDocBody').textContent = entry.note || 'No documented response matched this request.';
+    return;
+  }
+  notDocCardEl.style.display = 'none';
+  resultCardEl.style.display = '';
+  codeEl.textContent = String(entry.status);
+  codeEl.className = 'code-pill ' + respClass(entry.status);
+  resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(entry.status)})`);
+  bodyEl.textContent = entry.bodyText || '';
+  tryItSetRespSize(bodyEl.textContent);
+  tryItResetRespTabs();
+  renderTryItResponseHeaders(entry.bodyText ? { 'Content-Type': 'application/json' } : {});
+  renderTryItTestResults([
+    { name: `Status code is ${entry.status}`, pass: true, detail: 'From history — replayed, not re-sent.' },
+  ]);
+  matchNoteEl.textContent = `Viewing history · sent ${tryItRelativeTime(entry.timestamp)}`;
+  latencyEl.textContent = entry.timeMs ? `Simulated from documented example · ${entry.timeMs} ms` : '';
+}
+
 function sendTryIt(){
   if(!tryItContext) return;
   const { proj, ep } = tryItContext;
@@ -10771,6 +10951,23 @@ function sendTryIt(){
     if(!row.ghost && row.enabled && row.required && !row.value.trim()){
       row.error = true;
       renderTryItParamsPanel();
+      toast(`${row.key} is required`);
+      return;
+    }
+  }
+  // Same rule for headers: a header documented as required (including the
+  // structural Content-Type/Auth rows) has to be enabled with a value, or
+  // this send is refused before anything is "sent" — same as unchecking a
+  // required header in Postman would earn you a 4xx from the real API, this
+  // tool refuses up front instead of silently returning the success example.
+  for(const row of (tryItContext.headerRows||[])){
+    row.error = false;
+  }
+  for(const row of (tryItContext.headerRows||[])){
+    if(!row.ghost && row.required && (!row.enabled || !row.value.trim())){
+      row.error = true;
+      renderTryItHeadersTable();
+      activateTryItTab('headers');
       toast(`${row.key} is required`);
       return;
     }
@@ -10923,7 +11120,8 @@ function sendTryIt(){
       else if(matchKind === 'condition') matchNoteEl.textContent = `Matched scenario: ${matched.name} — condition ${describeCondition(conditionMatch.condition)} was true for this request`;
       else if(matchKind === 'exact' && matched.name !== 'Default') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
       else matchNoteEl.textContent = '';
-      latencyEl.textContent = `Simulated from documented example · ${Math.round(180 + Math.random()*140)} ms`;
+      const simulatedMs = Math.round(180 + Math.random()*140);
+      latencyEl.textContent = `Simulated from documented example · ${simulatedMs} ms`;
       // Force the fade/slide-in to replay on every send, not just the first —
       // the animation class never toggles off/on by itself once the element's
       // already visible, so without this a "Send again" click would just
@@ -10931,6 +11129,12 @@ function sendTryIt(){
       resultCardEl.style.animation = 'none';
       void resultCardEl.offsetWidth;
       resultCardEl.style.animation = '';
+      pushTryItHistory(ep, {
+        method: ep.method, path: ep.path, status: matched.code, timeMs: simulatedMs,
+        note: matched.name && matched.name !== 'Default' ? `${ep.path} — ${matched.name}` : ep.path,
+        bodyText: bodyEl.textContent, requestPreview: document.getElementById('tryItRequestPreview').textContent,
+        timestamp: Date.now(),
+      });
     } else {
       // Nothing documented matches this exact request — show NO response at
       // all (never a guess), just a clear empty state and a way to fix it.
@@ -10952,6 +11156,11 @@ function sendTryIt(){
         notDocBodyEl.textContent = `This exact request doesn't match any documented scenario for this endpoint.`;
       }
       document.getElementById('tryItEditInStudio').onclick = ()=>editInStudioFromTryIt(proj, ep, typedBody, closestRequestScenario);
+      pushTryItHistory(ep, {
+        method: ep.method, path: ep.path, status: null, timeMs: null,
+        note: `${ep.path} — not documented`, bodyText: '', requestPreview: document.getElementById('tryItRequestPreview').textContent,
+        timestamp: Date.now(),
+      });
     }
 
     resultEl.style.display = '';
