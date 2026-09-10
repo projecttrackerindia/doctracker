@@ -1696,6 +1696,30 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-headers-key{ flex:0 0 38%; font-family:var(--mono); font-weight:700; color:var(--text); word-break:break-all; }
 .tryit-headers-val{ flex:1; min-width:0; font-family:var(--mono); color:var(--text-dim); word-break:break-all; }
 
+/* Postman-style Headers table: checkbox / Key / Value / Description columns
+   with a real column header row, replacing the old plain key–value list.
+   The checkbox is functional, not decorative — unchecking a header removes
+   it from the "Request sent" preview built in sendTryIt()/sendTryItLive(),
+   same as unchecking a header in Postman drops it from the outgoing
+   request. */
+.tryit-headers-table{ border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--surface-2); }
+.tryit-headers-thead{
+  display:grid; grid-template-columns:28px 1fr 1.4fr 1fr; gap:10px; padding:7px 10px;
+  font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--text-faint);
+  background:var(--surface); border-bottom:1px solid var(--border);
+}
+.tryit-headers-trow{
+  display:grid; grid-template-columns:28px 1fr 1.4fr 1fr; gap:10px; padding:7px 10px; align-items:center;
+  font-size:12px; border-bottom:1px solid var(--border);
+}
+.tryit-headers-trow:last-child{ border-bottom:none; }
+.tryit-headers-trow.disabled .tryit-headers-tkey,
+.tryit-headers-trow.disabled .tryit-headers-tval{ opacity:.4; text-decoration:line-through; }
+.tryit-headers-tkey{ font-family:var(--mono); font-weight:700; color:var(--text); word-break:break-all; }
+.tryit-headers-tval{ font-family:var(--mono); color:var(--text-dim); word-break:break-all; }
+.tryit-headers-tdesc{ color:var(--text-faint); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tryit-headers-check{ accent-color:var(--accent); cursor:pointer; }
+
 /* ---------- Try It redesign: scenario pills, animated send, coloured result
    card, and the "Run all scenarios" checklist. Reuses .resp-pill for the
    scenario picker so it reads as the same control language as the doc
@@ -4832,16 +4856,16 @@ function authHeaderValue(proj){
 function headerList(proj, ep){
   const reveal = sensitiveRevealed();
   const headers = [];
-  if(ep.requestBody) headers.push(['Content-Type', ep.contentType || 'application/json']);
+  if(ep.requestBody) headers.push(['Content-Type', ep.contentType || 'application/json', '']);
   if(proj.auth && proj.auth.headerName){
-    headers.push([proj.auth.headerName, authHeaderValue(proj)]);
+    headers.push([proj.auth.headerName, authHeaderValue(proj), '']);
   }
   const hdrs = ep.headers || (ep.parameters||[]).filter(p=>p.in==='header');
   hdrs.forEach(p=>{
     let val = p.example || `<${p.name}>`;
     const rule = p.example ? piiRuleFor(p.name, p.example) : null;
     if(rule && !reveal) val = maskByStrategy(p.example, rule);
-    headers.push([p.name, val]);
+    headers.push([p.name, val, p.description || '']);
   });
   return headers;
 }
@@ -10164,7 +10188,7 @@ document.getElementById('tryItSidebarList').addEventListener('click', (e)=>{
 });
 
 function openTryItModal(proj, ep){
-  tryItContext = { proj, ep, generatedToken: null };
+  tryItContext = { proj, ep, generatedToken: null, disabledHeaders: new Set() };
   resetTryItFlow();
   renderTryItAuthPanel(proj, ep);
 
@@ -10298,12 +10322,23 @@ function updateTryItHeadersPanel(proj, ep){
     // instead of the generic "Bearer <token>" placeholder — same header row,
     // now showing what will actually be sent, still never the raw value.
     const genTok = tryItContext && tryItContext.generatedToken;
-    readonlyEl.innerHTML = docHeaders.map(([k,v])=>{
-      const shown = (genTok && proj.auth && k === proj.auth.headerName)
-        ? maskSecretValue(v.toLowerCase().startsWith('bearer') ? `Bearer ${genTok}` : genTok)
-        : v;
-      return `<div class="tryit-headers-row"><span class="tryit-headers-key">${escapeHtml(k)}</span><span class="tryit-headers-val">${escapeHtml(shown)}</span></div>`;
-    }).join('');
+    const disabled = tryItContext ? tryItContext.disabledHeaders : new Set();
+    readonlyEl.innerHTML = docHeaders.length ? `
+      <div class="tryit-headers-table">
+        <div class="tryit-headers-thead"><span></span><span>Key</span><span>Value</span><span>Description</span></div>
+        ${docHeaders.map(([k,v,desc])=>{
+          const shown = (genTok && proj.auth && k === proj.auth.headerName)
+            ? maskSecretValue(v.toLowerCase().startsWith('bearer') ? `Bearer ${genTok}` : genTok)
+            : v;
+          const isOff = disabled.has(k);
+          return `<div class="tryit-headers-trow${isOff?' disabled':''}">
+            <input type="checkbox" class="tryit-headers-check" data-header-toggle="${escapeHtml(k)}" ${isOff?'':'checked'}>
+            <span class="tryit-headers-tkey">${escapeHtml(k)}</span>
+            <span class="tryit-headers-tval">${escapeHtml(shown)}</span>
+            <span class="tryit-headers-tdesc">${escapeHtml(desc||'')}</span>
+          </div>`;
+        }).join('')}
+      </div>` : '';
   }
 
   liveWrap.style.display = on ? '' : 'none';
@@ -10319,6 +10354,13 @@ function updateTryItHeadersPanel(proj, ep){
       <input type="text" data-live-header="${escapeHtml(h.name)}" value="${escapeHtml(h.value)}" placeholder="${escapeHtml(h.placeholder||'')}" style="font-family:var(--mono); font-size:12px; width:100%;">
     </div>`).join('');
 }
+document.getElementById('tryItHeadersReadonly').addEventListener('change', (e)=>{
+  const cb = e.target.closest('[data-header-toggle]');
+  if(!cb || !tryItContext) return;
+  const name = cb.getAttribute('data-header-toggle');
+  if(cb.checked) tryItContext.disabledHeaders.delete(name); else tryItContext.disabledHeaders.add(name);
+  cb.closest('.tryit-headers-trow').classList.toggle('disabled', !cb.checked);
+});
 
 /* Named request-body scenarios for an endpoint: "Default" (the main example)
    plus any named alternates. Skips "Default" if there's no main example but
@@ -10750,7 +10792,8 @@ function buildTryItResolvedRequestPreview(proj, ep, typedBody){
   // the Auth tab, the preview shows what will actually go out (masked), not
   // the generic placeholder.
   const genTok = tryItContext && tryItContext.generatedToken;
-  const lines = [`${ep.method} ${url}`, ...headerList(proj, ep).map(([k,v])=>{
+  const disabled = tryItContext ? tryItContext.disabledHeaders : new Set();
+  const lines = [`${ep.method} ${url}`, ...headerList(proj, ep).filter(([k])=>!disabled.has(k)).map(([k,v])=>{
     const shown = (genTok && proj.auth && k === proj.auth.headerName)
       ? maskSecretValue(v.toLowerCase().startsWith('bearer') ? `Bearer ${genTok}` : genTok)
       : v;
