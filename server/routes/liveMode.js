@@ -208,7 +208,15 @@ router.post('/send', liveCallLimiter, async (req, res) => {
     if (contentType.includes('application/json')) {
       try { bodyOut = JSON.parse(responseText); } catch (e) { /* leave as text */ }
     }
-    res.json({ status: response.status, statusText: response.statusText, latencyMs, body: bodyOut });
+    // Real response headers, not guessed — same masking philosophy as the
+    // rest of the app: strip hop-by-hop / cookie-setting headers rather than
+    // forward anything that could leak session state back into the UI.
+    const respHeaders = {};
+    response.headers.forEach((value, key) => {
+      if (/^(set-cookie|connection|transfer-encoding)$/i.test(key)) return;
+      respHeaders[key] = value;
+    });
+    res.json({ status: response.status, statusText: response.statusText, latencyMs, body: bodyOut, headers: respHeaders });
   } catch (err) {
     const isAbort = err && err.name === 'AbortError';
     console.error('POST /api/live-mode/send failed:', err);

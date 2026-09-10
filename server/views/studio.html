@@ -1612,6 +1612,7 @@ body.tryit-standalone #tryItClose{ display:none; }
 }
 .tryit-urlbar .badge.badge-lg{ flex-shrink:0; }
 .tryit-urlbar-url{ font-family:var(--mono); font-size:13px; color:var(--text); word-break:break-all; flex:1; min-width:0; }
+.tryit-urlbar .tryit-send-btn{ flex-shrink:0; }
 
 /* Stub tabs (Scripts / Settings) — visibly present, honestly unbuilt. */
 .tryit-stub-panel{ border:1px dashed var(--border); border-radius:10px; padding:18px; }
@@ -1772,6 +1773,21 @@ body.tryit-standalone #tryItClose{ display:none; }
   background:var(--accent-soft); color:var(--accent); font-size:10px; font-weight:700; line-height:15px;
 }
 .lang-tab.active .trytab-count{ background:var(--accent); color:var(--accent-ink); }
+
+/* Response tabs (Body / Headers / Test Results) — same segmented-control
+   language as the request tabs above, just scoped smaller since it sits
+   inside the result card rather than the top of the panel. */
+.tryit-resptabs{ margin:10px 0 10px; max-width:320px; }
+.tryit-tests-list{ display:flex; flex-direction:column; gap:6px; }
+.tryit-test-row{
+  display:flex; align-items:flex-start; gap:8px; padding:8px 10px; border-radius:8px;
+  border:1px solid var(--border); background:var(--surface-2); font-size:12px;
+}
+.tryit-test-ic{ flex-shrink:0; font-weight:700; font-size:12px; line-height:1.4; }
+.tryit-test-row.pass .tryit-test-ic{ color:var(--post,#35c491); }
+.tryit-test-row.fail .tryit-test-ic{ color:var(--danger,#e03e3e); }
+.tryit-test-name{ color:var(--text); font-weight:600; }
+.tryit-test-detail{ color:var(--text-faint); font-size:11px; margin-top:2px; }
 
 /* ---------- Try It redesign: scenario pills, animated send, coloured result
    card, and the "Run all scenarios" checklist. Reuses .resp-pill for the
@@ -3018,6 +3034,7 @@ pre.json-raw{ max-height:360px; margin:0; }
     <div class="tryit-urlbar">
       <span class="badge badge-lg" id="tryItMethodBadge"></span>
       <span class="tryit-urlbar-url" id="tryItPath"></span>
+      <button class="primary tryit-send-btn" id="tryItSend"><span class="tryit-send-spinner"></span><span id="tryItSendLabel">Send</span></button>
     </div>
     <div class="modal-sub" id="tryItUrlPreview" style="font-family:var(--mono); font-size:11.5px; word-break:break-all; margin-top:6px;"></div>
 
@@ -3106,7 +3123,6 @@ pre.json-raw{ max-height:360px; margin:0; }
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-14 9V3z"></path></svg>
           Run all scenarios
         </button>
-        <button class="primary tryit-send-btn" id="tryItSend"><span class="tryit-send-spinner"></span><span id="tryItSendLabel">Send</span></button>
       </div>
     </div>
 
@@ -3148,7 +3164,20 @@ pre.json-raw{ max-height:360px; margin:0; }
             <button type="button" class="tryit-icon-btn" id="tryItRespWrap" title="Toggle line wrap">↔</button>
           </div>
         </div>
-        <pre class="code-block tryit-editor-pre" id="tryItResponseBody" style="max-height:280px; overflow:auto;"></pre>
+        <div class="lang-tabs tryit-tabs tryit-resptabs" id="tryItRespTabs">
+          <div class="lang-tab active" data-resptab="body" id="tryItRespTabBtnBody">Body</div>
+          <div class="lang-tab" data-resptab="headers" id="tryItRespTabBtnHeaders">Headers<span class="trytab-count" id="tryItRespHeadersCount" style="display:none;">0</span></div>
+          <div class="lang-tab" data-resptab="tests" id="tryItRespTabBtnTests">Test Results<span class="trytab-count" id="tryItRespTestsCount" style="display:none;">0</span></div>
+        </div>
+        <div class="tryit-tabpanel active" id="tryItRespBodyPanel">
+          <pre class="code-block tryit-editor-pre" id="tryItResponseBody" style="max-height:280px; overflow:auto;"></pre>
+        </div>
+        <div class="tryit-tabpanel" id="tryItRespHeadersPanel">
+          <div id="tryItRespHeadersTable"></div>
+        </div>
+        <div class="tryit-tabpanel" id="tryItRespTestsPanel">
+          <div id="tryItRespTestsList" class="tryit-tests-list"></div>
+        </div>
       </div>
 
       <!-- Not-documented view: shown INSTEAD of the card above whenever there's
@@ -10052,6 +10081,59 @@ function tryItSetRespSize(text){
   el.textContent = bytes < 1024 ? `${bytes} B` : `${(bytes/1024).toFixed(1)} KB`;
 }
 
+/* ---------- Response tabs: Body / Headers / Test Results ----------
+   Same idea as the request-side tabs, scoped to the result card. Headers
+   and Test Results are only ever populated with real data — synthesized
+   from what this send actually produced (a real fetch's real headers in
+   Live mode, or the one thing we can honestly say about a simulated
+   response: what content type its documented body is) — never guessed. */
+function activateTryItRespTab(name){
+  document.querySelectorAll('#tryItRespTabs [data-resptab]').forEach(btn=>{
+    btn.classList.toggle('active', btn.getAttribute('data-resptab') === name);
+  });
+  document.getElementById('tryItRespBodyPanel').classList.toggle('active', name === 'body');
+  document.getElementById('tryItRespHeadersPanel').classList.toggle('active', name === 'headers');
+  document.getElementById('tryItRespTestsPanel').classList.toggle('active', name === 'tests');
+}
+document.getElementById('tryItRespTabs').addEventListener('click', (e)=>{
+  const btn = e.target.closest('[data-resptab]');
+  if(btn) activateTryItRespTab(btn.getAttribute('data-resptab'));
+});
+
+function renderTryItResponseHeaders(headersObj){
+  const entries = Object.entries(headersObj||{});
+  const countEl = document.getElementById('tryItRespHeadersCount');
+  countEl.textContent = String(entries.length);
+  countEl.style.display = entries.length ? '' : 'none';
+  const tableEl = document.getElementById('tryItRespHeadersTable');
+  tableEl.innerHTML = entries.length ? `
+    <div class="tryit-headers-table">
+      <div class="tryit-headers-thead" style="grid-template-columns:1fr 2fr;"><span>Key</span><span>Value</span></div>
+      ${entries.map(([k,v])=>`<div class="tryit-headers-trow" style="grid-template-columns:1fr 2fr;">
+        <span class="tryit-headers-tkey">${escapeHtml(k)}</span>
+        <span class="tryit-headers-tval">${escapeHtml(String(v))}</span>
+      </div>`).join('')}
+    </div>` : `<div class="hint">No response headers available for this send.</div>`;
+}
+
+function renderTryItTestResults(tests){
+  const countEl = document.getElementById('tryItRespTestsCount');
+  const passCount = tests.filter(t=>t.pass).length;
+  countEl.textContent = `${passCount}/${tests.length}`;
+  countEl.style.display = tests.length ? '' : 'none';
+  const listEl = document.getElementById('tryItRespTestsList');
+  listEl.innerHTML = tests.map(t=>`
+    <div class="tryit-test-row ${t.pass?'pass':'fail'}">
+      <span class="tryit-test-ic">${t.pass?'✓':'✕'}</span>
+      <div><div class="tryit-test-name">${escapeHtml(t.name)}</div>${t.detail?`<div class="tryit-test-detail">${escapeHtml(t.detail)}</div>`:''}</div>
+    </div>`).join('');
+}
+
+// Reset to the Body tab every time a fresh result comes in, same as
+// Postman focusing Body after a new send rather than leaving you on
+// whatever tab a previous response happened to leave active.
+function tryItResetRespTabs(){ activateTryItRespTab('body'); }
+
 function tryItUpdateBodyGutter(){
   const ta = document.getElementById('tryItBodyInput');
   const gutter = document.getElementById('tryItBodyGutter');
@@ -10315,6 +10397,7 @@ function openTryItModal(proj, ep){
 
   document.getElementById('tryItResult').style.display = 'none';
   document.getElementById('tryItEmptyState').style.display = '';
+  tryItResetRespTabs();
   const sendBtnInit = document.getElementById('tryItSend');
   sendBtnInit.disabled = false;
   sendBtnInit.classList.remove('loading');
@@ -10826,6 +10909,16 @@ function sendTryIt(){
       const parsed = matched.value ? tryParseJson(matched.value) : { ok:false };
       bodyEl.textContent = parsed.ok ? JSON.stringify(parsed.value, null, 2) : (matched.value || 'No example body documented for this response.');
       tryItSetRespSize(bodyEl.textContent);
+      tryItResetRespTabs();
+      // The only response header this app can honestly claim without a real
+      // network call: the content type implied by the documented body being
+      // JSON. Everything else about a simulated response is intentionally
+      // left unshown rather than invented.
+      renderTryItResponseHeaders(parsed.ok ? { 'Content-Type': 'application/json' } : {});
+      renderTryItTestResults([
+        { name: `Status code is ${matched.code}`, pass: true, detail: 'From the documented example for this scenario.' },
+        { name: 'Response has a body', pass: !!(bodyEl.textContent && bodyEl.textContent.trim()), detail: null },
+      ]);
       if(matchKind === 'picked') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
       else if(matchKind === 'condition') matchNoteEl.textContent = `Matched scenario: ${matched.name} — condition ${describeCondition(conditionMatch.condition)} was true for this request`;
       else if(matchKind === 'exact' && matched.name !== 'Default') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
@@ -10936,6 +11029,7 @@ async function sendTryItLive(proj, ep, typedBody){
       body: JSON.stringify({ projectId: proj.id, endpointId: ep.id, environmentId: state.env, pathParams, queryParams, headers: headersObj, body: typedBody }),
     });
     const data = await res.json().catch(()=>({}));
+    tryItResetRespTabs();
     if(!res.ok){
       codeEl.textContent = String(res.status);
       codeEl.className = 'code-pill ' + respClass(res.status);
@@ -10943,6 +11037,10 @@ async function sendTryItLive(proj, ep, typedBody){
       bodyEl.textContent = data.error || 'The live request failed.';
       latencyEl.textContent = '';
       tryItSetRespSize(bodyEl.textContent);
+      renderTryItResponseHeaders(data.headers || {});
+      renderTryItTestResults([
+        { name: 'Status code is 2xx', pass: false, detail: `Actually received ${res.status}.` },
+      ]);
     } else {
       codeEl.textContent = String(data.status);
       codeEl.className = 'code-pill ' + respClass(data.status);
@@ -10950,6 +11048,12 @@ async function sendTryItLive(proj, ep, typedBody){
       bodyEl.textContent = typeof data.body === 'string' ? data.body : JSON.stringify(data.body, null, 2);
       tryItSetRespSize(bodyEl.textContent);
       latencyEl.textContent = `🔴 Live response from ${envMeta(state.env).label} · ${data.latencyMs} ms — not simulated`;
+      renderTryItResponseHeaders(data.headers || {});
+      renderTryItTestResults([
+        { name: 'Status code is 2xx', pass: data.status >= 200 && data.status < 300, detail: `Received ${data.status}.` },
+        { name: 'Response time is below 1000ms', pass: data.latencyMs < 1000, detail: `Actual: ${data.latencyMs} ms.` },
+        { name: 'Response has a body', pass: !!(bodyEl.textContent && bodyEl.textContent.trim()), detail: null },
+      ]);
     }
     resultEl.style.display = '';
     document.getElementById('tryItEmptyState').style.display = 'none';
