@@ -184,16 +184,33 @@ async function reencryptOrganisation(organisation) {
   return { projects: projectsTouched, orgWorkspace: true };
 }
 
-// A project is visible in full only to its owner. For everyone else in the
-// same organisation, we strip it down: only `public` endpoints survive, and
-// attachments (which are project-level, not per-endpoint) only survive if the
-// project itself is `public`. Different organisation => caller never sees the
-// row at all (filtered out in SQL before this runs).
-function projectForViewer(row, viewerId, data) {
+// A project is visible in full only to its owner, OR to someone holding a
+// named project_access grant (see server/projectAccess.js) — a grant means
+// "share the whole project with this person," same as an owner would see it,
+// gated only by `_readonly` (view-only grants can't be saved back) and
+// `_grantedEnvironments` (which of the project's environments this person may
+// actually use in Try It/Live Mode/promotion views — enforced at THOSE call
+// sites, not here, since endpoints themselves aren't per-environment).
+// Everyone else in the same organisation gets the old stripped-down view:
+// only `public` endpoints survive, and attachments/diagram (project-level,
+// not per-endpoint) only survive if the whole project is public. Different
+// organisation => caller never sees the row at all (filtered out in SQL).
+function projectForViewer(row, viewerId, data, grant) {
   data = data || {};
   const isOwner = row.owner_id === viewerId;
   if (isOwner) {
     return { ...data, id: row.id, visibility: row.visibility, _owned: true };
+  }
+  if (grant) {
+    const envs = Array.isArray(grant.environments) ? grant.environments : [];
+    return {
+      ...data,
+      id: row.id,
+      visibility: row.visibility,
+      _owned: false,
+      _readonly: grant.permission !== 'edit',
+      _grantedEnvironments: envs.includes('*') ? 'all' : envs,
+    };
   }
   const endpoints = Array.isArray(data.endpoints)
     ? data.endpoints.filter((ep) => ep && ep.visibility === 'public')
@@ -208,8 +225,9 @@ function projectForViewer(row, viewerId, data) {
 }
 
 // GET /api/workspace — everything the signed-in user should see: their own
-// projects (untouched) + any project from their organisation that has public
-// content, plus the shared org-level environments/audit log/history/presets.
+// projects (untouched), any project from their organisation that has public
+// content, plus any project shared with them directly via project_access,
+// plus the shared org-level environments/audit log/history/presets.
 router.get('/', async (req, res) => {
   try {
     const userId = req.authUser.sub;
@@ -225,23 +243,28 @@ router.get('/', async (req, res) => {
     // `data` is encrypted, so we can't ask Postgres to peek inside it with a
     // jsonb path EXISTS check — but `has_public_endpoint` is a plaintext
     // column kept in sync on every write (see computeHasPublicEndpoint()),
-    // so the WHERE clause itself now excludes every fully-private project
-    // that isn't the caller's own, instead of fetching and decrypting all of
-    // them just to discard most in projectForViewer() afterwards. This is
-    // the fix for GET /api/workspace decrypting an org's entire project set
-    // on every dashboard load.
+    // so the WHERE clause itself excludes every fully-private, non-granted
+    // project that isn't the caller's own, instead of fetching and decrypting
+    // all of them just to discard most in projectForViewer() afterwards.
+    // The LEFT JOIN both pulls in this user's own grants (pa.user_id = $1 in
+    // the WHERE) AND carries the grant's environments/permission along for
+    // projectForViewer to apply — one query instead of an N+1 per project.
     const { rows } = await pool.query(
-      `SELECT id, owner_id, organisation, visibility, name, data, data_enc
-       FROM projects
-       WHERE owner_id = $1
-          OR (organisation = $2 AND (visibility = 'public' OR has_public_endpoint))`,
+      `SELECT p.id, p.owner_id, p.organisation, p.visibility, p.name, p.data, p.data_enc,
+              pa.environments AS grant_environments, pa.permission AS grant_permission
+       FROM projects p
+       LEFT JOIN project_access pa ON pa.project_id = p.id AND pa.user_id = $1
+       WHERE p.owner_id = $1
+          OR pa.user_id = $1
+          OR (p.organisation = $2 AND (p.visibility = 'public' OR p.has_public_endpoint))`,
       [userId, org]
     );
 
     const projects = {};
     rows.forEach((row) => {
       const data = decryptProjectData(row);
-      projects[row.id] = projectForViewer(row, userId, data);
+      const grant = row.grant_permission ? { environments: row.grant_environments, permission: row.grant_permission } : null;
+      projects[row.id] = projectForViewer(row, userId, data, grant);
     });
 
     const wsResult = await pool.query(
