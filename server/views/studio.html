@@ -1638,6 +1638,21 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-icon-btn:hover{ color:var(--text); border-color:var(--border-strong); }
 .tryit-icon-btn.active{ color:var(--accent); border-color:var(--accent); }
 
+/* Body tab toolbar: "raw ▾  JSON ▾ ......... Beautify", matching Postman's
+   own row above its body editor. The two type pills are read-only (this
+   app documents one fixed content type per endpoint, same reasoning as the
+   Authorization tab's Type pill) — Beautify is the one real action here. */
+.tryit-body-toolbar{ display:flex; align-items:center; gap:6px; margin-bottom:8px; }
+.tryit-body-type-pill{
+  display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:600; color:var(--text-dim);
+  background:var(--surface-2); border:1px solid var(--border); border-radius:6px; padding:4px 8px; cursor:default;
+}
+.tryit-body-toolbar-spacer{ flex:1; }
+.tryit-body-beautify{
+  font-size:11.5px; font-weight:600; color:var(--accent); background:none; border:none; cursor:pointer; padding:4px 6px;
+}
+.tryit-body-beautify:hover{ text-decoration:underline; }
+
 /* "Nothing sent yet" empty state, Postman-style. */
 .tryit-empty-state{ display:flex; flex-direction:column; align-items:center; gap:14px; padding:48px 20px; }
 .tryit-empty-link{
@@ -3022,6 +3037,12 @@ pre.json-raw{ max-height:360px; margin:0; }
 
     <div class="tryit-tabpanel" id="tryItBodyPanel">
       <div id="tryItScenarioPicker" class="resp-pill-row" style="margin:0 0 10px;"></div>
+      <div class="tryit-body-toolbar">
+        <div class="tryit-body-type-pill" title="This endpoint's request body is documented as raw JSON — not switchable here">raw <span class="tryit-auth-type-caret">▾</span></div>
+        <div class="tryit-body-type-pill" title="This endpoint's request body is documented as raw JSON — not switchable here">JSON <span class="tryit-auth-type-caret">▾</span></div>
+        <div class="tryit-body-toolbar-spacer"></div>
+        <button type="button" class="tryit-body-beautify" id="tryItBeautifyBtn">Beautify</button>
+      </div>
       <div class="tryit-editor">
         <div class="tryit-editor-gutter" id="tryItBodyGutter">1</div>
         <textarea id="tryItBodyInput" class="tryit-editor-input" style="width:100%; min-height:110px; font-family:var(--mono); font-size:12px; resize:vertical;" spellcheck="false"></textarea>
@@ -10862,6 +10883,19 @@ document.getElementById('tryItRespWrap').addEventListener('click', ()=>{
 });
 document.getElementById('tryItEmptyGetSuccess').addEventListener('click', ()=>{
   document.getElementById('tryItSend').click();
+});
+document.getElementById('tryItBeautifyBtn').addEventListener('click', ()=>{
+  const ta = document.getElementById('tryItBodyInput');
+  const bodyErrEl = document.getElementById('tryItBodyErr');
+  const parsed = tryParseJson(ta.value);
+  if(!parsed.ok){
+    bodyErrEl.textContent = "Can't beautify — this isn't valid JSON.";
+    bodyErrEl.style.display = '';
+    return;
+  }
+  bodyErrEl.style.display = 'none';
+  ta.value = JSON.stringify(parsed.value, null, 2);
+  tryItUpdateBodyGutter();
 });
 
 /* Resolves the response a given (named) request scenario would produce: a
