@@ -1348,6 +1348,17 @@ body.tryit-standalone #tryItModal{
   position:fixed; inset:56px 0 0 0; background:var(--bg); backdrop-filter:none; -webkit-backdrop-filter:none;
   align-items:flex-start; justify-content:center; padding:40px clamp(16px,4vw,56px); overflow-y:auto;
 }
+/* Collection sidebar (standalone Try It tab only) pushes the request panel
+   over rather than sitting on top of it — same split-pane layout Postman
+   itself uses between its collection tree and the request builder. */
+body.tryit-standalone #tryItSidebar{ display:flex; }
+body.tryit-standalone #tryItModal{ inset:56px 0 0 280px; padding:32px clamp(16px,3vw,48px); }
+/* The Doc→Condition→Token→…→Response flow strip is a nice contextual aid in
+   the small floating dialog opened from inside a doc page, but next to a
+   full Postman-style collection sidebar + tab strip it reads as a leftover
+   decoration that doesn't belong to either design language — so it's hidden
+   here, not in the floating dialog. */
+body.tryit-standalone .tryit-flow{ display:none; }
 /* Widened from a 760px centered column (which left large dead margins on
    anything wider than a laptop screen) to fill most of the tab, and given
    its own card chrome (background/border/shadow) instead of blending flat
@@ -1646,6 +1657,40 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-cookies-link:hover{ color:var(--text-dim); }
 .tryit-resp-history{ font-size:11px; font-weight:600; color:var(--text-faint); background:none; border:1px solid var(--border); border-radius:6px; padding:3px 8px; cursor:pointer; }
 .tryit-resp-history:hover{ color:var(--text-dim); border-color:var(--border-strong); }
+
+/* ---------- Standalone Try It collection sidebar ----------
+   Only ever shown in the full-tab Try It page (body.tryit-standalone), never
+   in the floating dialog — see the display:flex override above. Built from
+   the same allProjects()/viewEndpoints() data the docs sidebar itself uses,
+   so it's never a second source of truth for what endpoints exist. */
+#tryItSidebar{
+  display:none; position:fixed; inset:56px auto 0 0; width:280px; flex-direction:column;
+  background:var(--surface-2); border-right:1px solid var(--border); z-index:5;
+}
+.tryit-sidebar-search{ padding:12px; border-bottom:1px solid var(--border); flex-shrink:0; }
+.tryit-sidebar-search input{
+  width:100%; background:var(--surface); border:1px solid var(--border); border-radius:7px;
+  color:var(--text); font-size:12px; padding:7px 10px;
+}
+.tryit-sidebar-list{ flex:1; overflow-y:auto; padding:8px; }
+.tryit-sidebar-proj{ margin-bottom:2px; }
+.tryit-sidebar-proj-head{
+  display:flex; align-items:center; gap:6px; padding:7px 8px; border-radius:6px; cursor:pointer;
+  font-size:11.5px; font-weight:700; color:var(--text-dim);
+}
+.tryit-sidebar-proj-head:hover{ background:var(--surface); }
+.tryit-sidebar-proj-caret{ font-size:9px; color:var(--text-faint); transition:transform .15s; flex-shrink:0; }
+.tryit-sidebar-proj.collapsed .tryit-sidebar-proj-caret{ transform:rotate(-90deg); }
+.tryit-sidebar-proj.collapsed .tryit-sidebar-eps{ display:none; }
+.tryit-sidebar-ep{
+  display:flex; align-items:center; gap:8px; padding:6px 8px 6px 22px; border-radius:6px; cursor:pointer;
+  font-size:12px; color:var(--text-dim);
+}
+.tryit-sidebar-ep:hover{ background:var(--surface); color:var(--text); }
+.tryit-sidebar-ep.active{ background:var(--accent-soft); color:var(--accent); }
+.tryit-sidebar-ep-method{ font-size:9.5px; font-weight:800; text-transform:uppercase; width:34px; flex-shrink:0; }
+.tryit-sidebar-ep-name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tryit-sidebar-empty{ padding:16px; font-size:11.5px; color:var(--text-faint); text-align:center; }
 .tryit-headers-row{ display:flex; align-items:baseline; gap:10px; padding:7px 0; border-bottom:1px solid var(--border); font-size:12px; }
 .tryit-headers-row:last-child{ border-bottom:none; }
 .tryit-headers-key{ flex:0 0 38%; font-family:var(--mono); font-weight:700; color:var(--text); word-break:break-all; }
@@ -2871,6 +2916,13 @@ pre.json-raw{ max-height:360px; margin:0; }
   </div>
 </div>
 
+
+<div id="tryItSidebar">
+  <div class="tryit-sidebar-search">
+    <input type="text" id="tryItSidebarSearch" placeholder="Search endpoints">
+  </div>
+  <div class="tryit-sidebar-list" id="tryItSidebarList"></div>
+</div>
 
 <div class="modal-overlay" id="tryItModal">
   <div class="modal">
@@ -10029,10 +10081,81 @@ document.getElementById('tryItTabs').addEventListener('click', (e)=>{
   if(btn) activateTryItTab(btn.getAttribute('data-trytab'));
 });
 
+/* ---------- Standalone Try It collection sidebar ----------
+   Postman-style: one collapsible group per project ("collection"), one row
+   per endpoint. Only ever visible in the standalone Try It tab (see the
+   body.tryit-standalone CSS) — built from the same allProjects()/
+   viewEndpoints() data the real docs sidebar uses, so it's never a second
+   source of truth for what endpoints exist. Clicking a row swaps
+   tryItContext in place via openTryItModal() instead of navigating, so nothing
+   about the tab (scroll position, the rest of the sidebar) resets. */
+let tryItSidebarCollapsed = new Set();
+
+function renderTryItSidebar(filterText){
+  const listEl = document.getElementById('tryItSidebarList');
+  if(!listEl) return;
+  const q = (filterText||'').trim().toLowerCase();
+  const activeEpId = tryItContext ? tryItContext.ep.id : null;
+
+  const html = allProjects().map(proj=>{
+    const eps = viewEndpoints(proj).filter(ep=>{
+      if(!q) return true;
+      return (ep.path||'').toLowerCase().includes(q) || (ep.name||'').toLowerCase().includes(q) || proj.name.toLowerCase().includes(q);
+    });
+    if(!eps.length) return '';
+    const collapsed = tryItSidebarCollapsed.has(proj.id);
+    return `<div class="tryit-sidebar-proj${collapsed?' collapsed':''}" data-proj-id="${escapeHtml(proj.id)}">
+      <div class="tryit-sidebar-proj-head" data-toggle-proj="${escapeHtml(proj.id)}">
+        <span class="tryit-sidebar-proj-caret">▾</span><span>${escapeHtml(proj.name)}</span>
+      </div>
+      <div class="tryit-sidebar-eps">
+        ${eps.map(ep=>`<div class="tryit-sidebar-ep${ep.id===activeEpId?' active':''}" data-ep-id="${escapeHtml(ep.id)}" data-proj-id="${escapeHtml(proj.id)}">
+          <span class="tryit-sidebar-ep-method" style="color:var(--${methodClass(ep.method)});">${escapeHtml((ep.method||'').toUpperCase())}</span>
+          <span class="tryit-sidebar-ep-name">${escapeHtml(ep.name || ep.path)}</span>
+        </div>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  listEl.innerHTML = html || `<div class="tryit-sidebar-empty">No endpoints match "${escapeHtml(filterText||'')}"</div>`;
+}
+
+document.getElementById('tryItSidebarSearch').addEventListener('input', (e)=>{
+  renderTryItSidebar(e.target.value);
+});
+
+document.getElementById('tryItSidebarList').addEventListener('click', (e)=>{
+  const toggleHead = e.target.closest('[data-toggle-proj]');
+  if(toggleHead){
+    const pid = toggleHead.getAttribute('data-toggle-proj');
+    if(tryItSidebarCollapsed.has(pid)) tryItSidebarCollapsed.delete(pid); else tryItSidebarCollapsed.add(pid);
+    renderTryItSidebar(document.getElementById('tryItSidebarSearch').value);
+    return;
+  }
+  const epRow = e.target.closest('[data-ep-id]');
+  if(epRow){
+    const proj = state.projects[epRow.getAttribute('data-proj-id')];
+    const ep = proj && viewEndpoints(proj).find(e2=>e2.id===epRow.getAttribute('data-ep-id'));
+    if(!proj || !ep || ep.id === (tryItContext && tryItContext.ep.id)) return;
+    state.selected = { type:'endpoint', id: ep.id, tryIt:false };
+    history.replaceState(null, '', buildTryItUrl(ep));
+    openTryItModal(proj, ep);
+    document.getElementById('tryItModal').scrollTop = 0;
+  }
+});
+
 function openTryItModal(proj, ep){
   tryItContext = { proj, ep, generatedToken: null };
   resetTryItFlow();
   renderTryItAuthPanel(proj, ep);
+
+  // Keep the collection sidebar's active row in sync, whether this call came
+  // from a deep link's auto-open or from clicking a different endpoint in
+  // the sidebar itself.
+  if(document.body.classList.contains('tryit-standalone')){
+    const searchEl = document.getElementById('tryItSidebarSearch');
+    renderTryItSidebar(searchEl ? searchEl.value : '');
+  }
 
   document.getElementById('tryItMethodBadge').className = 'badge badge-lg ' + methodClass(ep.method);
   document.getElementById('tryItMethodBadge').textContent = ep.method;
