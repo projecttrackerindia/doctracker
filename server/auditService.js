@@ -46,7 +46,7 @@ async function recordAuditEvent(authUser, req, fields = {}) {
       resourceId ? String(resourceId).slice(0, 200) : null,
       entityName ? String(entityName).slice(0, 300) : null,
       projectName ? String(projectName).slice(0, 300) : null,
-      details ? String(details).slice(0, 1000) : null,
+      details ? (typeof details === 'string' ? details : JSON.stringify(details)).slice(0, 1000) : null,
       apiName,
       environment,
       req && req.ip ? String(req.ip).slice(0, 64) : null,
