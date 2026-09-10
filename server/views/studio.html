@@ -1764,6 +1764,18 @@ body.tryit-standalone #tryItClose{ display:none; }
    fabricated. Same simulated-from-docs philosophy as the response matcher. */
 .tryit-auth-empty{ padding:16px; border-radius:10px; border:1px dashed var(--border-strong); color:var(--text-dim); font-size:12.5px; line-height:1.6; }
 .tryit-auth-card{ border:1px solid var(--border); border-radius:10px; background:var(--surface-2); padding:14px; }
+/* Type row + "Configure New Token" label — same structural language as
+   Postman's own Authorization tab (a Type selector above a boxed config
+   panel), just read-only: the type is whatever's documented in Project
+   Settings → Authentication, not something Try It can itself switch. */
+.tryit-auth-type-row{ display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+.tryit-auth-type-row label{ font-size:11px; font-weight:700; color:var(--text-faint); text-transform:uppercase; letter-spacing:.3px; flex-shrink:0; }
+.tryit-auth-type-pill{
+  display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; color:var(--text);
+  background:var(--surface); border:1px solid var(--border); border-radius:7px; padding:6px 10px; cursor:default;
+}
+.tryit-auth-type-caret{ font-size:9px; color:var(--text-faint); }
+.tryit-auth-card-label{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--text-faint); margin-bottom:10px; }
 .tryit-auth-head{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px; }
 .tryit-auth-endpoint{ font-family:var(--mono); font-size:12px; color:var(--text-dim); }
 .tryit-auth-desc{ font-size:12px; color:var(--text-faint); margin:6px 0 12px; line-height:1.6; }
@@ -10013,7 +10025,14 @@ function renderTryItAuthPanel(proj, ep){
   }
   tabBtn.style.display = '';
   panel.innerHTML = `
+    <div class="tryit-auth-type-row">
+      <label>Type</label>
+      <div class="tryit-auth-type-pill" title="Fixed by what's documented under Project Settings → Authentication — not switchable here">
+        ${escapeHtml(proj.auth.type)} <span class="tryit-auth-type-caret">▾</span>
+      </div>
+    </div>
     <div class="tryit-auth-card">
+      <div class="tryit-auth-card-label">Configure New Token</div>
       <div class="tryit-auth-head">
         <span class="badge ${methodClass(proj.auth.method||'POST')}">${escapeHtml(proj.auth.method||'POST')}</span>
         <span class="tryit-auth-endpoint">${escapeHtml(proj.auth.path)}</span>
