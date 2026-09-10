@@ -7957,7 +7957,9 @@ function renderEndpointDoc(main, proj, ep){
         // pill showing the same flat accent dot regardless of what it documents.
         const matched = responseScenarios.find(s=>s.name===name);
         const accentVar = matched ? respColorVar(matched.code) : '--accent';
-        return `<div class="resp-pill${i===0?' active':''}" data-scenario-pick="${escapeHtml(name)}" style="--pill-accent:var(${accentVar});"><span class="dot" style="background:var(${accentVar});"></span><span class="mono" style="font-weight:700;">${escapeHtml(name)}</span></div>`;
+        const reqScenario = requestScenarios.find(s=>s.name===name);
+        const condLabel = reqScenario && reqScenario.condition ? describeCondition(reqScenario.condition) : '';
+        return `<div class="resp-pill${i===0?' active':''}" data-scenario-pick="${escapeHtml(name)}" style="--pill-accent:var(${accentVar});" ${condLabel?`title="Condition: ${escapeHtml(condLabel)}"`:''}><span class="dot" style="background:var(${accentVar});"></span><span class="mono" style="font-weight:700;">${escapeHtml(name)}</span>${condLabel?`<span class="mono" style="font-size:10px;color:var(--text-faint);margin-left:6px;">${escapeHtml(condLabel)}</span>`:''}</div>`;
       }).join('')}
     </div>` : '';
 
@@ -8479,7 +8481,104 @@ let builderReqExamples = [];
 
 function newParamRow(){ return { id:uid(), name:'', type:'String', required:false, example:'', description:'' }; }
 function newResponseBlock(code){ return { id:uid(), code: code || 200, description:'', fields:[], example:'', examples:[] }; }
-function newExampleRow(){ return { id:uid(), name:'', value:'' }; }
+function newExampleRow(){ return { id:uid(), name:'', value:'', condition:null }; }
+
+/* ---------- Condition-based scenario matching ----------
+   A named request scenario can optionally carry a `condition` instead of (or
+   in addition to) relying on its `value` for exact-match. condition shape:
+     { field: "amount", op: "lt"|"lte"|"gt"|"gte"|"eq"|"neq"|"between", value: 100 }
+   or, for "between": { field, op:"between", min, max }.
+   `field` is a dot-path into the submitted JSON body ("amount",
+   "customer.amount"). Numeric comparisons coerce both sides with Number();
+   eq/neq fall back to string comparison when either side isn't numeric, so a
+   condition on a non-numeric field (e.g. currency === "INR") still works. */
+const CONDITION_OPS = [
+  { id:'lt',      label:'<' },
+  { id:'lte',     label:'<=' },
+  { id:'gt',      label:'>' },
+  { id:'gte',     label:'>=' },
+  { id:'eq',      label:'==' },
+  { id:'neq',     label:'!=' },
+  { id:'between', label:'between' },
+];
+function conditionOpLabel(op){ const m = CONDITION_OPS.find(o=>o.id===op); return m ? m.label : op; }
+
+function getByPath(obj, path){
+  if(obj == null || !path) return undefined;
+  return path.split('.').reduce((acc,key)=> (acc && typeof acc === 'object') ? acc[key] : undefined, obj);
+}
+
+// Human-readable summary for scenario pills / match notes / the checklist —
+// e.g. "amount < 100" or "amount between 100 and 500".
+function describeCondition(cond){
+  if(!cond || !cond.field || !cond.op) return '';
+  if(cond.op === 'between') return `${cond.field} between ${cond.min} and ${cond.max}`;
+  return `${cond.field} ${conditionOpLabel(cond.op)} ${cond.value}`;
+}
+
+// Returns true/false, or null when the field is missing from the submitted
+// body (treated as "condition not applicable", never as a false-positive match).
+function evaluateCondition(cond, body){
+  if(!cond || !cond.field || !cond.op || body == null || typeof body !== 'object') return null;
+  const raw = getByPath(body, cond.field);
+  if(raw === undefined) return null;
+  const num = Number(raw);
+  const isNum = raw !== '' && raw !== null && !Number.isNaN(num);
+  if(cond.op === 'between'){
+    const min = Number(cond.min), max = Number(cond.max);
+    if(!isNum || Number.isNaN(min) || Number.isNaN(max)) return null;
+    return num >= min && num <= max;
+  }
+  const target = cond.value;
+  const targetNum = Number(target);
+  const bothNumeric = isNum && target !== '' && target != null && !Number.isNaN(targetNum);
+  switch(cond.op){
+    case 'lt':  return bothNumeric ? num < targetNum : null;
+    case 'lte': return bothNumeric ? num <= targetNum : null;
+    case 'gt':  return bothNumeric ? num > targetNum : null;
+    case 'gte': return bothNumeric ? num >= targetNum : null;
+    case 'eq':  return bothNumeric ? num === targetNum : String(raw) === String(target);
+    case 'neq': return bothNumeric ? num !== targetNum : String(raw) !== String(target);
+    default: return null;
+  }
+}
+
+// Finds every documented request scenario whose condition evaluates true
+// against `body`. Used by the Try It matcher (narrowest-range wins on
+// overlap) and by the doc-side scenario picker to explain a match.
+function matchConditionScenarios(requestScenarios, body){
+  return requestScenarios.filter(s => s.condition && evaluateCondition(s.condition, body) === true);
+}
+
+// When more than one condition matches (overlapping ranges — a documentation
+// gap), prefer the one with the tightest bound so results stay deterministic
+// instead of "whichever was declared first". Falls back to declaration order.
+// Drops a condition that's incomplete (no field, or no comparison value(s))
+// so a half-filled form never gets saved as a silently-broken rule that
+// matches nothing. Coerces the numeric-looking value fields to Number so
+// evaluateCondition doesn't have to re-parse strings from storage.
+function sanitizeCondition(cond){
+  if(!cond || !cond.field || !String(cond.field).trim() || !cond.op) return undefined;
+  const field = String(cond.field).trim();
+  if(cond.op === 'between'){
+    if(cond.min === '' || cond.min === undefined || cond.max === '' || cond.max === undefined) return undefined;
+    return { field, op:'between', min:Number(cond.min), max:Number(cond.max) };
+  }
+  if(cond.value === '' || cond.value === undefined) return undefined;
+  const n = Number(cond.value);
+  return { field, op:cond.op, value: Number.isNaN(n) ? cond.value : n };
+}
+
+function narrowestConditionMatch(matches){
+  if(matches.length <= 1) return matches[0] || null;
+  const width = s=>{
+    const c = s.condition;
+    if(c.op === 'between') return Number(c.max) - Number(c.min);
+    if(c.op === 'eq') return 0;
+    return Infinity; // open-ended (<, <=, >, >=) is the least specific
+  };
+  return matches.slice().sort((a,b)=> width(a) - width(b))[0];
+}
 
 /* ---------- Named example variants (request body & per-response) ---------- */
 // Renders a compact list of "name + JSON" cards into containerEl for the given
@@ -8490,17 +8589,41 @@ function renderExampleCards(containerEl, examples, onChange){
     containerEl.innerHTML = `<div class="example-empty-hint">No additional examples yet.</div>`;
     return;
   }
-  containerEl.innerHTML = examples.map((ex,i)=>`
+  containerEl.innerHTML = examples.map((ex,i)=>{
+    const cond = ex.condition || null;
+    const hasCond = !!cond;
+    return `
     <div class="example-card" data-ex-id="${ex.id}">
       <div class="example-card-head">
         <span class="ex-index">#${i+2}</span>
-        <input type="text" data-exf="name" value="${escapeHtml(ex.name)}" placeholder="e.g. Subscription renewal">
+        <input type="text" data-exf="name" value="${escapeHtml(ex.name)}" placeholder="e.g. Minimum Payment Amount">
         <button type="button" class="dyn-del-btn icon" data-del-ex="${ex.id}">✕</button>
       </div>
       <div class="example-card-body">
         <textarea data-exf="value" class="mono" placeholder='{ "amount": 49900 }'>${escapeHtml(ex.value)}</textarea>
       </div>
-    </div>`).join('');
+      <div class="example-condition-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-top:1px solid var(--border);">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);white-space:nowrap;">
+          <input type="checkbox" data-cond-toggle ${hasCond?'checked':''}> Match by condition
+        </label>
+        <div class="example-condition-fields" style="display:${hasCond?'flex':'none'};align-items:center;gap:6px;flex-wrap:wrap;">
+          <input type="text" data-condf="field" value="${cond?escapeHtml(cond.field||''):''}" placeholder="field, e.g. amount" style="width:130px;">
+          <select data-condf="op" style="width:auto;">
+            ${CONDITION_OPS.map(o=>`<option value="${o.id}" ${cond&&cond.op===o.id?'selected':''}>${o.label}</option>`).join('')}
+          </select>
+          <span data-cond-single style="display:${cond&&cond.op==='between'?'none':'inline-flex'};">
+            <input type="text" data-condf="value" value="${cond&&cond.value!==undefined?escapeHtml(String(cond.value)):''}" placeholder="value, e.g. 100" style="width:100px;">
+          </span>
+          <span data-cond-between style="display:${cond&&cond.op==='between'?'inline-flex':'none'};gap:6px;">
+            <input type="text" data-condf="min" value="${cond&&cond.min!==undefined?escapeHtml(String(cond.min)):''}" placeholder="min" style="width:70px;">
+            <input type="text" data-condf="max" value="${cond&&cond.max!==undefined?escapeHtml(String(cond.max)):''}" placeholder="max" style="width:70px;">
+          </span>
+        </div>
+      </div>
+      <div class="example-condition-hint" style="padding:0 12px 8px;font-size:11px;color:var(--text-faint);display:${hasCond?'block':'none'};">
+        Try It selects this scenario whenever the submitted request's <b data-cond-summary-field>${cond?escapeHtml(cond.field||''):''}</b> satisfies this rule — the JSON above is still shown as the documented example, but no longer needs to match byte-for-byte.
+      </div>
+    </div>`;}).join('');
 
   containerEl.querySelectorAll('[data-exf]').forEach(inp=>{
     inp.addEventListener('input', ()=>{
@@ -8516,6 +8639,36 @@ function renderExampleCards(containerEl, examples, onChange){
       const idx = examples.findIndex(e=>e.id===id);
       if(idx > -1) examples.splice(idx, 1);
       renderExampleCards(containerEl, examples, onChange);
+      if(onChange) onChange();
+    });
+  });
+  containerEl.querySelectorAll('[data-cond-toggle]').forEach(cb=>{
+    cb.addEventListener('change', ()=>{
+      const card = cb.closest('[data-ex-id]');
+      const ex = examples.find(e=>e.id===card.getAttribute('data-ex-id'));
+      if(!ex) return;
+      if(cb.checked){ ex.condition = ex.condition || { field:'', op:'lt', value:'' }; }
+      else { ex.condition = null; }
+      renderExampleCards(containerEl, examples, onChange);
+      if(onChange) onChange();
+    });
+  });
+  containerEl.querySelectorAll('[data-condf]').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      const card = inp.closest('[data-ex-id]');
+      const ex = examples.find(e=>e.id===card.getAttribute('data-ex-id'));
+      if(!ex || !ex.condition) return;
+      const f = inp.getAttribute('data-condf');
+      ex.condition[f] = inp.value;
+      if(f === 'op'){
+        const isBetween = inp.value === 'between';
+        card.querySelector('[data-cond-single]').style.display = isBetween ? 'none' : 'inline-flex';
+        card.querySelector('[data-cond-between]').style.display = isBetween ? 'inline-flex' : 'none';
+      }
+      if(f === 'field'){
+        const summaryEl = card.querySelector('[data-cond-summary-field]');
+        if(summaryEl) summaryEl.textContent = inp.value;
+      }
       if(onChange) onChange();
     });
   });
@@ -8820,7 +8973,7 @@ function openManualModal(epId){
       fields:(r.fields||[]).map(f=>({id:uid(), name:f.name||'', type:normalizeTypeLabel(f.type), required:!!f.required, example: f.example!==undefined?String(f.example):'', description:f.description||''})),
       examples:(r.examples||[]).map(ex=>({id:uid(), name:ex.name||'', value:ex.value||''})),
     }));
-    builderReqExamples = (ep.requestBody && ep.requestBody.examples || []).map(ex=>({id:uid(), name:ex.name||'', value:ex.value||''}));
+    builderReqExamples = (ep.requestBody && ep.requestBody.examples || []).map(ex=>({id:uid(), name:ex.name||'', value:ex.value||'', condition: ex.condition ? {...ex.condition} : null}));
 
     document.getElementById('mBody').value = (ep.requestBody && ep.requestBody.example) || '';
   } else {
@@ -9520,7 +9673,7 @@ function gatherFormAsEndpoint(){
       ? {
           example: document.getElementById('mBody').value.trim(),
           fields: cleanRows(builderParams),
-          examples: builderReqExamples.filter(ex=>ex.name.trim() && ex.value.trim()).map(ex=>({ name:ex.name.trim(), value:ex.value.trim() })),
+          examples: builderReqExamples.filter(ex=>ex.name.trim() && ex.value.trim()).map(ex=>({ name:ex.name.trim(), value:ex.value.trim(), condition: sanitizeCondition(ex.condition) })),
         } : null,
     responses: builderResponses.map(r=>({
       code: parseInt(r.code,10) || 200,
@@ -9613,7 +9766,8 @@ function openTryItModal(proj, ep){
     scenarioPickerEl.innerHTML = namedRequestExamples.map((s,i)=>{
       const matchedResp = responseScenariosForPicker.find(rs=>rs.name.trim().toLowerCase()===s.name.trim().toLowerCase());
       const accentVar = matchedResp ? respColorVar(matchedResp.code) : '--accent';
-      return `<div class="resp-pill${i===0?' active':''}" data-scenario-name="${escapeHtml(s.name)}" style="--pill-accent:var(${accentVar});"><span class="dot" style="background:var(${accentVar});"></span><span class="mono" style="font-weight:700;">${escapeHtml(s.name)}</span></div>`;
+      const condLabel = s.condition ? describeCondition(s.condition) : '';
+      return `<div class="resp-pill${i===0?' active':''}" data-scenario-name="${escapeHtml(s.name)}" style="--pill-accent:var(${accentVar});" ${condLabel?`title="Condition: ${escapeHtml(condLabel)}"`:''}><span class="dot" style="background:var(${accentVar});"></span><span class="mono" style="font-weight:700;">${escapeHtml(s.name)}</span>${condLabel?`<span class="mono" style="font-size:10px;color:var(--text-faint);margin-left:6px;">${escapeHtml(condLabel)}</span>`:''}</div>`;
     }).join('');
     scenarioPickerEl.style.display = namedRequestExamples.length > 1 ? '' : 'none';
     bodyInputEl.value = namedRequestExamples[0].value;
@@ -9702,7 +9856,7 @@ function tryItRequestScenarios(ep){
   if(!rb) return [];
   const list = [];
   if(rb.example && rb.example.trim()) list.push({ name:'Default', value:rb.example });
-  (rb.examples||[]).forEach(ex=>{ if(ex.name && ex.value) list.push({ name:ex.name, value:ex.value }); });
+  (rb.examples||[]).forEach(ex=>{ if(ex.name && ex.value) list.push({ name:ex.name, value:ex.value, condition: ex.condition||null }); });
   return list;
 }
 
@@ -9850,7 +10004,7 @@ function sendTryIt(){
 
     const responseScenarios = tryItResponseScenarios(ep);
     let matched = null;
-    let matchKind = null; // 'picked' | 'exact' | 'documented' — every one of these means the response shown is real documentation, never a guess.
+    let matchKind = null; // 'picked' | 'condition' | 'exact' | 'documented' — every one of these means the response shown is real documentation, never a guess.
 
     // Closest documented request scenario by field diff — no longer used to
     // pick a response (see below), only kept to explain, in the "Not
@@ -9880,7 +10034,24 @@ function sendTryIt(){
       if(picked){ matched = picked; matchKind = 'picked'; }
     }
 
-    // 2) Otherwise, an exact match against a named request example → use the
+    // 2) Otherwise, check every documented scenario that carries a condition
+    //    (e.g. "amount < 100") against the actual submitted body. This is
+    //    what makes the match dynamic instead of requiring the typed body to
+    //    be byte-for-byte identical to a stored example — changing the
+    //    amount now changes which scenario applies, per the documented rule,
+    //    not per a fixed JSON blob. Overlapping conditions (a doc gap) are
+    //    resolved deterministically by picking the narrowest range.
+    let conditionMatch = null;
+    if(!matched && typedBody !== null){
+      const condMatches = matchConditionScenarios(requestScenarios, typedBody);
+      conditionMatch = narrowestConditionMatch(condMatches);
+      if(conditionMatch){
+        const condResp = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === conditionMatch.name.trim().toLowerCase());
+        if(condResp){ matched = condResp; matchKind = 'condition'; }
+      }
+    }
+
+    // 3) Otherwise, an exact match against a named request example → use the
     //    response scenario that shares that name, if one's documented.
     if(!matched && typedBody !== null){
       const exactReq = requestScenarios.find(s=>{ const p = tryParseJson(s.value); return p.ok && deepEqualJson(p.value, typedBody); });
@@ -9890,7 +10061,7 @@ function sendTryIt(){
       }
     }
 
-    // 3) An endpoint with NO request-body scenarios documented at all (e.g. a
+    // 4) An endpoint with NO request-body scenarios documented at all (e.g. a
     //    plain GET) has nothing for a request to be checked against — its one
     //    documented response IS the documentation, not a guess among options.
     //    This is the ONLY remaining fallback; it deliberately does not apply
@@ -9913,6 +10084,7 @@ function sendTryIt(){
       const parsed = matched.value ? tryParseJson(matched.value) : { ok:false };
       bodyEl.textContent = parsed.ok ? JSON.stringify(parsed.value, null, 2) : (matched.value || 'No example body documented for this response.');
       if(matchKind === 'picked') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
+      else if(matchKind === 'condition') matchNoteEl.textContent = `Matched scenario: ${matched.name} — condition ${describeCondition(conditionMatch.condition)} was true for this request`;
       else if(matchKind === 'exact' && matched.name !== 'Default') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
       else matchNoteEl.textContent = '';
       latencyEl.textContent = `Simulated from documented example · ${Math.round(180 + Math.random()*140)} ms`;
@@ -10149,7 +10321,7 @@ async function runAllTryItScenarios(){
   resultsEl.style.display = '';
   resultsEl.innerHTML = requestScenarios.map(s=>`
     <div class="tryit-run-all-row" data-run-row="${escapeHtml(s.name)}" style="--item-accent:var(--border-strong);">
-      <span class="tryit-run-all-name">${escapeHtml(s.name)}</span>
+      <span class="tryit-run-all-name">${escapeHtml(s.name)}${s.condition?`<span class="mono" style="font-size:10px;color:var(--text-faint);margin-left:6px;">${escapeHtml(describeCondition(s.condition))}</span>`:''}</span>
       <span class="tryit-run-all-status"><span class="env-skel-bar" style="width:60px; height:9px;"></span></span>
     </div>`).join('');
 
