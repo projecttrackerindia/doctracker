@@ -1671,13 +1671,19 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-tabs-row .tryit-tabs{ margin:0; flex:1; min-width:0; }
 .tryit-cookies-link{ font-size:11.5px; font-weight:600; color:var(--text-faint); background:none; border:none; cursor:pointer; white-space:nowrap; flex-shrink:0; }
 .tryit-cookies-link:hover{ color:var(--text-dim); }
-.tryit-history-wrap{ position:relative; }
-.tryit-resp-history{ font-size:11px; font-weight:600; color:var(--text-faint); background:none; border:1px solid var(--border); border-radius:6px; padding:3px 8px; cursor:pointer; display:inline-flex; align-items:center; gap:5px; }
-.tryit-resp-history:hover, .tryit-resp-history.active{ color:var(--text-dim); border-color:var(--border-strong); }
+.tryit-history-wrap{ position:relative; flex-shrink:0; }
+.tryit-resp-history{
+  font-size:11px; font-weight:600; color:var(--text-faint); background:var(--surface-2);
+  border:1px solid var(--border); border-radius:7px; padding:5px 10px; cursor:pointer;
+  display:inline-flex; align-items:center; gap:6px; transition:color .12s, border-color .12s;
+}
+.tryit-history-ic{ font-size:12px; line-height:1; opacity:.85; }
+.tryit-resp-history:hover, .tryit-resp-history.active{ color:var(--text); border-color:var(--border-strong); background:var(--surface); }
 .tryit-history-count{
-  font-size:9.5px; font-weight:700; color:var(--accent); background:var(--accent-soft);
+  font-size:9.5px; font-weight:700; color:var(--text-faint); background:var(--surface); border:1px solid var(--border);
   border-radius:8px; padding:1px 6px; line-height:1.4;
 }
+.tryit-resp-history.active .tryit-history-count, .tryit-history-count:not(:empty){ color:var(--accent); background:var(--accent-soft); border-color:transparent; }
 .tryit-history-panel{
   position:absolute; top:calc(100% + 6px); left:0; z-index:30; width:320px; max-height:340px; overflow-y:auto;
   background:var(--surface); border:1px solid var(--border); border-radius:10px;
@@ -1755,6 +1761,7 @@ body.tryit-standalone #tryItClose{ display:none; }
   font-size:12px; border-bottom:1px solid var(--border);
 }
 .tryit-headers-trow:last-child{ border-bottom:none; }
+.tryit-headers-trow:not(.ghost):hover{ background:var(--surface); }
 .tryit-headers-trow.disabled .tryit-table-input{ opacity:.4; text-decoration:line-through; }
 .tryit-headers-trow.ghost .tryit-table-input{ font-style:italic; }
 .tryit-headers-trow.error{ background:var(--danger-bg,rgba(224,62,62,.08)); border-radius:6px; box-shadow:inset 0 0 0 1px var(--danger,#e03e3e); }
@@ -1808,12 +1815,17 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-resptabs{ margin:10px 0 10px; max-width:320px; }
 .tryit-tests-list{ display:flex; flex-direction:column; gap:6px; }
 .tryit-test-row{
-  display:flex; align-items:flex-start; gap:8px; padding:8px 10px; border-radius:8px;
-  border:1px solid var(--border); background:var(--surface-2); font-size:12px;
+  display:flex; align-items:flex-start; gap:9px; padding:9px 11px; border-radius:8px;
+  border:1px solid var(--border); border-left:3px solid var(--border); background:var(--surface-2); font-size:12px;
 }
-.tryit-test-ic{ flex-shrink:0; font-weight:700; font-size:12px; line-height:1.4; }
-.tryit-test-row.pass .tryit-test-ic{ color:var(--post,#35c491); }
-.tryit-test-row.fail .tryit-test-ic{ color:var(--danger,#e03e3e); }
+.tryit-test-row.pass{ border-left-color:var(--post,#35c491); }
+.tryit-test-row.fail{ border-left-color:var(--danger,#e03e3e); }
+.tryit-test-ic{
+  flex-shrink:0; font-weight:700; font-size:11px; line-height:1; width:18px; height:18px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center; margin-top:1px;
+}
+.tryit-test-row.pass .tryit-test-ic{ color:var(--post,#35c491); background:rgba(53,196,145,.14); }
+.tryit-test-row.fail .tryit-test-ic{ color:var(--danger,#e03e3e); background:rgba(224,62,62,.14); }
 .tryit-test-name{ color:var(--text); font-weight:600; }
 .tryit-test-detail{ color:var(--text-faint); font-size:11px; margin-top:2px; }
 
@@ -1839,7 +1851,11 @@ body.tryit-standalone #tryItClose{ display:none; }
   border:1px solid var(--border); border-left:3px solid var(--item-accent, var(--border-strong));
   border-radius:10px; background:var(--surface-2); padding:16px; animation:docPanelFadeIn .22s ease;
 }
-.tryit-result-head{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+.tryit-result-head{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+.tryit-result-head .code-pill{ margin-right:2px; }
+.tryit-result-head .hint{ color:var(--text-faint); }
+.tryit-result-head .hint:not(:empty)::before{ content:'·'; margin-right:6px; color:var(--border-strong); font-weight:700; }
+.tryit-match-note{ max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tryit-section-label{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--text-faint); margin:0 0 6px; display:flex; align-items:center; justify-content:space-between; }
 .tryit-copy-btn{ font-size:10.5px; font-weight:600; color:var(--text-faint); background:none; border:1px solid var(--border); border-radius:6px; padding:2px 8px; cursor:pointer; text-transform:none; letter-spacing:0; }
 .tryit-copy-btn:hover{ color:var(--text); border-color:var(--border-strong); }
@@ -3182,26 +3198,32 @@ pre.json-raw{ max-height:360px; margin:0; }
            this endpoint genuinely documents (see sendTryIt()). -->
       <div class="tryit-result-card" id="tryItResultCard" style="display:none;">
         <div class="tryit-result-head">
-          <div class="tryit-history-wrap" id="tryItHistoryWrap">
-            <button type="button" class="tryit-resp-history" id="tryItRespHistory" title="Past sends for this endpoint, this session">History <span class="tryit-history-count" id="tryItHistoryCount" style="display:none;">0</span> ▾</button>
-            <div class="tryit-history-panel" id="tryItHistoryPanel" style="display:none;"></div>
-          </div>
           <span class="code-pill" id="tryItStatusCode"></span>
           <span class="hint" id="tryItLatency" style="margin:0;"></span>
           <span class="hint" id="tryItRespSize" style="margin:0;"></span>
-          <span class="hint" id="tryItMatchNote" style="margin:0;"></span>
+          <span class="hint tryit-match-note" id="tryItMatchNote" style="margin:0;"></span>
           <div class="tryit-resp-actions">
             <button type="button" class="tryit-icon-btn" id="tryItRespCopy" title="Copy response">⧉</button>
             <button type="button" class="tryit-icon-btn" id="tryItRespWrap" title="Toggle line wrap">↔</button>
           </div>
         </div>
-        <div class="lang-tabs tryit-tabs tryit-resptabs" id="tryItRespTabs">
-          <div class="lang-tab active" data-resptab="body" id="tryItRespTabBtnBody">Body</div>
-          <div class="lang-tab" data-resptab="headers" id="tryItRespTabBtnHeaders">Headers<span class="trytab-count" id="tryItRespHeadersCount" style="display:none;">0</span></div>
-          <div class="lang-tab" data-resptab="tests" id="tryItRespTabBtnTests">Test Results<span class="trytab-count" id="tryItRespTestsCount" style="display:none;">0</span></div>
+        <div class="tryit-tabs-row">
+          <div class="lang-tabs tryit-tabs tryit-resptabs" id="tryItRespTabs">
+            <div class="lang-tab active" data-resptab="body" id="tryItRespTabBtnBody">Body</div>
+            <div class="lang-tab" data-resptab="headers" id="tryItRespTabBtnHeaders">Headers<span class="trytab-count" id="tryItRespHeadersCount" style="display:none;">0</span></div>
+            <div class="lang-tab" data-resptab="tests" id="tryItRespTabBtnTests">Test Results<span class="trytab-count" id="tryItRespTestsCount" style="display:none;">0</span></div>
+          </div>
+          <div class="tryit-history-wrap" id="tryItHistoryWrap">
+            <button type="button" class="tryit-resp-history" id="tryItRespHistory" title="Past sends for this endpoint, this session">
+              <span class="tryit-history-ic">↻</span>History<span class="tryit-history-count" id="tryItHistoryCount" style="display:none;">0</span>
+            </button>
+            <div class="tryit-history-panel" id="tryItHistoryPanel" style="display:none;"></div>
+          </div>
         </div>
         <div class="tryit-tabpanel active" id="tryItRespBodyPanel">
-          <pre class="code-block tryit-editor-pre" id="tryItResponseBody" style="max-height:280px; overflow:auto;"></pre>
+          <div class="tryit-editor">
+            <pre class="code-block tryit-editor-pre" id="tryItResponseBody" style="max-height:280px; overflow:auto;"></pre>
+          </div>
         </div>
         <div class="tryit-tabpanel" id="tryItRespHeadersPanel">
           <div id="tryItRespHeadersTable"></div>
@@ -10799,7 +10821,7 @@ function tryItResponseScenarios(ep){
    (PUT /request-history), and loaded on boot; this is the first thing that
    actually writes and reads it. Newest entry first, capped so it can't grow
    forever across a long session. */
-const TRYIT_HISTORY_MAX = 25;
+const TRYIT_HISTORY_MAX = 10;
 
 function tryItRelativeTime(ts){
   const diffSec = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -10928,6 +10950,7 @@ function restoreTryItHistoryEntry(entry){
     { name: `Status code is ${entry.status}`, pass: true, detail: 'From history — replayed, not re-sent.' },
   ]);
   matchNoteEl.textContent = `Viewing history · sent ${tryItRelativeTime(entry.timestamp)}`;
+  matchNoteEl.title = matchNoteEl.textContent;
   latencyEl.textContent = entry.timeMs ? `Simulated from documented example · ${entry.timeMs} ms` : '';
 }
 
@@ -11120,6 +11143,7 @@ function sendTryIt(){
       else if(matchKind === 'condition') matchNoteEl.textContent = `Matched scenario: ${matched.name} — condition ${describeCondition(conditionMatch.condition)} was true for this request`;
       else if(matchKind === 'exact' && matched.name !== 'Default') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
       else matchNoteEl.textContent = '';
+      matchNoteEl.title = matchNoteEl.textContent;
       const simulatedMs = Math.round(180 + Math.random()*140);
       latencyEl.textContent = `Simulated from documented example · ${simulatedMs} ms`;
       // Force the fade/slide-in to replay on every send, not just the first —
