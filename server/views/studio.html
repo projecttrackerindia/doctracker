@@ -1567,18 +1567,35 @@ body.tryit-standalone #tryItClose{ display:none; }
 .rp-envbanner-v{ font-family:var(--mono); font-weight:700; color:var(--text); margin-left:6px; }
 .rp-envbanner-hint{ font-size:11px; color:var(--text-faint); flex-shrink:0; }
 
-/* "Not explicitly documented" warning in Try It — shown only when the response
-   came from a closest/fallback guess rather than a scenario the request truly
-   matches (see sendTryIt()'s match-transparency logic). Kept visually distinct
-   (amber, not the neutral gray of .hint) so a guess never reads the same as a
-   documented, verified response. */
-.tryit-mismatch{ margin-top:10px; padding:10px 12px; border-radius:10px; border:1px solid var(--put); background:var(--put-bg); }
-.tryit-mismatch-head{ display:flex; align-items:center; gap:7px; font-size:12px; font-weight:700; color:var(--put); }
-.tryit-mismatch-ic{ font-size:13px; }
-.tryit-mismatch-body{ margin-top:6px; font-size:12px; color:var(--text-dim); line-height:1.5; }
-.tryit-mismatch-body .mono{ font-family:var(--mono); }
-.tryit-mismatch-action{ margin-top:8px; padding:5px 10px; font-size:11.5px; font-weight:600; border-radius:7px; border:1px solid var(--put); background:transparent; color:var(--put); cursor:pointer; }
-.tryit-mismatch-action:hover{ background:var(--put-bg); }
+/* "Not documented" empty-state in Try It — shown INSTEAD OF a response
+   whenever the typed/selected request doesn't exactly match a scenario this
+   endpoint actually documents (see sendTryIt()'s strict-match logic). This
+   used to be a warning banner layered under a best-guess response; per
+   explicit direction this app must never fabricate or guess a response —
+   an undocumented request gets no response at all, only a clear call to
+   go document it. Kept visually distinct (amber, not the neutral gray of
+   .hint, and not the verified-response green/status colours) so "nothing
+   is documented for this" can never be confused with an actual answer. */
+.tryit-notdoc{ padding:16px; border-radius:10px; border:1px dashed var(--put); background:var(--put-bg); animation:docPanelFadeIn .22s ease; }
+.tryit-notdoc-head{ display:flex; align-items:center; gap:8px; font-size:13px; font-weight:700; color:var(--put); }
+.tryit-notdoc-ic{ font-size:15px; }
+.tryit-notdoc-body{ margin-top:8px; font-size:12.5px; color:var(--text-dim); line-height:1.6; }
+.tryit-notdoc-body .mono{ font-family:var(--mono); }
+.tryit-notdoc-action{ margin-top:12px; padding:7px 14px; font-size:12px; font-weight:700; border-radius:8px; border:1px solid var(--put); background:var(--put); color:#1a1200; cursor:pointer; }
+.tryit-notdoc-action:hover{ filter:brightness(1.08); }
+.tryit-run-all-status .tryit-inline-edit{ font-size:10.5px; font-weight:700; color:var(--put); background:none; border:none; cursor:pointer; padding:0; text-decoration:underline; }
+
+/* Postman-style Params / Headers / Body tab strip for Try It — reuses the
+   same segmented-control look as .lang-tabs (the code-sample language
+   switcher) so it reads as the same control language rather than a new
+   widget, just scoped under .tryit-tabs so JS can target it without
+   touching the code-sample tabs. */
+.tryit-tabpanel{ display:none; }
+.tryit-tabpanel.active{ display:block; }
+.tryit-headers-row{ display:flex; align-items:baseline; gap:10px; padding:7px 0; border-bottom:1px solid var(--border); font-size:12px; }
+.tryit-headers-row:last-child{ border-bottom:none; }
+.tryit-headers-key{ flex:0 0 38%; font-family:var(--mono); font-weight:700; color:var(--text); word-break:break-all; }
+.tryit-headers-val{ flex:1; min-width:0; font-family:var(--mono); color:var(--text-dim); word-break:break-all; }
 
 /* ---------- Try It redesign: scenario pills, animated send, coloured result
    card, and the "Run all scenarios" checklist. Reuses .resp-pill for the
@@ -2745,29 +2762,39 @@ pre.json-raw{ max-height:360px; margin:0; }
     </div>
     <div class="modal-sub" id="tryItUrlPreview" style="font-family:var(--mono); font-size:11.5px; word-break:break-all;"></div>
 
-    <div class="field" style="margin-top:14px;">
-      <label>Parameters</label>
+    <!-- Postman-collection-style request builder: Params / Headers / Body as
+         tabs of ONE request, not stacked fields — see activateTryItTab().
+         Reuses .lang-tabs (the code-sample language switcher) for the tab
+         strip itself so it's the same control language, not a new widget. -->
+    <div class="lang-tabs tryit-tabs" id="tryItTabs" style="margin-top:14px;">
+      <div class="lang-tab active" data-trytab="params" id="tryItTabBtnParams">Params</div>
+      <div class="lang-tab" data-trytab="headers" id="tryItTabBtnHeaders">Headers</div>
+      <div class="lang-tab" data-trytab="body" id="tryItTabBtnBody" style="display:none;">Body</div>
+    </div>
+
+    <div class="tryit-tabpanel active" id="tryItParamsPanel">
       <div id="tryItParams" style="display:flex; flex-direction:column; gap:8px;"></div>
       <div class="hint" id="tryItNoParams" style="display:none;">This endpoint takes no path or query parameters.</div>
     </div>
 
-    <div class="field" id="tryItBodyField" style="margin-top:14px; display:none;">
-      <label style="display:block; margin-bottom:0;">
-        <span>Request body</span>
-      </label>
-      <div id="tryItScenarioPicker" class="resp-pill-row" style="margin:4px 0 10px;"></div>
+    <div class="tryit-tabpanel" id="tryItHeadersPanel">
+      <div id="tryItHeadersReadonly"></div>
+      <div class="hint" id="tryItNoHeaders" style="display:none;">No headers documented for this endpoint.</div>
+      <div id="tryItLiveHeadersField" style="display:none;">
+        <label style="display:block; margin:10px 0 6px; font-size:11px; color:var(--delete); font-weight:700;">Live request — enter your real values (never saved)</label>
+        <div id="tryItLiveHeaders" style="display:flex; flex-direction:column; gap:8px;"></div>
+        <span class="hint" style="margin-top:4px; display:block;">This app never stores real credentials — only the auth scheme is documented. Fill in the real value here for this one request; nothing you type in this box is saved.</span>
+      </div>
+    </div>
+
+    <div class="tryit-tabpanel" id="tryItBodyPanel">
+      <div id="tryItScenarioPicker" class="resp-pill-row" style="margin:0 0 10px;"></div>
       <textarea id="tryItBodyInput" class="code-block" style="width:100%; min-height:110px; font-family:var(--mono); font-size:12px; resize:vertical;"></textarea>
       <span class="hint" id="tryItBodyErr" style="display:none; color:var(--danger);"></span>
     </div>
 
-    <div class="field" id="tryItLiveHeadersField" style="margin-top:14px; display:none;">
-      <label>Live request headers — enter your real values (never saved)</label>
-      <div id="tryItLiveHeaders" style="display:flex; flex-direction:column; gap:8px;"></div>
-      <span class="hint" style="margin-top:4px;">This app never stores real credentials — only the auth scheme is documented. Fill in the real value here for this one request; nothing you type in this box is saved.</span>
-    </div>
-
     <div style="display:flex; align-items:center; justify-content:space-between; margin:16px 0 8px; flex-wrap:wrap; gap:8px;">
-      <span class="hint" id="tryItHint" style="margin:0;">Uses the response documented for this endpoint — nothing leaves your browser.</span>
+      <span class="hint" id="tryItHint" style="margin:0;">Only shows a response for a request that's actually documented for this endpoint — nothing leaves your browser, and nothing is ever guessed.</span>
       <div style="display:flex; align-items:center; gap:10px;">
         <label id="tryItLiveWrap" style="display:none; align-items:center; gap:6px; font-size:11.5px; font-weight:600; color:var(--delete); cursor:pointer;">
           <input type="checkbox" id="tryItLiveToggle" style="accent-color:var(--delete);">
@@ -2786,18 +2813,25 @@ pre.json-raw{ max-height:360px; margin:0; }
     <div id="tryItResult" style="display:none;">
       <div class="hint" style="margin:0 0 4px;">Request sent</div>
       <pre class="code-block" id="tryItRequestPreview" style="max-height:160px; overflow:auto; margin-bottom:14px;"></pre>
-      <div class="tryit-result-card" id="tryItResultCard">
+
+      <!-- Matched view: shown ONLY when the request exactly matches a scenario
+           this endpoint genuinely documents (see sendTryIt()). -->
+      <div class="tryit-result-card" id="tryItResultCard" style="display:none;">
         <div class="tryit-result-head">
           <span class="code-pill" id="tryItStatusCode"></span>
           <span class="hint" id="tryItLatency" style="margin:0;"></span>
           <span class="hint" id="tryItMatchNote" style="margin:0;"></span>
         </div>
         <pre class="code-block" id="tryItResponseBody" style="max-height:280px; overflow:auto;"></pre>
-        <div class="tryit-mismatch" id="tryItMismatchWarning" style="display:none;">
-          <div class="tryit-mismatch-head"><span class="tryit-mismatch-ic">⚠</span><span>Not explicitly documented</span></div>
-          <div class="tryit-mismatch-body" id="tryItMismatchBody"></div>
-          <button type="button" class="tryit-mismatch-action" id="tryItDocumentScenario">Document this scenario →</button>
-        </div>
+      </div>
+
+      <!-- Not-documented view: shown INSTEAD of the card above whenever there's
+           no exact documented match — never a guessed response, just a clear
+           empty state and a way to go document it. See sendTryIt(). -->
+      <div class="tryit-notdoc" id="tryItNotDocCard" style="display:none;">
+        <div class="tryit-notdoc-head"><span class="tryit-notdoc-ic">✕</span><span>Not documented</span></div>
+        <div class="tryit-notdoc-body" id="tryItNotDocBody"></div>
+        <button type="button" class="tryit-notdoc-action" id="tryItEditInStudio">Edit in Studio →</button>
       </div>
     </div>
 
@@ -9507,6 +9541,23 @@ function gatherFormAsProjectStub(){
 /* ---------- Try it: fill in params, simulate a call, show the documented response ---------- */
 let tryItContext = null;
 
+// Postman-style Params/Headers/Body tab strip — see the .tryit-tabs markup.
+// Body's tab button is hidden entirely (not just an empty panel) when the
+// endpoint has no request body at all, same as a real Postman collection
+// entry wouldn't show a Body tab for a plain GET.
+function activateTryItTab(name){
+  document.querySelectorAll('#tryItTabs [data-trytab]').forEach(btn=>{
+    btn.classList.toggle('active', btn.getAttribute('data-trytab') === name);
+  });
+  document.getElementById('tryItParamsPanel').classList.toggle('active', name === 'params');
+  document.getElementById('tryItHeadersPanel').classList.toggle('active', name === 'headers');
+  document.getElementById('tryItBodyPanel').classList.toggle('active', name === 'body');
+}
+document.getElementById('tryItTabs').addEventListener('click', (e)=>{
+  const btn = e.target.closest('[data-trytab]');
+  if(btn) activateTryItTab(btn.getAttribute('data-trytab'));
+});
+
 function openTryItModal(proj, ep){
   tryItContext = { proj, ep };
 
@@ -9547,7 +9598,6 @@ function openTryItModal(proj, ep){
      is a list of named alternates (e.g. "Amount too low"). Each response can
      carry the same names in its own .examples list — that's how a request
      scenario gets paired to the response it should produce. */
-  const bodyFieldEl = document.getElementById('tryItBodyField');
   const bodyInputEl = document.getElementById('tryItBodyInput');
   const bodyErrEl = document.getElementById('tryItBodyErr');
   const scenarioPickerEl = document.getElementById('tryItScenarioPicker');
@@ -9555,8 +9605,8 @@ function openTryItModal(proj, ep){
 
   const namedRequestExamples = tryItRequestScenarios(ep);
   const responseScenariosForPicker = tryItResponseScenarios(ep);
+  document.getElementById('tryItTabBtnBody').style.display = namedRequestExamples.length ? '' : 'none';
   if(namedRequestExamples.length){
-    bodyFieldEl.style.display = '';
     // Pills instead of a plain <select> — same control language as the doc
     // viewer's own scenario picker, each dot/border coloured off the status
     // code that scenario actually resolves to (see respColorVar below).
@@ -9568,7 +9618,6 @@ function openTryItModal(proj, ep){
     scenarioPickerEl.style.display = namedRequestExamples.length > 1 ? '' : 'none';
     bodyInputEl.value = namedRequestExamples[0].value;
   } else {
-    bodyFieldEl.style.display = 'none';
     scenarioPickerEl.innerHTML = '';
     bodyInputEl.value = '';
   }
@@ -9583,6 +9632,11 @@ function openTryItModal(proj, ep){
   sendBtnInit.classList.remove('loading');
   document.getElementById('tryItSendLabel').textContent = 'Send';
 
+  // Default tab: Body when there's a request body to fill in (the common,
+  // Razorpay-style POST case this whole redesign is about), otherwise
+  // Params, matching what a person actually needs to look at first.
+  activateTryItTab(namedRequestExamples.length ? 'body' : 'params');
+
   // Live mode: only offered at all when an Admin has granted THIS user
   // access to THIS environment (see /api/live-mode/my-access, loaded once at
   // boot into state.liveModeEnvs) — never shown as a dead/disabled control
@@ -9592,22 +9646,43 @@ function openTryItModal(proj, ep){
   const canGoLive = Array.isArray(state.liveModeEnvs) && state.liveModeEnvs.includes(state.env);
   liveWrap.style.display = canGoLive ? 'flex' : 'none';
   liveToggle.checked = false; // always opens back to simulated — never remembers "live" as a default
-  document.getElementById('tryItLiveHeadersField').style.display = 'none';
-  liveToggle.onchange = () => renderTryItLiveHeaders(proj, ep);
+  updateTryItHeadersPanel(proj, ep);
+  liveToggle.onchange = () => {
+    updateTryItHeadersPanel(proj, ep);
+    // Turning Live on means the very next thing this person needs to do is
+    // fill in a real credential — jump them straight to where that input
+    // lives instead of leaving them on whichever tab they happened to be on.
+    if(liveToggle.checked) activateTryItTab('headers');
+  };
 
   document.getElementById('tryItModal').classList.add('show');
 }
 
-/* Populates the "enter your real values" header inputs shown only while Live
-   mode is toggled on. Never pre-filled with a real credential — this app
-   doesn't store one — only with the documented scheme as a placeholder hint,
-   so the person sending the live call supplies it fresh, for this send only. */
-function renderTryItLiveHeaders(proj, ep){
-  const wrap = document.getElementById('tryItLiveHeadersField');
-  const listEl = document.getElementById('tryItLiveHeaders');
+/* Headers tab content — reflects the SAME headerList(proj, ep) used for the
+   cURL/code samples everywhere else in the app, so "documented headers" in
+   Try It is never a second, drifting source of truth. Two states:
+     - simulated (default): read-only Name/Value rows, masked the same way
+       as the rest of the app — this IS the documentation, not an input.
+     - live (toggle on): swaps to editable "enter your real value" inputs,
+       never pre-filled with a real credential since this app doesn't store
+       one, so the person supplies it fresh for this one send only. */
+function updateTryItHeadersPanel(proj, ep){
   const on = document.getElementById('tryItLiveToggle').checked;
-  wrap.style.display = on ? '' : 'none';
+  const readonlyEl = document.getElementById('tryItHeadersReadonly');
+  const noHeadersEl = document.getElementById('tryItNoHeaders');
+  const liveWrap = document.getElementById('tryItLiveHeadersField');
+  const docHeaders = headerList(proj, ep);
+
+  readonlyEl.style.display = on ? 'none' : '';
+  noHeadersEl.style.display = (!on && !docHeaders.length) ? '' : 'none';
+  if(!on){
+    readonlyEl.innerHTML = docHeaders.map(([k,v])=>`
+      <div class="tryit-headers-row"><span class="tryit-headers-key">${escapeHtml(k)}</span><span class="tryit-headers-val">${escapeHtml(v)}</span></div>`).join('');
+  }
+
+  liveWrap.style.display = on ? '' : 'none';
   if(!on) return;
+  const listEl = document.getElementById('tryItLiveHeaders');
   const rows = [];
   if(ep.requestBody) rows.push({ name:'Content-Type', value: ep.contentType || 'application/json', isAuth:false });
   if(proj.auth && proj.auth.headerName) rows.push({ name: proj.auth.headerName, value:'', placeholder: authHeaderValue(proj), isAuth:true });
@@ -9770,14 +9845,17 @@ function sendTryIt(){
     const matchNoteEl = document.getElementById('tryItMatchNote');
     matchNoteEl.textContent = '';
 
+    const notDocCardEl = document.getElementById('tryItNotDocCard');
+    const notDocBodyEl = document.getElementById('tryItNotDocBody');
+
     const responseScenarios = tryItResponseScenarios(ep);
     let matched = null;
-    let matchKind = null; // 'picked' | 'exact' | 'closest' | 'fallback'
+    let matchKind = null; // 'picked' | 'exact' | 'documented' — every one of these means the response shown is real documentation, never a guess.
 
-    // Closest documented request scenario by field diff, computed up front
-    // (regardless of how close it actually is) — used both to pick a
-    // 'closest' match below AND, when the match ends up being only a guess,
-    // to explain exactly which fields made this request not truly documented.
+    // Closest documented request scenario by field diff — no longer used to
+    // pick a response (see below), only kept to explain, in the "Not
+    // documented" state, which documented scenario this request is nearest
+    // to and exactly how it differs. Purely informational.
     let closestRequestScenario = null, closestRequestScore = Infinity;
     if(typedBody !== null && requestScenarios.length){
       requestScenarios.forEach(s=>{
@@ -9802,37 +9880,33 @@ function sendTryIt(){
       if(picked){ matched = picked; matchKind = 'picked'; }
     }
 
+    // 2) Otherwise, an exact match against a named request example → use the
+    //    response scenario that shares that name, if one's documented.
     if(!matched && typedBody !== null){
-      // 2) Otherwise, an exact match against a named request example → use
-      //    the response scenario that shares that name, if one's documented.
       const exactReq = requestScenarios.find(s=>{ const p = tryParseJson(s.value); return p.ok && deepEqualJson(p.value, typedBody); });
-      if(exactReq) matched = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === exactReq.name.trim().toLowerCase());
-      if(matched) matchKind = 'exact';
-
-      // 3) Otherwise, use the closest documented request example's paired
-      //    response, if the match is close enough to be meaningful (not just
-      //    "everything's different"). This is still only a guess — see the
-      //    "Not explicitly documented" warning below, which fires here.
-      if(!matched && closestRequestScenario && closestRequestScore <= 2){
-        const closestResp = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === closestRequestScenario.name.trim().toLowerCase());
-        if(closestResp){ matched = closestResp; matchKind = 'closest'; }
+      if(exactReq){
+        const exactResp = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === exactReq.name.trim().toLowerCase());
+        if(exactResp){ matched = exactResp; matchKind = 'exact'; }
       }
     }
 
-    // 4) Last resort: first documented 2xx response (old default behaviour).
-    if(!matched){
-      const fallback = responseScenarios.find(rs=>String(rs.code)[0]==='2') || responseScenarios[0];
-      if(fallback){ matched = fallback; matchKind = 'fallback'; }
+    // 3) An endpoint with NO request-body scenarios documented at all (e.g. a
+    //    plain GET) has nothing for a request to be checked against — its one
+    //    documented response IS the documentation, not a guess among options.
+    //    This is the ONLY remaining fallback; it deliberately does not apply
+    //    once requestScenarios.length > 0, because at that point a real
+    //    request/response pairing exists and "close enough" is exactly the
+    //    silent-guessing behaviour this was rebuilt to remove.
+    if(!matched && requestScenarios.length === 0){
+      const onlyDocumented = responseScenarios.find(rs=>String(rs.code)[0]==='2') || responseScenarios[0];
+      if(onlyDocumented){ matched = onlyDocumented; matchKind = 'documented'; }
     }
 
     document.getElementById('tryItRequestPreview').textContent = buildTryItResolvedRequestPreview(proj, ep, typedBody);
 
-    if(!matched){
-      codeEl.textContent = '—';
-      codeEl.className = 'code-pill';
-      bodyEl.textContent = 'No response documented for this endpoint yet — add one from Edit.';
-      resultCardEl.style.setProperty('--item-accent', 'var(--border-strong)');
-    } else {
+    if(matched){
+      resultCardEl.style.display = '';
+      notDocCardEl.style.display = 'none';
       codeEl.textContent = String(matched.code);
       codeEl.className = 'code-pill ' + respClass(matched.code);
       resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(matched.code)})`);
@@ -9840,53 +9914,45 @@ function sendTryIt(){
       bodyEl.textContent = parsed.ok ? JSON.stringify(parsed.value, null, 2) : (matched.value || 'No example body documented for this response.');
       if(matchKind === 'picked') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
       else if(matchKind === 'exact' && matched.name !== 'Default') matchNoteEl.textContent = `Matched scenario: ${matched.name}`;
-      else if(matchKind === 'closest') matchNoteEl.textContent = `Closest documented match: ${matched.name}`;
-    }
-
-    // "Not explicitly documented" warning — fires whenever the response shown
-    // is only a guess (closest/fallback), not a scenario this exact request
-    // actually matches. Never silently relabels a partial match as a real one.
-    const mismatchEl = document.getElementById('tryItMismatchWarning');
-    const mismatchBodyEl = document.getElementById('tryItMismatchBody');
-    let showMismatch = false;
-    if(matched && typedBody !== null && matchKind === 'closest' && closestRequestScenario){
-      const p = tryParseJson(closestRequestScenario.value);
-      const diffs = p.ok ? describeJsonDiff(p.value, typedBody) : [];
-      if(diffs.length){
-        showMismatch = true;
-        mismatchBodyEl.innerHTML = `This request doesn't exactly match the "${escapeHtml(closestRequestScenario.name)}" scenario documented for this response — it differs in:
-          <ul style="margin:6px 0 0; padding-left:18px;">
-            ${diffs.map(d=>`<li><span class="mono">${escapeHtml(d.path)}</span> — documented example: <span class="mono">${escapeHtml(d.docLabel)}</span>, you sent: <span class="mono">${escapeHtml(d.sentLabel)}</span></li>`).join('')}
-          </ul>
-          This exact combination hasn't been documented yet, so this response is a best guess, not a verified one.`;
-      }
-    } else if(matched && typedBody !== null && matchKind === 'fallback' && requestScenarios.length){
-      showMismatch = true;
-      mismatchBodyEl.textContent = `No documented request scenario resembles this request closely enough to match with confidence — showing the first documented response as a fallback, not a verified one for this input.`;
-    }
-    if(showMismatch){
-      mismatchEl.style.display = '';
-      document.getElementById('tryItDocumentScenario').onclick = ()=>documentTryItScenario(proj, ep, typedBody);
+      else matchNoteEl.textContent = '';
+      latencyEl.textContent = `Simulated from documented example · ${Math.round(180 + Math.random()*140)} ms`;
+      // Force the fade/slide-in to replay on every send, not just the first —
+      // the animation class never toggles off/on by itself once the element's
+      // already visible, so without this a "Send again" click would just
+      // update the numbers in place with no visual confirmation anything happened.
+      resultCardEl.style.animation = 'none';
+      void resultCardEl.offsetWidth;
+      resultCardEl.style.animation = '';
     } else {
-      mismatchEl.style.display = 'none';
+      // Nothing documented matches this exact request — show NO response at
+      // all (never a guess), just a clear empty state and a way to fix it.
+      resultCardEl.style.display = 'none';
+      notDocCardEl.style.display = '';
+      if(requestScenarios.length === 0){
+        notDocBodyEl.textContent = `This endpoint doesn't have a documented response yet.`;
+      } else if(typedBody === null){
+        notDocBodyEl.textContent = `This endpoint documents ${requestScenarios.length} request scenario${requestScenarios.length===1?'':'s'} with a body — send one of them, or a request that matches one exactly, to see its documented response.`;
+      } else if(closestRequestScenario){
+        const p = tryParseJson(closestRequestScenario.value);
+        const diffs = p.ok ? describeJsonDiff(p.value, typedBody) : [];
+        notDocBodyEl.innerHTML = diffs.length ? `This exact request hasn't been documented. The closest documented scenario is <span class="mono">"${escapeHtml(closestRequestScenario.name)}"</span> — it differs in:
+          <ul style="margin:6px 0 0; padding-left:18px;">
+            ${diffs.map(d=>`<li><span class="mono">${escapeHtml(d.path)}</span> — documented: <span class="mono">${escapeHtml(d.docLabel)}</span>, you sent: <span class="mono">${escapeHtml(d.sentLabel)}</span></li>`).join('')}
+          </ul>` : `This exact request hasn't been documented yet for this endpoint.`;
+      } else {
+        notDocBodyEl.textContent = `This exact request doesn't match any documented scenario for this endpoint.`;
+      }
+      document.getElementById('tryItEditInStudio').onclick = ()=>editInStudioFromTryIt(proj, ep, typedBody, closestRequestScenario);
     }
 
-    latencyEl.textContent = `Simulated from documented example · ${Math.round(180 + Math.random()*140)} ms`;
     resultEl.style.display = '';
-    // Force the fade/slide-in to replay on every send, not just the first —
-    // the animation class never toggles off/on by itself once the element's
-    // already visible, so without this a "Send again" click would just
-    // update the numbers in place with no visual confirmation anything happened.
-    resultCardEl.style.animation = 'none';
-    void resultCardEl.offsetWidth;
-    resultCardEl.style.animation = '';
     sendBtn.disabled = false;
     sendBtn.classList.remove('loading');
     document.getElementById('tryItSendLabel').textContent = 'Send again';
   }, 450);
 }
 
-/* One-level field diff for the Try It "not explicitly documented" warning —
+/* One-level field diff for the Try It "Not documented" empty state —
    deliberately shallow (nested objects/arrays are compared as whole values,
    not key-by-key) since this drives a human-readable summary, not a merge. */
 /* Live mode: an actual outbound HTTP call via the server-side proxy
@@ -9940,7 +10006,8 @@ async function sendTryItLive(proj, ep, typedBody){
   const codeEl = document.getElementById('tryItStatusCode');
   const latencyEl = document.getElementById('tryItLatency');
   document.getElementById('tryItMatchNote').textContent = '';
-  document.getElementById('tryItMismatchWarning').style.display = 'none';
+  document.getElementById('tryItNotDocCard').style.display = 'none';
+  resultCardEl.style.display = '';
 
   // Never echo real credential values back onto the screen, even though they
   // were just sent — same secret-masking strategy used everywhere else.
@@ -10012,17 +10079,32 @@ function buildTryItResolvedRequestPreview(proj, ep, typedBody){
   return lines.join('\n');
 }
 
-/* "Document this scenario" — stashes the request the person actually tried as
-   a one-shot prefill for the endpoint editor (read once and deleted there —
-   see applyTryItPrefillIfAny in editor.html), then opens the editor in its
-   own tab, same as every other edit action in this app. Deliberately never
+/* "Edit in Studio" — the destination for every "Not documented" state in Try
+   It. Stashes the request the person actually tried as a one-shot prefill
+   for the endpoint editor (read once and deleted there — see
+   applyTryItPrefillIfAny in editor.html), then opens the editor in its own
+   tab, same as every other edit action in this app. Deliberately never
    guesses or saves a response: only someone who knows what the real API
    actually returns for this case can document that correctly, which is the
-   whole reason this scenario wasn't already covered. */
-function documentTryItScenario(proj, ep, typedBody){
+   whole reason this scenario wasn't already covered.
+   closestScenario (optional) is whatever the "Not documented" panel found as
+   the nearest existing scenario — when its diff points at a single changed
+   field (e.g. amount), that field drives the prefilled name (e.g.
+   "amount: 10") instead of a generic placeholder, so the new scenario is
+   easy to tell apart in the picker right away. */
+function editInStudioFromTryIt(proj, ep, typedBody, closestScenario){
   try{
+    let name = 'New scenario from Try It';
+    if(closestScenario){
+      const p = tryParseJson(closestScenario.value);
+      const diffs = p.ok ? describeJsonDiff(p.value, typedBody) : [];
+      if(diffs.length === 1) name = `${diffs[0].path}: ${diffs[0].sentLabel}`;
+    }
+    if(name === 'New scenario from Try It' && typedBody && typeof typedBody === 'object' && typedBody.currency){
+      name = `Currency ${typedBody.currency}`;
+    }
     localStorage.setItem(`apiStudio_tryitPrefill_${ep.id}`, JSON.stringify({
-      name: (typedBody && typeof typedBody === 'object' && typedBody.currency) ? `Currency ${typedBody.currency}` : 'New scenario from Try It',
+      name,
       requestJson: JSON.stringify(typedBody, null, 2),
       ts: Date.now(),
     }));
@@ -10034,38 +10116,18 @@ document.getElementById('tryItSend').addEventListener('click', sendTryIt);
 document.getElementById('tryItClose').addEventListener('click', closeTryItModal);
 document.getElementById('tryItModal').addEventListener('click', (e)=>{ if(e.target.id === 'tryItModal') closeTryItModal(); });
 
-/* Resolves the response a given (named) request scenario would produce,
-   using the same priority a real send uses once a scenario is picked
-   (exact name match first) with the same closest/fallback guesses sendTryIt
-   falls back to — factored out here so "Run all scenarios" and a normal
-   single Send stay in agreement instead of drifting into two competing
-   ideas of what a scenario "resolves to". */
-function resolveTryItScenarioResponse(ep, scenarioName, requestValue){
+/* Resolves the response a given (named) request scenario would produce: a
+   documented response scenario with that exact same name, and nothing else.
+   No closest/fallback guessing here either — a request scenario that was
+   documented without a matching response scenario IS "not documented" (it's
+   the whole point of "Run all scenarios" as a documentation-completeness
+   check), not something to paper over with a guess. Factored out here so
+   "Run all scenarios" and a normal single Send stay in agreement about what
+   a scenario "resolves to". */
+function resolveTryItScenarioResponse(ep, scenarioName){
   const responseScenarios = tryItResponseScenarios(ep);
-  const requestScenarios = tryItRequestScenarios(ep);
-  let matched = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === scenarioName.trim().toLowerCase());
-  let matchKind = matched ? 'picked' : null;
-  if(!matched && requestValue){
-    const parsed = tryParseJson(requestValue);
-    if(parsed.ok){
-      let closest = null, closestScore = Infinity;
-      requestScenarios.forEach(s=>{
-        const p = tryParseJson(s.value);
-        if(!p.ok) return;
-        const score = jsonDiffScore(p.value, parsed.value);
-        if(score < closestScore){ closestScore = score; closest = s; }
-      });
-      if(closest && closestScore <= 2){
-        const cr = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === closest.name.trim().toLowerCase());
-        if(cr){ matched = cr; matchKind = 'closest'; }
-      }
-    }
-  }
-  if(!matched){
-    matched = responseScenarios.find(rs=>String(rs.code)[0]==='2') || responseScenarios[0];
-    matchKind = matched ? 'fallback' : null;
-  }
-  return { matched, matchKind };
+  const matched = responseScenarios.find(rs=>rs.name.trim().toLowerCase() === scenarioName.trim().toLowerCase());
+  return { matched, matchKind: matched ? 'picked' : null };
 }
 
 /* "Run all scenarios" — sends every documented request scenario for this
@@ -10075,7 +10137,7 @@ function resolveTryItScenarioResponse(ep, scenarioName, requestValue){
    each scenario one at a time. */
 async function runAllTryItScenarios(){
   if(!tryItContext) return;
-  const { ep } = tryItContext;
+  const { proj, ep } = tryItContext;
   const requestScenarios = tryItRequestScenarios(ep);
   if(!requestScenarios.length) return;
 
@@ -10096,21 +10158,23 @@ async function runAllTryItScenarios(){
   // scenario, rather than a table that just materializes all at once.
   for(const s of requestScenarios){
     await new Promise(r=>setTimeout(r, 220));
-    const { matched, matchKind } = resolveTryItScenarioResponse(ep, s.name, s.value);
+    const { matched } = resolveTryItScenarioResponse(ep, s.name);
     const row = resultsEl.querySelector(`[data-run-row="${CSS.escape(s.name)}"]`);
     if(!row) continue;
     if(!matched){
-      row.querySelector('.tryit-run-all-status').innerHTML = `<span>No response documented</span>`;
+      // A documented request scenario with no matching-named response —
+      // exactly the gap this checklist exists to surface. No guessed status
+      // code here; just the gap and a one-click way to close it.
+      const statusEl = row.querySelector('.tryit-run-all-status');
+      statusEl.innerHTML = `<span class="guess">✕ Not documented</span> <button type="button" class="tryit-inline-edit">Edit →</button>`;
+      statusEl.querySelector('.tryit-inline-edit').onclick = ()=>editInStudioFromTryIt(proj, ep, tryParseJson(s.value).value, null);
       continue;
     }
     const accentVar = respColorVar(matched.code);
     row.style.setProperty('--item-accent', `var(${accentVar})`);
-    const verified = matchKind === 'picked';
-    const statusClass = verified ? 'verified' : 'guess';
-    const statusLabel = verified ? 'Documented' : (matchKind === 'closest' ? 'Closest guess' : 'Fallback guess');
     row.querySelector('.tryit-run-all-status').innerHTML = `
       <span class="code-pill ${respClass(matched.code)}" style="font-size:10.5px; padding:2px 8px;">${escapeHtml(String(matched.code))}</span>
-      <span class="${statusClass}">${verified ? '✓' : '⚠'} ${statusLabel}</span>`;
+      <span class="verified">✓ Documented</span>`;
   }
 
   runBtn.disabled = false;
