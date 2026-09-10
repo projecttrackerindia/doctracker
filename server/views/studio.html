@@ -1719,21 +1719,59 @@ body.tryit-standalone #tryItClose{ display:none; }
    request. */
 .tryit-headers-table{ border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--surface-2); }
 .tryit-headers-thead{
-  display:grid; grid-template-columns:28px 1fr 1.4fr 1fr; gap:10px; padding:7px 10px;
+  display:grid; grid-template-columns:24px 1fr 1.4fr 1fr 22px; gap:8px; padding:7px 10px;
   font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--text-faint);
   background:var(--surface); border-bottom:1px solid var(--border);
 }
 .tryit-headers-trow{
-  display:grid; grid-template-columns:28px 1fr 1.4fr 1fr; gap:10px; padding:7px 10px; align-items:center;
+  position:relative;
+  display:grid; grid-template-columns:24px 1fr 1.4fr 1fr 22px; gap:8px; padding:3px 10px; align-items:center;
   font-size:12px; border-bottom:1px solid var(--border);
 }
 .tryit-headers-trow:last-child{ border-bottom:none; }
-.tryit-headers-trow.disabled .tryit-headers-tkey,
-.tryit-headers-trow.disabled .tryit-headers-tval{ opacity:.4; text-decoration:line-through; }
+.tryit-headers-trow.disabled .tryit-table-input{ opacity:.4; text-decoration:line-through; }
+.tryit-headers-trow.ghost .tryit-table-input{ font-style:italic; }
 .tryit-headers-tkey{ font-family:var(--mono); font-weight:700; color:var(--text); word-break:break-all; }
 .tryit-headers-tval{ font-family:var(--mono); color:var(--text-dim); word-break:break-all; }
 .tryit-headers-tdesc{ color:var(--text-faint); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tryit-headers-check{ accent-color:var(--accent); cursor:pointer; }
+
+/* ---------- Postman-parity editable table cells ----------
+   Shared by the Headers table and the Params/Path-Variables tables: every
+   cell is a real <input>, borderless until hovered/focused so the table
+   reads as a clean grid (like Postman's) rather than a form. */
+.tryit-table-input{
+  width:100%; background:transparent; border:1px solid transparent; border-radius:5px;
+  padding:5px 6px; font-size:12px; color:var(--text); font-family:var(--sans);
+}
+.tryit-table-input.mono{ font-family:var(--mono); }
+.tryit-table-input::placeholder{ color:var(--text-faint); }
+.tryit-table-input:hover{ border-color:var(--border); background:var(--surface); }
+.tryit-table-input:focus{ border-color:var(--accent); background:var(--surface); outline:none; }
+.tryit-table-input[readonly]{ color:var(--text-dim); cursor:default; }
+.tryit-row-delete{
+  opacity:0; width:20px; height:20px; border-radius:5px; border:none; background:transparent;
+  color:var(--text-faint); cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center;
+}
+.tryit-headers-trow:hover .tryit-row-delete{ opacity:1; }
+.tryit-row-delete:hover{ background:var(--danger-bg,rgba(224,62,62,.12)); color:var(--danger,#e03e3e); }
+.tryit-headers-trow.ghost .tryit-row-delete{ visibility:hidden; }
+.tryit-row-lock{ color:var(--text-faint); font-size:11px; text-align:center; }
+.tryit-table-section-label{
+  font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--text-faint);
+  margin:14px 0 6px; }
+.tryit-table-section-label:first-child{ margin-top:0; }
+.tryit-live-banner{
+  margin-top:8px; padding:8px 10px; border-radius:8px; font-size:11.5px; line-height:1.5;
+  color:var(--delete); background:var(--put-bg); border:1px dashed var(--put);
+}
+/* Small count badge on Params/Headers tab buttons, e.g. "Headers 3" — same
+   idea as Postman's grey pill next to a tab with active content. */
+.trytab-count{
+  display:inline-block; margin-left:5px; padding:0 5px; min-width:14px; border-radius:8px;
+  background:var(--accent-soft); color:var(--accent); font-size:10px; font-weight:700; line-height:15px;
+}
+.lang-tab.active .trytab-count{ background:var(--accent); color:var(--accent-ink); }
 
 /* ---------- Try It redesign: scenario pills, animated send, coloured result
    card, and the "Run all scenarios" checklist. Reuses .resp-pill for the
@@ -3008,9 +3046,9 @@ pre.json-raw{ max-height:360px; margin:0; }
          language, not a new widget. -->
     <div class="tryit-tabs-row">
       <div class="lang-tabs tryit-tabs" id="tryItTabs">
-        <div class="lang-tab active" data-trytab="params" id="tryItTabBtnParams">Params</div>
+        <div class="lang-tab active" data-trytab="params" id="tryItTabBtnParams">Params<span class="trytab-count" id="tryItParamsCount" style="display:none;">0</span></div>
         <div class="lang-tab" data-trytab="auth" id="tryItTabBtnAuth" style="display:none;">Authorization</div>
-        <div class="lang-tab" data-trytab="headers" id="tryItTabBtnHeaders">Headers</div>
+        <div class="lang-tab" data-trytab="headers" id="tryItTabBtnHeaders">Headers<span class="trytab-count" id="tryItHeadersCount" style="display:none;">0</span></div>
         <div class="lang-tab" data-trytab="body" id="tryItTabBtnBody" style="display:none;">Body</div>
         <div class="lang-tab" data-trytab="scripts" id="tryItTabBtnScripts">Scripts</div>
         <div class="lang-tab" data-trytab="settings" id="tryItTabBtnSettings">Settings</div>
@@ -3021,18 +3059,12 @@ pre.json-raw{ max-height:360px; margin:0; }
     <div class="tryit-tabpanel" id="tryItAuthPanel"></div>
 
     <div class="tryit-tabpanel active" id="tryItParamsPanel">
-      <div id="tryItParams" style="display:flex; flex-direction:column; gap:8px;"></div>
+      <div id="tryItParams"></div>
       <div class="hint" id="tryItNoParams" style="display:none;">This endpoint takes no path or query parameters.</div>
     </div>
 
     <div class="tryit-tabpanel" id="tryItHeadersPanel">
       <div id="tryItHeadersReadonly"></div>
-      <div class="hint" id="tryItNoHeaders" style="display:none;">No headers documented for this endpoint.</div>
-      <div id="tryItLiveHeadersField" style="display:none;">
-        <label style="display:block; margin:10px 0 6px; font-size:11px; color:var(--delete); font-weight:700;">Live request — enter your real values (never saved)</label>
-        <div id="tryItLiveHeaders" style="display:flex; flex-direction:column; gap:8px;"></div>
-        <span class="hint" style="margin-top:4px; display:block;">This app never stores real credentials — only the auth scheme is documented. Fill in the real value here for this one request; nothing you type in this box is saved.</span>
-      </div>
     </div>
 
     <div class="tryit-tabpanel" id="tryItBodyPanel">
@@ -10137,7 +10169,7 @@ function generateTryItToken(proj, ep){
     document.querySelectorAll('[data-wf-toggle]').forEach(row=>{
       row.addEventListener('click', ()=> row.closest('.tryit-waterfall-step').classList.toggle('open'));
     });
-    updateTryItHeadersPanel(proj, ep);
+    renderTryItHeadersTable();
   }, 500);
 }
 document.getElementById('tryItTabs').addEventListener('click', (e)=>{
@@ -10209,7 +10241,7 @@ document.getElementById('tryItSidebarList').addEventListener('click', (e)=>{
 });
 
 function openTryItModal(proj, ep){
-  tryItContext = { proj, ep, generatedToken: null, disabledHeaders: new Set() };
+  tryItContext = { proj, ep, generatedToken: null, pathRows: [], queryRows: [], headerRows: [] };
   resetTryItFlow();
   renderTryItAuthPanel(proj, ep);
 
@@ -10231,27 +10263,20 @@ function openTryItModal(proj, ep){
   document.getElementById('tryItUrlPreview').textContent =
     `${envMeta(state.env).label} → ${envVarToken(state.env)}${pathWithParams(ep)}${queryString(ep)}`;
 
-  const pathParams = (ep.parameters||[]).filter(p=>p.in==='path');
-  const queryParams = (ep.parameters||[]).filter(p=>!p.in || p.in==='query');
-  const allParams = [...pathParams, ...queryParams];
+  const pathParamDefs = (ep.parameters||[]).filter(p=>p.in==='path');
+  const queryParamDefs = (ep.parameters||[]).filter(p=>!p.in || p.in==='query');
 
-  const paramsEl = document.getElementById('tryItParams');
-  const noParamsEl = document.getElementById('tryItNoParams');
-  if(!allParams.length){
-    paramsEl.innerHTML = '';
-    noParamsEl.style.display = '';
-  } else {
-    noParamsEl.style.display = 'none';
-    paramsEl.innerHTML = allParams.map(p=>`
-      <div>
-        <label style="font-size:11px; color:var(--text-faint); display:flex; gap:6px; margin-bottom:3px;">
-          ${escapeHtml(p.name)}${p.required ? ' <span style="color:var(--danger);">*</span>' : ''}
-          <span class="mono" style="color:var(--text-faint);">${p.in==='path' ? 'path' : 'query'} · ${escapeHtml(p.type||'string')}</span>
-        </label>
-        <input type="text" data-try-param="${escapeHtml(p.name)}" data-try-in="${p.in==='path'?'path':'query'}"
-               value="${escapeHtml(String(exampleValueFor(p.type, p.example)))}" placeholder="${escapeHtml(p.description||'')}">
-      </div>`).join('');
-  }
+  tryItContext.pathRows = pathParamDefs.map(p=>({
+    key: p.name, value: String(exampleValueFor(p.type, p.example)), description: p.description||'', type: p.type||'string',
+  }));
+  tryItContext.queryRows = queryParamDefs.map(p=>({
+    key: p.name, value: String(exampleValueFor(p.type, p.example)), description: p.description||'',
+    type: p.type||'string', enabled:true, required: !!p.required, deletable:false,
+  }));
+  tryItContext.queryRows.push(makeEmptyParamRow());
+
+  document.getElementById('tryItNoParams').style.display = (pathParamDefs.length || queryParamDefs.length) ? 'none' : '';
+  renderTryItParamsPanel();
 
   /* ---- Request body + scenario picker ----
      ep.requestBody.example is the "Default" scenario; ep.requestBody.examples
@@ -10309,9 +10334,14 @@ function openTryItModal(proj, ep){
   const canGoLive = Array.isArray(state.liveModeEnvs) && state.liveModeEnvs.includes(state.env);
   liveWrap.style.display = canGoLive ? 'flex' : 'none';
   liveToggle.checked = false; // always opens back to simulated — never remembers "live" as a default
-  updateTryItHeadersPanel(proj, ep);
+  tryItContext.headerRows = buildInitialHeaderRows(proj, ep);
+  renderTryItHeadersTable();
   liveToggle.onchange = () => {
-    updateTryItHeadersPanel(proj, ep);
+    // Flipping the toggle either way clears any typed value for the secret
+    // (auth) row — this app never carries a real credential across modes,
+    // so re-entering Live always starts that field blank again.
+    tryItContext.headerRows.forEach(r=>{ if(r.isSecret) r.value = ''; });
+    renderTryItHeadersTable();
     // Turning Live on means the very next thing this person needs to do is
     // fill in a real credential — jump them straight to where that input
     // lives instead of leaving them on whichever tab they happened to be on.
@@ -10321,66 +10351,219 @@ function openTryItModal(proj, ep){
   document.getElementById('tryItModal').classList.add('show');
 }
 
-/* Headers tab content — reflects the SAME headerList(proj, ep) used for the
-   cURL/code samples everywhere else in the app, so "documented headers" in
-   Try It is never a second, drifting source of truth. Two states:
-     - simulated (default): read-only Name/Value rows, masked the same way
-       as the rest of the app — this IS the documentation, not an input.
-     - live (toggle on): swaps to editable "enter your real value" inputs,
-       never pre-filled with a real credential since this app doesn't store
-       one, so the person supplies it fresh for this one send only. */
-function updateTryItHeadersPanel(proj, ep){
-  const on = document.getElementById('tryItLiveToggle').checked;
-  const readonlyEl = document.getElementById('tryItHeadersReadonly');
-  const noHeadersEl = document.getElementById('tryItNoHeaders');
-  const liveWrap = document.getElementById('tryItLiveHeadersField');
-  const docHeaders = headerList(proj, ep);
+/* ---------- Headers tab: a single Postman-style editable table ----------
+   One table, always. Rows seed from the SAME headerList(proj, ep) used for
+   the cURL/code samples elsewhere in the app, so "documented headers" is
+   never a second, drifting source of truth — but from there every cell
+   (key/value/description), the checkbox, and an add/delete row are fully
+   live-editable, exactly like a real Postman request.
+     - simulated (Live off): values start as the documented example, masked
+       the same way as the rest of the app; editing them only changes what
+       the "Request sent" preview below shows.
+     - live (toggle on): the exact same table IS the outbound request. The
+       one row tied to this project's auth header is always blanked out
+       when Live turns on — this app never stores a real credential, so
+       that field is supplied fresh for this one send only. */
+function makeEmptyHeaderRow(){ return { key:'', value:'', description:'', enabled:true, deletable:true, isSecret:false, ghost:true }; }
 
-  readonlyEl.style.display = on ? 'none' : '';
-  noHeadersEl.style.display = (!on && !docHeaders.length) ? '' : 'none';
-  if(!on){
-    // Once a token's been generated on the Auth tab, reflect it here (masked)
-    // instead of the generic "Bearer <token>" placeholder — same header row,
-    // now showing what will actually be sent, still never the raw value.
-    const genTok = tryItContext && tryItContext.generatedToken;
-    const disabled = tryItContext ? tryItContext.disabledHeaders : new Set();
-    readonlyEl.innerHTML = docHeaders.length ? `
-      <div class="tryit-headers-table">
-        <div class="tryit-headers-thead"><span></span><span>Key</span><span>Value</span><span>Description</span></div>
-        ${docHeaders.map(([k,v,desc])=>{
-          const shown = (genTok && proj.auth && k === proj.auth.headerName)
-            ? maskSecretValue(v.toLowerCase().startsWith('bearer') ? `Bearer ${genTok}` : genTok)
-            : v;
-          const isOff = disabled.has(k);
-          return `<div class="tryit-headers-trow${isOff?' disabled':''}">
-            <input type="checkbox" class="tryit-headers-check" data-header-toggle="${escapeHtml(k)}" ${isOff?'':'checked'}>
-            <span class="tryit-headers-tkey">${escapeHtml(k)}</span>
-            <span class="tryit-headers-tval">${escapeHtml(shown)}</span>
-            <span class="tryit-headers-tdesc">${escapeHtml(desc||'')}</span>
-          </div>`;
-        }).join('')}
-      </div>` : '';
-  }
-
-  liveWrap.style.display = on ? '' : 'none';
-  if(!on) return;
-  const listEl = document.getElementById('tryItLiveHeaders');
-  const rows = [];
-  if(ep.requestBody) rows.push({ name:'Content-Type', value: ep.contentType || 'application/json', isAuth:false });
-  if(proj.auth && proj.auth.headerName) rows.push({ name: proj.auth.headerName, value:'', placeholder: authHeaderValue(proj), isAuth:true });
-  (ep.headers || (ep.parameters||[]).filter(p=>p.in==='header')).forEach(p=>rows.push({ name:p.name, value: p.example || '', isAuth:false }));
-  listEl.innerHTML = rows.map(h=>`
-    <div>
-      <label style="font-size:11px; color:var(--text-faint); display:block; margin-bottom:3px;">${escapeHtml(h.name)}${h.isAuth ? ' <span style="color:var(--delete);">— your real credential</span>' : ''}</label>
-      <input type="text" data-live-header="${escapeHtml(h.name)}" value="${escapeHtml(h.value)}" placeholder="${escapeHtml(h.placeholder||'')}" style="font-family:var(--mono); font-size:12px; width:100%;">
-    </div>`).join('');
+function buildInitialHeaderRows(proj, ep){
+  const rows = headerList(proj, ep).map(([k,v,desc])=>({
+    key:k, value:v, description:desc||'', enabled:true, deletable:true,
+    isSecret: !!(proj.auth && proj.auth.headerName && k === proj.auth.headerName),
+  }));
+  rows.push(makeEmptyHeaderRow());
+  return rows;
 }
+
+function renderTryItHeadersTable(){
+  if(!tryItContext) return;
+  const rows = tryItContext.headerRows;
+  const tableEl = document.getElementById('tryItHeadersReadonly');
+  const liveOn = document.getElementById('tryItLiveToggle').checked;
+  const genTok = tryItContext.generatedToken;
+  const proj = tryItContext.proj;
+  const realCount = rows.filter(r=>!r.ghost && r.key).length;
+
+  const countBadge = document.getElementById('tryItHeadersCount');
+  countBadge.textContent = String(realCount);
+  countBadge.style.display = realCount ? '' : 'none';
+
+  tableEl.innerHTML = `
+    <div class="tryit-headers-table">
+      <div class="tryit-headers-thead"><span></span><span>Key</span><span>Value</span><span>Description</span><span></span></div>
+      ${rows.map((r,i)=>{
+        const isGhost = !!r.ghost;
+        let shownVal = r.value;
+        if(!isGhost && r.isSecret && !liveOn && genTok){
+          shownVal = maskSecretValue(r.value.toLowerCase().startsWith('bearer') ? `Bearer ${genTok}` : genTok);
+        }
+        return `<div class="tryit-headers-trow${(!isGhost && !r.enabled)?' disabled':''}${isGhost?' ghost':''}" data-row-idx="${i}">
+          ${isGhost ? '<span></span>' : `<input type="checkbox" class="tryit-headers-check" data-hdr-field="enabled" ${r.enabled?'checked':''}>`}
+          <input type="text" class="tryit-table-input mono" data-hdr-field="key" placeholder="${isGhost?'Key':''}" value="${escapeHtml(r.key)}">
+          <input type="text" class="tryit-table-input mono" data-hdr-field="value" placeholder="${isGhost?'Value':(!isGhost && r.isSecret && liveOn ? authHeaderValue(proj) : '')}" value="${escapeHtml(shownVal)}">
+          <input type="text" class="tryit-table-input" data-hdr-field="description" placeholder="${isGhost?'Description':''}" value="${escapeHtml(r.description)}">
+          ${isGhost ? '<span></span>' : '<button type="button" class="tryit-row-delete" data-hdr-del title="Delete header">✕</button>'}
+        </div>`;
+      }).join('')}
+    </div>
+    ${(proj.auth && proj.auth.headerName && liveOn) ? `<div class="tryit-live-banner">This app never stores real credentials — the <span class="mono">${escapeHtml(proj.auth.headerName)}</span> value you type above is used for this one send only, never saved.</div>` : ''}
+  `;
+}
+
+// Collects the headers Try It will actually send: every non-ghost, enabled
+// row with a key, in table order. Used by both the simulated preview and
+// the live-mode send, so there is exactly one place that decides "what
+// headers go out", not three copies of the same filter.
+function collectTryItHeaders(){
+  if(!tryItContext) return [];
+  return tryItContext.headerRows.filter(r=>!r.ghost && r.enabled && r.key.trim());
+}
+
+// Event delegation on the Headers table container: plain edits update state
+// in place (no re-render, so focus/caret position survives typing); adding
+// text to the trailing ghost row promotes it and appends a fresh ghost;
+// the delete button splices a row out entirely.
+document.getElementById('tryItHeadersReadonly').addEventListener('input', (e)=>{
+  const input = e.target.closest('[data-hdr-field]');
+  if(!input || !tryItContext) return;
+  const rowEl = input.closest('[data-row-idx]');
+  const idx = Number(rowEl.getAttribute('data-row-idx'));
+  const field = input.getAttribute('data-hdr-field');
+  const row = tryItContext.headerRows[idx];
+  if(!row) return;
+  const wasGhost = !!row.ghost;
+  row[field] = input.value;
+  if(wasGhost && field === 'key' && input.value.trim()){
+    row.ghost = false;
+    row.deletable = true;
+    if(idx === tryItContext.headerRows.length - 1) tryItContext.headerRows.push(makeEmptyHeaderRow());
+    renderTryItHeadersTable();
+    const fresh = tableRowInput('tryItHeadersReadonly', idx, 'key');
+    if(fresh){ fresh.focus(); fresh.setSelectionRange(fresh.value.length, fresh.value.length); }
+  }
+});
 document.getElementById('tryItHeadersReadonly').addEventListener('change', (e)=>{
-  const cb = e.target.closest('[data-header-toggle]');
+  const cb = e.target.closest('[data-hdr-field="enabled"]');
   if(!cb || !tryItContext) return;
-  const name = cb.getAttribute('data-header-toggle');
-  if(cb.checked) tryItContext.disabledHeaders.delete(name); else tryItContext.disabledHeaders.add(name);
-  cb.closest('.tryit-headers-trow').classList.toggle('disabled', !cb.checked);
+  const idx = Number(cb.closest('[data-row-idx]').getAttribute('data-row-idx'));
+  if(tryItContext.headerRows[idx]) tryItContext.headerRows[idx].enabled = cb.checked;
+  renderTryItHeadersTable();
+});
+document.getElementById('tryItHeadersReadonly').addEventListener('click', (e)=>{
+  const del = e.target.closest('[data-hdr-del]');
+  if(!del || !tryItContext) return;
+  const idx = Number(del.closest('[data-row-idx]').getAttribute('data-row-idx'));
+  tryItContext.headerRows.splice(idx, 1);
+  renderTryItHeadersTable();
+});
+
+// Small helper: after a re-render inside a table container, grab the input
+// for a given row index + field so focus can be restored (e.g. right after
+// a ghost row is promoted and a new one appended below it).
+function tableRowInput(containerId, idx, field){
+  const row = document.querySelector(`#${containerId} [data-row-idx="${idx}"]`);
+  return row ? row.querySelector(`[data-hdr-field="${field}"], [data-param-field="${field}"]`) : null;
+}
+
+/* ---------- Params tab: Path Variables + Query Params, Postman-style ----------
+   Two tables, matching how Postman itself splits these: Path Variables are
+   fixed by the endpoint's own {placeholders} (no checkbox, no delete — you
+   can't "turn off" part of the URL), Query Params are a fully editable,
+   addable/removable, checkbox-toggleable table, same pattern as Headers. */
+function makeEmptyParamRow(){ return { key:'', value:'', description:'', enabled:true, deletable:true, required:false, ghost:true }; }
+
+function renderTryItParamsPanel(){
+  if(!tryItContext) return;
+  const wrap = document.getElementById('tryItParams');
+  const pathRows = tryItContext.pathRows || [];
+  const queryRows = tryItContext.queryRows || [];
+  const enabledCount = pathRows.length + queryRows.filter(r=>!r.ghost && r.enabled && r.key.trim()).length;
+
+  const countBadge = document.getElementById('tryItParamsCount');
+  countBadge.textContent = String(enabledCount);
+  countBadge.style.display = enabledCount ? '' : 'none';
+
+  const pathTableHtml = pathRows.length ? `
+    <div class="tryit-table-section-label">Path Variables</div>
+    <div class="tryit-headers-table">
+      <div class="tryit-headers-thead"><span></span><span>Key</span><span>Value</span><span>Description</span><span></span></div>
+      ${pathRows.map((r,i)=>`
+        <div class="tryit-headers-trow" data-path-idx="${i}">
+          <span class="tryit-row-lock" title="Fixed by the URL">🔒</span>
+          <input type="text" class="tryit-table-input mono" readonly value="${escapeHtml(r.key)}">
+          <input type="text" class="tryit-table-input mono" data-path-field="value" value="${escapeHtml(r.value)}">
+          <input type="text" class="tryit-table-input" data-path-field="description" readonly value="${escapeHtml(r.description)}">
+          <span></span>
+        </div>`).join('')}
+    </div>` : '';
+
+  const queryTableHtml = `
+    <div class="tryit-table-section-label">Query Params</div>
+    <div class="tryit-headers-table">
+      <div class="tryit-headers-thead"><span></span><span>Key</span><span>Value</span><span>Description</span><span></span></div>
+      ${queryRows.length ? queryRows.map((r,i)=>{
+        const isGhost = !!r.ghost;
+        return `<div class="tryit-headers-trow${(!isGhost && !r.enabled)?' disabled':''}${isGhost?' ghost':''}" data-row-idx="${i}">
+          ${isGhost ? '<span></span>' : `<input type="checkbox" class="tryit-headers-check" data-param-field="enabled" ${r.enabled?'checked':''}>`}
+          <input type="text" class="tryit-table-input mono" data-param-field="key" placeholder="${isGhost?'Key':''}" value="${escapeHtml(r.key)}">
+          <input type="text" class="tryit-table-input mono" data-param-field="value" placeholder="${isGhost?'Value':''}" value="${escapeHtml(r.value)}">
+          <input type="text" class="tryit-table-input" data-param-field="description" placeholder="${isGhost?'Description':''}" value="${escapeHtml(r.description)}">
+          ${isGhost ? '<span></span>' : '<button type="button" class="tryit-row-delete" data-param-del title="Delete param">✕</button>'}
+        </div>`;
+      }).join('') : ''}
+    </div>`;
+
+  wrap.innerHTML = pathTableHtml + queryTableHtml;
+}
+
+// Collects what Try It will actually resolve into the URL: path
+// substitutions plus enabled, non-empty query params, in table order.
+function collectTryItParams(){
+  if(!tryItContext) return { pathParams:{}, queryParams:[] };
+  const pathParams = {};
+  (tryItContext.pathRows||[]).forEach(r=>{ pathParams[r.key] = r.value; });
+  const queryParams = (tryItContext.queryRows||[]).filter(r=>!r.ghost && r.enabled && r.key.trim()).map(r=>[r.key, r.value]);
+  return { pathParams, queryParams };
+}
+
+document.getElementById('tryItParams').addEventListener('input', (e)=>{
+  const pathInput = e.target.closest('[data-path-field]');
+  if(pathInput && tryItContext){
+    const idx = Number(pathInput.closest('[data-path-idx]').getAttribute('data-path-idx'));
+    if(tryItContext.pathRows[idx]) tryItContext.pathRows[idx][pathInput.getAttribute('data-path-field')] = pathInput.value;
+    return;
+  }
+  const input = e.target.closest('[data-param-field]');
+  if(!input || !tryItContext) return;
+  const idx = Number(input.closest('[data-row-idx]').getAttribute('data-row-idx'));
+  const field = input.getAttribute('data-param-field');
+  const row = tryItContext.queryRows[idx];
+  if(!row) return;
+  const wasGhost = !!row.ghost;
+  row[field] = input.value;
+  row.error = false;
+  if(wasGhost && field === 'key' && input.value.trim()){
+    row.ghost = false;
+    row.deletable = true;
+    if(idx === tryItContext.queryRows.length - 1) tryItContext.queryRows.push(makeEmptyParamRow());
+    renderTryItParamsPanel();
+    const fresh = tableRowInput('tryItParams', idx, 'key');
+    if(fresh){ fresh.focus(); fresh.setSelectionRange(fresh.value.length, fresh.value.length); }
+  }
+});
+document.getElementById('tryItParams').addEventListener('change', (e)=>{
+  const cb = e.target.closest('[data-param-field="enabled"]');
+  if(!cb || !tryItContext) return;
+  const idx = Number(cb.closest('[data-row-idx]').getAttribute('data-row-idx'));
+  if(tryItContext.queryRows[idx]) tryItContext.queryRows[idx].enabled = cb.checked;
+  renderTryItParamsPanel();
+});
+document.getElementById('tryItParams').addEventListener('click', (e)=>{
+  const del = e.target.closest('[data-param-del]');
+  if(!del || !tryItContext) return;
+  const idx = Number(del.closest('[data-row-idx]').getAttribute('data-row-idx'));
+  tryItContext.queryRows.splice(idx, 1);
+  renderTryItParamsPanel();
 });
 
 /* Named request-body scenarios for an endpoint: "Default" (the main example)
@@ -10495,17 +10678,19 @@ function sendTryIt(){
   setTryItFlowNode('response', null);
   if(tryItHasTokenAuth(proj) && !tryItContext.generatedToken) setTryItFlowNode('header', null);
 
-  // Basic required-field validation before "sending"
-  const inputs = document.querySelectorAll('[data-try-param]');
-  for(const input of inputs){
-    const name = input.getAttribute('data-try-param');
-    const param = (ep.parameters||[]).find(p=>p.name===name);
-    if(param && param.required && !input.value.trim()){
-      input.style.borderColor = 'var(--danger)';
-      toast(`${name} is required`);
+  // Basic required-field validation before "sending" — every path variable
+  // is implicitly required (it's part of the URL), plus any query param
+  // documented as required that's still enabled.
+  for(const row of (tryItContext.pathRows||[])){
+    if(!row.value.trim()){ toast(`${row.key} is required`); return; }
+  }
+  for(const row of (tryItContext.queryRows||[])){
+    if(!row.ghost && row.enabled && row.required && !row.value.trim()){
+      row.error = true;
+      renderTryItParamsPanel();
+      toast(`${row.key} is required`);
       return;
     }
-    input.style.borderColor = '';
   }
 
   // Parse the request body, if this endpoint documents one
@@ -10700,17 +10885,16 @@ async function sendTryItLive(proj, ep, typedBody){
 
   // The auth header is never pre-filled with a real value (this app doesn't
   // store one) — block before even asking for confirmation if it's still empty.
-  const headerInputs = document.querySelectorAll('[data-live-header]');
+  const headerRowsForSend = collectTryItHeaders();
   const headersObj = {};
   const secretHeaderNames = new Set();
   let missingAuth = false;
-  headerInputs.forEach(input=>{
-    const name = input.getAttribute('data-live-header');
-    if(input.placeholder) secretHeaderNames.add(name);
-    if(!input.value.trim() && input.placeholder){ missingAuth = true; input.style.borderColor = 'var(--danger)'; }
-    else { input.style.borderColor = ''; headersObj[name] = input.value; }
+  headerRowsForSend.forEach(r=>{
+    if(r.isSecret) secretHeaderNames.add(r.key);
+    if(r.isSecret && !r.value.trim()) missingAuth = true;
+    else headersObj[r.key] = r.value;
   });
-  if(missingAuth){ toast('Enter your real credential before sending live.'); return; }
+  if(missingAuth){ toast('Enter your real credential before sending live.'); renderTryItHeadersTable(); return; }
 
   if(!state._liveModeConfirmedOnce){
     const ok = await openConfirmModal({
@@ -10725,12 +10909,9 @@ async function sendTryItLive(proj, ep, typedBody){
   sendBtn.disabled = true;
   sendBtn.classList.add('loading');
   document.getElementById('tryItSendLabel').textContent = 'Sending…';
-  const pathParams = {}, queryParams = {};
-  document.querySelectorAll('[data-try-param]').forEach(input=>{
-    const name = input.getAttribute('data-try-param');
-    if(input.getAttribute('data-try-in') === 'path') pathParams[name] = input.value;
-    else queryParams[name] = input.value;
-  });
+  const { pathParams, queryParams: queryParamPairs } = collectTryItParams();
+  const queryParams = {};
+  queryParamPairs.forEach(([k,v])=>{ queryParams[k] = v; });
 
   const resultEl = document.getElementById('tryItResult');
   const resultCardEl = document.getElementById('tryItResultCard');
@@ -10798,27 +10979,23 @@ function describeJsonDiff(documented, sent){
    exactly the same way (no leaking real hosts/secrets just because a request
    was 'sent'). */
 function buildTryItResolvedRequestPreview(proj, ep, typedBody){
-  const pathParams = {};
-  const queryParams = [];
-  document.querySelectorAll('[data-try-param]').forEach(input=>{
-    const name = input.getAttribute('data-try-param');
-    if(input.getAttribute('data-try-in') === 'path') pathParams[name] = input.value;
-    else queryParams.push([name, input.value]);
-  });
+  const { pathParams, queryParams } = collectTryItParams();
   let path = pathWithParams(ep);
   Object.keys(pathParams).forEach(name=>{ path = path.replace(`{${name}}`, encodeURIComponent(pathParams[name] || `{${name}}`)); });
   const qs = queryParams.filter(([,v])=>v).map(([k,v])=>`${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
   const url = `${envVarToken(state.env)}${path}${qs ? '?'+qs : ''}`;
   // Same substitution as the Headers tab: once a token's been generated on
   // the Auth tab, the preview shows what will actually go out (masked), not
-  // the generic placeholder.
+  // the generic placeholder. Reads the SAME editable header rows the
+  // Headers tab shows — this preview is never a second, drifting source of
+  // truth for "what headers go out".
   const genTok = tryItContext && tryItContext.generatedToken;
-  const disabled = tryItContext ? tryItContext.disabledHeaders : new Set();
-  const lines = [`${ep.method} ${url}`, ...headerList(proj, ep).filter(([k])=>!disabled.has(k)).map(([k,v])=>{
-    const shown = (genTok && proj.auth && k === proj.auth.headerName)
-      ? maskSecretValue(v.toLowerCase().startsWith('bearer') ? `Bearer ${genTok}` : genTok)
-      : v;
-    return `${k}: ${shown}`;
+  const liveOn = document.getElementById('tryItLiveToggle').checked;
+  const lines = [`${ep.method} ${url}`, ...collectTryItHeaders().map(r=>{
+    const shown = (r.isSecret && !liveOn && genTok)
+      ? maskSecretValue(r.value.toLowerCase().startsWith('bearer') ? `Bearer ${genTok}` : genTok)
+      : r.value;
+    return `${r.key}: ${shown}`;
   })];
   if(typedBody !== null) lines.push('', JSON.stringify(typedBody, null, 2));
   return lines.join('\n');
