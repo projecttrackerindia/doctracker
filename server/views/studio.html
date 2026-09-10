@@ -1637,6 +1637,70 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-run-all-status.verified{ color:var(--post); }
 .tryit-run-all-status.guess{ color:var(--put); }
 
+/* ---------- Try It flow strip: Doc → Condition → Token → Header → Request →
+   Response as one connected chain, not a marketing stepper. Reuses the exact
+   same status-colour language as the rest of the app (--post=verified/2xx,
+   --put=pending/undocumented, --danger=failed/5xx) so a node's colour means
+   the same thing here it does everywhere else in Try It — no new palette. */
+.tryit-flow{ display:flex; align-items:center; gap:0; margin:14px 0 2px; overflow-x:auto; padding-bottom:2px; }
+.tryit-flow-node{ display:flex; flex-direction:column; align-items:center; gap:5px; flex-shrink:0; min-width:64px; }
+.tryit-flow-dot{
+  width:9px; height:9px; border-radius:50%; background:var(--border-strong); border:2px solid var(--bg-elevated);
+  box-shadow:0 0 0 1px var(--border); transition:background .25s ease, box-shadow .25s ease;
+}
+.tryit-flow-node.done .tryit-flow-dot{ background:var(--post); box-shadow:0 0 0 1px var(--post), 0 0 8px -1px var(--post); }
+.tryit-flow-node.pending .tryit-flow-dot{ background:var(--put); box-shadow:0 0 0 1px var(--put); animation:tryitFlowPulse 1s ease-in-out infinite; }
+.tryit-flow-node.error .tryit-flow-dot{ background:var(--danger); box-shadow:0 0 0 1px var(--danger); }
+.tryit-flow-label{ font-size:9.5px; font-weight:700; letter-spacing:.2px; color:var(--text-faint); white-space:nowrap; }
+.tryit-flow-node.done .tryit-flow-label{ color:var(--post); }
+.tryit-flow-node.pending .tryit-flow-label{ color:var(--put); }
+.tryit-flow-node.error .tryit-flow-label{ color:var(--danger); }
+.tryit-flow-line{ height:2px; flex:1 0 20px; min-width:20px; background:var(--border); margin-bottom:14px; transition:background .25s ease; }
+.tryit-flow-line.done{ background:var(--post); }
+@keyframes tryitFlowPulse{ 0%,100%{ opacity:1; } 50%{ opacity:.4; } }
+
+/* ---------- Auth tab: Postman's "Get New Access Token" pattern, but built on
+   this app's existing honesty rule — a token is only ever produced from the
+   documented auth response example (proj.auth.responseExample), never
+   fabricated. Same simulated-from-docs philosophy as the response matcher. */
+.tryit-auth-empty{ padding:16px; border-radius:10px; border:1px dashed var(--border-strong); color:var(--text-dim); font-size:12.5px; line-height:1.6; }
+.tryit-auth-card{ border:1px solid var(--border); border-radius:10px; background:var(--surface-2); padding:14px; }
+.tryit-auth-head{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px; }
+.tryit-auth-endpoint{ font-family:var(--mono); font-size:12px; color:var(--text-dim); }
+.tryit-auth-desc{ font-size:12px; color:var(--text-faint); margin:6px 0 12px; line-height:1.6; }
+.tryit-auth-genbtn{
+  display:inline-flex; align-items:center; gap:8px; padding:8px 14px; border-radius:8px; border:1px solid var(--accent);
+  background:var(--accent-soft); color:var(--accent-ink); font-size:12px; font-weight:700; cursor:pointer;
+}
+.tryit-auth-genbtn:hover{ background:var(--accent-soft-strong); }
+.tryit-auth-genbtn:disabled{ opacity:.55; cursor:default; }
+.tryit-token-chip{
+  display:inline-flex; align-items:center; gap:8px; margin-top:12px; padding:7px 12px; border-radius:8px;
+  border:1px solid var(--post); background:var(--post-bg); font-family:var(--mono); font-size:11.5px; color:var(--post);
+  animation:docPanelFadeIn .22s ease;
+}
+.tryit-token-chip .tryit-copy-btn{ border-color:var(--post); color:var(--post); }
+
+/* Waterfall: an ordered request log (token call, then API call), Postman-
+   console style — each entry masked the same way headers/secrets are masked
+   everywhere else, and expandable to show the exact documented example it
+   came from. */
+.tryit-waterfall{ display:flex; flex-direction:column; gap:6px; margin-top:12px; }
+.tryit-waterfall-step{ border:1px solid var(--border); border-left:3px solid var(--border-strong); border-radius:8px; background:var(--bg-elevated); animation:docPanelFadeIn .22s ease; overflow:hidden; }
+.tryit-waterfall-step.done{ border-left-color:var(--post); }
+.tryit-waterfall-step.pending{ border-left-color:var(--put); }
+.tryit-waterfall-step.error{ border-left-color:var(--danger); }
+.tryit-waterfall-row{ display:flex; align-items:center; gap:10px; padding:9px 12px; cursor:pointer; }
+.tryit-waterfall-ic{ width:8px; height:8px; border-radius:50%; flex-shrink:0; background:var(--border-strong); }
+.tryit-waterfall-step.done .tryit-waterfall-ic{ background:var(--post); }
+.tryit-waterfall-step.pending .tryit-waterfall-ic{ background:var(--put); animation:tryitFlowPulse 1s ease-in-out infinite; }
+.tryit-waterfall-step.error .tryit-waterfall-ic{ background:var(--danger); }
+.tryit-waterfall-label{ flex:1; min-width:0; font-size:12px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tryit-waterfall-meta{ font-size:10.5px; font-family:var(--mono); color:var(--text-faint); flex-shrink:0; }
+.tryit-waterfall-detail{ display:none; padding:0 12px 12px; border-top:1px solid var(--border); }
+.tryit-waterfall-step.open .tryit-waterfall-detail{ display:block; }
+.tryit-waterfall-detail pre{ margin:8px 0 0; }
+
 /* ---------- Your Profile — environment management (add/delete global environments) ---------- */
 /* ---------- Endpoint table (Environment / Endpoint / Access / Color / Actions) ---------- */
 .env-table-toolbar{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:12px; }
@@ -2762,15 +2826,37 @@ pre.json-raw{ max-height:360px; margin:0; }
     </div>
     <div class="modal-sub" id="tryItUrlPreview" style="font-family:var(--mono); font-size:11.5px; word-break:break-all;"></div>
 
-    <!-- Postman-collection-style request builder: Params / Headers / Body as
-         tabs of ONE request, not stacked fields — see activateTryItTab().
-         Reuses .lang-tabs (the code-sample language switcher) for the tab
-         strip itself so it's the same control language, not a new widget. -->
-    <div class="lang-tabs tryit-tabs" id="tryItTabs" style="margin-top:14px;">
+    <!-- Flow strip: Doc → Condition → Token → Header → Request → Response.
+         Every node's state comes from something real that already happened
+         in this modal (a scenario matched, a token was generated from the
+         documented example, a response came back) — never decorative. -->
+    <div class="tryit-flow" id="tryItFlow">
+      <div class="tryit-flow-node done" data-flow-node="doc"><span class="tryit-flow-dot"></span><span class="tryit-flow-label">Doc</span></div>
+      <div class="tryit-flow-line" data-flow-line="doc-cond"></div>
+      <div class="tryit-flow-node" data-flow-node="condition"><span class="tryit-flow-dot"></span><span class="tryit-flow-label">Condition</span></div>
+      <div class="tryit-flow-line" data-flow-line="cond-token"></div>
+      <div class="tryit-flow-node" data-flow-node="token"><span class="tryit-flow-dot"></span><span class="tryit-flow-label">Token</span></div>
+      <div class="tryit-flow-line" data-flow-line="token-header"></div>
+      <div class="tryit-flow-node" data-flow-node="header"><span class="tryit-flow-dot"></span><span class="tryit-flow-label">Auth Header</span></div>
+      <div class="tryit-flow-line" data-flow-line="header-req"></div>
+      <div class="tryit-flow-node" data-flow-node="request"><span class="tryit-flow-dot"></span><span class="tryit-flow-label">Request</span></div>
+      <div class="tryit-flow-line" data-flow-line="req-resp"></div>
+      <div class="tryit-flow-node" data-flow-node="response"><span class="tryit-flow-dot"></span><span class="tryit-flow-label">Response</span></div>
+    </div>
+
+    <!-- Postman-collection-style request builder: Params / Auth / Headers /
+         Body as tabs of ONE request, not stacked fields — see
+         activateTryItTab(). Reuses .lang-tabs (the code-sample language
+         switcher) for the tab strip itself so it's the same control
+         language, not a new widget. -->
+    <div class="lang-tabs tryit-tabs" id="tryItTabs" style="margin-top:10px;">
       <div class="lang-tab active" data-trytab="params" id="tryItTabBtnParams">Params</div>
+      <div class="lang-tab" data-trytab="auth" id="tryItTabBtnAuth" style="display:none;">Auth</div>
       <div class="lang-tab" data-trytab="headers" id="tryItTabBtnHeaders">Headers</div>
       <div class="lang-tab" data-trytab="body" id="tryItTabBtnBody" style="display:none;">Body</div>
     </div>
+
+    <div class="tryit-tabpanel" id="tryItAuthPanel"></div>
 
     <div class="tryit-tabpanel active" id="tryItParamsPanel">
       <div id="tryItParams" style="display:flex; flex-direction:column; gap:8px;"></div>
@@ -9703,8 +9789,112 @@ function activateTryItTab(name){
     btn.classList.toggle('active', btn.getAttribute('data-trytab') === name);
   });
   document.getElementById('tryItParamsPanel').classList.toggle('active', name === 'params');
+  document.getElementById('tryItAuthPanel').classList.toggle('active', name === 'auth');
   document.getElementById('tryItHeadersPanel').classList.toggle('active', name === 'headers');
   document.getElementById('tryItBodyPanel').classList.toggle('active', name === 'body');
+}
+
+/* ---------- Try It flow strip state ----------
+   Sets one node (and the line leading INTO it) to 'done' | 'pending' | 'error'
+   | idle (no class). Never called with a state that didn't really happen —
+   e.g. 'token':'done' only fires once a documented auth response example
+   actually produced a token, same honesty rule as everything else in Try It. */
+function setTryItFlowNode(node, status){
+  const el = document.querySelector(`#tryItFlow [data-flow-node="${node}"]`);
+  if(!el) return;
+  el.classList.remove('done','pending','error');
+  if(status) el.classList.add(status);
+  const lineMap = { condition:'doc-cond', token:'cond-token', header:'token-header', request:'header-req', response:'req-resp' };
+  const lineEl = document.querySelector(`#tryItFlow [data-flow-line="${lineMap[node]}"]`);
+  if(lineEl) lineEl.classList.toggle('done', status === 'done');
+}
+function resetTryItFlow(){
+  ['condition','token','header','request','response'].forEach(n=>setTryItFlowNode(n, null));
+}
+
+/* ---------- Auth tab: simulated token generation ----------
+   State lives on tryItContext so it resets whenever a new endpoint is
+   opened. Nothing here ever leaves the browser or invents a token — it
+   parses proj.auth.responseExample (the same JSON a person typed into
+   Project Settings → Authentication → "Response parameters" preview) and
+   reads a token-shaped field out of it, exactly like the response matcher
+   reads a documented example instead of guessing one. */
+function tryItHasTokenAuth(proj){
+  return !!(proj.auth && proj.auth.type && proj.auth.path);
+}
+
+function renderTryItAuthPanel(proj, ep){
+  const panel = document.getElementById('tryItAuthPanel');
+  const tabBtn = document.getElementById('tryItTabBtnAuth');
+  if(!tryItHasTokenAuth(proj)){
+    tabBtn.style.display = 'none';
+    panel.innerHTML = '';
+    return;
+  }
+  tabBtn.style.display = '';
+  panel.innerHTML = `
+    <div class="tryit-auth-card">
+      <div class="tryit-auth-head">
+        <span class="badge ${methodClass(proj.auth.method||'POST')}">${escapeHtml(proj.auth.method||'POST')}</span>
+        <span class="tryit-auth-endpoint">${escapeHtml(proj.auth.path)}</span>
+      </div>
+      <div class="tryit-auth-desc">${proj.auth.description ? escapeHtml(proj.auth.description) : `This endpoint requires ${escapeHtml(proj.auth.type)}${proj.auth.headerName ? ' via the '+escapeHtml(proj.auth.headerName)+' header' : ''}.`}</div>
+      <button type="button" class="tryit-auth-genbtn" id="tryItGenTokenBtn">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>
+        Get New Access Token
+      </button>
+      <div id="tryItAuthWaterfall" class="tryit-waterfall"></div>
+    </div>`;
+  document.getElementById('tryItGenTokenBtn').addEventListener('click', ()=>generateTryItToken(proj, ep));
+}
+
+function tryItWaterfallStepHtml(id, status, label, meta, detail){
+  return `<div class="tryit-waterfall-step ${status}" data-wf-step="${id}">
+    <div class="tryit-waterfall-row" data-wf-toggle="${id}">
+      <span class="tryit-waterfall-ic"></span>
+      <span class="tryit-waterfall-label">${escapeHtml(label)}</span>
+      <span class="tryit-waterfall-meta">${escapeHtml(meta||'')}</span>
+    </div>
+    <div class="tryit-waterfall-detail">${detail||''}</div>
+  </div>`;
+}
+
+function generateTryItToken(proj, ep){
+  const waterfallEl = document.getElementById('tryItAuthWaterfall');
+  const btn = document.getElementById('tryItGenTokenBtn');
+  btn.disabled = true;
+  setTryItFlowNode('token', 'pending');
+  waterfallEl.innerHTML = tryItWaterfallStepHtml('token', 'pending',
+    `${(proj.auth.method||'POST')} ${proj.auth.path}`, 'Sending…');
+
+  setTimeout(()=>{
+    const parsed = proj.auth.responseExample ? tryParseJson(proj.auth.responseExample) : { ok:false };
+    const body = parsed.ok ? parsed.value : null;
+    const tokenField = body && typeof body === 'object'
+      ? (body.token || body.access_token || body.accessToken || null) : null;
+
+    btn.disabled = false;
+    if(!tokenField){
+      setTryItFlowNode('token', 'error');
+      waterfallEl.innerHTML = tryItWaterfallStepHtml('token', 'error',
+        `${(proj.auth.method||'POST')} ${proj.auth.path}`, 'No token in doc',
+        `<pre class="code-block" style="margin:8px 0 0;">This auth endpoint has no documented response example with a token/access_token field yet — add one under Project Settings → Authentication → Response parameters.</pre>`);
+      return;
+    }
+
+    tryItContext.generatedToken = String(tokenField);
+    setTryItFlowNode('token', 'done');
+    setTryItFlowNode('header', 'done');
+    const masked = maskSecretValue(tryItContext.generatedToken);
+    waterfallEl.innerHTML = tryItWaterfallStepHtml('token', 'done',
+      `${(proj.auth.method||'POST')} ${proj.auth.path}`, '200 · simulated',
+      `<div class="hint" style="margin:0 0 4px;">Response (from documented example)</div><pre class="code-block">${escapeHtml(JSON.stringify(body, null, 2))}</pre>`)
+      + `<div class="tryit-token-chip"><span>${(proj.auth.headerName||'Authorization')}: ${escapeHtml(maskSecretValue((proj.auth.headerName||'').toLowerCase()==='authorization' || !proj.auth.headerName ? 'Bearer '+tryItContext.generatedToken : tryItContext.generatedToken))}</span><button type="button" class="tryit-copy-btn" onclick="navigator.clipboard&&navigator.clipboard.writeText('${escapeHtml(tryItContext.generatedToken)}')">Copy</button></div>`;
+    document.querySelectorAll('[data-wf-toggle]').forEach(row=>{
+      row.addEventListener('click', ()=> row.closest('.tryit-waterfall-step').classList.toggle('open'));
+    });
+    updateTryItHeadersPanel(proj, ep);
+  }, 500);
 }
 document.getElementById('tryItTabs').addEventListener('click', (e)=>{
   const btn = e.target.closest('[data-trytab]');
@@ -9712,7 +9902,9 @@ document.getElementById('tryItTabs').addEventListener('click', (e)=>{
 });
 
 function openTryItModal(proj, ep){
-  tryItContext = { proj, ep };
+  tryItContext = { proj, ep, generatedToken: null };
+  resetTryItFlow();
+  renderTryItAuthPanel(proj, ep);
 
   document.getElementById('tryItMethodBadge').className = 'badge badge-lg ' + methodClass(ep.method);
   document.getElementById('tryItMethodBadge').textContent = ep.method;
@@ -9830,8 +10022,16 @@ function updateTryItHeadersPanel(proj, ep){
   readonlyEl.style.display = on ? 'none' : '';
   noHeadersEl.style.display = (!on && !docHeaders.length) ? '' : 'none';
   if(!on){
-    readonlyEl.innerHTML = docHeaders.map(([k,v])=>`
-      <div class="tryit-headers-row"><span class="tryit-headers-key">${escapeHtml(k)}</span><span class="tryit-headers-val">${escapeHtml(v)}</span></div>`).join('');
+    // Once a token's been generated on the Auth tab, reflect it here (masked)
+    // instead of the generic "Bearer <token>" placeholder — same header row,
+    // now showing what will actually be sent, still never the raw value.
+    const genTok = tryItContext && tryItContext.generatedToken;
+    readonlyEl.innerHTML = docHeaders.map(([k,v])=>{
+      const shown = (genTok && proj.auth && k === proj.auth.headerName)
+        ? maskSecretValue(v.toLowerCase().startsWith('bearer') ? `Bearer ${genTok}` : genTok)
+        : v;
+      return `<div class="tryit-headers-row"><span class="tryit-headers-key">${escapeHtml(k)}</span><span class="tryit-headers-val">${escapeHtml(shown)}</span></div>`;
+    }).join('');
   }
 
   liveWrap.style.display = on ? '' : 'none';
@@ -9947,6 +10147,9 @@ function sendTryIt(){
   const sendBtn = document.getElementById('tryItSend');
   const bodyErrEl = document.getElementById('tryItBodyErr');
   bodyErrEl.style.display = 'none';
+  setTryItFlowNode('request', 'pending');
+  setTryItFlowNode('response', null);
+  if(tryItHasTokenAuth(proj) && !tryItContext.generatedToken) setTryItFlowNode('header', null);
 
   // Basic required-field validation before "sending"
   const inputs = document.querySelectorAll('[data-try-param]');
@@ -10074,10 +10277,13 @@ function sendTryIt(){
     }
 
     document.getElementById('tryItRequestPreview').textContent = buildTryItResolvedRequestPreview(proj, ep, typedBody);
+    setTryItFlowNode('request', 'done');
+    setTryItFlowNode('condition', matchKind === 'condition' ? 'done' : (matchKind ? 'done' : null));
 
     if(matched){
       resultCardEl.style.display = '';
       notDocCardEl.style.display = 'none';
+      setTryItFlowNode('response', 'done');
       codeEl.textContent = String(matched.code);
       codeEl.className = 'code-pill ' + respClass(matched.code);
       resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(matched.code)})`);
@@ -10100,6 +10306,7 @@ function sendTryIt(){
       // all (never a guess), just a clear empty state and a way to fix it.
       resultCardEl.style.display = 'none';
       notDocCardEl.style.display = '';
+      setTryItFlowNode('response', 'error');
       if(requestScenarios.length === 0){
         notDocBodyEl.textContent = `This endpoint doesn't have a documented response yet.`;
       } else if(typedBody === null){
@@ -10246,7 +10453,16 @@ function buildTryItResolvedRequestPreview(proj, ep, typedBody){
   Object.keys(pathParams).forEach(name=>{ path = path.replace(`{${name}}`, encodeURIComponent(pathParams[name] || `{${name}}`)); });
   const qs = queryParams.filter(([,v])=>v).map(([k,v])=>`${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
   const url = `${envVarToken(state.env)}${path}${qs ? '?'+qs : ''}`;
-  const lines = [`${ep.method} ${url}`, ...headerList(proj, ep).map(([k,v])=>`${k}: ${v}`)];
+  // Same substitution as the Headers tab: once a token's been generated on
+  // the Auth tab, the preview shows what will actually go out (masked), not
+  // the generic placeholder.
+  const genTok = tryItContext && tryItContext.generatedToken;
+  const lines = [`${ep.method} ${url}`, ...headerList(proj, ep).map(([k,v])=>{
+    const shown = (genTok && proj.auth && k === proj.auth.headerName)
+      ? maskSecretValue(v.toLowerCase().startsWith('bearer') ? `Bearer ${genTok}` : genTok)
+      : v;
+    return `${k}: ${shown}`;
+  })];
   if(typedBody !== null) lines.push('', JSON.stringify(typedBody, null, 2));
   return lines.join('\n');
 }
