@@ -372,6 +372,168 @@ router.patch('/projects/:id/visibility', async (req, res) => {
   }
 });
 
+// ---- Per-project, per-environment sharing (project_access) ----
+// Lets an owner (or Admin) share ONE private project with a NAMED org member,
+// optionally scoped to specific environments — independent of that member's
+// global role and without exposing the project to the whole organisation the
+// way `visibility: 'public'` does. See server/projectAccess.js for how these
+// grants are consulted on read.
+
+// Only the owner or an Admin may view/manage a project's grant list.
+async function requireOwnerOrAdmin(req, res, projectId) {
+  const { rows } = await pool.query('SELECT id, owner_id, organisation, name FROM projects WHERE id = $1', [projectId]);
+  if (!rows.length) {
+    res.status(404).json({ error: 'Project not found.' });
+    return null;
+  }
+  const project = rows[0];
+  if (project.organisation !== req.authUser.organisation) {
+    res.status(404).json({ error: 'Project not found.' });
+    return null;
+  }
+  if (project.owner_id !== req.authUser.sub && req.authUser.role !== 'admin') {
+    res.status(403).json({ error: 'Only the project owner or an Admin can manage access to this project.' });
+    return null;
+  }
+  return project;
+}
+
+// GET /api/workspace/projects/:id/access — current grants + org roster/env
+// catalog, everything the "Share" UI needs in one call.
+router.get('/projects/:id/access', async (req, res) => {
+  try {
+    const project = await requireOwnerOrAdmin(req, res, req.params.id);
+    if (!project) return;
+
+    const [grantsResult, usersResult, environments] = await Promise.all([
+      pool.query(
+        `SELECT pa.user_id, u.username, u.role, pa.environments, pa.permission, pa.granted_at,
+                gb.username AS granted_by_username
+         FROM project_access pa
+         JOIN users u ON u.id = pa.user_id
+         LEFT JOIN users gb ON gb.id = pa.granted_by
+         WHERE pa.project_id = $1
+         ORDER BY pa.granted_at ASC`,
+        [req.params.id]
+      ),
+      pool.query(
+        `SELECT id, username, role FROM users WHERE organisation = $1 AND id != $2 ORDER BY username ASC`,
+        [req.authUser.organisation, project.owner_id]
+      ),
+      getOrgEnvironments(req.authUser.organisation),
+    ]);
+
+    res.json({
+      projectId: req.params.id,
+      projectName: project.name,
+      grants: grantsResult.rows,
+      shareableUsers: usersResult.rows,
+      environments,
+    });
+  } catch (err) {
+    console.error('GET project access failed:', err);
+    res.status(500).json({ error: 'Could not load project access.' });
+  }
+});
+
+// POST /api/workspace/projects/:id/access — create or update one user's grant.
+// Body: { userId, environments: ["DEV","SIT"] | ["*"], permission: 'view'|'edit' }
+router.post('/projects/:id/access', async (req, res) => {
+  try {
+    const project = await requireOwnerOrAdmin(req, res, req.params.id);
+    if (!project) return;
+
+    const { userId, environments, permission } = req.body || {};
+    const targetUserId = Number(userId);
+    if (!Number.isInteger(targetUserId)) {
+      return res.status(400).json({ error: 'userId is required.' });
+    }
+    if (targetUserId === project.owner_id) {
+      return res.status(400).json({ error: 'The owner already has full access — no grant needed.' });
+    }
+    if (permission !== 'view' && permission !== 'edit') {
+      return res.status(400).json({ error: "permission must be 'view' or 'edit'." });
+    }
+    if (!Array.isArray(environments) || environments.length === 0) {
+      return res.status(400).json({ error: 'Pick at least one environment, or ["*"] for all.' });
+    }
+
+    // Silently drop anything invalid rather than failing the whole save over
+    // one stale entry — same tolerance liveMode.js applies to its grants.
+    const wildcard = environments.includes('*');
+    let cleanEnvs = ['*'];
+    if (!wildcard) {
+      const validEnvIds = new Set((await getOrgEnvironments(req.authUser.organisation)).map((e) => e.id));
+      cleanEnvs = [...new Set(environments.filter((e) => typeof e === 'string' && validEnvIds.has(e)))];
+      if (!cleanEnvs.length) return res.status(400).json({ error: 'None of the given environments exist for this organisation.' });
+    }
+
+    // Confirm the target user is actually in the same organisation before
+    // granting — the FK alone would let you reference any user id in the DB.
+    const { rows: targetRows } = await pool.query(
+      'SELECT id, username FROM users WHERE id = $1 AND organisation = $2',
+      [targetUserId, req.authUser.organisation]
+    );
+    if (!targetRows.length) return res.status(404).json({ error: 'That user was not found in your organisation.' });
+
+    const { rows } = await pool.query(
+      `INSERT INTO project_access (project_id, user_id, environments, permission, granted_by)
+       VALUES ($1, $2, $3::jsonb, $4, $5)
+       ON CONFLICT (project_id, user_id)
+       DO UPDATE SET environments = EXCLUDED.environments, permission = EXCLUDED.permission,
+                      granted_by = EXCLUDED.granted_by, granted_at = now()
+       RETURNING user_id, environments, permission, granted_at`,
+      [req.params.id, targetUserId, JSON.stringify(cleanEnvs), permission, req.authUser.sub]
+    );
+
+    await cache.invalidateOrg(req.authUser.organisation);
+    await recordAuditEvent(req.authUser, req, {
+      action: 'PROJECT_ACCESS_GRANTED',
+      resourceType: 'project',
+      resourceId: req.params.id,
+      projectName: project.name,
+      details: `Granted ${targetRows[0].username} ${permission} access (${cleanEnvs.join(', ')})`,
+      severity: 'warning',
+      metadata: { targetUserId, environments: cleanEnvs, permission },
+    });
+
+    res.json({ grant: rows[0] });
+  } catch (err) {
+    console.error('POST project access failed:', err);
+    res.status(500).json({ error: 'Could not save project access.' });
+  }
+});
+
+// DELETE /api/workspace/projects/:id/access/:userId — revoke one user's grant.
+router.delete('/projects/:id/access/:userId', async (req, res) => {
+  try {
+    const project = await requireOwnerOrAdmin(req, res, req.params.id);
+    if (!project) return;
+
+    const targetUserId = Number(req.params.userId);
+    const { rows } = await pool.query(
+      `DELETE FROM project_access WHERE project_id = $1 AND user_id = $2 RETURNING user_id`,
+      [req.params.id, targetUserId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'No grant found for that user on this project.' });
+
+    await cache.invalidateOrg(req.authUser.organisation);
+    await recordAuditEvent(req.authUser, req, {
+      action: 'PROJECT_ACCESS_REVOKED',
+      resourceType: 'project',
+      resourceId: req.params.id,
+      projectName: project.name,
+      severity: 'warning',
+      metadata: { targetUserId },
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('DELETE project access failed:', err);
+    res.status(500).json({ error: 'Could not revoke project access.' });
+  }
+});
+
 // DELETE /api/workspace/projects/:id — owner only.
 router.delete('/projects/:id', async (req, res) => {
   try {

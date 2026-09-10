@@ -300,6 +300,35 @@ async function initDb() {
     );
   `);
 
+  // ---- Per-project, per-environment sharing grants ----
+  // Fills the gap between `projects.visibility` ('private' = owner only,
+  // 'public' = entire organisation) and the org-wide `live_mode_grants`
+  // above: this is how an owner (or Admin) shares ONE private project with a
+  // NAMED person, optionally restricted to specific environments, without
+  // touching that person's global role or exposing the project to the whole
+  // organisation. One row per (project, user) — not per (project, user,
+  // environment) — so an access check is a single indexed lookup regardless
+  // of how many environments a project has; `environments` holds the scoped
+  // list (or the literal ["*"] wildcard for "every environment this project
+  // has"), same JSONB-list pattern already used by `custom_permissions.envs`
+  // and `pii_field_rules.environments`. Deliberately independent of role,
+  // same reasoning as live_mode_grants: an Admin can hand a Viewer edit
+  // access to one specific project without promoting them org-wide.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_access (
+      id BIGSERIAL PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      environments JSONB NOT NULL DEFAULT '[]',
+      permission TEXT NOT NULL DEFAULT 'view' CHECK (permission IN ('view', 'edit')),
+      granted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (project_id, user_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_project_access_user ON project_access (user_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_project_access_project ON project_access (project_id);`);
+
   console.log('Database schema ready.');
 }
 
