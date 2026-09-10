@@ -1646,8 +1646,9 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-body-toolbar{ display:flex; align-items:center; gap:6px; margin-bottom:8px; }
 .tryit-body-type-pill{
   display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:600; color:var(--text-dim);
-  background:var(--surface-2); border:1px solid var(--border); border-radius:6px; padding:4px 8px; cursor:default;
+  background:var(--surface-2); border:1px solid var(--border); border-radius:6px; padding:4px 8px; cursor:pointer;
 }
+.tryit-body-type-pill:hover{ color:var(--text); border-color:var(--border-strong); }
 .tryit-body-toolbar-spacer{ flex:1; }
 .tryit-body-beautify{
   font-size:11.5px; font-weight:600; color:var(--accent); background:none; border:none; cursor:pointer; padding:4px 6px;
@@ -1685,7 +1686,7 @@ body.tryit-standalone #tryItClose{ display:none; }
 }
 .tryit-resp-history.active .tryit-history-count, .tryit-history-count:not(:empty){ color:var(--accent); background:var(--accent-soft); border-color:transparent; }
 .tryit-history-panel{
-  position:absolute; top:calc(100% + 6px); left:0; z-index:30; width:320px; max-height:340px; overflow-y:auto;
+  position:absolute; top:calc(100% + 6px); right:0; z-index:30; width:300px; max-height:340px; overflow-y:auto;
   background:var(--surface); border:1px solid var(--border); border-radius:10px;
   box-shadow:0 10px 28px rgba(0,0,0,.28); padding:6px;
 }
@@ -1768,6 +1769,10 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-headers-keycell{ display:flex; align-items:center; gap:0; min-width:0; }
 .tryit-headers-keycell .tryit-table-input{ flex:1; min-width:0; }
 .tryit-headers-tkey{ font-family:var(--mono); font-weight:700; color:var(--text); word-break:break-all; }
+.tryit-headers-tkey-chip{
+  display:inline-block; background:var(--accent-soft); color:var(--accent); border-radius:5px;
+  padding:2px 6px; font-size:11px; font-weight:700;
+}
 .tryit-headers-tval{ font-family:var(--mono); color:var(--text-dim); word-break:break-all; }
 .tryit-headers-tdesc{ color:var(--text-faint); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tryit-headers-check{ accent-color:var(--accent); cursor:pointer; }
@@ -1813,6 +1818,7 @@ body.tryit-standalone #tryItClose{ display:none; }
    language as the request tabs above, just scoped smaller since it sits
    inside the result card rather than the top of the panel. */
 .tryit-resptabs{ margin:10px 0 10px; max-width:320px; }
+.tryit-resptabs .lang-tab.active{ box-shadow:0 1px 4px rgba(0,0,0,.18); }
 .tryit-tests-list{ display:flex; flex-direction:column; gap:6px; }
 .tryit-test-row{
   display:flex; align-items:flex-start; gap:9px; padding:9px 11px; border-radius:8px;
@@ -1824,6 +1830,7 @@ body.tryit-standalone #tryItClose{ display:none; }
   flex-shrink:0; font-weight:700; font-size:11px; line-height:1; width:18px; height:18px; border-radius:50%;
   display:flex; align-items:center; justify-content:center; margin-top:1px;
 }
+.tryit-test-ic svg{ display:block; }
 .tryit-test-row.pass .tryit-test-ic{ color:var(--post,#35c491); background:rgba(53,196,145,.14); }
 .tryit-test-row.fail .tryit-test-ic{ color:var(--danger,#e03e3e); background:rgba(224,62,62,.14); }
 .tryit-test-name{ color:var(--text); font-weight:600; }
@@ -1909,8 +1916,9 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-auth-type-row label{ font-size:11px; font-weight:700; color:var(--text-faint); text-transform:uppercase; letter-spacing:.3px; flex-shrink:0; }
 .tryit-auth-type-pill{
   display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; color:var(--text);
-  background:var(--surface); border:1px solid var(--border); border-radius:7px; padding:6px 10px; cursor:default;
+  background:var(--surface); border:1px solid var(--border); border-radius:7px; padding:6px 10px; cursor:pointer;
 }
+.tryit-auth-type-pill:hover{ border-color:var(--border-strong); background:var(--surface-2); }
 .tryit-auth-type-caret{ font-size:9px; color:var(--text-faint); }
 .tryit-auth-card-label{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--text-faint); margin-bottom:10px; }
 .tryit-auth-head{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px; }
@@ -3131,8 +3139,8 @@ pre.json-raw{ max-height:360px; margin:0; }
     <div class="tryit-tabpanel" id="tryItBodyPanel">
       <div id="tryItScenarioPicker" class="resp-pill-row" style="margin:0 0 10px;"></div>
       <div class="tryit-body-toolbar">
-        <div class="tryit-body-type-pill" title="This endpoint's request body is documented as raw JSON — not switchable here">raw <span class="tryit-auth-type-caret">▾</span></div>
-        <div class="tryit-body-type-pill" title="This endpoint's request body is documented as raw JSON — not switchable here">JSON <span class="tryit-auth-type-caret">▾</span></div>
+        <button type="button" class="tryit-body-type-pill" id="tryItBodyRawPill" title="Click for why this can't be changed here">raw <span class="tryit-auth-type-caret">▾</span></button>
+        <button type="button" class="tryit-body-type-pill" id="tryItBodyJsonPill" title="Click for why this can't be changed here">JSON <span class="tryit-auth-type-caret">▾</span></button>
         <div class="tryit-body-toolbar-spacer"></div>
         <button type="button" class="tryit-body-beautify" id="tryItBeautifyBtn">Beautify</button>
       </div>
@@ -10163,7 +10171,7 @@ function renderTryItResponseHeaders(headersObj){
     <div class="tryit-headers-table">
       <div class="tryit-headers-thead" style="grid-template-columns:1fr 2fr;"><span>Key</span><span>Value</span></div>
       ${entries.map(([k,v])=>`<div class="tryit-headers-trow" style="grid-template-columns:1fr 2fr;">
-        <span class="tryit-headers-tkey">${escapeHtml(k)}</span>
+        <span class="tryit-headers-tkey"><span class="tryit-headers-tkey-chip">${escapeHtml(k)}</span></span>
         <span class="tryit-headers-tval">${escapeHtml(String(v))}</span>
       </div>`).join('')}
     </div>` : `<div class="hint">No response headers available for this send.</div>`;
@@ -10175,9 +10183,11 @@ function renderTryItTestResults(tests){
   countEl.textContent = `${passCount}/${tests.length}`;
   countEl.style.display = tests.length ? '' : 'none';
   const listEl = document.getElementById('tryItRespTestsList');
+  const checkIc = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  const crossIc = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
   listEl.innerHTML = tests.map(t=>`
     <div class="tryit-test-row ${t.pass?'pass':'fail'}">
-      <span class="tryit-test-ic">${t.pass?'✓':'✕'}</span>
+      <span class="tryit-test-ic">${t.pass?checkIc:crossIc}</span>
       <div><div class="tryit-test-name">${escapeHtml(t.name)}</div>${t.detail?`<div class="tryit-test-detail">${escapeHtml(t.detail)}</div>`:''}</div>
     </div>`).join('');
 }
@@ -10239,9 +10249,9 @@ function renderTryItAuthPanel(proj, ep){
   panel.innerHTML = `
     <div class="tryit-auth-type-row">
       <label>Type</label>
-      <div class="tryit-auth-type-pill" title="Fixed by what's documented under Project Settings → Authentication — not switchable here">
+      <button type="button" class="tryit-auth-type-pill" id="tryItAuthTypeInfo" title="Click for why this can't be changed here">
         ${escapeHtml(proj.auth.type)} <span class="tryit-auth-type-caret">▾</span>
-      </div>
+      </button>
     </div>
     <div class="tryit-auth-card">
       <div class="tryit-auth-card-label">Configure New Token</div>
@@ -10257,6 +10267,9 @@ function renderTryItAuthPanel(proj, ep){
       <div id="tryItAuthWaterfall" class="tryit-waterfall"></div>
     </div>`;
   document.getElementById('tryItGenTokenBtn').addEventListener('click', ()=>generateTryItToken(proj, ep));
+  document.getElementById('tryItAuthTypeInfo').addEventListener('click', ()=>{
+    toast(`Auth type is fixed to ${proj.auth.type} — set in Project Settings → Authentication for this API, not per-request.`);
+  });
 }
 
 function tryItWaterfallStepHtml(id, status, label, meta, detail){
@@ -11410,6 +11423,13 @@ document.getElementById('tryItBeautifyBtn').addEventListener('click', ()=>{
   bodyErrEl.style.display = 'none';
   ta.value = JSON.stringify(parsed.value, null, 2);
   tryItUpdateBodyGutter();
+});
+['tryItBodyRawPill','tryItBodyJsonPill'].forEach(id=>{
+  document.getElementById(id).addEventListener('click', ()=>{
+    const ep = tryItContext && tryItContext.ep;
+    const ct = (ep && ep.contentType) || 'application/json';
+    toast(`Body format is fixed to raw/${ct.split('/').pop().toUpperCase()} — set by this endpoint's documented request body, not switchable here.`);
+  });
 });
 
 /* Resolves the response a given (named) request scenario would produce: a
