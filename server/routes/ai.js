@@ -292,8 +292,8 @@ router.post('/structure', generateLimiter, async (req, res) => {
   if (typeof rawText !== 'string' || !rawText.trim()) {
     return res.status(400).json({ error: 'rawText is required.' });
   }
-  if (rawText.length > 60000) {
-    return res.status(400).json({ error: 'That text is too long for a single pass — try splitting it up.' });
+  if (rawText.length > 200000) {
+    return res.status(400).json({ error: 'That text is too long for a single pass (200,000 character limit) — try splitting it up.' });
   }
   try {
     const settings = await loadOrgAiSettings(req.authUser.organisation);
