@@ -558,28 +558,35 @@ const sectionLimiter = createRateLimiter({
   message: { error: 'Too many AI requests — please wait a moment and try again.' },
 });
 
+// The plan now mirrors what the editor actually stores: several distinct
+// endpoints (never merged), a shared project-level auth block, one
+// project-wide overview, and per-endpoint sections tagged with a "kind"
+// that maps directly onto a real editor block type — "headers"/
+// "parameters"/"requestBody"/"response"/"custom" — instead of always
+// landing as one undifferentiated prose blob. See applyAiPlanResult /
+// generateOne in editor.html for how each kind is routed to its block.
 function validatePlanShape(p) {
   return !!p && typeof p === 'object' && !Array.isArray(p)
     && p.project && typeof p.project === 'object'
-    && p.endpoint && typeof p.endpoint === 'object'
-    && Array.isArray(p.sections)
-    && p.sections.every(s => s && typeof s === 'object' && typeof s.type === 'string' && typeof s.title === 'string');
+    && (p.projectAuth === null || (p.projectAuth && typeof p.projectAuth === 'object'))
+    && p.overview && typeof p.overview === 'object' && typeof p.overview.title === 'string'
+    && Array.isArray(p.endpoints)
+    && p.endpoints.every(e => e && typeof e === 'object' && typeof e.method === 'string' && typeof e.path === 'string'
+      && Array.isArray(e.sections)
+      && e.sections.every(s => s && typeof s === 'object' && typeof s.kind === 'string' && typeof s.title === 'string'));
 }
-const AI_MAX_PLANNED_SECTIONS = 25; // a defensive cap, not a realistic ceiling — keeps one bad plan from queuing up dozens of section calls
+const AI_MAX_PLANNED_ENDPOINTS = 6; // a defensive cap, not a realistic ceiling
+const AI_MAX_SECTIONS_PER_ENDPOINT = 15;
+const AI_MAX_TOTAL_SECTIONS = 40; // across every endpoint combined
 
 // POST /api/ai/structure/plan
 // Body: { rawText, audience }
-// Returns metadata + a list of { type, title, hint } — content, INCLUDING
-// the API-level overview, comes later, one call per section, via
-// /structure/section below. The overview used to be written here too, but
-// notes that describe several endpoints and a long section list (auth,
-// multiple sample payloads, error tables, sequence diagrams...) could push
-// a decent overview + a full section list past this call's own token
-// budget, truncating the plan itself before it ever got to generating
-// anything. Planning is now purely structural — metadata and short
-// one-line hints only — so its output size no longer scales with how much
-// prose the notes eventually need; the overview gets its own full-budget
-// section call instead, same as every other section.
+// Returns metadata + a list of endpoints, each with a list of
+// { kind, title, hint, statusCode? } — content, INCLUDING the API-level
+// overview, comes later, one call per piece, via /structure/section below.
+// Planning is purely structural — metadata and short one-line hints only —
+// so its output size doesn't scale with how much prose the notes eventually
+// need; the overview and every section get their own full-budget call.
 router.post('/structure/plan', generateLimiter, async (req, res) => {
   const { rawText, audience } = req.body || {};
   if (typeof rawText !== 'string' || !rawText.trim()) {
@@ -594,28 +601,42 @@ router.post('/structure/plan', generateLimiter, async (req, res) => {
       return res.status(409).json({ error: 'AI isn\'t set up for your organisation yet — ask an Admin to add an API key under Security ▸ AI Studio.' });
     }
     const audienceLine = buildAudienceLine(audience);
-    const systemPrompt = `You are the planning pass of a two-stage documentation generator. From raw, unstructured notes (which may mix business intent and technical detail, in any order, in any format), produce STRUCTURE ONLY — no prose content yet, that all comes from a later pass, one section at a time:
-1. Extract the project metadata and the PRIMARY endpoint's method/path/summary. If the notes describe more than one endpoint (e.g. two separate operations sharing one auth scheme), pick the first/primary one for this "endpoint" field and give each of the OTHER endpoints its own section instead (e.g. type "endpoint-call-recording") — never try to merge multiple endpoints' method/path into one field.
-2. List every documentation SECTION the notes call for. The list MUST start with one section of type exactly "overview" (title like "API Overview") whose hint tells the next pass to write a markdown Overview / Flow / Authentication summary for the whole API. After that, add one section per remaining topic the notes need (e.g. "Request Headers", "Sample Request", "Sample Response", "Field Descriptions", "Error Responses", "S3 Integration", "Sequence Diagram", additional endpoints as above — whatever the notes actually call for, however many that is).
-Each section's "hint" is ONE short sentence pointing the next pass at what to cover — not the content itself.
+    const systemPrompt = `You are the planning pass of a two-stage documentation generator. From raw, unstructured notes (which may mix business intent and technical detail, in any order, in any format, and may describe ONE or SEVERAL distinct API operations), produce STRUCTURE ONLY — no prose content yet, that all comes from a later pass, one piece at a time.
 ${audienceLine}
+1. Extract the project's "name" and a short "tag".
+2. If the notes describe ONE shared authentication/header scheme that applies to every endpoint (e.g. a JWT/API-key/clientId+secret model validated the same way everywhere), extract it as "projectAuth": { "type": short label like "JWT" or "API Key", "headerName": the ONE header that actually carries the credential (e.g. "token" or "Authorization"), "description": one or two sentences on how it's validated/obtained }. If no such shared scheme is described, set "projectAuth" to null — never invent one.
+3. Write ONE top-level "overview": { "title", "hint" } — hint is one sentence pointing the next pass at a project-wide Overview/Flow/Authentication summary, written once for the whole project, never per endpoint.
+4. Identify EVERY DISTINCT API operation (a genuinely different method+path pair) the notes describe and give each its OWN entry in "endpoints" — never merge two different operations into one, and never invent one that isn't described. For each endpoint, give: "method", "path", one-sentence "summary", and a "sections" list of everything the notes call for about THAT endpoint. Each section needs "kind" (EXACTLY one of the five below), "title", "hint" (one short sentence on what the next pass should cover — not the content itself), and "statusCode" (integer, ONLY for kind "response"):
+   - "headers" — HTTP request headers specific to this endpoint (skip this kind if every header is already covered by projectAuth above and there's nothing endpoint-specific to add)
+   - "parameters" — query-string or URL path parameters
+   - "requestBody" — the request payload: use this for POST/PUT/PATCH input fields the notes describe, not "parameters"
+   - "response" — ONE specific HTTP response; add a separate "response" section per distinct status code the notes go into enough detail to document (e.g. one for 200, another for 400/401/etc.)
+   - "custom" — anything else: flow/sequence narrative, storage/naming conventions, caching behaviour, diagrams, error-handling philosophy, and so on
 Respond with ONLY a JSON object, no prose, no markdown fences, shaped exactly like:
 {
   "project": { "name": string, "tag": string },
-  "endpoint": { "method": "GET|POST|PUT|PATCH|DELETE", "path": string, "summary": string },
-  "sections": [
-    { "type": string, "title": string, "hint": string }
+  "projectAuth": { "type": string, "headerName": string, "description": string } | null,
+  "overview": { "title": string, "hint": string },
+  "endpoints": [
+    { "method": "GET|POST|PUT|PATCH|DELETE", "path": string, "summary": string,
+      "sections": [ { "kind": "headers|parameters|requestBody|response|custom", "title": string, "hint": string, "statusCode": integer } ] }
   ]
 }
 Infer missing pieces sensibly from context; use a short honest placeholder only if something genuinely isn't present in the notes.
 ${JSON_STRICTNESS_RULES}`;
     const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 4000 });
     const parsed = await extractJson(text, { validate: validatePlanShape, settings, label: 'structure-plan' });
-    parsed.sections = (parsed.sections || []).slice(0, AI_MAX_PLANNED_SECTIONS);
+    parsed.endpoints = (parsed.endpoints || []).slice(0, AI_MAX_PLANNED_ENDPOINTS);
+    let sectionBudget = AI_MAX_TOTAL_SECTIONS;
+    parsed.endpoints.forEach(e => {
+      e.sections = (e.sections || []).slice(0, Math.min(AI_MAX_SECTIONS_PER_ENDPOINT, sectionBudget));
+      sectionBudget -= e.sections.length;
+    });
+    const totalSections = parsed.endpoints.reduce((n, e) => n + e.sections.length, 0);
     await recordAuditEvent(req.authUser, req, {
       action: 'ai.structure.plan_generated',
       resourceType: 'ai',
-      details: `Planned ${parsed.sections.length} section(s) from ${rawText.length} chars of input`,
+      details: `Planned ${parsed.endpoints.length} endpoint(s), ${totalSections} section(s) total, from ${rawText.length} chars of input`,
       severity: 'info',
     });
     res.json(parsed);
@@ -626,21 +647,83 @@ ${JSON_STRICTNESS_RULES}`;
   }
 });
 
-// A single section's content is markdown prose that routinely contains the
-// exact things that make JSON-embedding fragile — sample JSON payloads with
-// their own quotes, multi-paragraph text with real line breaks, backslashes
-// in paths/regexes. Forcing the model to re-encode all of that as one JSON
-// string value was the single biggest source of parse failures (and every
-// failure paid for a second "repair" LLM call on top of the original one).
-// type/title are already known here — they came from the plan — so there's
-// nothing for the model to echo back. It writes plain markdown; we attach
-// the type/title ourselves. No JSON in, no JSON out, nothing to repair.
-//
-// Some models still wrap an entire answer in one outer ```markdown fence
-// out of habit even when told not to. We only ever strip a fence that wraps
-// the *whole* response with an empty/"markdown"/"md" language tag — never a
-// same-sized "json"/"http"/etc. fence, since a section can legitimately be
-// nothing but one real code sample and we must not eat that.
+// ---- Shared parsing helpers for the non-JSON section formats below ----
+// Same reasoning as the markdown-only fix above, extended to the other
+// editor block types: a header/parameter table or a sample payload +
+// fields table is genuinely structured data, but asking the model to
+// deliver it as JSON reintroduces exactly the escaping fragility we just
+// removed (a JSON sample payload nested inside a JSON string, a
+// multi-column table's punctuation inside a JSON string, etc.). Instead
+// these ask for a plain markdown table, or a payload + table separated by
+// plain-text "===LABEL===" markers, and we parse that ourselves — no
+// JSON.parse, nothing to repair.
+
+// Splits text on top-level "===LABEL===" markers (case-insensitive, 2+
+// equals signs tolerated on either side) into { LABEL: content }. If the
+// model didn't use the markers at all, everything is attributed to the
+// first requested label as a best-effort fallback rather than losing the
+// content outright.
+function splitMarkerSections(text, labels) {
+  const src = String(text || '');
+  const pattern = new RegExp(`={2,}\\s*(${labels.join('|')})\\s*={2,}`, 'gi');
+  const matches = [];
+  let m;
+  while ((m = pattern.exec(src))) matches.push({ label: m[1].toUpperCase(), index: m.index, end: m.index + m[0].length });
+  const parts = {};
+  if (matches.length === 0) {
+    parts[labels[0].toUpperCase()] = src.trim();
+    return parts;
+  }
+  matches.forEach((mm, i) => {
+    const end = i + 1 < matches.length ? matches[i + 1].index : src.length;
+    parts[mm.label] = src.slice(mm.end, end).trim();
+  });
+  return parts;
+}
+
+// Returns the inner content of the first fenced code block, or the whole
+// trimmed text if there isn't one (the model forgetting the fence around an
+// otherwise-fine sample shouldn't lose the sample).
+function extractFencedBlock(text) {
+  const s = String(text || '');
+  const m = s.match(/```[\w-]*\r?\n([\s\S]*?)\r?\n```/);
+  return (m ? m[1] : s).trim();
+}
+
+// Parses a GFM-style pipe table into raw cell arrays, tolerating missing
+// outer pipes, a header row, and a "---" separator row — all skipped.
+function parsePipeTable(text) {
+  const lines = String(text || '').split(/\r?\n/).map(l => l.trim()).filter(l => l.includes('|'));
+  const rows = [];
+  for (const line of lines) {
+    let l = line;
+    if (l.startsWith('|')) l = l.slice(1);
+    if (l.endsWith('|')) l = l.slice(0, -1);
+    const cells = l.split('|').map(c => c.trim());
+    if (cells.every(c => /^:?-{1,}:?$/.test(c))) continue; // separator row
+    if (cells[0] && /^name$/i.test(cells[0])) continue; // header row
+    rows.push(cells);
+  }
+  return rows;
+}
+
+// Maps parsed table rows (Name | Type | Required | Example | Description)
+// into the exact row shape the editor's parameters/headers/fields blocks
+// expect.
+function rowsToParamObjects(cellRows) {
+  return cellRows
+    .filter(c => c[0])
+    .map(c => ({
+      name: c[0] || '',
+      type: c[1] || 'String',
+      required: /^(y|yes|true)$/i.test((c[2] || '').trim()),
+      example: c[3] || '',
+      description: c[4] || '',
+    }));
+}
+
+// Same wrapper-fence safety net as generateMarkdownSection below, reused
+// here for a bare markdown table response.
 function stripOuterMarkdownFence(text) {
   const trimmed = String(text || '').trim();
   const m = trimmed.match(/^```(\w*)\r?\n([\s\S]*?)\r?\n```$/);
@@ -650,17 +733,84 @@ function stripOuterMarkdownFence(text) {
   return trimmed;
 }
 
+// kind: "overview" | "custom" (or anything unrecognized, as a safe fallback)
+// — freeform markdown prose. type/title are already known here — they came
+// from the plan — so there's nothing for the model to echo back; it writes
+// plain markdown and we attach title/kind ourselves. No JSON in, no JSON
+// out, nothing to repair.
+async function generateMarkdownSection(settings, { section, audienceLine, contextLine, rawText }) {
+  const systemPrompt = `You are writing ONE section of a larger piece of API documentation — other sections are generated separately, so write only this one. ${audienceLine}
+Section to write:
+- title: ${section.title}
+- what it should cover: ${section.hint || '(use your judgement based on the raw notes below)'}
+${contextLine}
+Respond with ONLY the markdown content of this section itself — no JSON, no surrounding code fence around the whole answer, no preamble like "Here's the section", and no top-level heading restating the title (it's already shown separately above your content). Use normal markdown throughout, including fenced code blocks for any sample requests/responses/headers — write real quotes and real line breaks exactly as a person would in a markdown file, you do not need to escape anything for JSON.
+Go into real depth here — you are not sharing a response budget with any other section, so don't compress for space the way a single giant response would have to.`;
+  const rawContent = await callLlm(settings, systemPrompt, rawText, { maxTokens: 4000 });
+  const content = stripOuterMarkdownFence(rawContent);
+  if (!content) throw new Error('AI_EMPTY: model returned no content for this section');
+  return content;
+}
+
+// kind: "headers" | "parameters" — a plain markdown table, parsed into the
+// row shape the editor's Headers / Parameters blocks store directly.
+async function generateRowsSection(settings, { section, audienceLine, contextLine, rawText }) {
+  const noun = section.kind === 'headers' ? 'HTTP request header' : 'query-string or URL path parameter';
+  const systemPrompt = `You are writing ONE table for a piece of API documentation — other sections are generated separately, so write only this table. ${audienceLine}
+Table to write: ${section.title}
+What it should cover: ${section.hint || '(use your judgement based on the raw notes below)'}
+${contextLine}
+Respond with ONLY a markdown table — no prose or headings before or after it. Use exactly these columns, in this order: Name | Type | Required | Example | Description
+- One row per ${noun} the notes call for.
+- "Required" must be exactly "Yes" or "No".
+- "Type" is a short data type (String, Integer, Boolean, UUID, Enum, etc.).
+- Leave "Example" blank only if no concrete example value is discoverable in the notes.
+- "Description" is one short clause.`;
+  const raw = await callLlm(settings, systemPrompt, rawText, { maxTokens: 2000 });
+  const rows = rowsToParamObjects(parsePipeTable(raw));
+  if (rows.length === 0) throw new Error('AI_EMPTY: model returned no rows for this table');
+  return rows;
+}
+
+// kind: "requestBody" | "response" — a sample payload plus its field
+// table, both in plain text (no JSON escaping problem for the sample
+// payload itself, since it's never nested inside a JSON string).
+async function generatePayloadSection(settings, { section, audienceLine, contextLine, rawText }) {
+  const withSummary = section.kind === 'response';
+  const systemPrompt = `You are writing ONE section of a larger piece of API documentation — other sections are generated separately, so write only this one. ${audienceLine}
+Section: ${section.title}
+What it should cover: ${section.hint || '(use your judgement based on the raw notes below)'}
+${contextLine}
+Respond in EXACTLY this plain-text shape and nothing else — no JSON, no extra prose outside these labeled parts:
+${withSummary ? '===SUMMARY===\n<one short sentence: what this response means>\n\n' : ''}===EXAMPLE===
+<a single fenced \`\`\`json code block containing ONE realistic, complete sample payload>
+
+===FIELDS===
+<a markdown table, columns exactly: Name | Type | Required | Example | Description — one row per field that appears in the sample>
+Real quotes and real line breaks are fine everywhere here — none of this needs JSON escaping.`;
+  const raw = await callLlm(settings, systemPrompt, rawText, { maxTokens: 3000 });
+  const parts = splitMarkerSections(raw, withSummary ? ['SUMMARY', 'EXAMPLE', 'FIELDS'] : ['EXAMPLE', 'FIELDS']);
+  const example = extractFencedBlock(parts.EXAMPLE || '');
+  const fields = rowsToParamObjects(parsePipeTable(parts.FIELDS || ''));
+  const description = withSummary ? (parts.SUMMARY || '').trim() : undefined;
+  if (!example && fields.length === 0) throw new Error('AI_EMPTY: model returned no example or fields for this section');
+  return { description, example, fields };
+}
+
 // POST /api/ai/structure/section
-// Body: { rawText, audience, section: { type, title, hint }, apiLevelDescription? }
+// Body: { rawText, audience, section: { kind, title, hint, statusCode? }, apiLevelDescription? }
 // Writes ONE section's content. Called once per section from the plan
 // above — small input, small output, so it's cheap to retry in isolation.
+// The response shape depends on kind — see the generate* helpers above —
+// so the editor can route it straight to the matching block type instead
+// of every section landing as one undifferentiated custom text block.
 router.post('/structure/section', sectionLimiter, async (req, res) => {
   const { rawText, audience, section, apiLevelDescription } = req.body || {};
   if (typeof rawText !== 'string' || !rawText.trim()) {
     return res.status(400).json({ error: 'rawText is required.' });
   }
-  if (!section || typeof section !== 'object' || typeof section.type !== 'string' || typeof section.title !== 'string') {
-    return res.status(400).json({ error: 'section {type, title} is required.' });
+  if (!section || typeof section !== 'object' || typeof section.kind !== 'string' || typeof section.title !== 'string') {
+    return res.status(400).json({ error: 'section {kind, title} is required.' });
   }
   try {
     const settings = await loadOrgAiSettings(req.authUser.organisation);
@@ -668,21 +818,23 @@ router.post('/structure/section', sectionLimiter, async (req, res) => {
       return res.status(409).json({ error: 'AI isn\'t set up for your organisation yet — ask an Admin to add an API key under Security ▸ AI Studio.' });
     }
     const audienceLine = buildAudienceLine(audience);
-    const systemPrompt = `You are writing ONE section of a larger piece of API documentation — other sections are generated separately, so write only this one. ${audienceLine}
-Section to write:
-- title: ${section.title}
-- what it should cover: ${section.hint || '(use your judgement based on the raw notes below)'}
-${apiLevelDescription ? `For context, here is the API-level overview already written elsewhere — stay consistent with it, don't repeat it:\n${String(apiLevelDescription).slice(0, 2000)}\n` : ''}
-Respond with ONLY the markdown content of this section itself — no JSON, no surrounding code fence around the whole answer, no preamble like "Here's the section", and no top-level heading restating the title (it's already shown separately above your content). Use normal markdown throughout, including fenced code blocks for any sample requests/responses/headers — write real quotes and real line breaks exactly as a person would in a markdown file, you do not need to escape anything for JSON.
-Go into real depth here — you are not sharing a response budget with any other section, so don't compress for space the way a single giant response would have to.`;
-    const rawContent = await callLlm(settings, systemPrompt, rawText, { maxTokens: 4000 });
-    const content = stripOuterMarkdownFence(rawContent);
-    if (!content) {
-      throw new Error('AI_EMPTY: model returned no content for this section');
+    const contextLine = apiLevelDescription ? `For context, here is the API-level overview already written elsewhere — stay consistent with it, don't repeat it:\n${String(apiLevelDescription).slice(0, 2000)}\n` : '';
+    const ctx = { section, audienceLine, contextLine, rawText };
+
+    if (section.kind === 'headers' || section.kind === 'parameters') {
+      const rows = await generateRowsSection(settings, ctx);
+      return res.json({ kind: section.kind, title: section.title, rows });
     }
-    res.json({ type: section.type, title: section.title, content });
+    if (section.kind === 'requestBody' || section.kind === 'response') {
+      const { description, example, fields } = await generatePayloadSection(settings, ctx);
+      const statusCode = section.kind === 'response' ? (Number.isFinite(section.statusCode) ? section.statusCode : 200) : undefined;
+      return res.json({ kind: section.kind, title: section.title, statusCode, description, example, fields });
+    }
+    // overview / custom / anything unrecognized — plain markdown fallback
+    const content = await generateMarkdownSection(settings, ctx);
+    res.json({ kind: section.kind || 'custom', title: section.title, content });
   } catch (err) {
-    console.error(`POST /api/ai/structure/section (${section?.type}) failed:`, err);
+    console.error(`POST /api/ai/structure/section (${section?.kind}) failed:`, err);
     const described = describeAiError(err);
     res.status(502).json({ error: described.message, errorCode: described.code, retryable: described.retryable });
   }

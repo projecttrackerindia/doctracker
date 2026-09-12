@@ -2396,13 +2396,19 @@ function applyAiStructureResult(parsed){
   renderBlocks();
 }
 
-// ==================== Staged generation (plan, then one section at a time) ====================
+// ==================== Staged generation (plan, then one piece at a time) ====================
 // Same "Generate documentation" button, but instead of one big all-or-
-// nothing call, this plans the section list first, then generates and
-// applies each section as its own small call. Every section that finishes
-// is added to the editor immediately — a failure partway through only
-// costs the sections after it, and each failed row gets its own inline
-// retry instead of redoing the whole document.
+// nothing call, this plans the endpoints and sections first, then
+// generates and applies each piece as its own small call. Every piece
+// that finishes is added to the editor immediately — a failure partway
+// through only costs the pieces after it, and each failed row gets its
+// own inline retry instead of redoing the whole document.
+//
+// Each planned section carries a "kind" (headers/parameters/requestBody/
+// response/custom/overview) that says exactly which real editor block it
+// belongs in — see applyAiSectionResult below — instead of every section
+// landing as one undifferentiated "custom" text block regardless of what
+// it actually contains.
 function renderAiSectionChecklist(container, sections){
   container.innerHTML = `
     <div class="ai-status-title" style="margin-bottom:8px;">Generating ${sections.length} section(s)…</div>
@@ -2431,9 +2437,227 @@ function updateAiSectionRow(i, { icon, status, error, onRetry }){
   }
 }
 
+// Converts AI-returned rows ({name,type,required,example,description}) into
+// the exact per-row shape the editor's blocks store (fresh id per row —
+// same shape fillFormFromEndpoint uses when loading a saved endpoint).
+function aiRowsToBlockRows(rows, extra){
+  return (rows||[]).filter(r=>r && r.name).map(r=>Object.assign({
+    id: uid(), name: r.name||'', type: r.type||'String', required: !!r.required,
+    example: r.example||'', description: r.description||'',
+  }, extra||{}));
+}
+
+// Headers/Parameters/Request body are singleton blocks (see SINGLETON_
+// BLOCKS) — addBlock() on a type that already exists just highlights it
+// and ignores the data you passed, which is right for the "+ Add block"
+// menu but wrong here: two AI sections of the same kind (or a retry) need
+// their rows merged into the one block, not silently dropped. Matches
+// existing rows by name (case-insensitive) so a retry never duplicates a
+// row that already landed.
+function upsertSingletonRows(type, newRows){
+  if(!newRows.length) return;
+  let block = blocks.find(b=>b.type===type);
+  if(!block) block = addBlock(type, { rows: [] });
+  const existingNames = new Set((block.rows||[]).map(r=>r.name.toLowerCase()));
+  block.rows = [...(block.rows||[]), ...newRows.filter(r=>!existingNames.has(r.name.toLowerCase()))];
+}
+
+function upsertRequestBody(example, fields){
+  let block = blocks.find(b=>b.type==='requestBody');
+  if(!block) block = addBlock('requestBody', {});
+  if(example && !block.example.trim()) block.example = example;
+  const existingNames = new Set((block.fields||[]).map(f=>f.name.toLowerCase()));
+  const rows = aiRowsToBlockRows(fields).filter(f=>!existingNames.has(f.name.toLowerCase()));
+  block.fields = [...(block.fields||[]), ...rows];
+}
+
+// response blocks are NOT singleton (one endpoint can have several — 200,
+// 400, 401...), so each response-kind section just adds its own. A brand
+// new endpoint starts with one blank placeholder response block (see
+// boot()) purely so the form isn't empty before anything is generated —
+// once a real AI-generated response is about to land, that empty
+// placeholder is removed rather than left behind as a stray duplicate. It
+// is only ever removed when it's still completely untouched, so this
+// never discards anything a person (or an earlier AI pass) actually
+// entered.
+function removeBlankSeedResponseBlock(){
+  if(endpointId) return; // only ever applies to a brand new, unsaved endpoint
+  const idx = blocks.findIndex(b=>b.type==='response'
+    && (b.code||200)===200 && !(b.description||'').trim() && !(b.example||'').trim()
+    && (b.fields||[]).length===0 && (b.examples||[]).length===0);
+  if(idx>=0 && blocks.length===1) blocks.splice(idx,1);
+}
+
+// Routes one finished /structure/section result to the real block its
+// "kind" belongs in. Returns the updated apiLevelDescription (unchanged
+// unless this was the overview).
+function applyAiSectionResult(result, apiLevelDescription){
+  const kind = result.kind || 'custom';
+  if(kind === 'overview'){
+    const content = result.content || '';
+    if(!document.getElementById('fApiDesc').value.trim()) document.getElementById('fApiDesc').value = content;
+    return content;
+  }
+  if(kind === 'headers'){
+    upsertSingletonRows('headers', aiRowsToBlockRows(result.rows));
+  } else if(kind === 'parameters'){
+    upsertSingletonRows('parameters', aiRowsToBlockRows(result.rows, { sendAs:'query' }));
+  } else if(kind === 'requestBody'){
+    removeBlankSeedResponseBlock();
+    upsertRequestBody(result.example, result.fields);
+  } else if(kind === 'response'){
+    removeBlankSeedResponseBlock();
+    addBlock('response', {
+      code: result.statusCode || 200,
+      description: result.description || '',
+      example: result.example || '',
+      fields: aiRowsToBlockRows(result.fields),
+    });
+  } else {
+    addBlock('custom', { title: result.title, content: result.content || '' });
+  }
+  return apiLevelDescription;
+}
+
+// Project-level facts from the plan — name/tag and the shared auth model,
+// if the notes described one. Auth is project-wide (Project details ▸
+// Authentication applies to every endpoint), so this is only ever applied
+// once, from the first endpoint's pass, and never overwrites anything
+// already filled in.
+function applyAiPlanBasics(plan){
+  if(plan.project?.name && !document.getElementById('fProject').value.trim()) document.getElementById('fProject').value = plan.project.name;
+  if(plan.project?.tag && !document.getElementById('fTag').value.trim()) document.getElementById('fTag').value = plan.project.tag;
+  if(plan.projectAuth){
+    if(!document.getElementById('fAuthType').value.trim()) document.getElementById('fAuthType').value = plan.projectAuth.type || '';
+    if(!document.getElementById('fAuthHeader').value.trim()) document.getElementById('fAuthHeader').value = plan.projectAuth.headerName || '';
+    if(!document.getElementById('fAuthDesc').value.trim()) document.getElementById('fAuthDesc').value = plan.projectAuth.description || '';
+  }
+}
+function applyAiEndpointBasics(ep){
+  if(ep.method) document.getElementById('fMethod').value = ep.method;
+  if(ep.path && !document.getElementById('fPath').value.trim()) document.getElementById('fPath').value = ep.path;
+  if(ep.summary){
+    let sBlock = blocks.find(b=>b.type==='summary');
+    if(!sBlock) sBlock = addBlock('summary', {});
+    if(!sBlock.summary) sBlock.summary = ep.summary;
+  }
+}
+
+// Resets ONLY the endpoint-scoped state (method/path/tag/version/content
+// type/visibility, the blocks list, and the loaded-endpoint id) so the
+// next Save creates a NEW endpoint instead of overwriting this one.
+// Project-scoped state — name, Project details tab, Authentication —
+// is deliberately left untouched, since the next endpoint belongs to the
+// same project.
+function resetEndpointFieldsForNewEndpoint(){
+  endpointId = null;
+  loadedUpdatedAt = null;
+  document.getElementById('fMethod').value = 'GET';
+  document.getElementById('fPath').value = '';
+  document.getElementById('fTag').value = '';
+  document.getElementById('fVersion').value = '';
+  document.getElementById('fContentType').value = 'application/json';
+  document.getElementById('fVisibility').value = 'private';
+  blocks.length = 0;
+  addBlock('response', { code:200, description:'', example:'', fields:[] });
+  updateTopBar({ name: document.getElementById('fProject').value.trim() || 'this project' }, null);
+}
+
+// If the plan found more than one endpoint, offer the next one instead of
+// silently drafting it — merging it into the endpoint just generated would
+// recreate exactly the "two endpoints' info in one endpoint" problem this
+// was built to avoid. Each endpoint is reviewed and saved on its own,
+// consistent with the rest of this editor's one-endpoint-at-a-time model.
+function maybeOfferNextEndpoint(plan, endpoints, index, rawText, audience, resultEl, btn){
+  if(index + 1 >= endpoints.length) return;
+  const next = endpoints[index+1];
+  const box = document.createElement('div');
+  box.className = 'hint';
+  box.style.marginTop = '14px';
+  box.innerHTML = `
+    <div>The notes also described another endpoint:</div>
+    <div style="display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-top:6px;">
+      <span><b>${escapeHtml(next.method)} ${escapeHtml(next.path)}</b>${next.summary ? ' — '+escapeHtml(next.summary) : ''}</span>
+      <button type="button" class="btn-ghost" id="aiNextEndpointBtn-${index}">Save this one, then draft that one →</button>
+    </div>
+  `;
+  resultEl.appendChild(box);
+  document.getElementById(`aiNextEndpointBtn-${index}`).addEventListener('click', ()=>{
+    const current = `${document.getElementById('fMethod').value} ${document.getElementById('fPath').value}`;
+    if(!confirm(`This clears the form to start drafting ${next.method} ${next.path} as a new endpoint in this project. Make sure you've saved ${current} first — anything unsaved on it will be lost. Continue?`)) return;
+    resetEndpointFieldsForNewEndpoint();
+    renderBlocks();
+    runAiEndpointQueue(plan, endpoints, index+1, rawText, audience, resultEl, btn);
+  });
+}
+
+// Generates the project-wide overview (once, on the first endpoint only)
+// plus one queued endpoint's own sections, then offers to draft the next
+// endpoint the plan found, if any.
+async function runAiEndpointQueue(plan, endpoints, index, rawText, audience, resultEl, btn){
+  const ep = endpoints[index];
+  applyAiEndpointBasics(ep);
+  renderBlocks();
+
+  const includeOverview = index === 0 && plan.overview && plan.overview.title;
+  const checklist = [
+    ...(includeOverview ? [{ kind:'overview', title: plan.overview.title, hint: plan.overview.hint }] : []),
+    ...(ep.sections || []),
+  ];
+
+  if(btn){ btn.textContent = 'Generating…'; }
+
+  if(checklist.length === 0){
+    if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
+    renderAiStatus(resultEl, { type:'success', title:'Applied to this endpoint', message:`${escapeHtml(ep.method)} ${escapeHtml(ep.path)} — endpoint fields were added. The notes didn't call for any additional sections here.` });
+    maybeOfferNextEndpoint(plan, endpoints, index, rawText, audience, resultEl, btn);
+    return;
+  }
+
+  renderAiSectionChecklist(resultEl, checklist);
+
+  // Filled in once the overview section comes back, then passed as
+  // context to every section generated after it.
+  let apiLevelDescription = document.getElementById('fApiDesc').value || '';
+
+  // One section's failure is isolated to its own row/retry, so this can
+  // simply await each call in turn — no need for a shared error path that
+  // would otherwise abandon sections that haven't run yet.
+  async function generateOne(i){
+    const section = checklist[i];
+    updateAiSectionRow(i, { icon:'…', status:'Generating…' });
+    try{
+      const result = await aiApi('POST', '/structure/section', { rawText, audience, section, apiLevelDescription });
+      apiLevelDescription = applyAiSectionResult(result, apiLevelDescription) || apiLevelDescription;
+      renderBlocks();
+      updateAiSectionRow(i, { icon:'✓', status:'Added' });
+      return true;
+    }catch(err){
+      updateAiSectionRow(i, { icon:'!', status: err.message, error:true, onRetry: ()=>generateOne(i) });
+      return false;
+    }
+  }
+
+  for(let i=0; i<checklist.length; i++){
+    await generateOne(i);
+  }
+
+  if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
+  const failedCount = resultEl.querySelectorAll('.ai-section-row-error').length;
+  const summaryEl = document.createElement('div');
+  summaryEl.className = 'hint';
+  summaryEl.style.marginTop = '10px';
+  summaryEl.textContent = failedCount === 0
+    ? `All ${checklist.length} piece(s) generated and added below for ${ep.method} ${ep.path}. Review, edit, then Publish when ready.`
+    : `${checklist.length - failedCount} of ${checklist.length} piece(s) added below for ${ep.method} ${ep.path}; ${failedCount} need a retry (click Retry on that row above) — nothing else needs to be redone.`;
+  resultEl.appendChild(summaryEl);
+
+  maybeOfferNextEndpoint(plan, endpoints, index, rawText, audience, resultEl, btn);
+}
+
 async function runAiStructureStaged(rawText, audience, resultEl, btn){
   if(btn){ btn.disabled = true; btn.textContent = 'Planning…'; }
-  renderAiStatus(resultEl, { type:'loading', message:'Reading the content and planning out the sections it needs…' });
+  renderAiStatus(resultEl, { type:'loading', message:'Reading the content and planning out the endpoints and sections it needs…' });
 
   let plan;
   try{
@@ -2449,62 +2673,21 @@ async function runAiStructureStaged(rawText, audience, resultEl, btn){
     return;
   }
 
-  applyAiMetadata(plan);
+  applyAiPlanBasics(plan);
   renderBlocks();
-  const sections = plan.sections || [];
-  if(btn){ btn.textContent = 'Generating…'; }
 
-  if(sections.length === 0){
+  const endpoints = plan.endpoints || [];
+  if(endpoints.length === 0){
     if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
-    renderAiStatus(resultEl, { type:'success', title:'Applied to this endpoint', message:'Project/endpoint fields and the overview were added. The notes didn\'t call for any additional sections.' });
+    renderAiStatus(resultEl, {
+      type:'error', title:'Nothing to generate',
+      message:'The notes didn\'t contain enough to identify even one endpoint — check what you pasted and try again.',
+      onRetry: ()=>runAiStructureStaged(rawText, audience, resultEl, btn),
+    });
     return;
   }
 
-  renderAiSectionChecklist(resultEl, sections);
-
-  // Filled in once the "overview" section (always planned first — see the
-  // /structure/plan prompt) comes back, then passed as context to every
-  // section generated after it — same role apiLevelDescription used to
-  // play when the plan wrote it directly.
-  let apiLevelDescription = '';
-
-  // One section's failure is isolated to its own row/retry, so this can
-  // simply await each call in turn — no need for a shared error path that
-  // would otherwise abandon sections that haven't run yet.
-  async function generateOne(i){
-    const section = sections[i];
-    updateAiSectionRow(i, { icon:'…', status:'Generating…' });
-    try{
-      const result = await aiApi('POST', '/structure/section', { rawText, audience, section, apiLevelDescription });
-      const content = result.content || '';
-      if((section.type || '').toLowerCase() === 'overview'){
-        apiLevelDescription = content;
-        if(!document.getElementById('fApiDesc').value.trim()) document.getElementById('fApiDesc').value = content;
-      } else {
-        addBlock('custom', { title: result.title || section.title, content });
-      }
-      renderBlocks();
-      updateAiSectionRow(i, { icon:'✓', status:'Added' });
-      return true;
-    }catch(err){
-      updateAiSectionRow(i, { icon:'!', status: err.message, error:true, onRetry: ()=>generateOne(i) });
-      return false;
-    }
-  }
-
-  for(let i=0; i<sections.length; i++){
-    await generateOne(i);
-  }
-
-  if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
-  const failedCount = document.querySelectorAll('.ai-section-row-error').length;
-  const summaryEl = document.createElement('div');
-  summaryEl.className = 'hint';
-  summaryEl.style.marginTop = '10px';
-  summaryEl.textContent = failedCount === 0
-    ? `All ${sections.length} section(s) generated and added below. Review, edit, then Publish when ready.`
-    : `${sections.length - failedCount} of ${sections.length} section(s) added below; ${failedCount} need a retry (click Retry on that row above) — nothing else needs to be redone.`;
-  resultEl.appendChild(summaryEl);
+  await runAiEndpointQueue(plan, endpoints, 0, rawText, audience, resultEl, btn);
 }
 
 async function runAiStructure(rawText, audience, resultEl, btn){
