@@ -546,6 +546,42 @@ svg{ display:block; }
 .modal-actions button.primary{ background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:#04141a; }
 .modal-actions button:hover{ filter:brightness(1.08); }
 
+/* ---- AI Studio (Draft -> Diagram) ---- */
+.ai-arch-modal{ width:640px; max-width:94vw; }
+.ai-arch-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:2px; }
+.ai-arch-head-left{ display:flex; align-items:center; gap:12px; }
+.ai-arch-badge{
+  width:36px; height:36px; border-radius:11px; display:flex; align-items:center; justify-content:center;
+  flex:none; color:#04141a; background:linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow:var(--accent-glow);
+}
+.ai-arch-modal h2{ margin-bottom:1px; }
+.ai-arch-sub{ font-size:11.5px; color:var(--text-faint); }
+.ai-arch-modal > p{ margin-top:12px; }
+.ai-arch-modal textarea{ min-height:150px; font-family:var(--sans); }
+.ai-arch-status{ margin:0 0 4px; }
+.ai-arch-status-box{
+  display:flex; gap:11px; align-items:flex-start; padding:12px 14px; margin-bottom:14px;
+  border-radius:12px; font-size:12px; line-height:1.55; border:1px solid var(--border);
+  background:var(--surface-2); color:var(--text-dim);
+}
+.ai-arch-status-box.success{ border-color:rgba(51,230,168,.35); background:var(--ok-soft); color:var(--text); }
+.ai-arch-status-box.error{ border-color:rgba(255,93,120,.35); background:var(--danger-soft); color:var(--text); }
+.ai-arch-status-title{ font-weight:700; color:var(--text); margin-bottom:2px; }
+.ai-arch-status-icon{ flex:none; font-size:14px; line-height:1.45; }
+.ai-arch-retry{ margin-top:9px; padding:5px 11px; border-radius:8px; font-size:11px; font-weight:700; background:var(--surface-hover); color:var(--text); }
+.ai-arch-retry:hover{ filter:brightness(1.1); }
+.ai-spin{
+  width:14px; height:14px; margin-top:1px; border-radius:50%; flex:none;
+  border:2px solid var(--border-strong); border-top-color:var(--accent);
+  animation:ai-spin .7s linear infinite;
+}
+@keyframes ai-spin{ to{ transform:rotate(360deg); } }
+.tb-btn-ai{
+  background:var(--accent-soft); color:var(--accent); border-color:rgba(34,229,255,.35);
+}
+.tb-btn-ai:hover{ background:var(--accent-soft-strong); color:var(--accent); }
+
 @media (max-width: 900px){
   .palette{ position:absolute; z-index:30; height:100%; left:0; }
   .inspector{ position:absolute; z-index:30; height:100%; right:0; }
@@ -574,6 +610,11 @@ svg{ display:block; }
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"></path><path d="M21 13a9 9 0 1 1-3-7.7L21 8"></path></svg>
       </button>
     </div>
+    <div class="ft-sep"></div>
+    <button type="button" class="tb-btn tb-btn-ai" id="btnAiStudio" title="AI Studio — draft notes into a diagram">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none"><path d="M12 2l1.6 4.9L18.5 8.4l-4.9 1.6L12 15l-1.6-4.9L5.5 8.4l4.9-1.5L12 2z"></path><path d="M19 14l.9 2.6L22.5 17.5l-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z"></path></svg>
+      AI Studio
+    </button>
     <div class="ft-sep"></div>
     <button type="button" class="tb-btn" id="btnExport" title="Export diagram">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"></path><path d="M7 10l5 5 5-5"></path><path d="M4 20h16"></path></svg>
@@ -771,6 +812,35 @@ svg{ display:block; }
     <div class="modal-actions">
       <button id="ciCancel">Cancel</button>
       <button class="primary" id="ciSave" disabled>Save icon</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="aiArchModal">
+  <div class="modal ai-arch-modal">
+    <div class="ai-arch-head">
+      <div class="ai-arch-head-left">
+        <div class="ai-arch-badge">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" stroke="none"><path d="M12 2l1.8 5.4L19.2 9.2l-5.4 1.8L12 16.4l-1.8-5.4L4.8 9.2l5.4-1.8L12 2z"></path></svg>
+        </div>
+        <div>
+          <h2>AI Studio</h2>
+          <div class="ai-arch-sub">Turn notes into an architecture diagram</div>
+        </div>
+      </div>
+      <button type="button" class="tb-icon-btn" id="aiArchClose" title="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"></path></svg>
+      </button>
+    </div>
+    <p>Paste anything — a technical spec, meeting notes, a list of services and how they call each other. AI lays out the components and connections on the canvas; nothing already there gets moved or removed.</p>
+    <div class="insp-field">
+      <label>Your notes</label>
+      <textarea id="aiArchText" placeholder="e.g. Mobile app calls the API Gateway, which authenticates via Auth0, then hits an Order Lambda that reads/writes Postgres and publishes an order.created event to Kafka for the analytics pipeline…"></textarea>
+    </div>
+    <div class="ai-arch-status" id="aiArchStatus"></div>
+    <div class="modal-actions">
+      <button id="aiArchCancel">Cancel</button>
+      <button class="primary" id="aiArchGo">Generate diagram</button>
     </div>
   </div>
 </div>
@@ -3146,6 +3216,132 @@ document.getElementById('ciSave').addEventListener('click', async ()=>{
     saveBtn.disabled = false; saveBtn.textContent = 'Save icon';
   }
 });
+
+/* ==================== AI Studio (Draft -> Diagram) ====================
+   Thin fetch wrapper for /api/ai/* — separate from apiGet/apiSend above
+   since those are hard-scoped to /api/workspace. Surfaces the server's own
+   error message (e.g. "AI isn't set up for your organisation yet…")
+   instead of a generic failure whenever the response includes one. */
+async function aiApi(method, path, body){
+  const res = await fetch('/api/ai' + path, {
+    method, credentials:'same-origin',
+    headers: body ? { 'Content-Type':'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let data = null;
+  try{ data = await res.json(); }catch(e){ /* no body */ }
+  if(!res.ok){
+    const err = new Error((data && data.error) || `Request failed: ${res.status}`);
+    err.retryable = !!(data && data.retryable);
+    err.code = data && data.errorCode;
+    throw err;
+  }
+  return data;
+}
+
+function openAiArchModal(){
+  document.getElementById('aiArchModal').classList.add('show');
+  document.getElementById('aiArchText').focus();
+}
+function closeAiArchModal(){
+  document.getElementById('aiArchModal').classList.remove('show');
+}
+document.getElementById('btnAiStudio').addEventListener('click', openAiArchModal);
+document.getElementById('aiArchClose').addEventListener('click', closeAiArchModal);
+document.getElementById('aiArchCancel').addEventListener('click', closeAiArchModal);
+document.getElementById('aiArchModal').addEventListener('click', (e)=>{
+  if(e.target.id === 'aiArchModal') closeAiArchModal();
+});
+
+function renderAiArchStatus(kind, opts){
+  const el = document.getElementById('aiArchStatus');
+  if(kind === null){ el.innerHTML = ''; return; }
+  if(kind === 'loading'){
+    el.innerHTML = `<div class="ai-arch-status-box"><div class="ai-spin"></div><div>${escapeHtml(opts.message)}</div></div>`;
+    return;
+  }
+  const icon = kind === 'success' ? '✅' : '⚠️';
+  el.innerHTML = `<div class="ai-arch-status-box ${kind}">
+    <div class="ai-arch-status-icon">${icon}</div>
+    <div>
+      <div class="ai-arch-status-title">${escapeHtml(opts.title)}</div>
+      <div>${escapeHtml(opts.message)}</div>
+      ${opts.retry ? `<button type="button" class="ai-arch-retry" id="aiArchRetryBtn">Try again</button>` : ''}
+    </div>
+  </div>`;
+  if(opts.retry) document.getElementById('aiArchRetryBtn').addEventListener('click', opts.retry);
+}
+
+// Places newly generated components to the right of whatever is already on
+// the canvas (rather than at a fixed origin), so generating into a diagram
+// that already has content — or generating more than once — never stacks
+// new components on top of existing ones. Node/edge ids from the server are
+// stable slugs used only to wire edges together; every node gets a real,
+// collision-proof uid() before it's added to state, exactly like paste/
+// duplicate do elsewhere in this file.
+function applyAiArchitectureResult(parsed){
+  const nodesIn = Array.isArray(parsed.nodes) ? parsed.nodes : [];
+  const edgesIn = Array.isArray(parsed.edges) ? parsed.edges : [];
+  const existingMaxX = state.nodes.reduce((m,n)=>Math.max(m, n.x + n.w), 0);
+  const offsetX = state.nodes.length ? existingMaxX + 90 : 60;
+  const offsetY = 60;
+
+  const idMap = {};
+  const newNodes = nodesIn.map(n=>{
+    const real = {
+      id: uid(), kind:'icon',
+      icon: ICONS_BY_ID[n.icon] ? n.icon : 'externalsystem',
+      label: n.label || 'Component',
+      x: offsetX + (n.x||0), y: offsetY + (n.y||0), w: n.w||132, h: n.h||92,
+      parentId: null,
+    };
+    idMap[n.id] = real.id;
+    return real;
+  });
+  state.nodes.push(...newNodes);
+
+  const newEdges = edgesIn
+    .filter(e => idMap[e.from] && idMap[e.to])
+    .map(e => ({
+      id: uid(), from: idMap[e.from], to: idMap[e.to],
+      fromSide: e.fromSide || 'right', toSide: e.toSide || 'left',
+      label: e.label || '', lineStyle:'solid', shape:'elbow',
+      arrowStart:false, arrowEnd:true, animated:true,
+    }));
+  state.edges.push(...newEdges);
+
+  state.selection.clear();
+  newNodes.forEach(n=>addToSelection('node', n.id));
+  render();
+  pushHistory();
+  return { nodeCount:newNodes.length, edgeCount:newEdges.length };
+}
+
+async function runAiArchGenerate(){
+  const rawText = document.getElementById('aiArchText').value.trim();
+  if(!rawText){ toast('Paste some notes first.'); return; }
+  const btn = document.getElementById('aiArchGo');
+  btn.disabled = true; btn.textContent = 'Generating…';
+  renderAiArchStatus('loading', { message:'Reading the notes and laying out the diagram…' });
+  try{
+    const parsed = await aiApi('POST', '/generate-architecture', { rawText });
+    const added = applyAiArchitectureResult(parsed);
+    renderAiArchStatus('success', {
+      title:'Added to the canvas',
+      message:`${added.nodeCount} component${added.nodeCount===1?'':'s'} and ${added.edgeCount} connection${added.edgeCount===1?'':'s'} added. Review the layout, then Publish when ready.`,
+    });
+    document.getElementById('aiArchText').value = '';
+  }catch(err){
+    renderAiArchStatus('error', {
+      title: err.retryable ? 'Temporary problem' : 'Could not generate a diagram',
+      message: err.message,
+      retry: err.retryable ? runAiArchGenerate : null,
+    });
+  }finally{
+    btn.disabled = false; btn.textContent = 'Generate diagram';
+  }
+}
+document.getElementById('aiArchGo').addEventListener('click', runAiArchGenerate);
 
 async function boot(){
   document.getElementById('userLabel').textContent = AUTH_USER.username || 'Unknown';

@@ -267,13 +267,67 @@ function describeAiError(err) {
 // Every prompt below asks for JSON-only output; models occasionally still
 // wrap it in ```json fences or add a stray sentence, so this strips both
 // before parsing instead of trusting the raw string.
+//
+// Models also routinely break strict JSON *inside* the string values
+// themselves — most often by writing a literal newline instead of "\n"
+// when a "content" field holds multi-paragraph markdown (numbered flows,
+// "Flow 1: ..." style notes, etc.), and occasionally by writing a bare
+// backslash that isn't one of JSON's legal escapes (a Windows path, a
+// regex, a markdown escape like "\_"). Either one makes JSON.parse throw
+// "Unexpected token" partway through an otherwise well-formed object. We
+// try a strict parse first (the common case), and only fall back to a
+// character-level repair pass — which walks the text, and *only while
+// inside a "..." string*, escapes raw \n/\r/\t and doubles up any
+// backslash that isn't followed by a legal JSON escape char — if that
+// fails.
+const JSON_ESCAPE_CHARS = new Set(['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u']);
+function repairJsonStrings(raw) {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (!inString) {
+      if (ch === '"') inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === '\\') {
+      const next = raw[i + 1];
+      if (next !== undefined && JSON_ESCAPE_CHARS.has(next)) {
+        out += ch + next;
+        i++;
+      } else {
+        out += '\\\\'; // stray backslash — escape it rather than leave an illegal sequence
+      }
+      continue;
+    }
+    if (ch === '"') { inString = false; out += ch; continue; }
+    if (ch === '\n') { out += '\\n'; continue; }
+    if (ch === '\r') { out += '\\r'; continue; }
+    if (ch === '\t') { out += '\\t'; continue; }
+    out += ch;
+  }
+  return out;
+}
+
 function extractJson(text) {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const candidate = fenced ? fenced[1] : text;
   const start = candidate.indexOf('{');
   const end = candidate.lastIndexOf('}');
   const jsonSlice = start !== -1 && end !== -1 ? candidate.slice(start, end + 1) : candidate;
-  return JSON.parse(jsonSlice);
+  try {
+    return JSON.parse(jsonSlice);
+  } catch (firstErr) {
+    try {
+      return JSON.parse(repairJsonStrings(jsonSlice));
+    } catch (secondErr) {
+      // Neither the raw slice nor the repaired version parsed — surface the
+      // original error (it's the more informative one) rather than the
+      // repair pass's, since the repair is best-effort.
+      throw firstErr;
+    }
+  }
 }
 
 // ==================== Draft / upload -> structured documentation ====================
@@ -360,6 +414,174 @@ Use exactly the method, path, params, headers and body shape given — do not in
     res.json(parsed);
   } catch (err) {
     console.error('POST /api/ai/generate-openapi failed:', err);
+    const described = describeAiError(err);
+    res.status(502).json({ error: described.message, errorCode: described.code, retryable: described.retryable });
+  }
+});
+
+// ==================== Draft notes -> Architecture Studio diagram ====================
+// POST /api/ai/generate-architecture
+// Body: { rawText }
+// Mirrors /structure's job but targets Architecture Studio's canvas model
+// (state.nodes / state.edges) instead of the endpoint editor's blocks. The
+// model is deliberately NOT asked for pixel coordinates — it has no idea
+// what's already on the canvas — only for *icon* (constrained to the
+// studio's real icon catalog, so nothing renders as a broken/missing icon)
+// and *layer* (its left-to-right rank in the flow). We turn that into an
+// actual layered layout server-side, so the diagram always comes back
+// tidy regardless of what the model produces.
+
+// Kept as (id, display name) pairs and cross-checked against
+// architecture-studio.html's own ICON_DEFS — if that catalog ever changes,
+// update this list too, or generated nodes will fall back to a generic icon.
+const ARCH_ICON_DEFS = [
+  ['client', 'Browser / Client'], ['mobile', 'Mobile App'], ['user', 'User'],
+  ['server', 'Server'], ['vm', 'Virtual Machine'], ['lambda', 'Function (Lambda)'], ['container', 'Container'], ['k8s', 'Kubernetes Cluster'],
+  ['s3', 'Object Storage (S3)'], ['sql', 'SQL Database'], ['nosql', 'NoSQL Database'], ['cache', 'Cache (Redis)'], ['warehouse', 'Data Warehouse'],
+  ['gateway', 'API Gateway'], ['mulesoft', 'Integration Flow'], ['queue', 'Message Queue'], ['kafka', 'Event Stream (Kafka)'], ['webhook', 'Webhook'],
+  ['loadbalancer', 'Load Balancer'], ['broker', 'Message Broker (RabbitMQ/SQS)'], ['graphql', 'GraphQL API'], ['grpc', 'gRPC Service'], ['ingress', 'Ingress Controller'],
+  ['salesforce', 'Salesforce'], ['slack', 'Slack'], ['stripe', 'Stripe'], ['twilio', 'Twilio'], ['email', 'Email / SES'],
+  ['cdn', 'CDN'], ['firewall', 'Firewall'], ['vpn', 'VPN / Shield'], ['dns', 'DNS'], ['auth', 'Auth / Identity'], ['apikey', 'API Key / Secret'],
+  ['secretsvault', 'Secrets Vault'], ['waf', 'Web App Firewall'], ['multiregion', 'Multi-Region / DR'],
+  ['cicd', 'CI/CD Pipeline'], ['monitoring', 'Monitoring / APM'], ['logs', 'Logging'], ['scheduler', 'Cron / Scheduler'], ['alert', 'Alert / Incident'],
+  ['servicemesh', 'Service Mesh'], ['terraform', 'Infrastructure as Code'], ['featureflag', 'Feature Flags'],
+  ['etl', 'ETL / Data Pipeline'], ['datalake', 'Data Lake'], ['analytics', 'Analytics Dashboard'], ['search', 'Search Index'],
+  ['elasticsearch', 'Search Engine (Elasticsearch)'], ['blobstorage', 'Blob Storage (GCS/Azure)'],
+  ['cloud', 'Cloud (generic)'], ['process', 'Process'], ['decision', 'Decision'], ['actor', 'Actor / Person'],
+  ['externalsystem', 'External System'], ['datastore', 'Generic Data Store'],
+];
+const ARCH_ICON_IDS = new Set(ARCH_ICON_DEFS.map(([id]) => id));
+const ARCH_ICON_CATALOG_TEXT = ARCH_ICON_DEFS.map(([id, name]) => `${id} — ${name}`).join('\n');
+const ARCH_ICON_FALLBACK = 'externalsystem';
+
+// Matches architecture-studio.html's defaultSize('icon') exactly, so
+// generated nodes are pixel-identical in size to hand-placed ones.
+const ARCH_NODE_W = 132;
+const ARCH_NODE_H = 92;
+const ARCH_COL_GAP = 240;
+const ARCH_ROW_GAP = 150;
+const ARCH_MAX_NODES = 40;
+const ARCH_MAX_EDGES = 80;
+
+function slugifyArchId(raw, fallbackIndex) {
+  const slug = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || `node-${fallbackIndex}`;
+}
+
+// Turns the model's { id, icon, label, layer } list — with no positions —
+// into a real layered left-to-right layout: nodes are grouped by layer,
+// stacked vertically within it, and each layer is centered against the
+// tallest column so the whole diagram reads as one balanced composition
+// rather than top-aligned columns of differing heights.
+function layoutArchitecture(nodesIn, edgesIn) {
+  const seenIds = new Set();
+  const nodes = [];
+  (Array.isArray(nodesIn) ? nodesIn : []).slice(0, ARCH_MAX_NODES).forEach((n, i) => {
+    if (!n || typeof n !== 'object') return;
+    let id = slugifyArchId(n.id, i);
+    while (seenIds.has(id)) id = `${id}-${i}`;
+    seenIds.add(id);
+    const icon = ARCH_ICON_IDS.has(n.icon) ? n.icon : ARCH_ICON_FALLBACK;
+    const label = (typeof n.label === 'string' && n.label.trim()) || id.replace(/-/g, ' ');
+    const layer = Number.isFinite(n.layer) ? Math.max(0, Math.round(n.layer)) : 0;
+    nodes.push({ id, icon, label, layer });
+  });
+
+  // Remap layer numbers to a contiguous 0..k-1 range (the model might say
+  // "0, 1, 4" for a 3-stage flow) so column spacing stays even.
+  const distinctLayers = [...new Set(nodes.map(n => n.layer))].sort((a, b) => a - b);
+  const layerRank = new Map(distinctLayers.map((l, i) => [l, i]));
+  const byLayer = new Map();
+  nodes.forEach(n => {
+    const rank = layerRank.get(n.layer);
+    n._rank = rank;
+    if (!byLayer.has(rank)) byLayer.set(rank, []);
+    byLayer.get(rank).push(n);
+  });
+  const maxColumnCount = Math.max(1, ...[...byLayer.values()].map(col => col.length));
+
+  const positioned = nodes.map(n => {
+    const col = byLayer.get(n._rank);
+    const indexInCol = col.indexOf(n);
+    const verticalOffset = ((maxColumnCount - col.length) * ARCH_ROW_GAP) / 2;
+    return {
+      id: n.id,
+      icon: n.icon,
+      label: n.label,
+      layer: n._rank,
+      x: n._rank * ARCH_COL_GAP,
+      y: verticalOffset + indexInCol * ARCH_ROW_GAP,
+      w: ARCH_NODE_W,
+      h: ARCH_NODE_H,
+    };
+  });
+
+  const rankById = new Map(positioned.map(n => [n.id, n.layer]));
+  const validIds = new Set(positioned.map(n => n.id));
+  const seenEdgeKeys = new Set();
+  const edges = [];
+  (Array.isArray(edgesIn) ? edgesIn : []).slice(0, ARCH_MAX_EDGES * 2).forEach(e => {
+    if (!e || typeof e !== 'object') return;
+    const from = slugifyArchId(e.from, -1);
+    const to = slugifyArchId(e.to, -1);
+    if (from === to || !validIds.has(from) || !validIds.has(to)) return;
+    const key = `${from}>${to}`;
+    if (seenEdgeKeys.has(key) || edges.length >= ARCH_MAX_EDGES) return;
+    seenEdgeKeys.add(key);
+    const fromRank = rankById.get(from), toRank = rankById.get(to);
+    const [fromSide, toSide] = toRank > fromRank ? ['right', 'left'] : toRank < fromRank ? ['left', 'right'] : ['bottom', 'top'];
+    edges.push({ from, to, fromSide, toSide, label: (typeof e.label === 'string' ? e.label.trim().slice(0, 60) : '') });
+  });
+
+  return { nodes: positioned, edges };
+}
+
+router.post('/generate-architecture', generateLimiter, async (req, res) => {
+  const { rawText } = req.body || {};
+  if (typeof rawText !== 'string' || !rawText.trim()) {
+    return res.status(400).json({ error: 'rawText is required.' });
+  }
+  if (rawText.length > 200000) {
+    return res.status(400).json({ error: 'That text is too long for a single pass (200,000 character limit) — try splitting it up.' });
+  }
+  try {
+    const settings = await loadOrgAiSettings(req.authUser.organisation);
+    if (!settings) {
+      return res.status(409).json({ error: 'AI isn\'t set up for your organisation yet — ask an Admin to add an API key under Security ▸ AI Studio.' });
+    }
+    const systemPrompt = `You convert raw notes (a spec, meeting notes, a description of a flow — in any order, any format) into the components and connections of a system architecture diagram.
+Respond with ONLY a JSON object, no prose, no markdown fences, shaped exactly like:
+{
+  "nodes": [
+    { "id": string, "icon": string, "label": string, "layer": integer }
+  ],
+  "edges": [
+    { "from": string, "to": string, "label": string }
+  ]
+}
+Rules:
+- "id" is a short, unique, kebab-case slug you make up per node (e.g. "mobile-app", "auth-service") — used only to wire up edges, never shown.
+- "icon" MUST be exactly one of these catalog ids (pick the closest real match; use "externalsystem" only when truly nothing else fits):
+${ARCH_ICON_CATALOG_TEXT}
+- "label" is a short human-readable name for that specific component (2-4 words), not the catalog name verbatim unless it genuinely is that generic.
+- "layer" is the component's left-to-right rank in the flow: 0 for where the flow starts (a client, a trigger, an inbound request), increasing by 1 for each hop deeper into the system. Give two components the same layer only if they genuinely happen in parallel at that stage.
+- "edges[].label" should be short and concrete when the notes support it (an HTTP verb+path, an event/topic name, "sync"/"async") — empty string if nothing concrete is stated.
+- Only include components and connections the notes actually describe or clearly imply — do not pad the diagram with generic infrastructure (load balancers, CDNs, monitoring, etc.) that wasn't mentioned or reasonably implied.`;
+    const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 3000 });
+    const rawParsed = extractJson(text);
+    const { nodes, edges } = layoutArchitecture(rawParsed.nodes, rawParsed.edges);
+    if (nodes.length === 0) {
+      return res.status(502).json({ error: 'The AI couldn\'t identify any components in that text — try adding more detail about the services involved.', errorCode: 'empty', retryable: false });
+    }
+    await recordAuditEvent(req.authUser, req, {
+      action: 'ai.architecture.generated',
+      resourceType: 'ai',
+      details: `Generated ${nodes.length} node(s) and ${edges.length} edge(s) from ${rawText.length} chars of input`,
+      severity: 'info',
+    });
+    res.json({ nodes, edges });
+  } catch (err) {
+    console.error('POST /api/ai/generate-architecture failed:', err);
     const described = describeAiError(err);
     res.status(502).json({ error: described.message, errorCode: described.code, retryable: described.retryable });
   }
