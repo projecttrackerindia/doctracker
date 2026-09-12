@@ -273,7 +273,7 @@ button{ cursor:pointer; }
     <div class="topbar-sub" id="topSub">Not saved yet</div>
   </div>
   <div class="topbar-spacer"></div>
-  <button type="button" class="btn-ghost" id="btnAiStudio" title="Draft notes or upload a document — AI structures it into this endpoint's docs, and can generate Swagger/cURL">✨ AI Studio</button>
+  <button type="button" class="btn-ghost" id="btnAiStudio" title="Draft notes or upload a document — AI structures it into this endpoint's docs">✨ AI Studio</button>
   <button type="button" class="btn-primary" id="btnSave">Publish</button>
   <button type="button" class="theme-toggle" id="btnTheme" title="Switch theme">◐</button>
   <div class="user-chip"><span class="user-dot" id="userDot">?</span><span id="userLabel">—</span></div>
@@ -537,7 +537,6 @@ button{ cursor:pointer; }
     <div class="ai-tabs">
       <button type="button" class="ai-tab active" data-ai-tab="draft"><span class="ai-tab-ic">📝</span>Draft → Docs</button>
       <button type="button" class="ai-tab" data-ai-tab="upload"><span class="ai-tab-ic">📤</span>Upload → Docs</button>
-      <button type="button" class="ai-tab" data-ai-tab="openapi"><span class="ai-tab-ic">🔧</span>Swagger &amp; cURL</button>
     </div>
     <div id="aiTabBody" class="ai-tab-body"></div>
   </div>
@@ -580,7 +579,22 @@ button{ cursor:pointer; }
 .ai-drop-icon{ width:42px; height:42px; margin:0 auto 12px; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; font-size:18px; }
 .ai-drop-title{ font-weight:700; color:var(--text); margin-bottom:3px; font-size:13px; }
 .ai-drop-sub{ color:var(--text-faint); font-size:11.5px; }
-.ai-file-chip{ display:inline-flex; align-items:center; gap:8px; margin-top:14px; padding:7px 14px; border-radius:999px; background:var(--surface); border:1px solid var(--border-strong); font-size:11.5px; color:var(--text); font-weight:600; }
+.ai-file-card{ border:1px solid var(--border); border-radius:12px; background:var(--surface-2); overflow:hidden; animation:ai-fade-in .15s ease; }
+@keyframes ai-fade-in{ from{ opacity:0; transform:translateY(-4px); } to{ opacity:1; transform:translateY(0); } }
+.ai-file-card-head{ display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--border); }
+.ai-file-icon{ width:38px; height:38px; border-radius:9px; display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0; }
+.ai-file-meta{ flex:1; min-width:0; }
+.ai-file-name{ font-weight:700; font-size:12.5px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ai-file-sub{ font-size:11px; color:var(--text-faint); margin-top:2px; }
+.ai-file-change{ font-size:11px; font-weight:600; color:var(--accent); background:none; border:1px solid var(--border-strong); border-radius:6px; padding:5px 10px; cursor:pointer; flex-shrink:0; }
+.ai-file-change:hover{ border-color:var(--accent); background:var(--accent-soft); }
+.ai-file-preview-label{ display:flex; align-items:center; justify-content:space-between; padding:10px 16px 0; font-size:10.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--text-faint); }
+.ai-file-preview{ position:relative; max-height:150px; overflow:hidden; margin-top:6px; }
+.ai-file-preview pre{ margin:0; padding:2px 16px 14px; font-family:var(--mono); font-size:11px; color:var(--text-dim); white-space:pre-wrap; word-break:break-word; }
+.ai-file-preview::after{ content:''; position:absolute; left:0; right:0; bottom:0; height:36px; background:linear-gradient(to bottom, transparent, var(--surface-2)); pointer-events:none; }
+.ai-file-body{ padding:16px; padding-top:12px; }
+.ai-format-badges{ display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; justify-content:center; }
+.ai-format-badge{ font-size:10.5px; font-weight:600; padding:3px 9px; border-radius:999px; background:var(--surface); border:1px solid var(--border-strong); color:var(--text-faint); }
 
 /* Unified status feedback — replaces the old one-box-fits-all-states panel.
    Loading / success / error each get their own colour and icon, matching
@@ -605,15 +619,6 @@ button{ cursor:pointer; }
 
 /* Output panels (generated OpenAPI JSON / cURL) — visually distinct from
    the status feedback above, styled like a code card rather than a notice. */
-.ai-output{ margin-top:14px; border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--surface); }
-.ai-output-head{ display:flex; align-items:center; justify-content:space-between; padding:9px 12px; background:var(--surface-2); border-bottom:1px solid var(--border); font-size:11.5px; font-weight:700; }
-.ai-output-body{ padding:12px; }
-.ai-output pre{ white-space:pre-wrap; word-break:break-word; margin:0; font-family:var(--mono); font-size:11.5px; max-height:260px; overflow:auto; color:var(--text); }
-.ai-curl-item{ margin-bottom:12px; }
-.ai-curl-item:last-child{ margin-bottom:0; }
-.ai-curl-item .ai-curl-name{ font-weight:700; font-size:12px; margin-bottom:4px; color:var(--text-dim); }
-.ai-copy-btn{ font-size:11px; padding:4px 10px; border-radius:6px; border:1px solid var(--border-strong); background:var(--surface); cursor:pointer; margin-top:6px; }
-.ai-copy-btn:hover{ border-color:var(--accent); color:var(--accent); }
 .ai-not-configured{ display:flex; gap:12px; align-items:flex-start; text-align:left; padding:16px; border-radius:10px; background:var(--warn-soft); border:1px solid rgba(232,163,61,.35); color:var(--text); font-size:12.5px; line-height:1.5; }
 .ai-not-configured-icon{ flex-shrink:0; font-size:16px; margin-top:1px; }
 </style>
@@ -2114,8 +2119,7 @@ async function renderAiTab(){
     return;
   }
   if(aiTab === 'draft') renderAiDraftTab(body);
-  else if(aiTab === 'upload') renderAiUploadTab(body);
-  else renderAiOpenapiTab(body);
+  else renderAiUploadTab(body);
 }
 
 function renderAiDraftTab(body){
@@ -2154,31 +2158,47 @@ function renderAiDraftTab(body){
   });
 }
 
-// Only genuinely text-based formats are supported — the model reads plain
-// text, so a real .docx/.pdf/.xlsx selected via drag-and-drop (the <input
-// accept> filter only constrains the file picker, not drag-and-drop) would
-// otherwise get read as raw bytes and sent upstream as garbage, which is
-// what was producing confusing failures. This list is checked explicitly
-// rather than trusted from the browser.
 const AI_UPLOAD_EXTENSIONS = ['.txt','.md','.markdown','.csv','.json','.log','.yml','.yaml'];
 const AI_UPLOAD_MAX_BYTES = 5 * 1024 * 1024; // 5MB max file size
 const AI_UPLOAD_TEXT_CHAR_LIMIT = 200000; // matches the server's per-request character cap in routes/ai.js
+const AI_FILE_ICON = {
+  txt:{ ic:'📄', bg:'rgba(109,141,255,.15)', fg:'#6d8dff' },
+  md:{ ic:'📝', bg:'rgba(109,141,255,.15)', fg:'#6d8dff' },
+  markdown:{ ic:'📝', bg:'rgba(109,141,255,.15)', fg:'#6d8dff' },
+  csv:{ ic:'📊', bg:'rgba(56,199,147,.15)', fg:'#38c793' },
+  json:{ ic:'{ }', bg:'rgba(232,163,61,.15)', fg:'#e8a33d' },
+  log:{ ic:'🧾', bg:'rgba(169,179,196,.18)', fg:'#a9b3c4' },
+  yml:{ ic:'⚙️', bg:'rgba(160,111,255,.15)', fg:'#a06fff' },
+  yaml:{ ic:'⚙️', bg:'rgba(160,111,255,.15)', fg:'#a06fff' },
+};
+function formatBytes(n){
+  if(n < 1024) return `${n} B`;
+  if(n < 1024*1024) return `${(n/1024).toFixed(1)} KB`;
+  return `${(n/1024/1024).toFixed(1)} MB`;
+}
 
 function renderAiUploadTab(body){
   body.innerHTML = `
-    <div class="hint" style="margin-bottom:10px;">Upload a text-based document (.txt, .md, .csv, .json, .log, .yml) — a BRD, a spec, an email thread. AI reads it and structures it the same way as pasting notes.</div>
+    <div class="hint" style="margin-bottom:14px;">Upload a text-based document — a BRD, a spec, an email thread. AI reads it and structures it the same way as pasting notes.</div>
+    <div id="aiUploadStage"></div>
+  `;
+  renderAiDropzone(document.getElementById('aiUploadStage'));
+}
+
+function renderAiDropzone(stage){
+  stage.innerHTML = `
     <label class="ai-drop" id="aiDropZone">
       <input type="file" id="aiFileInput" accept="${AI_UPLOAD_EXTENSIONS.join(',')}" style="display:none;">
       <div class="ai-drop-icon">⬆️</div>
       <div class="ai-drop-title">Click to choose a file, or drag one here</div>
-      <div class="ai-drop-sub">.txt, .md, .csv, .json, .log, .yml — up to 5MB</div>
-      <div id="aiFileChipWrap"></div>
+      <div class="ai-drop-sub">Up to 5MB</div>
+      <div class="ai-format-badges">${AI_UPLOAD_EXTENSIONS.map(e=>`<span class="ai-format-badge">${e}</span>`).join('')}</div>
     </label>
     <div id="aiUploadResult"></div>
   `;
   const input = document.getElementById('aiFileInput');
   const zone = document.getElementById('aiDropZone');
-  zone.addEventListener('click', ()=>{ if(!zone.classList.contains('disabled')) input.click(); });
+  zone.addEventListener('click', ()=>input.click());
   ['dragover','dragenter'].forEach(evt=>zone.addEventListener(evt, e=>{ e.preventDefault(); zone.classList.add('dragover'); }));
   ['dragleave','drop'].forEach(evt=>zone.addEventListener(evt, e=>{ e.preventDefault(); zone.classList.remove('dragover'); }));
   zone.addEventListener('drop', e=>{ if(e.dataTransfer.files[0]) handleAiFile(e.dataTransfer.files[0]); });
@@ -2196,15 +2216,12 @@ function looksLikeBinary(text){
 }
 
 async function handleAiFile(file){
-  const zone = document.getElementById('aiDropZone');
-  const chipWrap = document.getElementById('aiFileChipWrap');
-  const resultEl = document.getElementById('aiUploadResult');
-  const ext = '.' + (file.name.split('.').pop() || '').toLowerCase();
+  const stage = document.getElementById('aiUploadStage');
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
 
-  chipWrap.innerHTML = `<div class="ai-file-chip">📄 ${escapeHtml(file.name)}</div>`;
-
-  if(!AI_UPLOAD_EXTENSIONS.includes(ext)){
-    renderAiStatus(resultEl, {
+  if(!AI_UPLOAD_EXTENSIONS.includes('.' + ext)){
+    renderAiDropzone(stage);
+    renderAiStatus(document.getElementById('aiUploadResult'), {
       type:'error',
       title:'Unsupported file type',
       message:`"${escapeHtml(file.name)}" isn't a supported format. Upload one of: ${AI_UPLOAD_EXTENSIONS.join(', ')} — or paste the content into the Draft → Docs tab instead.`,
@@ -2212,34 +2229,34 @@ async function handleAiFile(file){
     return;
   }
   if(file.size > AI_UPLOAD_MAX_BYTES){
-    renderAiStatus(resultEl, {
+    renderAiDropzone(stage);
+    renderAiStatus(document.getElementById('aiUploadResult'), {
       type:'error',
       title:'File too large',
-      message:`"${escapeHtml(file.name)}" is ${(file.size/1024/1024).toFixed(1)}MB — please keep uploads under 5MB, or paste the relevant section into the Draft → Docs tab.`,
+      message:`"${escapeHtml(file.name)}" is ${formatBytes(file.size)} — please keep uploads under 5MB, or paste the relevant section into the Draft → Docs tab.`,
     });
     return;
   }
 
-  zone.classList.add('disabled');
-  renderAiStatus(resultEl, { type:'loading', message:'Reading the file…' });
+  stage.innerHTML = `<div class="ai-status loading"><div class="ai-status-icon">…</div><div class="ai-status-body">Reading “${escapeHtml(file.name)}”…</div></div>`;
 
   let text;
   try{
     text = await file.text();
   }catch(e){
-    zone.classList.remove('disabled');
-    renderAiStatus(resultEl, { type:'error', title:'Could not read file', message:'The browser couldn\'t read that file. Try a different file or paste the content directly.' });
+    renderAiDropzone(stage);
+    renderAiStatus(document.getElementById('aiUploadResult'), { type:'error', title:'Could not read file', message:'The browser couldn\'t read that file. Try a different file or paste the content directly.' });
     return;
   }
 
   if(!text.trim()){
-    zone.classList.remove('disabled');
-    renderAiStatus(resultEl, { type:'error', title:'Empty file', message:'That file looks empty — nothing to structure.' });
+    renderAiDropzone(stage);
+    renderAiStatus(document.getElementById('aiUploadResult'), { type:'error', title:'Empty file', message:'That file looks empty — nothing to structure.' });
     return;
   }
   if(looksLikeBinary(text)){
-    zone.classList.remove('disabled');
-    renderAiStatus(resultEl, {
+    renderAiDropzone(stage);
+    renderAiStatus(document.getElementById('aiUploadResult'), {
       type:'error',
       title:'File isn\'t plain text',
       message:`"${escapeHtml(file.name)}" looks like a binary format (e.g. an actual Word/PDF/Excel file saved with a text extension), not plain text. Export it as .txt/.md first, or paste the content into the Draft → Docs tab.`,
@@ -2247,22 +2264,68 @@ async function handleAiFile(file){
     return;
   }
 
-  // Files can be up to 5MB, but sending millions of characters to the model
-  // in one pass is neither useful nor cheap — trim to the same cap the
-  // server enforces and say so plainly, rather than letting the upload
-  // "succeed" only to bounce back with a 400 a second later.
   let wasTruncated = false;
   if(text.length > AI_UPLOAD_TEXT_CHAR_LIMIT){
     text = text.slice(0, AI_UPLOAD_TEXT_CHAR_LIMIT);
     wasTruncated = true;
-    toast(`File is long — using the first ${AI_UPLOAD_TEXT_CHAR_LIMIT.toLocaleString()} characters.`);
   }
 
-  await runAiStructure(text, 'both', resultEl, null);
-  zone.classList.remove('disabled');
-  if(wasTruncated){
-    resultEl.insertAdjacentHTML('beforeend', `<div class="hint" style="margin-top:8px;">Note: this file was longer than the ${AI_UPLOAD_TEXT_CHAR_LIMIT.toLocaleString()}-character limit for a single pass, so only the beginning was used. Run it again on the remaining section if you need the rest documented.</div>`);
-  }
+  renderAiFilePreview(stage, file, text, wasTruncated);
+}
+
+// Instead of firing the AI call the instant a file lands, show what was
+// actually read — icon, size, a peek at the content — with an audience
+// choice (mirroring the Draft tab), so the person can confirm this is the
+// right file/section before spending an AI call on it.
+function renderAiFilePreview(stage, file, text, wasTruncated){
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  const iconInfo = AI_FILE_ICON[ext] || AI_FILE_ICON.txt;
+  const previewText = text.slice(0, 1200);
+
+  stage.innerHTML = `
+    <div class="ai-file-card">
+      <div class="ai-file-card-head">
+        <div class="ai-file-icon" style="background:${iconInfo.bg}; color:${iconInfo.fg};">${iconInfo.ic}</div>
+        <div class="ai-file-meta">
+          <div class="ai-file-name">${escapeHtml(file.name)}</div>
+          <div class="ai-file-sub">${formatBytes(file.size)} · ${text.length.toLocaleString()} characters${wasTruncated ? ' (truncated)' : ''}</div>
+        </div>
+        <button type="button" class="ai-file-change" id="aiFileChangeBtn">Change file</button>
+      </div>
+      <div class="ai-file-preview-label"><span>Preview</span></div>
+      <div class="ai-file-preview"><pre>${escapeHtml(previewText)}${text.length > previewText.length ? '…' : ''}</pre></div>
+      <div class="ai-file-body">
+        <div class="ai-field-label">Who is this for?</div>
+        <div class="ai-audience-row">
+          <label class="ai-audience-chip">
+            <input type="radio" name="aiUploadAudience" value="both" checked>
+            <span class="ai-audience-ic">🔀</span><span>Both audiences</span>
+            <span class="ai-audience-sub">Business + technical</span>
+          </label>
+          <label class="ai-audience-chip">
+            <input type="radio" name="aiUploadAudience" value="business">
+            <span class="ai-audience-ic">💼</span><span>Business / BRD</span>
+            <span class="ai-audience-sub">Plain language</span>
+          </label>
+          <label class="ai-audience-chip">
+            <input type="radio" name="aiUploadAudience" value="technical">
+            <span class="ai-audience-ic">⚙️</span><span>Technical</span>
+            <span class="ai-audience-sub">Implementation detail</span>
+          </label>
+        </div>
+        <div style="display:flex; justify-content:flex-end;">
+          <button type="button" class="btn-primary" id="aiUploadGo">Generate documentation</button>
+        </div>
+      </div>
+    </div>
+    <div id="aiUploadResult">${wasTruncated ? `<div class="hint" style="margin-top:10px;">This file was longer than the ${AI_UPLOAD_TEXT_CHAR_LIMIT.toLocaleString()}-character limit for a single pass, so only the beginning is shown/used. Run it again on the remaining section if you need the rest documented.</div>` : ''}</div>
+  `;
+
+  document.getElementById('aiFileChangeBtn').addEventListener('click', ()=>renderAiDropzone(stage));
+  document.getElementById('aiUploadGo').addEventListener('click', ()=>{
+    const audience = document.querySelector('input[name="aiUploadAudience"]:checked').value;
+    runAiStructure(text, audience, document.getElementById('aiUploadResult'), document.getElementById('aiUploadGo'));
+  });
 }
 
 async function runAiStructure(rawText, audience, resultEl, btn){
@@ -2309,60 +2372,6 @@ function applyAiStructureResult(parsed){
     addBlock('custom', { title: b.title || (b.type||'').replace(/[-_]/g,' '), content: b.content || '' });
   });
   renderBlocks();
-}
-
-function renderAiOpenapiTab(body){
-  body.innerHTML = `
-    <div class="hint" style="margin-bottom:10px;">Generates an OpenAPI fragment and ready-to-run cURL commands from this endpoint's current fields — method, path, parameters, headers, request body and responses, exactly as filled in above.</div>
-    <div style="display:flex; justify-content:flex-end;">
-      <button type="button" class="btn-primary" id="aiOpenapiGo">Generate Swagger &amp; cURL</button>
-    </div>
-    <div id="aiOpenapiResult"></div>
-  `;
-  document.getElementById('aiOpenapiGo').addEventListener('click', ()=>runAiOpenapi());
-}
-
-async function runAiOpenapi(){
-  const btn = document.getElementById('aiOpenapiGo');
-  const resultEl = document.getElementById('aiOpenapiResult');
-  btn.disabled = true; btn.textContent = 'Generating…';
-  renderAiStatus(resultEl, { type:'loading', message:'Building the OpenAPI fragment and cURL examples…' });
-  try{
-    const endpoint = gatherEndpointFromForm();
-    const baseUrl = (window.CURRENT_PROJECT_ENV_URL) || undefined;
-    const parsed = await aiApi('POST', '/generate-openapi', { endpoint, baseUrl });
-    const curlHtml = (parsed.curlExamples||[]).map((c,i)=>`
-      <div class="ai-curl-item">
-        <div class="ai-curl-name">${escapeHtml(c.name || `Example ${i+1}`)}</div>
-        <pre id="aiCurl${i}">${escapeHtml(c.command)}</pre>
-        <button type="button" class="ai-copy-btn" data-copy-target="aiCurl${i}">Copy</button>
-      </div>`).join('');
-    resultEl.innerHTML = `
-      <div class="ai-output">
-        <div class="ai-output-head"><span>OpenAPI fragment</span><button type="button" class="ai-copy-btn" data-copy-target="aiOpenapiJson">Copy</button></div>
-        <div class="ai-output-body"><pre id="aiOpenapiJson">${escapeHtml(JSON.stringify(parsed.openapi, null, 2))}</pre></div>
-      </div>
-      <div class="ai-output">
-        <div class="ai-output-head"><span>cURL</span></div>
-        <div class="ai-output-body">${curlHtml || '<div class="hint">No examples generated.</div>'}</div>
-      </div>
-    `;
-    resultEl.querySelectorAll('[data-copy-target]').forEach(cbtn=>{
-      cbtn.addEventListener('click', ()=>{
-        const text = document.getElementById(cbtn.getAttribute('data-copy-target')).textContent;
-        navigator.clipboard.writeText(text).then(()=>toast('Copied.'));
-      });
-    });
-  }catch(err){
-    renderAiStatus(resultEl, {
-      type:'error',
-      title: err.retryable ? 'Temporary problem' : 'Could not generate',
-      message: escapeHtml(err.message),
-      onRetry: err.retryable ? ()=>runAiOpenapi() : null,
-    });
-  }finally{
-    btn.disabled = false; btn.textContent = 'Generate Swagger & cURL';
-  }
 }
 
 boot();

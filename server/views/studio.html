@@ -7115,7 +7115,7 @@ function renderLiveModeAccessTab(body){
 
 /* ==================== Security ▸ AI Studio tab (Admin only) ====================
    Org-wide LLM configuration that powers the Editor's "AI Studio" panel
-   (draft → docs, upload → docs, Swagger/cURL generation). The key itself is
+   (draft → docs, upload → docs). The key itself is
    never sent back down once saved — only whether one is configured and its
    last 4 characters, same masking convention as everything else sensitive
    in this app. */
@@ -7140,7 +7140,7 @@ function renderAiSettingsTab(body){
           <div class="s" style="line-height:1.6;">
             ${cfg.configured
               ? `AI is configured for this organisation using <strong>${escapeHtml(cfg.provider)}</strong> (model: ${escapeHtml(cfg.model)}). Key on file: <code>${escapeHtml(cfg.keyPreview||'')}</code>. Everyone in the org can use AI Studio in the Endpoint Editor; only Admins can change or remove this key.`
-              : `AI Studio (draft → docs, document upload, Swagger &amp; cURL generation) is <strong>not set up yet</strong>. Add an API key below to turn it on for the whole organisation.`}
+              : `AI Studio (draft → docs, document upload) is <strong>not set up yet</strong>. Add an API key below to turn it on for the whole organisation.`}
           </div>
         </div>
       </div>
