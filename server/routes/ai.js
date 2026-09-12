@@ -622,9 +622,9 @@ Respond with ONLY a JSON object, no prose, no markdown fences, shaped exactly li
       "sections": [ { "kind": "headers|parameters|requestBody|response|custom", "title": string, "hint": string, "statusCode": integer } ] }
   ]
 }
-Infer missing pieces sensibly from context; use a short honest placeholder only if something genuinely isn't present in the notes.
+Infer missing pieces sensibly from context; use a short honest placeholder only if something genuinely isn't present in the notes. Keep every "hint" under ~15 words — it's a pointer for the next pass, not the content itself — since this plan can cover several endpoints at once and all of it has to fit in a single response.
 ${JSON_STRICTNESS_RULES}`;
-    const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 4000 });
+    const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 8000 });
     const parsed = await extractJson(text, { validate: validatePlanShape, settings, label: 'structure-plan' });
     parsed.endpoints = (parsed.endpoints || []).slice(0, AI_MAX_PLANNED_ENDPOINTS);
     let sectionBudget = AI_MAX_TOTAL_SECTIONS;
