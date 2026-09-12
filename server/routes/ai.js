@@ -300,6 +300,12 @@ function describeAiError(err) {
   if (/timeout|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed/i.test(msg)) {
     return { code: 'network', retryable: true, message: 'Could not reach the AI provider — check your connection and try again.' };
   }
+  if (/^AI_EMPTY/.test(msg)) {
+    return {
+      code: 'empty', retryable: true,
+      message: 'The AI returned an empty response for this section — usually a brief provider hiccup. Click "Try again".',
+    };
+  }
   if (/^AI_TRUNCATED/.test(msg)) {
     return {
       code: 'truncated', retryable: false,
@@ -559,10 +565,6 @@ function validatePlanShape(p) {
     && Array.isArray(p.sections)
     && p.sections.every(s => s && typeof s === 'object' && typeof s.type === 'string' && typeof s.title === 'string');
 }
-function validateSectionShape(p) {
-  return !!p && typeof p === 'object' && !Array.isArray(p)
-    && typeof p.type === 'string' && typeof p.title === 'string' && typeof p.content === 'string';
-}
 const AI_MAX_PLANNED_SECTIONS = 25; // a defensive cap, not a realistic ceiling — keeps one bad plan from queuing up dozens of section calls
 
 // POST /api/ai/structure/plan
@@ -624,6 +626,30 @@ ${JSON_STRICTNESS_RULES}`;
   }
 });
 
+// A single section's content is markdown prose that routinely contains the
+// exact things that make JSON-embedding fragile — sample JSON payloads with
+// their own quotes, multi-paragraph text with real line breaks, backslashes
+// in paths/regexes. Forcing the model to re-encode all of that as one JSON
+// string value was the single biggest source of parse failures (and every
+// failure paid for a second "repair" LLM call on top of the original one).
+// type/title are already known here — they came from the plan — so there's
+// nothing for the model to echo back. It writes plain markdown; we attach
+// the type/title ourselves. No JSON in, no JSON out, nothing to repair.
+//
+// Some models still wrap an entire answer in one outer ```markdown fence
+// out of habit even when told not to. We only ever strip a fence that wraps
+// the *whole* response with an empty/"markdown"/"md" language tag — never a
+// same-sized "json"/"http"/etc. fence, since a section can legitimately be
+// nothing but one real code sample and we must not eat that.
+function stripOuterMarkdownFence(text) {
+  const trimmed = String(text || '').trim();
+  const m = trimmed.match(/^```(\w*)\r?\n([\s\S]*?)\r?\n```$/);
+  if (m && /^(markdown|md)?$/i.test(m[1])) {
+    return m[2].trim();
+  }
+  return trimmed;
+}
+
 // POST /api/ai/structure/section
 // Body: { rawText, audience, section: { type, title, hint }, apiLevelDescription? }
 // Writes ONE section's content. Called once per section from the plan
@@ -644,17 +670,17 @@ router.post('/structure/section', sectionLimiter, async (req, res) => {
     const audienceLine = buildAudienceLine(audience);
     const systemPrompt = `You are writing ONE section of a larger piece of API documentation — other sections are generated separately, so write only this one. ${audienceLine}
 Section to write:
-- type: ${section.type}
 - title: ${section.title}
 - what it should cover: ${section.hint || '(use your judgement based on the raw notes below)'}
 ${apiLevelDescription ? `For context, here is the API-level overview already written elsewhere — stay consistent with it, don't repeat it:\n${String(apiLevelDescription).slice(0, 2000)}\n` : ''}
-Respond with ONLY a JSON object, no prose, no markdown fences, shaped exactly like:
-{ "type": ${JSON.stringify(section.type)}, "title": ${JSON.stringify(section.title)}, "content": string }
-"content" is markdown. Go into real depth here — you are not sharing a response budget with any other section, so don't compress for space the way a single giant response would have to.
-${JSON_STRICTNESS_RULES}`;
-    const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 4000 });
-    const parsed = await extractJson(text, { validate: validateSectionShape, settings, label: `structure-section:${section.type}` });
-    res.json(parsed);
+Respond with ONLY the markdown content of this section itself — no JSON, no surrounding code fence around the whole answer, no preamble like "Here's the section", and no top-level heading restating the title (it's already shown separately above your content). Use normal markdown throughout, including fenced code blocks for any sample requests/responses/headers — write real quotes and real line breaks exactly as a person would in a markdown file, you do not need to escape anything for JSON.
+Go into real depth here — you are not sharing a response budget with any other section, so don't compress for space the way a single giant response would have to.`;
+    const rawContent = await callLlm(settings, systemPrompt, rawText, { maxTokens: 4000 });
+    const content = stripOuterMarkdownFence(rawContent);
+    if (!content) {
+      throw new Error('AI_EMPTY: model returned no content for this section');
+    }
+    res.json({ type: section.type, title: section.title, content });
   } catch (err) {
     console.error(`POST /api/ai/structure/section (${section?.type}) failed:`, err);
     const described = describeAiError(err);
