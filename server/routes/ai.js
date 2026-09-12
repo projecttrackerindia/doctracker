@@ -33,6 +33,24 @@ const PROVIDERS = {
   },
 };
 
+// Appended to every "respond with ONLY a JSON object" prompt below. This
+// exists because of a specific, recurring failure: documentation notes very
+// often describe headers/config using a bare `key: <PLACEHOLDER>` convention
+// (that's exactly how JWT/clientId/clientSecret requirements normally get
+// written), and models tend to mirror that convention literally *inside*
+// their JSON output — e.g. "token": <JWT_TOKEN> — which is not legal JSON at
+// all (an unquoted, un-parseable value). The second failure mode is the
+// inverse: embedding a real sample request/response payload's own quotes
+// and line breaks directly into a markdown field without escaping them,
+// which closes the enclosing JSON string early. Both are called out
+// explicitly, with the exact shape this task tends to produce, because
+// generic "output valid JSON" instructions don't reliably prevent either one.
+const JSON_STRICTNESS_RULES = `
+Your entire reply must be ONE valid JSON object that JSON.parse() can consume with no fix-up. Two specific mistakes break this often — avoid both:
+1. Never write a bare, unquoted placeholder as a value. token: <JWT_TOKEN> is INVALID JSON. If a placeholder needs to appear as a value, quote it as a string: "token": "<JWT_TOKEN>".
+2. Never paste a sample request/response payload's raw quotes or line breaks directly into a JSON string. If a field's content needs to show one, every " inside it must become \\" and every line break must become \\n, so the whole sample is still just one valid JSON string.
+No comments, no trailing commas, no text outside the single JSON object.`;
+
 function aad(organisation) {
   return `ai:${organisation}`;
 }
@@ -277,6 +295,12 @@ function describeAiError(err) {
       message: 'The AI\'s answer got cut off before it finished, because it hit the response length limit — not because anything you pasted was invalid. This happens when the notes ask for a lot of output in one pass (many sections, sequence diagrams, several full sample payloads). Try trimming the notes to what matters for this one endpoint, or split a large multi-section spec into a couple of shorter generations.',
     };
   }
+  if (/is not valid JSON|Unexpected token|Unexpected end of JSON|JSON at position/i.test(msg)) {
+    return {
+      code: 'malformed_json', retryable: true,
+      message: 'The AI\'s answer wasn\'t quite valid JSON, and the automatic repair (including asking it to fix its own output) couldn\'t recover it. This is usually a one-off formatting slip on detail-heavy notes, not a problem with what you pasted — click "Try again", or try generating one endpoint at a time if it keeps happening.',
+    };
+  }
   // Unrecognized failure — still give something diagnosable rather than a flat "it failed".
   return { code: 'unknown', retryable: true, message: `The AI request failed: ${msg.slice(0, 200)}` };
 }
@@ -327,37 +351,117 @@ function repairJsonStrings(raw) {
   return out;
 }
 
-function extractJson(text) {
+// Fixes the exact break seen in production: notes that describe headers
+// using a bare `key: <PLACEHOLDER>` convention (how JWT/clientId/
+// clientSecret requirements normally get written) prime the model to
+// mirror that convention *inside* its JSON output too — e.g. "token":
+// <JWT_TOKEN> — an unquoted value that isn't legal JSON at all and makes
+// JSON.parse throw immediately. This only rewrites a `<...>` that sits
+// exactly where a JSON value is expected (right after `:`, `[`, or `,`,
+// with only whitespace in between, and right before `,`, `]`, `}`, or a
+// line break), so it can't touch a `<...>` that's already safely inside a
+// quoted string — it would already have a `"` on one side, not `:`/`,`/`[`.
+function quoteBarePlaceholders(raw) {
+  return raw.replace(/([:[,]\s*)<([^<>"\r\n]{1,120})>(\s*[,\]}\r\n])/g, '$1"<$2>"$3');
+}
+
+// Tries every repair strategy in order of how little they change the
+// original, returning the first one that both (a) parses and (b) matches
+// the shape the calling route actually expects. That second check matters:
+// a repair pass can be syntactically successful but structurally wrong — in
+// testing, jsonrepair silently turned one malformed object into an array of
+// mismatched fragments rather than throwing, which would otherwise save
+// corrupted documentation with no visible error at all. `validate` is what
+// stops that — if it's not provided, any syntactically valid JSON is
+// accepted, matching this function's original behavior.
+function tryParseCandidates(jsonSlice, validate) {
+  const attempts = [
+    () => JSON.parse(jsonSlice),
+    () => JSON.parse(quoteBarePlaceholders(jsonSlice)),
+    () => JSON.parse(repairJsonStrings(jsonSlice)),
+    () => JSON.parse(repairJsonStrings(quoteBarePlaceholders(jsonSlice))),
+    // repairJsonStrings only fixes things *inside* a string it correctly
+    // identified as still open. It can't help when an embedded sample (the
+    // notes here are full of quoted JSON payloads the model has to
+    // re-embed inside a markdown string) contains an unescaped literal
+    // quote — that quote closes the outer string early. That's a
+    // genuinely different class of break, so it gets a genuinely
+    // different, battle-tested fix: jsonrepair.
+    () => JSON.parse(jsonrepair(jsonSlice)),
+    () => JSON.parse(jsonrepair(quoteBarePlaceholders(jsonSlice))),
+  ];
+  let firstErr = null;
+  for (const attempt of attempts) {
+    try {
+      const value = attempt();
+      if (!validate || validate(value)) return value;
+    } catch (err) {
+      if (!firstErr) firstErr = err;
+    }
+  }
+  throw firstErr || new Error('AI output could not be parsed as JSON.');
+}
+
+// `validate` (optional) checks the parsed object actually matches the
+// shape the calling route expects — see tryParseCandidates above for why.
+// `settings` (optional) enables a last-resort fallback: asking the same
+// model to fix its own output. This is a cheap, targeted follow-up call
+// (small input, small output) rather than discarding an otherwise-correct
+// draft over a formatting slip. `label` is only for the server log line.
+async function extractJson(text, { validate, settings, label = 'response' } = {}) {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const candidate = fenced ? fenced[1] : text;
   const start = candidate.indexOf('{');
   const end = candidate.lastIndexOf('}');
   const jsonSlice = start !== -1 && end !== -1 ? candidate.slice(start, end + 1) : candidate;
+
   try {
-    return JSON.parse(jsonSlice);
-  } catch (firstErr) {
+    return tryParseCandidates(jsonSlice, validate);
+  } catch (localErr) {
+    if (!settings) {
+      console.error(`extractJson: local repairs failed for ${label}:`, localErr.message, '— raw text (truncated):', text.slice(0, 2000));
+      throw localErr;
+    }
     try {
-      return JSON.parse(repairJsonStrings(jsonSlice));
-    } catch (secondErr) {
-      // repairJsonStrings only fixes things *inside* a string it correctly
-      // identified as still open. It can't help when an embedded sample
-      // (the notes here are full of quoted JSON payloads the model has to
-      // re-embed inside a markdown string) contains an unescaped literal
-      // quote — that quote closes the outer string early, and everything
-      // after it — including otherwise-valid "\n" escapes meant to still be
-      // inside it — leaks out as raw, structurally invalid tokens. That's a
-      // genuinely different (and much more common) class of break, so it
-      // gets a genuinely different, battle-tested fix: jsonrepair, rather
-      // than trying to extend our own character-level pass to guess at it.
-      try {
-        return JSON.parse(jsonrepair(jsonSlice));
-      } catch (thirdErr) {
-        // All three failed — surface the original error (it's the most
-        // informative one) rather than either repair pass's.
-        throw firstErr;
-      }
+      const repairSystemPrompt = `You are fixing a JSON formatting error. The text below was supposed to be a single valid JSON object but failed to parse.
+The parser said: ${localErr.message}
+Return ONLY the corrected, valid JSON object — same fields, same content and meaning — fixing ONLY what's needed to make it valid JSON (quoting bare placeholder values like <TOKEN>, escaping stray quotes/newlines/backslashes inside strings, removing trailing commas). Do not summarize, shorten, or otherwise change the content. No markdown fences, no commentary — just the JSON object.`;
+      const repairedText = await callLlm(settings, repairSystemPrompt, jsonSlice.slice(0, 30000), { maxTokens: 8000 });
+      const repairedFenced = repairedText.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      const repairedCandidate = repairedFenced ? repairedFenced[1] : repairedText;
+      const rs = repairedCandidate.indexOf('{');
+      const re = repairedCandidate.lastIndexOf('}');
+      const repairedSlice = rs !== -1 && re !== -1 ? repairedCandidate.slice(rs, re + 1) : repairedCandidate;
+      return tryParseCandidates(repairedSlice, validate);
+    } catch (repairErr) {
+      console.error(`extractJson: local + AI repair both failed for ${label}:`, localErr.message, '/', repairErr.message, '— raw text (truncated):', text.slice(0, 2000));
+      // The original parse error is more informative than the repair
+      // attempt's — surface that one.
+      throw localErr;
     }
   }
+}
+
+// Shape checks used by extractJson (see tryParseCandidates) to reject a
+// repair pass that "succeeded" into the wrong structure — cheap, and only
+// checks the top-level contract each route actually depends on.
+function validateStructureShape(p) {
+  return !!p && typeof p === 'object' && !Array.isArray(p)
+    && p.project && typeof p.project === 'object'
+    && p.endpoint && typeof p.endpoint === 'object'
+    && typeof p.apiLevelDescription === 'string'
+    && Array.isArray(p.blocks)
+    && p.blocks.every(b => b && typeof b === 'object'
+      && typeof b.type === 'string' && typeof b.title === 'string' && typeof b.content === 'string');
+}
+function validateOpenApiShape(p) {
+  return !!p && typeof p === 'object' && !Array.isArray(p)
+    && p.openapi && typeof p.openapi === 'object'
+    && Array.isArray(p.curlExamples);
+}
+function validateArchitectureShape(p) {
+  return !!p && typeof p === 'object' && !Array.isArray(p)
+    && Array.isArray(p.nodes) && Array.isArray(p.edges);
 }
 
 // ==================== Draft / upload -> structured documentation ====================
@@ -400,9 +504,10 @@ Respond with ONLY a JSON object, no prose, no markdown fences, shaped exactly li
   ]
 }
 Infer missing pieces sensibly from context rather than leaving fields empty; if something genuinely isn't present in the notes, use a short honest placeholder instead of inventing specifics.
-This has to fit in a single response, so if the notes ask for an unusually large number of sections (many error codes, multiple sample payloads, sequence diagrams, security appendices, etc.), prioritize covering every section the notes call for — keep each individual block's content focused and reasonably concise rather than exhaustive, so breadth doesn't get sacrificed to depth on just the first few sections.`;
+This has to fit in a single response, so if the notes ask for an unusually large number of sections (many error codes, multiple sample payloads, sequence diagrams, security appendices, etc.), prioritize covering every section the notes call for — keep each individual block's content focused and reasonably concise rather than exhaustive, so breadth doesn't get sacrificed to depth on just the first few sections.
+${JSON_STRICTNESS_RULES}`;
     const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 16000 });
-    const parsed = extractJson(text);
+    const parsed = await extractJson(text, { validate: validateStructureShape, settings, label: 'structure' });
     await recordAuditEvent(req.authUser, req, {
       action: 'ai.structure.generated',
       resourceType: 'ai',
@@ -439,9 +544,10 @@ router.post('/generate-openapi', generateLimiter, async (req, res) => {
   "openapi": { ... },   // a valid OpenAPI 3.0 PATH ITEM object for this one endpoint (the value that would sit under paths["/the/path"]["get"] etc.) — include parameters, requestBody, and responses drawn from what was given
   "curlExamples": [ { "name": string, "command": string } ]  // one or more realistic cURL commands, using ${baseUrl ? JSON.stringify(baseUrl) : '"https://api.example.com"'} as the host, matching any named request examples given; use placeholder values only where no example value exists
 }
-Use exactly the method, path, params, headers and body shape given — do not invent additional fields.`;
+Use exactly the method, path, params, headers and body shape given — do not invent additional fields.
+${JSON_STRICTNESS_RULES}`;
     const text = await callLlm(settings, systemPrompt, JSON.stringify(endpoint), { maxTokens: 3000 });
-    const parsed = extractJson(text);
+    const parsed = await extractJson(text, { validate: validateOpenApiShape, settings, label: 'generate-openapi' });
     res.json(parsed);
   } catch (err) {
     console.error('POST /api/ai/generate-openapi failed:', err);
@@ -597,9 +703,10 @@ ${ARCH_ICON_CATALOG_TEXT}
 - "label" is a short human-readable name for that specific component (2-4 words), not the catalog name verbatim unless it genuinely is that generic.
 - "layer" is the component's left-to-right rank in the flow: 0 for where the flow starts (a client, a trigger, an inbound request), increasing by 1 for each hop deeper into the system. Give two components the same layer only if they genuinely happen in parallel at that stage.
 - "edges[].label" should be short and concrete when the notes support it (an HTTP verb+path, an event/topic name, "sync"/"async") — empty string if nothing concrete is stated.
-- Only include components and connections the notes actually describe or clearly imply — do not pad the diagram with generic infrastructure (load balancers, CDNs, monitoring, etc.) that wasn't mentioned or reasonably implied.`;
+- Only include components and connections the notes actually describe or clearly imply — do not pad the diagram with generic infrastructure (load balancers, CDNs, monitoring, etc.) that wasn't mentioned or reasonably implied.
+${JSON_STRICTNESS_RULES}`;
     const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 3000 });
-    const rawParsed = extractJson(text);
+    const rawParsed = await extractJson(text, { validate: validateArchitectureShape, settings, label: 'generate-architecture' });
     const { nodes, edges } = layoutArchitecture(rawParsed.nodes, rawParsed.edges);
     if (nodes.length === 0) {
       return res.status(502).json({ error: 'The AI couldn\'t identify any components in that text — try adding more detail about the services involved.', errorCode: 'empty', retryable: false });
