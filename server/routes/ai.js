@@ -556,7 +556,6 @@ function validatePlanShape(p) {
   return !!p && typeof p === 'object' && !Array.isArray(p)
     && p.project && typeof p.project === 'object'
     && p.endpoint && typeof p.endpoint === 'object'
-    && typeof p.apiLevelDescription === 'string'
     && Array.isArray(p.sections)
     && p.sections.every(s => s && typeof s === 'object' && typeof s.type === 'string' && typeof s.title === 'string');
 }
@@ -568,8 +567,17 @@ const AI_MAX_PLANNED_SECTIONS = 25; // a defensive cap, not a realistic ceiling 
 
 // POST /api/ai/structure/plan
 // Body: { rawText, audience }
-// Returns metadata + a list of { type, title, hint } — content comes later,
-// one call per section, via /structure/section below.
+// Returns metadata + a list of { type, title, hint } — content, INCLUDING
+// the API-level overview, comes later, one call per section, via
+// /structure/section below. The overview used to be written here too, but
+// notes that describe several endpoints and a long section list (auth,
+// multiple sample payloads, error tables, sequence diagrams...) could push
+// a decent overview + a full section list past this call's own token
+// budget, truncating the plan itself before it ever got to generating
+// anything. Planning is now purely structural — metadata and short
+// one-line hints only — so its output size no longer scales with how much
+// prose the notes eventually need; the overview gets its own full-budget
+// section call instead, same as every other section.
 router.post('/structure/plan', generateLimiter, async (req, res) => {
   const { rawText, audience } = req.body || {};
   if (typeof rawText !== 'string' || !rawText.trim()) {
@@ -584,23 +592,22 @@ router.post('/structure/plan', generateLimiter, async (req, res) => {
       return res.status(409).json({ error: 'AI isn\'t set up for your organisation yet — ask an Admin to add an API key under Security ▸ AI Studio.' });
     }
     const audienceLine = buildAudienceLine(audience);
-    const systemPrompt = `You are the planning pass of a two-stage documentation generator. From raw, unstructured notes (which may mix business intent and technical detail, in any order, in any format):
-1. Extract the project/endpoint metadata.
-2. Write ONE overall "apiLevelDescription" (markdown: Overview / Flow / Authentication summary for the whole API — this is the only prose this pass writes).
-3. List every documentation SECTION the notes call for (e.g. "Request Headers", "Sample Request", "Sample Response", "Field Descriptions", "Error Responses", "S3 Integration", "Sequence Diagram" — whatever the notes actually need, however many that is) — but do NOT write each section's content yet. A later pass writes each one individually.
+    const systemPrompt = `You are the planning pass of a two-stage documentation generator. From raw, unstructured notes (which may mix business intent and technical detail, in any order, in any format), produce STRUCTURE ONLY — no prose content yet, that all comes from a later pass, one section at a time:
+1. Extract the project metadata and the PRIMARY endpoint's method/path/summary. If the notes describe more than one endpoint (e.g. two separate operations sharing one auth scheme), pick the first/primary one for this "endpoint" field and give each of the OTHER endpoints its own section instead (e.g. type "endpoint-call-recording") — never try to merge multiple endpoints' method/path into one field.
+2. List every documentation SECTION the notes call for. The list MUST start with one section of type exactly "overview" (title like "API Overview") whose hint tells the next pass to write a markdown Overview / Flow / Authentication summary for the whole API. After that, add one section per remaining topic the notes need (e.g. "Request Headers", "Sample Request", "Sample Response", "Field Descriptions", "Error Responses", "S3 Integration", "Sequence Diagram", additional endpoints as above — whatever the notes actually call for, however many that is).
+Each section's "hint" is ONE short sentence pointing the next pass at what to cover — not the content itself.
 ${audienceLine}
 Respond with ONLY a JSON object, no prose, no markdown fences, shaped exactly like:
 {
   "project": { "name": string, "tag": string },
   "endpoint": { "method": "GET|POST|PUT|PATCH|DELETE", "path": string, "summary": string },
-  "apiLevelDescription": string,
   "sections": [
-    { "type": string, "title": string, "hint": string }  // type is a short kebab-case slug; hint is one sentence telling the next pass what this section should cover
+    { "type": string, "title": string, "hint": string }
   ]
 }
 Infer missing pieces sensibly from context; use a short honest placeholder only if something genuinely isn't present in the notes.
 ${JSON_STRICTNESS_RULES}`;
-    const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 3000 });
+    const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 4000 });
     const parsed = await extractJson(text, { validate: validatePlanShape, settings, label: 'structure-plan' });
     parsed.sections = (parsed.sections || []).slice(0, AI_MAX_PLANNED_SECTIONS);
     await recordAuditEvent(req.authUser, req, {

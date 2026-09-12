@@ -2462,6 +2462,12 @@ async function runAiStructureStaged(rawText, audience, resultEl, btn){
 
   renderAiSectionChecklist(resultEl, sections);
 
+  // Filled in once the "overview" section (always planned first — see the
+  // /structure/plan prompt) comes back, then passed as context to every
+  // section generated after it — same role apiLevelDescription used to
+  // play when the plan wrote it directly.
+  let apiLevelDescription = '';
+
   // One section's failure is isolated to its own row/retry, so this can
   // simply await each call in turn — no need for a shared error path that
   // would otherwise abandon sections that haven't run yet.
@@ -2469,8 +2475,14 @@ async function runAiStructureStaged(rawText, audience, resultEl, btn){
     const section = sections[i];
     updateAiSectionRow(i, { icon:'…', status:'Generating…' });
     try{
-      const result = await aiApi('POST', '/structure/section', { rawText, audience, section, apiLevelDescription: plan.apiLevelDescription });
-      addBlock('custom', { title: result.title || section.title, content: result.content || '' });
+      const result = await aiApi('POST', '/structure/section', { rawText, audience, section, apiLevelDescription });
+      const content = result.content || '';
+      if((section.type || '').toLowerCase() === 'overview'){
+        apiLevelDescription = content;
+        if(!document.getElementById('fApiDesc').value.trim()) document.getElementById('fApiDesc').value = content;
+      } else {
+        addBlock('custom', { title: result.title || section.title, content });
+      }
       renderBlocks();
       updateAiSectionRow(i, { icon:'✓', status:'Added' });
       return true;
