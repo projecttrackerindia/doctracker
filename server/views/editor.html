@@ -556,15 +556,48 @@ button{ cursor:pointer; }
 .ai-audience-chip input{ position:absolute; opacity:0; width:1px; height:1px; }
 .ai-audience-chip:has(input:checked){ background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
 .ai-audience-chip:has(input:focus-visible){ outline:2px solid var(--accent); outline-offset:2px; }
-.ai-drop{ border:1.5px dashed var(--border-strong); border-radius:10px; padding:26px; text-align:center; color:var(--text-dim); font-size:12.5px; cursor:pointer; }
-.ai-drop:hover{ border-color:var(--accent); }
-.ai-result{ margin-top:14px; border:1px solid var(--border); border-radius:10px; padding:12px; background:var(--surface-hover); font-size:12px; }
-.ai-result pre{ white-space:pre-wrap; word-break:break-word; margin:6px 0; font-family:var(--mono); font-size:11.5px; max-height:260px; overflow:auto; }
+.ai-drop{ position:relative; border:1.5px dashed var(--border-strong); border-radius:10px; padding:28px 20px; text-align:center; color:var(--text-dim); font-size:12.5px; cursor:pointer; transition:border-color .15s ease, background .15s ease; }
+.ai-drop:hover, .ai-drop.dragover{ border-color:var(--accent); background:var(--accent-soft); }
+.ai-drop.disabled{ pointer-events:none; opacity:.6; }
+.ai-drop-icon{ font-size:22px; margin-bottom:8px; opacity:.8; }
+.ai-drop-title{ font-weight:600; color:var(--text); margin-bottom:3px; }
+.ai-drop-sub{ color:var(--text-faint); font-size:11.5px; }
+.ai-file-chip{ display:inline-flex; align-items:center; gap:8px; margin-top:12px; padding:6px 12px; border-radius:999px; background:var(--surface-2); border:1px solid var(--border); font-size:11.5px; color:var(--text); }
+
+/* Unified status feedback — replaces the old one-box-fits-all-states panel.
+   Loading / success / error each get their own colour and icon, matching
+   the app's existing --ok/--warn/--danger token set (see .banner above)
+   instead of a flat grey box that looked identical no matter what happened. */
+.ai-status{ margin-top:14px; border-radius:10px; padding:12px 14px; display:flex; gap:10px; align-items:flex-start; border:1px solid var(--border); background:var(--surface-hover); font-size:12.5px; line-height:1.5; }
+.ai-status-icon{ flex-shrink:0; width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; margin-top:1px; }
+.ai-status-body{ flex:1; min-width:0; color:var(--text); }
+.ai-status-title{ font-weight:700; margin-bottom:2px; }
+.ai-status-actions{ margin-top:8px; display:flex; gap:8px; }
+.ai-status-actions button{ font-size:11.5px; padding:5px 12px; border-radius:6px; border:1px solid currentColor; background:none; cursor:pointer; }
+.ai-status.loading{ background:var(--surface-hover); border-color:var(--border); }
+.ai-status.loading .ai-status-icon{ background:var(--surface-2); color:var(--text-dim); animation:ai-pulse 1.1s ease-in-out infinite; }
+.ai-status.success{ background:var(--ok-soft); border-color:rgba(56,199,147,.35); }
+.ai-status.success .ai-status-icon{ background:var(--ok); color:#fff; }
+.ai-status.success .ai-status-title{ color:var(--ok); }
+.ai-status.error{ background:var(--danger-soft); border-color:rgba(239,90,111,.35); }
+.ai-status.error .ai-status-icon{ background:var(--danger); color:#fff; }
+.ai-status.error .ai-status-title{ color:var(--danger); }
+.ai-status.error .ai-status-actions button{ color:var(--danger); }
+@keyframes ai-pulse{ 0%,100%{ opacity:.5; } 50%{ opacity:1; } }
+
+/* Output panels (generated OpenAPI JSON / cURL) — visually distinct from
+   the status feedback above, styled like a code card rather than a notice. */
+.ai-output{ margin-top:14px; border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--surface); }
+.ai-output-head{ display:flex; align-items:center; justify-content:space-between; padding:9px 12px; background:var(--surface-2); border-bottom:1px solid var(--border); font-size:11.5px; font-weight:700; }
+.ai-output-body{ padding:12px; }
+.ai-output pre{ white-space:pre-wrap; word-break:break-word; margin:0; font-family:var(--mono); font-size:11.5px; max-height:260px; overflow:auto; color:var(--text); }
 .ai-curl-item{ margin-bottom:12px; }
-.ai-curl-item .ai-curl-name{ font-weight:700; font-size:12px; margin-bottom:4px; }
-.ai-copy-btn{ font-size:11px; padding:4px 10px; border-radius:6px; border:1px solid var(--border-strong); background:var(--surface); cursor:pointer; margin-top:4px; }
+.ai-curl-item:last-child{ margin-bottom:0; }
+.ai-curl-item .ai-curl-name{ font-weight:700; font-size:12px; margin-bottom:4px; color:var(--text-dim); }
+.ai-copy-btn{ font-size:11px; padding:4px 10px; border-radius:6px; border:1px solid var(--border-strong); background:var(--surface); cursor:pointer; margin-top:6px; }
 .ai-copy-btn:hover{ border-color:var(--accent); color:var(--accent); }
-.ai-not-configured{ text-align:center; padding:28px 10px; color:var(--text-dim); font-size:12.5px; }
+.ai-not-configured{ display:flex; gap:12px; align-items:flex-start; text-align:left; padding:16px; border-radius:10px; background:var(--warn-soft); border:1px solid rgba(232,163,61,.35); color:var(--text); font-size:12.5px; line-height:1.5; }
+.ai-not-configured-icon{ flex-shrink:0; font-size:16px; margin-top:1px; }
 </style>
 
 <script nonce="__CSP_NONCE__">
@@ -1993,8 +2026,31 @@ async function aiApi(method, path, body){
   });
   let data = null;
   try{ data = await res.json(); }catch(e){ /* no body */ }
-  if(!res.ok) throw new Error((data && data.error) || `Request failed: ${res.status}`);
+  if(!res.ok){
+    const err = new Error((data && data.error) || `Request failed: ${res.status}`);
+    err.retryable = !!(data && data.retryable);
+    err.code = data && data.errorCode;
+    throw err;
+  }
   return data;
+}
+
+// Single place that renders loading / success / error feedback for every
+// AI Studio panel, so the same three states always look the same way
+// instead of each tab drawing its own ad-hoc grey box.
+function renderAiStatus(el, { type, title, message, onRetry, retryLabel }){
+  const icon = type==='loading' ? '…' : type==='success' ? '✓' : '!';
+  el.innerHTML = `<div class="ai-status ${type}">
+    <div class="ai-status-icon">${icon}</div>
+    <div class="ai-status-body">
+      ${title ? `<div class="ai-status-title">${escapeHtml(title)}</div>` : ''}
+      <div>${message}</div>
+      ${onRetry ? `<div class="ai-status-actions"><button type="button" id="aiStatusRetryBtn">${escapeHtml(retryLabel || 'Try again')}</button></div>` : ''}
+    </div>
+  </div>`;
+  if(onRetry){
+    document.getElementById('aiStatusRetryBtn').addEventListener('click', onRetry);
+  }
 }
 
 let aiTab = 'draft';
@@ -2031,8 +2087,11 @@ async function renderAiTab(){
   const cfg = await ensureAiConfig();
   if(!cfg.configured){
     body.innerHTML = `<div class="ai-not-configured">
-      AI isn't set up for your organisation yet.<br>
-      ${cfg.canManage ? 'Add an API key under <b>Security ▸ AI Studio</b> in the main Studio to turn this on.' : 'Ask an organisation Admin to add an API key under Security ▸ AI Studio.'}
+      <div class="ai-not-configured-icon">⚠️</div>
+      <div>
+        <div style="font-weight:700; margin-bottom:2px;">AI isn't set up for your organisation yet</div>
+        ${cfg.canManage ? 'Add an API key under <b>Security ▸ AI Studio</b> in the main Studio to turn this on.' : 'Ask an organisation Admin to add an API key under Security ▸ AI Studio.'}
+      </div>
     </div>`;
     return;
   }
@@ -2063,43 +2122,120 @@ function renderAiDraftTab(body){
   });
 }
 
+// Only genuinely text-based formats are supported — the model reads plain
+// text, so a real .docx/.pdf/.xlsx selected via drag-and-drop (the <input
+// accept> filter only constrains the file picker, not drag-and-drop) would
+// otherwise get read as raw bytes and sent upstream as garbage, which is
+// what was producing confusing failures. This list is checked explicitly
+// rather than trusted from the browser.
+const AI_UPLOAD_EXTENSIONS = ['.txt','.md','.markdown','.csv','.json','.log','.yml','.yaml'];
+const AI_UPLOAD_MAX_BYTES = 2 * 1024 * 1024; // 2MB — comfortably under the server's 60k-character cap once decoded
+
 function renderAiUploadTab(body){
   body.innerHTML = `
-    <div class="hint" style="margin-bottom:10px;">Upload a text-based document (.txt, .md, or similar) — a BRD, a spec, an email thread. AI reads it and structures it the same way as pasting notes.</div>
+    <div class="hint" style="margin-bottom:10px;">Upload a text-based document (.txt, .md, .csv, .json, .log, .yml) — a BRD, a spec, an email thread. AI reads it and structures it the same way as pasting notes.</div>
     <label class="ai-drop" id="aiDropZone">
-      <input type="file" id="aiFileInput" accept=".txt,.md,.markdown,.csv,.json,.log,text/plain" style="display:none;">
-      <div>Click to choose a file, or drag one here</div>
-      <div id="aiFileName" class="hint" style="margin-top:6px;"></div>
+      <input type="file" id="aiFileInput" accept="${AI_UPLOAD_EXTENSIONS.join(',')}" style="display:none;">
+      <div class="ai-drop-icon">⬆️</div>
+      <div class="ai-drop-title">Click to choose a file, or drag one here</div>
+      <div class="ai-drop-sub">.txt, .md, .csv, .json, .log, .yml — up to 2MB</div>
+      <div id="aiFileChipWrap"></div>
     </label>
     <div id="aiUploadResult"></div>
   `;
   const input = document.getElementById('aiFileInput');
   const zone = document.getElementById('aiDropZone');
-  zone.addEventListener('click', ()=>input.click());
-  ['dragover','drop'].forEach(evt=>zone.addEventListener(evt, e=>e.preventDefault()));
+  zone.addEventListener('click', ()=>{ if(!zone.classList.contains('disabled')) input.click(); });
+  ['dragover','dragenter'].forEach(evt=>zone.addEventListener(evt, e=>{ e.preventDefault(); zone.classList.add('dragover'); }));
+  ['dragleave','drop'].forEach(evt=>zone.addEventListener(evt, e=>{ e.preventDefault(); zone.classList.remove('dragover'); }));
   zone.addEventListener('drop', e=>{ if(e.dataTransfer.files[0]) handleAiFile(e.dataTransfer.files[0]); });
   input.addEventListener('change', ()=>{ if(input.files[0]) handleAiFile(input.files[0]); });
 }
+
+function looksLikeBinary(text){
+  // Heuristic: real text files essentially never contain NUL bytes or the
+  // Unicode replacement character (which is what you get from decoding a
+  // .docx/.pdf/.xlsx as UTF-8). A tiny sample check is enough to catch it
+  // before wasting an AI call on unreadable content.
+  const sample = text.slice(0, 4000);
+  const badChars = (sample.match(/\u0000|\uFFFD/g) || []).length;
+  return badChars > 3;
+}
+
 async function handleAiFile(file){
-  document.getElementById('aiFileName').textContent = `Selected: ${file.name}`;
-  const text = await file.text();
-  if(!text.trim()){ toast('That file looks empty.'); return; }
+  const zone = document.getElementById('aiDropZone');
+  const chipWrap = document.getElementById('aiFileChipWrap');
   const resultEl = document.getElementById('aiUploadResult');
+  const ext = '.' + (file.name.split('.').pop() || '').toLowerCase();
+
+  chipWrap.innerHTML = `<div class="ai-file-chip">📄 ${escapeHtml(file.name)}</div>`;
+
+  if(!AI_UPLOAD_EXTENSIONS.includes(ext)){
+    renderAiStatus(resultEl, {
+      type:'error',
+      title:'Unsupported file type',
+      message:`"${escapeHtml(file.name)}" isn't a supported format. Upload one of: ${AI_UPLOAD_EXTENSIONS.join(', ')} — or paste the content into the Draft → Docs tab instead.`,
+    });
+    return;
+  }
+  if(file.size > AI_UPLOAD_MAX_BYTES){
+    renderAiStatus(resultEl, {
+      type:'error',
+      title:'File too large',
+      message:`"${escapeHtml(file.name)}" is ${(file.size/1024/1024).toFixed(1)}MB — please keep uploads under 2MB, or paste the relevant section into the Draft → Docs tab.`,
+    });
+    return;
+  }
+
+  zone.classList.add('disabled');
+  renderAiStatus(resultEl, { type:'loading', message:'Reading the file…' });
+
+  let text;
+  try{
+    text = await file.text();
+  }catch(e){
+    zone.classList.remove('disabled');
+    renderAiStatus(resultEl, { type:'error', title:'Could not read file', message:'The browser couldn\'t read that file. Try a different file or paste the content directly.' });
+    return;
+  }
+
+  if(!text.trim()){
+    zone.classList.remove('disabled');
+    renderAiStatus(resultEl, { type:'error', title:'Empty file', message:'That file looks empty — nothing to structure.' });
+    return;
+  }
+  if(looksLikeBinary(text)){
+    zone.classList.remove('disabled');
+    renderAiStatus(resultEl, {
+      type:'error',
+      title:'File isn\'t plain text',
+      message:`"${escapeHtml(file.name)}" looks like a binary format (e.g. an actual Word/PDF/Excel file saved with a text extension), not plain text. Export it as .txt/.md first, or paste the content into the Draft → Docs tab.`,
+    });
+    return;
+  }
+
   await runAiStructure(text, 'both', resultEl, null);
+  zone.classList.remove('disabled');
 }
 
 async function runAiStructure(rawText, audience, resultEl, btn){
   if(btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
-  resultEl.innerHTML = `<div class="hint" style="margin-top:12px;">Thinking…</div>`;
+  renderAiStatus(resultEl, { type:'loading', message:'Reading the content and structuring it into sections…' });
   try{
     const parsed = await aiApi('POST', '/structure', { rawText, audience });
     applyAiStructureResult(parsed);
-    resultEl.innerHTML = `<div class="ai-result">
-      <b>Applied to this endpoint:</b> ${escapeHtml(parsed.endpoint?.method||'')} ${escapeHtml(parsed.endpoint?.path||'')} —
-      ${(parsed.blocks||[]).length} section(s) added below. Review, edit, then Publish when ready.
-    </div>`;
+    renderAiStatus(resultEl, {
+      type:'success',
+      title:'Applied to this endpoint',
+      message:`${escapeHtml(parsed.endpoint?.method||'')} ${escapeHtml(parsed.endpoint?.path||'')} — ${(parsed.blocks||[]).length} section(s) added below. Review, edit, then Publish when ready.`,
+    });
   }catch(err){
-    resultEl.innerHTML = `<div class="ai-result">${escapeHtml(err.message)}</div>`;
+    renderAiStatus(resultEl, {
+      type:'error',
+      title: err.retryable ? 'Temporary problem' : 'Could not generate documentation',
+      message: escapeHtml(err.message),
+      onRetry: err.retryable ? ()=>runAiStructure(rawText, audience, resultEl, btn) : null,
+    });
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
   }
@@ -2136,44 +2272,50 @@ function renderAiOpenapiTab(body){
     </div>
     <div id="aiOpenapiResult"></div>
   `;
-  document.getElementById('aiOpenapiGo').addEventListener('click', async ()=>{
-    const btn = document.getElementById('aiOpenapiGo');
-    const resultEl = document.getElementById('aiOpenapiResult');
-    btn.disabled = true; btn.textContent = 'Generating…';
-    resultEl.innerHTML = `<div class="hint" style="margin-top:12px;">Thinking…</div>`;
-    try{
-      const endpoint = gatherEndpointFromForm();
-      const baseUrl = (window.CURRENT_PROJECT_ENV_URL) || undefined;
-      const parsed = await aiApi('POST', '/generate-openapi', { endpoint, baseUrl });
-      const curlHtml = (parsed.curlExamples||[]).map((c,i)=>`
-        <div class="ai-curl-item">
-          <div class="ai-curl-name">${escapeHtml(c.name || `Example ${i+1}`)}</div>
-          <pre id="aiCurl${i}">${escapeHtml(c.command)}</pre>
-          <button type="button" class="ai-copy-btn" data-copy-target="aiCurl${i}">Copy</button>
-        </div>`).join('');
-      resultEl.innerHTML = `
-        <div class="ai-result">
-          <b>OpenAPI fragment</b>
-          <pre id="aiOpenapiJson">${escapeHtml(JSON.stringify(parsed.openapi, null, 2))}</pre>
-          <button type="button" class="ai-copy-btn" data-copy-target="aiOpenapiJson">Copy</button>
-        </div>
-        <div class="ai-result">
-          <b>cURL</b>
-          ${curlHtml || '<div class="hint">No examples generated.</div>'}
-        </div>
-      `;
-      resultEl.querySelectorAll('[data-copy-target]').forEach(cbtn=>{
-        cbtn.addEventListener('click', ()=>{
-          const text = document.getElementById(cbtn.getAttribute('data-copy-target')).textContent;
-          navigator.clipboard.writeText(text).then(()=>toast('Copied.'));
-        });
+  document.getElementById('aiOpenapiGo').addEventListener('click', ()=>runAiOpenapi());
+}
+
+async function runAiOpenapi(){
+  const btn = document.getElementById('aiOpenapiGo');
+  const resultEl = document.getElementById('aiOpenapiResult');
+  btn.disabled = true; btn.textContent = 'Generating…';
+  renderAiStatus(resultEl, { type:'loading', message:'Building the OpenAPI fragment and cURL examples…' });
+  try{
+    const endpoint = gatherEndpointFromForm();
+    const baseUrl = (window.CURRENT_PROJECT_ENV_URL) || undefined;
+    const parsed = await aiApi('POST', '/generate-openapi', { endpoint, baseUrl });
+    const curlHtml = (parsed.curlExamples||[]).map((c,i)=>`
+      <div class="ai-curl-item">
+        <div class="ai-curl-name">${escapeHtml(c.name || `Example ${i+1}`)}</div>
+        <pre id="aiCurl${i}">${escapeHtml(c.command)}</pre>
+        <button type="button" class="ai-copy-btn" data-copy-target="aiCurl${i}">Copy</button>
+      </div>`).join('');
+    resultEl.innerHTML = `
+      <div class="ai-output">
+        <div class="ai-output-head"><span>OpenAPI fragment</span><button type="button" class="ai-copy-btn" data-copy-target="aiOpenapiJson">Copy</button></div>
+        <div class="ai-output-body"><pre id="aiOpenapiJson">${escapeHtml(JSON.stringify(parsed.openapi, null, 2))}</pre></div>
+      </div>
+      <div class="ai-output">
+        <div class="ai-output-head"><span>cURL</span></div>
+        <div class="ai-output-body">${curlHtml || '<div class="hint">No examples generated.</div>'}</div>
+      </div>
+    `;
+    resultEl.querySelectorAll('[data-copy-target]').forEach(cbtn=>{
+      cbtn.addEventListener('click', ()=>{
+        const text = document.getElementById(cbtn.getAttribute('data-copy-target')).textContent;
+        navigator.clipboard.writeText(text).then(()=>toast('Copied.'));
       });
-    }catch(err){
-      resultEl.innerHTML = `<div class="ai-result">${escapeHtml(err.message)}</div>`;
-    }finally{
-      btn.disabled = false; btn.textContent = 'Generate Swagger & cURL';
-    }
-  });
+    });
+  }catch(err){
+    renderAiStatus(resultEl, {
+      type:'error',
+      title: err.retryable ? 'Temporary problem' : 'Could not generate',
+      message: escapeHtml(err.message),
+      onRetry: err.retryable ? ()=>runAiOpenapi() : null,
+    });
+  }finally{
+    btn.disabled = false; btn.textContent = 'Generate Swagger & cURL';
+  }
 }
 
 boot();

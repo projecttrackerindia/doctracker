@@ -172,9 +172,34 @@ async function loadOrgAiSettings(organisation) {
 // Single call-out point for both providers so every route above just deals
 // in { systemPrompt, userPrompt } and gets plain text back. Keeping this in
 // one place also means "add a third provider" is a one-function change.
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// A 429 from the upstream provider is very often transient (a brief burst,
+// not an exhausted quota), so a single retry with a short backoff clears the
+// large majority of them instead of surfacing an error to the person for
+// something that would have succeeded a second later. We retry at most
+// twice, respect the provider's own Retry-After header when it sends one,
+// and never retry non-429 failures (auth/model/quota errors won't resolve
+// themselves).
+async function fetchWithRetry(url, opts, { retries = 2 } = {}) {
+  let lastResp;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const resp = await fetch(url, opts);
+    if (resp.status !== 429) return resp;
+    lastResp = resp;
+    if (attempt === retries) break;
+    const retryAfterHeader = Number(resp.headers.get('retry-after'));
+    const waitMs = Number.isFinite(retryAfterHeader) && retryAfterHeader > 0
+      ? Math.min(retryAfterHeader * 1000, 8000)
+      : 600 * Math.pow(2, attempt) + Math.random() * 250; // ~600ms, then ~1.2s
+    await sleep(waitMs);
+  }
+  return lastResp;
+}
+
 async function callLlm(settings, systemPrompt, userPrompt, { maxTokens = 4000 } = {}) {
   if (settings.provider === 'openai') {
-    const resp = await fetch(PROVIDERS.openai.endpoint, {
+    const resp = await fetchWithRetry(PROVIDERS.openai.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.apiKey}` },
       body: JSON.stringify({
@@ -191,7 +216,7 @@ async function callLlm(settings, systemPrompt, userPrompt, { maxTokens = 4000 } 
     return data.choices?.[0]?.message?.content || '';
   }
   // default: anthropic
-  const resp = await fetch(PROVIDERS.anthropic.endpoint, {
+  const resp = await fetchWithRetry(PROVIDERS.anthropic.endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -215,22 +240,28 @@ async function callLlm(settings, systemPrompt, userPrompt, { maxTokens = 4000 } 
 // instead of the same generic line for every failure. Falls back to a short
 // excerpt of the real error when it doesn't match a known pattern, so
 // nothing gets swallowed even for cases this doesn't specifically recognize.
+// Returns { message, retryable, code } instead of a bare string so the
+// front end can render errors differently (e.g. offer a "Try again" action
+// only when retrying is actually likely to help).
 function describeAiError(err) {
   const msg = String(err && err.message || err);
   if (/401|invalid[_ ]?api[_ ]?key|incorrect api key|authentication/i.test(msg)) {
-    return 'The stored API key was rejected by the provider — ask an Admin to check or replace it under Security ▸ AI Studio.';
+    return { code: 'auth', retryable: false, message: 'The stored API key was rejected by the provider — ask an Admin to check or replace it under Security ▸ AI Studio.' };
   }
   if (/model[_ ]?not[_ ]?found|does not exist|invalid model|unknown model/i.test(msg)) {
-    return 'The configured model doesn\'t exist for this provider — check Security ▸ AI Studio ▸ Model matches the selected Provider.';
+    return { code: 'model', retryable: false, message: 'The configured model doesn\'t exist for this provider — check Security ▸ AI Studio ▸ Model matches the selected Provider.' };
   }
   if (/429|rate[_ ]?limit/i.test(msg)) {
-    return 'The AI provider is rate-limiting this key — wait a moment and try again.';
+    return { code: 'rate_limit', retryable: true, message: 'The AI provider is rate-limiting this key right now. This is usually brief — wait a few seconds and try again.' };
   }
   if (/insufficient_quota|billing|exceeded your current quota/i.test(msg)) {
-    return 'The AI provider says this key is out of quota/credit — check billing for the org\'s AI provider account.';
+    return { code: 'quota', retryable: false, message: 'The AI provider says this key is out of quota/credit — check billing for the org\'s AI provider account.' };
+  }
+  if (/timeout|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed/i.test(msg)) {
+    return { code: 'network', retryable: true, message: 'Could not reach the AI provider — check your connection and try again.' };
   }
   // Unrecognized failure — still give something diagnosable rather than a flat "it failed".
-  return `The AI request failed: ${msg.slice(0, 200)}`;
+  return { code: 'unknown', retryable: true, message: `The AI request failed: ${msg.slice(0, 200)}` };
 }
 
 // Every prompt below asks for JSON-only output; models occasionally still
@@ -296,7 +327,8 @@ Infer missing pieces sensibly from context rather than leaving fields empty; if 
     res.json(parsed);
   } catch (err) {
     console.error('POST /api/ai/structure failed:', err);
-    res.status(502).json({ error: describeAiError(err) });
+    const described = describeAiError(err);
+    res.status(502).json({ error: described.message, errorCode: described.code, retryable: described.retryable });
   }
 });
 
@@ -328,7 +360,8 @@ Use exactly the method, path, params, headers and body shape given — do not in
     res.json(parsed);
   } catch (err) {
     console.error('POST /api/ai/generate-openapi failed:', err);
-    res.status(502).json({ error: describeAiError(err) });
+    const described = describeAiError(err);
+    res.status(502).json({ error: described.message, errorCode: described.code, retryable: described.retryable });
   }
 });
 
