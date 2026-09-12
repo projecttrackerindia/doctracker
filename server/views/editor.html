@@ -617,6 +617,18 @@ button{ cursor:pointer; }
 .ai-status.error .ai-status-actions button{ color:var(--danger); }
 @keyframes ai-pulse{ 0%,100%{ opacity:.5; } 50%{ opacity:1; } }
 
+/* Per-section checklist shown while the staged Draft → Docs generator runs —
+   each row tracks one section from pending through generated/applied (or
+   failed, with its own inline retry) independently of the others. */
+.ai-section-list{ display:flex; flex-direction:column; gap:6px; margin-top:4px; }
+.ai-section-row{ display:flex; align-items:center; gap:8px; border:1px solid var(--border); background:var(--surface-hover); border-radius:8px; padding:8px 10px; font-size:12px; }
+.ai-section-row-icon{ flex-shrink:0; width:16px; text-align:center; }
+.ai-section-row-title{ flex:1; min-width:0; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ai-section-row-status{ flex-shrink:0; color:var(--text-dim); display:flex; align-items:center; gap:8px; }
+.ai-section-row.ai-section-row-error{ border-color:rgba(239,90,111,.35); background:var(--danger-soft); }
+.ai-section-row.ai-section-row-error .ai-section-row-status{ color:var(--danger); }
+.ai-section-retry-btn{ font-size:11px; padding:3px 9px; border-radius:6px; border:1px solid currentColor; background:none; color:var(--danger); cursor:pointer; }
+
 /* Output panels (generated OpenAPI JSON / cURL) — visually distinct from
    the status feedback above, styled like a code card rather than a notice. */
 .ai-not-configured{ display:flex; gap:12px; align-items:flex-start; text-align:left; padding:16px; border-radius:10px; background:var(--warn-soft); border:1px solid rgba(232,163,61,.35); color:var(--text); font-size:12.5px; line-height:1.5; }
@@ -2328,7 +2340,10 @@ function renderAiFilePreview(stage, file, text, wasTruncated){
   });
 }
 
-async function runAiStructure(rawText, audience, resultEl, btn){
+// Legacy single-shot generator — kept for reference/direct use if ever
+// needed, but no longer wired to a button; see runAiStructureStaged below,
+// which the "Generate documentation" buttons actually call now.
+async function runAiStructureQuick(rawText, audience, resultEl, btn){
   if(btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
   renderAiStatus(resultEl, { type:'loading', message:'Reading the content and structuring it into sections…' });
   try{
@@ -2344,10 +2359,28 @@ async function runAiStructure(rawText, audience, resultEl, btn){
       type:'error',
       title: err.retryable ? 'Temporary problem' : 'Could not generate documentation',
       message: escapeHtml(err.message),
-      onRetry: err.retryable ? ()=>runAiStructure(rawText, audience, resultEl, btn) : null,
+      onRetry: err.retryable ? ()=>runAiStructureQuick(rawText, audience, resultEl, btn) : null,
     });
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
+  }
+}
+
+// Fills the Basic info / API-level description fields only (no blocks) —
+// shared by both the legacy single-shot result and the staged plan result,
+// which both carry the same project/endpoint/apiLevelDescription shape.
+function applyAiMetadata(parsed) {
+  if (parsed.project?.name && !document.getElementById('fProject').value.trim()) document.getElementById('fProject').value = parsed.project.name;
+  if (parsed.project?.tag && !document.getElementById('fTag').value.trim()) document.getElementById('fTag').value = parsed.project.tag;
+  if (parsed.endpoint?.method) document.getElementById('fMethod').value = parsed.endpoint.method;
+  if (parsed.endpoint?.path && !document.getElementById('fPath').value.trim()) document.getElementById('fPath').value = parsed.endpoint.path;
+  if (parsed.endpoint?.summary) {
+    let sBlock = blocks.find(b => b.type === 'summary');
+    if (!sBlock) sBlock = addBlock('summary', {});
+    if (!sBlock.summary) sBlock.summary = parsed.endpoint.summary;
+  }
+  if (parsed.apiLevelDescription && !document.getElementById('fApiDesc').value.trim()) {
+    document.getElementById('fApiDesc').value = parsed.apiLevelDescription;
   }
 }
 
@@ -2355,24 +2388,117 @@ async function runAiStructure(rawText, audience, resultEl, btn){
 // so this never silently clobbers something already typed) and appends one
 // "custom" block per AI-suggested section — never replacing existing blocks.
 function applyAiStructureResult(parsed){
-  if(parsed.project?.name && !document.getElementById('fProject').value.trim()) document.getElementById('fProject').value = parsed.project.name;
-  if(parsed.project?.tag && !document.getElementById('fTag').value.trim()) document.getElementById('fTag').value = parsed.project.tag;
-  if(parsed.endpoint?.method) document.getElementById('fMethod').value = parsed.endpoint.method;
-  if(parsed.endpoint?.path && !document.getElementById('fPath').value.trim()) document.getElementById('fPath').value = parsed.endpoint.path;
-  if(parsed.endpoint?.summary){
-    let sBlock = blocks.find(b=>b.type==='summary');
-    if(!sBlock) sBlock = addBlock('summary', {});
-    if(!sBlock.summary) sBlock.summary = parsed.endpoint.summary;
-  }
-  if(parsed.apiLevelDescription && !document.getElementById('fApiDesc').value.trim()){
-    document.getElementById('fApiDesc').value = parsed.apiLevelDescription;
-  }
+  applyAiMetadata(parsed);
   (parsed.blocks||[]).forEach(b=>{
     if(!b || (!b.title && !b.content)) return;
     addBlock('custom', { title: b.title || (b.type||'').replace(/[-_]/g,' '), content: b.content || '' });
   });
   renderBlocks();
 }
+
+// ==================== Staged generation (plan, then one section at a time) ====================
+// Same "Generate documentation" button, but instead of one big all-or-
+// nothing call, this plans the section list first, then generates and
+// applies each section as its own small call. Every section that finishes
+// is added to the editor immediately — a failure partway through only
+// costs the sections after it, and each failed row gets its own inline
+// retry instead of redoing the whole document.
+function renderAiSectionChecklist(container, sections){
+  container.innerHTML = `
+    <div class="ai-status-title" style="margin-bottom:8px;">Generating ${sections.length} section(s)…</div>
+    <div id="aiSectionList" class="ai-section-list"></div>
+  `;
+  const list = document.getElementById('aiSectionList');
+  sections.forEach((s, i)=>{
+    const row = document.createElement('div');
+    row.className = 'ai-section-row';
+    row.id = `aiSectionRow-${i}`;
+    row.innerHTML = `<span class="ai-section-row-icon">⏳</span><span class="ai-section-row-title">${escapeHtml(s.title)}</span><span class="ai-section-row-status">Waiting…</span>`;
+    list.appendChild(row);
+  });
+}
+function updateAiSectionRow(i, { icon, status, error, onRetry }){
+  const row = document.getElementById(`aiSectionRow-${i}`);
+  if(!row) return;
+  row.querySelector('.ai-section-row-icon').textContent = icon;
+  row.classList.toggle('ai-section-row-error', !!error);
+  const statusEl = row.querySelector('.ai-section-row-status');
+  statusEl.innerHTML = error
+    ? `${escapeHtml(status)} <button type="button" class="ai-section-retry-btn">Retry</button>`
+    : escapeHtml(status);
+  if(error && onRetry){
+    statusEl.querySelector('.ai-section-retry-btn').addEventListener('click', onRetry);
+  }
+}
+
+async function runAiStructureStaged(rawText, audience, resultEl, btn){
+  if(btn){ btn.disabled = true; btn.textContent = 'Planning…'; }
+  renderAiStatus(resultEl, { type:'loading', message:'Reading the content and planning out the sections it needs…' });
+
+  let plan;
+  try{
+    plan = await aiApi('POST', '/structure/plan', { rawText, audience });
+  }catch(err){
+    if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
+    renderAiStatus(resultEl, {
+      type:'error',
+      title: err.retryable ? 'Temporary problem' : 'Could not plan documentation',
+      message: escapeHtml(err.message),
+      onRetry: err.retryable ? ()=>runAiStructureStaged(rawText, audience, resultEl, btn) : null,
+    });
+    return;
+  }
+
+  applyAiMetadata(plan);
+  renderBlocks();
+  const sections = plan.sections || [];
+  if(btn){ btn.textContent = 'Generating…'; }
+
+  if(sections.length === 0){
+    if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
+    renderAiStatus(resultEl, { type:'success', title:'Applied to this endpoint', message:'Project/endpoint fields and the overview were added. The notes didn\'t call for any additional sections.' });
+    return;
+  }
+
+  renderAiSectionChecklist(resultEl, sections);
+
+  // One section's failure is isolated to its own row/retry, so this can
+  // simply await each call in turn — no need for a shared error path that
+  // would otherwise abandon sections that haven't run yet.
+  async function generateOne(i){
+    const section = sections[i];
+    updateAiSectionRow(i, { icon:'…', status:'Generating…' });
+    try{
+      const result = await aiApi('POST', '/structure/section', { rawText, audience, section, apiLevelDescription: plan.apiLevelDescription });
+      addBlock('custom', { title: result.title || section.title, content: result.content || '' });
+      renderBlocks();
+      updateAiSectionRow(i, { icon:'✓', status:'Added' });
+      return true;
+    }catch(err){
+      updateAiSectionRow(i, { icon:'!', status: err.message, error:true, onRetry: ()=>generateOne(i) });
+      return false;
+    }
+  }
+
+  for(let i=0; i<sections.length; i++){
+    await generateOne(i);
+  }
+
+  if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
+  const failedCount = document.querySelectorAll('.ai-section-row-error').length;
+  const summaryEl = document.createElement('div');
+  summaryEl.className = 'hint';
+  summaryEl.style.marginTop = '10px';
+  summaryEl.textContent = failedCount === 0
+    ? `All ${sections.length} section(s) generated and added below. Review, edit, then Publish when ready.`
+    : `${sections.length - failedCount} of ${sections.length} section(s) added below; ${failedCount} need a retry (click Retry on that row above) — nothing else needs to be redone.`;
+  resultEl.appendChild(summaryEl);
+}
+
+async function runAiStructure(rawText, audience, resultEl, btn){
+  return runAiStructureStaged(rawText, audience, resultEl, btn);
+}
+
 
 boot();
 

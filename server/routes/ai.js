@@ -55,6 +55,17 @@ function aad(organisation) {
   return `ai:${organisation}`;
 }
 
+// Shared by every prompt below that needs to know who the documentation is
+// written for — factored out so the single-shot and staged (plan/section)
+// generators stay in sync instead of drifting wording independently.
+function buildAudienceLine(audience) {
+  return audience === 'business'
+    ? 'Write for a business/BRD reader: plain language, purpose, business rules, no jargon.'
+    : audience === 'technical'
+      ? 'Write for a technical/engineering reader: precise, implementation-level detail.'
+      : 'Write so both a business (BRD) reader and a technical/engineering reader get what they each need — separate blocks for each angle rather than blending them.';
+}
+
 // ==================== Admin: org AI configuration ====================
 // GET /api/ai/config — any authenticated user can see WHETHER AI is set up
 // (so the "Generate" buttons know whether to show a "not configured yet, ask
@@ -465,16 +476,19 @@ function validateArchitectureShape(p) {
 }
 
 // ==================== Draft / upload -> structured documentation ====================
-// POST /api/ai/structure
+// POST /api/ai/structure  — single-shot / "quick" path
 // Body: { rawText, audience }  audience: 'business' | 'technical' | 'both' (default)
-// Takes completely freeform notes — a BRD paragraph, a technical spec dump,
-// meeting notes, whatever the person actually has — and turns it into the
-// editor's block model: a title/summary, and a list of { type, title,
-// content } blocks. `type` is intentionally NOT restricted to the app's
-// built-in block types — the model can emit any short slug it wants
-// ("business-context", "risk", "sla", "sample-payload"...) and the editor's
-// "custom" block renders it as free-form markdown, so nothing about the
-// output shape constrains what kind of documentation this can produce.
+// Takes completely freeform notes and turns them into the whole document —
+// metadata plus every section — in ONE model call. Good for short notes.
+// For notes that call for many sections (the common case once auth headers,
+// multiple endpoints, S3/downstream integration, and a full error-code
+// table are all in scope) prefer the staged path below
+// (/structure/plan + /structure/section): one big call means one big JSON
+// object the model has to get entirely right in a single pass, and a
+// formatting slip anywhere in it loses everything generated so far. The
+// staged path generates and applies one section at a time, so a slip in
+// section 9 doesn't cost sections 1-8, and only that one section needs a
+// retry.
 router.post('/structure', generateLimiter, async (req, res) => {
   const { rawText, audience } = req.body || {};
   if (typeof rawText !== 'string' || !rawText.trim()) {
@@ -488,11 +502,7 @@ router.post('/structure', generateLimiter, async (req, res) => {
     if (!settings) {
       return res.status(409).json({ error: 'AI isn\'t set up for your organisation yet — ask an Admin to add an API key under Security ▸ AI Studio.' });
     }
-    const audienceLine = audience === 'business'
-      ? 'Write for a business/BRD reader: plain language, purpose, business rules, no jargon.'
-      : audience === 'technical'
-        ? 'Write for a technical/engineering reader: precise, implementation-level detail.'
-        : 'Write so both a business (BRD) reader and a technical/engineering reader get what they each need — separate blocks for each angle rather than blending them.';
+    const audienceLine = buildAudienceLine(audience);
     const systemPrompt = `You convert raw, unstructured notes (which may mix business intent and technical detail, in any order, in any format) into structured API documentation. ${audienceLine}
 Respond with ONLY a JSON object, no prose, no markdown fences, shaped exactly like:
 {
@@ -522,7 +532,130 @@ ${JSON_STRICTNESS_RULES}`;
   }
 });
 
-// ==================== Structured endpoint -> OpenAPI + cURL ====================
+// ==================== Staged draft -> docs (plan, then one section at a time) ====================
+// This is the recommended path for anything but a trivial note: instead of
+// asking for the whole document in one shot, it splits generation into a
+// cheap PLAN call (metadata + a list of section titles, no section content
+// yet) followed by one small call per section. Each section is its own
+// tiny, independent JSON response and gets applied to the editor the
+// moment it lands — so a formatting slip in one section only costs that
+// section (pick "Retry" on just that row), never the sections already
+// generated and applied before it, and never the whole document.
+//
+// Per-section calls are smaller and more frequent than the single-shot
+// route's, so they get their own, more generous limiter.
+const sectionLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many AI requests — please wait a moment and try again.' },
+});
+
+function validatePlanShape(p) {
+  return !!p && typeof p === 'object' && !Array.isArray(p)
+    && p.project && typeof p.project === 'object'
+    && p.endpoint && typeof p.endpoint === 'object'
+    && typeof p.apiLevelDescription === 'string'
+    && Array.isArray(p.sections)
+    && p.sections.every(s => s && typeof s === 'object' && typeof s.type === 'string' && typeof s.title === 'string');
+}
+function validateSectionShape(p) {
+  return !!p && typeof p === 'object' && !Array.isArray(p)
+    && typeof p.type === 'string' && typeof p.title === 'string' && typeof p.content === 'string';
+}
+const AI_MAX_PLANNED_SECTIONS = 25; // a defensive cap, not a realistic ceiling — keeps one bad plan from queuing up dozens of section calls
+
+// POST /api/ai/structure/plan
+// Body: { rawText, audience }
+// Returns metadata + a list of { type, title, hint } — content comes later,
+// one call per section, via /structure/section below.
+router.post('/structure/plan', generateLimiter, async (req, res) => {
+  const { rawText, audience } = req.body || {};
+  if (typeof rawText !== 'string' || !rawText.trim()) {
+    return res.status(400).json({ error: 'rawText is required.' });
+  }
+  if (rawText.length > 200000) {
+    return res.status(400).json({ error: 'That text is too long for a single pass (200,000 character limit) — try splitting it up.' });
+  }
+  try {
+    const settings = await loadOrgAiSettings(req.authUser.organisation);
+    if (!settings) {
+      return res.status(409).json({ error: 'AI isn\'t set up for your organisation yet — ask an Admin to add an API key under Security ▸ AI Studio.' });
+    }
+    const audienceLine = buildAudienceLine(audience);
+    const systemPrompt = `You are the planning pass of a two-stage documentation generator. From raw, unstructured notes (which may mix business intent and technical detail, in any order, in any format):
+1. Extract the project/endpoint metadata.
+2. Write ONE overall "apiLevelDescription" (markdown: Overview / Flow / Authentication summary for the whole API — this is the only prose this pass writes).
+3. List every documentation SECTION the notes call for (e.g. "Request Headers", "Sample Request", "Sample Response", "Field Descriptions", "Error Responses", "S3 Integration", "Sequence Diagram" — whatever the notes actually need, however many that is) — but do NOT write each section's content yet. A later pass writes each one individually.
+${audienceLine}
+Respond with ONLY a JSON object, no prose, no markdown fences, shaped exactly like:
+{
+  "project": { "name": string, "tag": string },
+  "endpoint": { "method": "GET|POST|PUT|PATCH|DELETE", "path": string, "summary": string },
+  "apiLevelDescription": string,
+  "sections": [
+    { "type": string, "title": string, "hint": string }  // type is a short kebab-case slug; hint is one sentence telling the next pass what this section should cover
+  ]
+}
+Infer missing pieces sensibly from context; use a short honest placeholder only if something genuinely isn't present in the notes.
+${JSON_STRICTNESS_RULES}`;
+    const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 3000 });
+    const parsed = await extractJson(text, { validate: validatePlanShape, settings, label: 'structure-plan' });
+    parsed.sections = (parsed.sections || []).slice(0, AI_MAX_PLANNED_SECTIONS);
+    await recordAuditEvent(req.authUser, req, {
+      action: 'ai.structure.plan_generated',
+      resourceType: 'ai',
+      details: `Planned ${parsed.sections.length} section(s) from ${rawText.length} chars of input`,
+      severity: 'info',
+    });
+    res.json(parsed);
+  } catch (err) {
+    console.error('POST /api/ai/structure/plan failed:', err);
+    const described = describeAiError(err);
+    res.status(502).json({ error: described.message, errorCode: described.code, retryable: described.retryable });
+  }
+});
+
+// POST /api/ai/structure/section
+// Body: { rawText, audience, section: { type, title, hint }, apiLevelDescription? }
+// Writes ONE section's content. Called once per section from the plan
+// above — small input, small output, so it's cheap to retry in isolation.
+router.post('/structure/section', sectionLimiter, async (req, res) => {
+  const { rawText, audience, section, apiLevelDescription } = req.body || {};
+  if (typeof rawText !== 'string' || !rawText.trim()) {
+    return res.status(400).json({ error: 'rawText is required.' });
+  }
+  if (!section || typeof section !== 'object' || typeof section.type !== 'string' || typeof section.title !== 'string') {
+    return res.status(400).json({ error: 'section {type, title} is required.' });
+  }
+  try {
+    const settings = await loadOrgAiSettings(req.authUser.organisation);
+    if (!settings) {
+      return res.status(409).json({ error: 'AI isn\'t set up for your organisation yet — ask an Admin to add an API key under Security ▸ AI Studio.' });
+    }
+    const audienceLine = buildAudienceLine(audience);
+    const systemPrompt = `You are writing ONE section of a larger piece of API documentation — other sections are generated separately, so write only this one. ${audienceLine}
+Section to write:
+- type: ${section.type}
+- title: ${section.title}
+- what it should cover: ${section.hint || '(use your judgement based on the raw notes below)'}
+${apiLevelDescription ? `For context, here is the API-level overview already written elsewhere — stay consistent with it, don't repeat it:\n${String(apiLevelDescription).slice(0, 2000)}\n` : ''}
+Respond with ONLY a JSON object, no prose, no markdown fences, shaped exactly like:
+{ "type": ${JSON.stringify(section.type)}, "title": ${JSON.stringify(section.title)}, "content": string }
+"content" is markdown. Go into real depth here — you are not sharing a response budget with any other section, so don't compress for space the way a single giant response would have to.
+${JSON_STRICTNESS_RULES}`;
+    const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 4000 });
+    const parsed = await extractJson(text, { validate: validateSectionShape, settings, label: `structure-section:${section.type}` });
+    res.json(parsed);
+  } catch (err) {
+    console.error(`POST /api/ai/structure/section (${section?.type}) failed:`, err);
+    const described = describeAiError(err);
+    res.status(502).json({ error: described.message, errorCode: described.code, retryable: described.retryable });
+  }
+});
+
+
 // POST /api/ai/generate-openapi
 // Body: { endpoint }  — the same shape the editor already works with
 // (method, path, params, headers, requestBody, responses, baseUrl…). Returns
