@@ -1,4 +1,5 @@
 const express = require('express');
+const { jsonrepair } = require('jsonrepair');
 const { pool } = require('../db');
 const dataCrypto = require('../crypto');
 const { authenticate, requireAdmin } = require('../middleware/authGuard');
@@ -338,10 +339,23 @@ function extractJson(text) {
     try {
       return JSON.parse(repairJsonStrings(jsonSlice));
     } catch (secondErr) {
-      // Neither the raw slice nor the repaired version parsed — surface the
-      // original error (it's the more informative one) rather than the
-      // repair pass's, since the repair is best-effort.
-      throw firstErr;
+      // repairJsonStrings only fixes things *inside* a string it correctly
+      // identified as still open. It can't help when an embedded sample
+      // (the notes here are full of quoted JSON payloads the model has to
+      // re-embed inside a markdown string) contains an unescaped literal
+      // quote — that quote closes the outer string early, and everything
+      // after it — including otherwise-valid "\n" escapes meant to still be
+      // inside it — leaks out as raw, structurally invalid tokens. That's a
+      // genuinely different (and much more common) class of break, so it
+      // gets a genuinely different, battle-tested fix: jsonrepair, rather
+      // than trying to extend our own character-level pass to guess at it.
+      try {
+        return JSON.parse(jsonrepair(jsonSlice));
+      } catch (thirdErr) {
+        // All three failed — surface the original error (it's the most
+        // informative one) rather than either repair pass's.
+        throw firstErr;
+      }
     }
   }
 }
@@ -387,7 +401,7 @@ Respond with ONLY a JSON object, no prose, no markdown fences, shaped exactly li
 }
 Infer missing pieces sensibly from context rather than leaving fields empty; if something genuinely isn't present in the notes, use a short honest placeholder instead of inventing specifics.
 This has to fit in a single response, so if the notes ask for an unusually large number of sections (many error codes, multiple sample payloads, sequence diagrams, security appendices, etc.), prioritize covering every section the notes call for — keep each individual block's content focused and reasonably concise rather than exhaustive, so breadth doesn't get sacrificed to depth on just the first few sections.`;
-    const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 8000 });
+    const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 16000 });
     const parsed = extractJson(text);
     await recordAuditEvent(req.authUser, req, {
       action: 'ai.structure.generated',
