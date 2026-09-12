@@ -213,6 +213,13 @@ async function callLlm(settings, systemPrompt, userPrompt, { maxTokens = 4000 } 
     });
     if (!resp.ok) throw new Error(`OpenAI API error (${resp.status}): ${await resp.text()}`);
     const data = await resp.json();
+    // finish_reason 'length' means the response was cut off mid-output, not
+    // that the model produced something malformed — that distinction lets
+    // describeAiError below give an actionable message ("ask for less at
+    // once") instead of a cryptic JSON parse error.
+    if (data.choices?.[0]?.finish_reason === 'length') {
+      throw new Error('AI_TRUNCATED: response was cut off at the output token limit');
+    }
     return data.choices?.[0]?.message?.content || '';
   }
   // default: anthropic
@@ -232,6 +239,9 @@ async function callLlm(settings, systemPrompt, userPrompt, { maxTokens = 4000 } 
   });
   if (!resp.ok) throw new Error(`Anthropic API error (${resp.status}): ${await resp.text()}`);
   const data = await resp.json();
+  if (data.stop_reason === 'max_tokens') {
+    throw new Error('AI_TRUNCATED: response was cut off at the output token limit');
+  }
   return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
 }
 
@@ -259,6 +269,12 @@ function describeAiError(err) {
   }
   if (/timeout|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed/i.test(msg)) {
     return { code: 'network', retryable: true, message: 'Could not reach the AI provider — check your connection and try again.' };
+  }
+  if (/^AI_TRUNCATED/.test(msg)) {
+    return {
+      code: 'truncated', retryable: false,
+      message: 'The AI\'s answer got cut off before it finished, because it hit the response length limit — not because anything you pasted was invalid. This happens when the notes ask for a lot of output in one pass (many sections, sequence diagrams, several full sample payloads). Try trimming the notes to what matters for this one endpoint, or split a large multi-section spec into a couple of shorter generations.',
+    };
   }
   // Unrecognized failure — still give something diagnosable rather than a flat "it failed".
   return { code: 'unknown', retryable: true, message: `The AI request failed: ${msg.slice(0, 200)}` };
@@ -369,8 +385,9 @@ Respond with ONLY a JSON object, no prose, no markdown fences, shaped exactly li
     { "type": string, "title": string, "content": string }  // content is markdown; type is a short kebab-case slug you choose freely to fit what this content actually is
   ]
 }
-Infer missing pieces sensibly from context rather than leaving fields empty; if something genuinely isn't present in the notes, use a short honest placeholder instead of inventing specifics.`;
-    const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 4000 });
+Infer missing pieces sensibly from context rather than leaving fields empty; if something genuinely isn't present in the notes, use a short honest placeholder instead of inventing specifics.
+This has to fit in a single response, so if the notes ask for an unusually large number of sections (many error codes, multiple sample payloads, sequence diagrams, security appendices, etc.), prioritize covering every section the notes call for — keep each individual block's content focused and reasonably concise rather than exhaustive, so breadth doesn't get sacrificed to depth on just the first few sections.`;
+    const text = await callLlm(settings, systemPrompt, rawText, { maxTokens: 8000 });
     const parsed = extractJson(text);
     await recordAuditEvent(req.authUser, req, {
       action: 'ai.structure.generated',
