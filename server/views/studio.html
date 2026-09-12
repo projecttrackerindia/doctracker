@@ -5657,11 +5657,27 @@ function renderSidebar(){
         confirmLabel: 'Delete API',
       });
       if(ok){
+        // Deleting a project is NOT covered by the debounced saveState()
+        // PUT — that endpoint only ever upserts the ids you send it, it
+        // never removes one just because it's now missing from the
+        // payload (a stale tab with an out-of-date project list would
+        // otherwise be able to silently wipe out projects it doesn't even
+        // know exist). So this has to go through the dedicated DELETE
+        // route first; only drop it from local state once the server has
+        // actually confirmed it's gone — otherwise a failed/unauthorized
+        // delete would look successful here and then reappear on the next
+        // refresh, with no indication anything went wrong.
+        try{
+          await apiSend('DELETE', '/projects/'+id);
+        }catch(err){
+          console.error('Delete project failed:', err);
+          toast(err.message || 'Could not delete the project on the server — it has not been removed.');
+          return;
+        }
         delete state.projects[id];
         if(state.selected && state.selected.type==='endpoint' && !projectHasEndpoint(state.selected.id)) state.selected = null;
         if(state.selected && state.selected.type==='overview' && state.selected.projectId===id) state.selected = null;
         logAudit('deleted', 'project', projName, `Deleted project "${projName}" and its ${epCount} endpoint${epCount===1?'':'s'}`, projName);
-        saveState();
         renderAll();
       }
     });
