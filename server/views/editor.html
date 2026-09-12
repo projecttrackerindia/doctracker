@@ -101,8 +101,15 @@ button{ cursor:pointer; }
 .card.accent-header{ border-left:3px solid var(--get); }
 .card.accent-request{ border-left:3px solid var(--post); }
 .card.accent-response{ border-left:3px solid var(--item-accent, var(--accent)); }
+.card.accent-custom{ border-left:3px solid var(--accent); }
 .card-head{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
 .card-title{ font-weight:700; font-size:13px; flex:1; }
+.card-title-input{
+  flex:1; font-weight:700; font-size:13px; border:1px solid transparent; background:transparent;
+  padding:4px 6px; border-radius:6px; color:var(--text);
+}
+.card-title-input:hover{ border-color:var(--border); }
+.card-title-input:focus{ border-color:var(--accent-soft-strong); background:var(--surface); outline:none; }
 .drag-handle{
   display:flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:6px;
   color:var(--text-faint); cursor:grab; flex-shrink:0; letter-spacing:-2px; font-size:14px; user-select:none;
@@ -266,6 +273,7 @@ button{ cursor:pointer; }
     <div class="topbar-sub" id="topSub">Not saved yet</div>
   </div>
   <div class="topbar-spacer"></div>
+  <button type="button" class="btn-ghost" id="btnAiStudio" title="Draft notes or upload a document — AI structures it into this endpoint's docs, and can generate Swagger/cURL">✨ AI Studio</button>
   <button type="button" class="btn-primary" id="btnSave">Publish</button>
   <button type="button" class="theme-toggle" id="btnTheme" title="Switch theme">◐</button>
   <div class="user-chip"><span class="user-dot" id="userDot">?</span><span id="userLabel">—</span></div>
@@ -496,6 +504,7 @@ button{ cursor:pointer; }
     <button data-block="headers" id="menuHeaders"><span>Headers</span><span class="sub">Request header table</span></button>
     <button data-block="requestBody" id="menuRequestBody"><span>Request body (JSON)</span><span class="sub">Paste JSON or build it manually</span></button>
     <button data-block="response"><span>Response</span><span class="sub">Add another status code / example</span></button>
+    <button data-block="custom" id="menuCustom"><span>Custom section</span><span class="sub">Any title, any markdown — for anything the fields above don't cover</span></button>
   </div>
 </div>
 
@@ -505,6 +514,54 @@ button{ cursor:pointer; }
 </div>
 
 <div id="toast"></div>
+
+<!-- ==================== AI Studio modal ====================
+     Two ways in: paste/draft freeform notes (BRD or technical, or both),
+     or upload a text-based document — either way it goes through the same
+     /api/ai/structure call and comes back as endpoint fields + as many
+     freeform "custom" blocks as the model decided the content needed.
+     A third tab turns the endpoint you're currently editing into an
+     OpenAPI fragment + ready-to-run cURL commands. -->
+<div id="aiStudioOverlay" class="ai-overlay hidden">
+  <div class="ai-modal">
+    <div class="ai-modal-head">
+      <div class="ai-modal-title">✨ AI Studio</div>
+      <button type="button" class="card-kill" id="aiStudioClose" title="Close">✕</button>
+    </div>
+    <div class="ai-tabs">
+      <button type="button" class="ai-tab active" data-ai-tab="draft">Draft → Docs</button>
+      <button type="button" class="ai-tab" data-ai-tab="upload">Upload → Docs</button>
+      <button type="button" class="ai-tab" data-ai-tab="openapi">Swagger &amp; cURL</button>
+    </div>
+    <div id="aiTabBody" class="ai-tab-body"></div>
+  </div>
+</div>
+
+<style>
+.ai-overlay{ position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:200; }
+.ai-overlay.hidden{ display:none; }
+.ai-modal{ background:var(--surface); border:1px solid var(--border); border-radius:14px; width:min(720px, 94vw); max-height:88vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,.35); }
+.ai-modal-head{ display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid var(--border); }
+.ai-modal-title{ font-weight:800; font-size:15px; }
+.ai-tabs{ display:flex; gap:4px; padding:10px 16px 0; border-bottom:1px solid var(--border); }
+.ai-tab{ background:none; border:none; padding:10px 14px; font-size:12.5px; font-weight:600; color:var(--text-dim); border-bottom:2px solid transparent; cursor:pointer; }
+.ai-tab.active{ color:var(--accent); border-bottom-color:var(--accent); }
+.ai-tab-body{ padding:18px 20px; overflow-y:auto; }
+.ai-audience-row{ display:flex; gap:8px; margin-bottom:12px; }
+.ai-audience-row label{ flex:1; text-align:center; border:1px solid var(--border-strong); border-radius:8px; padding:8px; font-size:12px; cursor:pointer; }
+.ai-audience-row input{ display:none; }
+.ai-audience-row input:checked + span{ color:var(--accent); font-weight:700; }
+.ai-audience-row label:has(input:checked){ border-color:var(--accent); background:var(--accent-soft); }
+.ai-drop{ border:1.5px dashed var(--border-strong); border-radius:10px; padding:26px; text-align:center; color:var(--text-dim); font-size:12.5px; cursor:pointer; }
+.ai-drop:hover{ border-color:var(--accent); }
+.ai-result{ margin-top:14px; border:1px solid var(--border); border-radius:10px; padding:12px; background:var(--surface-hover); font-size:12px; }
+.ai-result pre{ white-space:pre-wrap; word-break:break-word; margin:6px 0; font-family:var(--mono); font-size:11.5px; max-height:260px; overflow:auto; }
+.ai-curl-item{ margin-bottom:12px; }
+.ai-curl-item .ai-curl-name{ font-weight:700; font-size:12px; margin-bottom:4px; }
+.ai-copy-btn{ font-size:11px; padding:4px 10px; border-radius:6px; border:1px solid var(--border-strong); background:var(--surface); cursor:pointer; margin-top:4px; }
+.ai-copy-btn:hover{ border-color:var(--accent); color:var(--accent); }
+.ai-not-configured{ text-align:center; padding:28px 10px; color:var(--text-dim); font-size:12.5px; }
+</style>
 
 <script nonce="__CSP_NONCE__">
 /* ==================== Injected from server (see server.js) ==================== */
@@ -1045,6 +1102,9 @@ function fillFormFromEndpoint(proj, ep){
   if(ep.summary || ep.description){
     addBlock('summary', { summary: ep.summary || '', description: ep.description || '' });
   }
+  (ep.customSections || []).forEach(sec=>{
+    addBlock('custom', { title: sec.title || '', content: sec.content || '' });
+  });
   if((ep.parameters||[]).length){
     addBlock('parameters', { rows: ep.parameters.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'', sendAs:'query' })) });
   }
@@ -1090,6 +1150,7 @@ function addBlock(type, data){
   if(type==='parameters' || type==='headers'){ block.rows = block.rows || []; }
   if(type==='requestBody'){ block.example = block.example || ''; block.fields = block.fields || []; block.examples = block.examples || []; }
   if(type==='response'){ block.code = block.code || 200; block.description = block.description || ''; block.example = block.example || ''; block.fields = block.fields || []; block.examples = block.examples || []; }
+  if(type==='custom'){ block.title = block.title || ''; block.content = block.content || ''; }
   // Summary & description reads best pinned right under Basic info, ahead of
   // parameters/headers/body/response — insert it first regardless of click order.
   if(type==='summary') blocks.unshift(block); else blocks.push(block);
@@ -1306,6 +1367,29 @@ function renderBlockHtml(block){
       ${namedExamplesHtml(block)}
     </div>`;
   }
+  if(block.type==='custom'){
+    // Deliberately unrestricted: any title, any amount of markdown — this is
+    // the block to reach for when nothing else fits (business justification,
+    // compliance notes, SLAs, risk assessment, architecture rationale,
+    // rollout plan, anything a BRD or a technical write-up needs that the
+    // built-in block types don't cover). AI Studio's "Draft → Docs" also
+    // emits these when the model invents a section type on the fly.
+    return `<div class="card accent-custom" data-block="${block.id}" draggable="true">
+      <div class="card-head">${DRAG_HANDLE}
+        <input type="text" class="card-title-input" data-f="title" value="${escapeHtml(block.title || '')}" placeholder="Section title — e.g. Business justification, SLA, Risk notes…">
+        <button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button>
+      </div>
+      <div class="md-toolbar">
+        <span class="hint">Markdown supported. Freeform — write anything this section needs.</span>
+        <span class="spacer"></span>
+        <button type="button" class="md-preview-toggle" data-custom-preview="${block.id}">Preview</button>
+      </div>
+      <div class="field" style="margin-bottom:0;">
+        <textarea data-f="content" style="min-height:140px; font-family:inherit;" placeholder="Write freely — this section is never templated or restricted.">${escapeHtml(block.content || '')}</textarea>
+      </div>
+      <div class="md-preview-pane hidden" id="customPreview-${block.id}"></div>
+    </div>`;
+  }
   return '';
 }
 
@@ -1390,6 +1474,21 @@ function bindBlockEvents(container){
         const key = input.getAttribute('data-f');
         input.addEventListener('input', ()=>{ block[key] = input.value; });
       });
+    }
+    if(block.type==='custom'){
+      cardEl.querySelectorAll('[data-f="title"], [data-f="content"]').forEach(input=>{
+        const key = input.getAttribute('data-f');
+        input.addEventListener('input', ()=>{ block[key] = input.value; });
+      });
+      const previewBtn = cardEl.querySelector(`[data-custom-preview="${block.id}"]`);
+      if(previewBtn){
+        previewBtn.addEventListener('click', ()=>{
+          const pane = document.getElementById(`customPreview-${block.id}`);
+          const showing = !pane.classList.contains('hidden');
+          if(showing){ pane.classList.add('hidden'); previewBtn.textContent = 'Preview'; }
+          else { pane.innerHTML = renderMarkdown(block.content || ''); pane.classList.remove('hidden'); previewBtn.textContent = 'Edit'; }
+        });
+      }
     }
   });
   container.querySelectorAll('[data-add-example]').forEach(btn=>{
@@ -1688,6 +1787,13 @@ function gatherEndpointFromForm(){
       example: r.example || '',
       examples: cleanExamples(r.examples, true),
     })),
+    // Freeform, unrestricted documentation sections — any title, any markdown,
+    // any number of them. Not part of any fixed schema on purpose: this is
+    // where BRD-style context, technical deep-dives, compliance notes, SLAs,
+    // or anything else that doesn't fit the built-in blocks lives. Order is
+    // preserved so drag-reordering in the editor round-trips.
+    customSections: blocks.filter(b=>b.type==='custom' && (b.title.trim() || b.content.trim()))
+      .map(b=>({ title: b.title.trim(), content: b.content })),
   };
 }
 
@@ -1870,7 +1976,204 @@ window.addEventListener('storage', (e)=>{
 });
 applyThemeButton();
 
+/* ==================== AI Studio ==================== */
+// Thin fetch wrapper for the /api/ai/* routes — separate from apiGet/apiSend
+// above since those are hard-scoped to /api/workspace. Surfaces the server's
+// own error message (e.g. "AI isn't set up for your organisation yet…")
+// instead of a generic failure whenever the response includes one.
+async function aiApi(method, path, body){
+  const res = await fetch('/api/ai' + path, {
+    method, credentials:'same-origin',
+    headers: body ? { 'Content-Type':'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let data = null;
+  try{ data = await res.json(); }catch(e){ /* no body */ }
+  if(!res.ok) throw new Error((data && data.error) || `Request failed: ${res.status}`);
+  return data;
+}
+
+let aiTab = 'draft';
+let aiConfigCache = null;
+function openAiStudio(){
+  document.getElementById('aiStudioOverlay').classList.remove('hidden');
+  renderAiTab();
+}
+function closeAiStudio(){
+  document.getElementById('aiStudioOverlay').classList.add('hidden');
+}
+document.getElementById('btnAiStudio').addEventListener('click', openAiStudio);
+document.getElementById('aiStudioClose').addEventListener('click', closeAiStudio);
+document.getElementById('aiStudioOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'aiStudioOverlay') closeAiStudio();
+});
+document.querySelectorAll('[data-ai-tab]').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    aiTab = btn.getAttribute('data-ai-tab');
+    document.querySelectorAll('[data-ai-tab]').forEach(b=>b.classList.toggle('active', b===btn));
+    renderAiTab();
+  });
+});
+
+async function ensureAiConfig(){
+  if(aiConfigCache) return aiConfigCache;
+  try{ aiConfigCache = await aiApi('GET', '/config'); }
+  catch(e){ aiConfigCache = { configured:false, canManage:false }; }
+  return aiConfigCache;
+}
+
+async function renderAiTab(){
+  const body = document.getElementById('aiTabBody');
+  const cfg = await ensureAiConfig();
+  if(!cfg.configured){
+    body.innerHTML = `<div class="ai-not-configured">
+      AI isn't set up for your organisation yet.<br>
+      ${cfg.canManage ? 'Add an API key under <b>Security ▸ AI Studio</b> in the main Studio to turn this on.' : 'Ask an organisation Admin to add an API key under Security ▸ AI Studio.'}
+    </div>`;
+    return;
+  }
+  if(aiTab === 'draft') renderAiDraftTab(body);
+  else if(aiTab === 'upload') renderAiUploadTab(body);
+  else renderAiOpenapiTab(body);
+}
+
+function renderAiDraftTab(body){
+  body.innerHTML = `
+    <div class="hint" style="margin-bottom:10px;">Paste anything — a BRD paragraph, a technical spec, meeting notes, a mix of both. AI structures it into this endpoint's fields and adds whatever sections the content actually needs.</div>
+    <div class="ai-audience-row">
+      <label><input type="radio" name="aiAudience" value="both" checked><span>Both audiences</span></label>
+      <label><input type="radio" name="aiAudience" value="business"><span>Business / BRD</span></label>
+      <label><input type="radio" name="aiAudience" value="technical"><span>Technical</span></label>
+    </div>
+    <textarea id="aiDraftText" style="min-height:180px; font-family:inherit; width:100%;" placeholder="Paste your notes here…"></textarea>
+    <div style="display:flex; justify-content:flex-end; margin-top:10px;">
+      <button type="button" class="btn-primary" id="aiDraftGo">Generate documentation</button>
+    </div>
+    <div id="aiDraftResult"></div>
+  `;
+  document.getElementById('aiDraftGo').addEventListener('click', async ()=>{
+    const rawText = document.getElementById('aiDraftText').value.trim();
+    if(!rawText){ toast('Paste some notes first.'); return; }
+    const audience = document.querySelector('input[name="aiAudience"]:checked').value;
+    await runAiStructure(rawText, audience, document.getElementById('aiDraftResult'), document.getElementById('aiDraftGo'));
+  });
+}
+
+function renderAiUploadTab(body){
+  body.innerHTML = `
+    <div class="hint" style="margin-bottom:10px;">Upload a text-based document (.txt, .md, or similar) — a BRD, a spec, an email thread. AI reads it and structures it the same way as pasting notes.</div>
+    <label class="ai-drop" id="aiDropZone">
+      <input type="file" id="aiFileInput" accept=".txt,.md,.markdown,.csv,.json,.log,text/plain" style="display:none;">
+      <div>Click to choose a file, or drag one here</div>
+      <div id="aiFileName" class="hint" style="margin-top:6px;"></div>
+    </label>
+    <div id="aiUploadResult"></div>
+  `;
+  const input = document.getElementById('aiFileInput');
+  const zone = document.getElementById('aiDropZone');
+  zone.addEventListener('click', ()=>input.click());
+  ['dragover','drop'].forEach(evt=>zone.addEventListener(evt, e=>e.preventDefault()));
+  zone.addEventListener('drop', e=>{ if(e.dataTransfer.files[0]) handleAiFile(e.dataTransfer.files[0]); });
+  input.addEventListener('change', ()=>{ if(input.files[0]) handleAiFile(input.files[0]); });
+}
+async function handleAiFile(file){
+  document.getElementById('aiFileName').textContent = `Selected: ${file.name}`;
+  const text = await file.text();
+  if(!text.trim()){ toast('That file looks empty.'); return; }
+  const resultEl = document.getElementById('aiUploadResult');
+  await runAiStructure(text, 'both', resultEl, null);
+}
+
+async function runAiStructure(rawText, audience, resultEl, btn){
+  if(btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
+  resultEl.innerHTML = `<div class="hint" style="margin-top:12px;">Thinking…</div>`;
+  try{
+    const parsed = await aiApi('POST', '/structure', { rawText, audience });
+    applyAiStructureResult(parsed);
+    resultEl.innerHTML = `<div class="ai-result">
+      <b>Applied to this endpoint:</b> ${escapeHtml(parsed.endpoint?.method||'')} ${escapeHtml(parsed.endpoint?.path||'')} —
+      ${(parsed.blocks||[]).length} section(s) added below. Review, edit, then Publish when ready.
+    </div>`;
+  }catch(err){
+    resultEl.innerHTML = `<div class="ai-result">${escapeHtml(err.message)}</div>`;
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
+  }
+}
+
+// Fills the Basic info / API-level description fields (only if still empty,
+// so this never silently clobbers something already typed) and appends one
+// "custom" block per AI-suggested section — never replacing existing blocks.
+function applyAiStructureResult(parsed){
+  if(parsed.project?.name && !document.getElementById('fProject').value.trim()) document.getElementById('fProject').value = parsed.project.name;
+  if(parsed.project?.tag && !document.getElementById('fTag').value.trim()) document.getElementById('fTag').value = parsed.project.tag;
+  if(parsed.endpoint?.method) document.getElementById('fMethod').value = parsed.endpoint.method;
+  if(parsed.endpoint?.path && !document.getElementById('fPath').value.trim()) document.getElementById('fPath').value = parsed.endpoint.path;
+  if(parsed.endpoint?.summary){
+    let sBlock = blocks.find(b=>b.type==='summary');
+    if(!sBlock) sBlock = addBlock('summary', {});
+    if(!sBlock.summary) sBlock.summary = parsed.endpoint.summary;
+  }
+  if(parsed.apiLevelDescription && !document.getElementById('fApiDesc').value.trim()){
+    document.getElementById('fApiDesc').value = parsed.apiLevelDescription;
+  }
+  (parsed.blocks||[]).forEach(b=>{
+    if(!b || (!b.title && !b.content)) return;
+    addBlock('custom', { title: b.title || (b.type||'').replace(/[-_]/g,' '), content: b.content || '' });
+  });
+  renderBlocks();
+}
+
+function renderAiOpenapiTab(body){
+  body.innerHTML = `
+    <div class="hint" style="margin-bottom:10px;">Generates an OpenAPI fragment and ready-to-run cURL commands from this endpoint's current fields — method, path, parameters, headers, request body and responses, exactly as filled in above.</div>
+    <div style="display:flex; justify-content:flex-end;">
+      <button type="button" class="btn-primary" id="aiOpenapiGo">Generate Swagger &amp; cURL</button>
+    </div>
+    <div id="aiOpenapiResult"></div>
+  `;
+  document.getElementById('aiOpenapiGo').addEventListener('click', async ()=>{
+    const btn = document.getElementById('aiOpenapiGo');
+    const resultEl = document.getElementById('aiOpenapiResult');
+    btn.disabled = true; btn.textContent = 'Generating…';
+    resultEl.innerHTML = `<div class="hint" style="margin-top:12px;">Thinking…</div>`;
+    try{
+      const endpoint = gatherEndpointFromForm();
+      const baseUrl = (window.CURRENT_PROJECT_ENV_URL) || undefined;
+      const parsed = await aiApi('POST', '/generate-openapi', { endpoint, baseUrl });
+      const curlHtml = (parsed.curlExamples||[]).map((c,i)=>`
+        <div class="ai-curl-item">
+          <div class="ai-curl-name">${escapeHtml(c.name || `Example ${i+1}`)}</div>
+          <pre id="aiCurl${i}">${escapeHtml(c.command)}</pre>
+          <button type="button" class="ai-copy-btn" data-copy-target="aiCurl${i}">Copy</button>
+        </div>`).join('');
+      resultEl.innerHTML = `
+        <div class="ai-result">
+          <b>OpenAPI fragment</b>
+          <pre id="aiOpenapiJson">${escapeHtml(JSON.stringify(parsed.openapi, null, 2))}</pre>
+          <button type="button" class="ai-copy-btn" data-copy-target="aiOpenapiJson">Copy</button>
+        </div>
+        <div class="ai-result">
+          <b>cURL</b>
+          ${curlHtml || '<div class="hint">No examples generated.</div>'}
+        </div>
+      `;
+      resultEl.querySelectorAll('[data-copy-target]').forEach(cbtn=>{
+        cbtn.addEventListener('click', ()=>{
+          const text = document.getElementById(cbtn.getAttribute('data-copy-target')).textContent;
+          navigator.clipboard.writeText(text).then(()=>toast('Copied.'));
+        });
+      });
+    }catch(err){
+      resultEl.innerHTML = `<div class="ai-result">${escapeHtml(err.message)}</div>`;
+    }finally{
+      btn.disabled = false; btn.textContent = 'Generate Swagger & cURL';
+    }
+  });
+}
+
 boot();
+
 </script>
 </body>
 </html>

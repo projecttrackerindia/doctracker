@@ -17,6 +17,7 @@ const auditRoutes = require('./routes/audit');
 const piiRoutes = require('./routes/pii');
 const securityRoutes = require('./routes/security');
 const liveModeRoutes = require('./routes/liveMode');
+const aiRoutes = require('./routes/ai');
 const { verifySession, IdleTimeoutError } = require('./middleware/authGuard');
 
 const app = express();
@@ -86,6 +87,10 @@ app.use(cookieParser());
 // much larger body limit than auth/user requests — scoped to this path only,
 // mounted ahead of the tighter global limit below.
 app.use('/api/workspace', express.json({ limit: '25mb' }));
+// AI Studio requests carry pasted drafts / extracted upload text, which can
+// run well past the default 20kb cap well before hitting the route's own
+// 60,000-character sanity limit — scoped larger the same way workspace is.
+app.use('/api/ai', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '20kb' }));
 
 app.use('/api/auth', authRoutes);
@@ -95,6 +100,7 @@ app.use('/api/audit', auditRoutes);
 app.use('/api/pii', piiRoutes);
 app.use('/api/security', securityRoutes);
 app.use('/api/live-mode', liveModeRoutes);
+app.use('/api/ai', aiRoutes);
 
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 

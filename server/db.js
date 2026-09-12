@@ -329,6 +329,28 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_project_access_user ON project_access (user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_project_access_project ON project_access (project_id);`);
 
+  // ---- Org-wide AI configuration (AI Studio) ----
+  // One row per organisation. `api_key_enc` is the org's own LLM API key,
+  // field-encrypted with the same envelope scheme as everything else (see
+  // server/crypto.js) and AAD-bound to `ai:<organisation>` so a copied
+  // ciphertext can't be replayed into a different org's row. The key is
+  // never returned to any client, admin or otherwise, once saved — only
+  // `configured: true/false` and the non-secret fields (provider/model) are
+  // ever sent down. Only an Admin can write this row (see
+  // server/routes/ai.js); any authenticated org member can use the features
+  // it powers.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_ai_settings (
+      organisation TEXT PRIMARY KEY,
+      provider TEXT NOT NULL DEFAULT 'anthropic',
+      model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+      api_key_enc TEXT,
+      api_key_last4 TEXT,
+      updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
   console.log('Database schema ready.');
 }
 
