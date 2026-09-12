@@ -47,13 +47,18 @@ router.get('/config', async (req, res) => {
       [req.authUser.organisation]
     );
     const row = rows[0];
+    const resolvedProviderId = row?.provider || 'anthropic';
     res.json({
       configured: !!(row && row.api_key_enc !== null) || !!(row && row.api_key_last4),
-      provider: row?.provider || 'anthropic',
-      model: row?.model || PROVIDERS.anthropic.defaultModel,
+      provider: resolvedProviderId,
+      // Bug fix: this used to always fall back to Anthropic's default model
+      // even when the stored provider was OpenAI, which is exactly how a
+      // saved row could end up with provider=openai + model=claude-*  — an
+      // invalid pairing that fails at generation time with a confusing
+      // upstream error. Fall back to the STORED provider's own default.
+      model: row?.model || PROVIDERS[resolvedProviderId].defaultModel,
       keyPreview: row?.api_key_last4 ? `••••${row.api_key_last4}` : null,
-      updatedAt: row?.updated_at || null,
-      providers: Object.entries(PROVIDERS).map(([id, p]) => ({ id, label: p.label, defaultModel: p.defaultModel })),
+      updatedAt: row?.updated_at || null,      providers: Object.entries(PROVIDERS).map(([id, p]) => ({ id, label: p.label, defaultModel: p.defaultModel })),
       canManage: req.authUser.role === 'admin',
     });
   } catch (err) {
@@ -61,6 +66,25 @@ router.get('/config', async (req, res) => {
     res.status(500).json({ error: 'Could not load AI configuration.' });
   }
 });
+
+// A model name that obviously belongs to the other provider — e.g. saving
+// provider=openai with model="claude-sonnet-4-6" (exactly what happened when
+// switching the Provider dropdown didn't also reset a stale Model value) —
+// is rejected here, at save time, with a specific message. Without this, the
+// mismatch only surfaces later as an opaque upstream error when someone
+// actually tries to generate something.
+const MODEL_HINTS = {
+  anthropic: { foreign: /^(gpt-|o[0-9](-|$)|chatgpt)/i, example: PROVIDERS.anthropic.defaultModel },
+  openai: { foreign: /^claude/i, example: PROVIDERS.openai.defaultModel },
+};
+function checkModelMatchesProvider(provider, model) {
+  const hint = MODEL_HINTS[provider];
+  if (hint && hint.foreign.test(model)) {
+    const otherProvider = provider === 'anthropic' ? 'openai' : 'anthropic';
+    return `"${model}" looks like ${PROVIDERS[otherProvider].label}'s model, not ${PROVIDERS[provider].label}'s. Did you mean to pick a different Provider, or use a model like "${hint.example}"?`;
+  }
+  return null;
+}
 
 // PUT /api/ai/config — Admin only. Saves (or rotates) the organisation's own
 // LLM API key. The key is encrypted at rest the same way as every other
@@ -72,6 +96,10 @@ router.put('/config', requireAdmin, async (req, res) => {
   }
   const resolvedProvider = provider || 'anthropic';
   const resolvedModel = (typeof model === 'string' && model.trim()) || PROVIDERS[resolvedProvider].defaultModel;
+  const mismatch = checkModelMatchesProvider(resolvedProvider, resolvedModel);
+  if (mismatch) {
+    return res.status(400).json({ error: mismatch });
+  }
 
   try {
     if (typeof apiKey === 'string' && apiKey.trim()) {
@@ -182,6 +210,29 @@ async function callLlm(settings, systemPrompt, userPrompt, { maxTokens = 4000 } 
   return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
 }
 
+// Turns the raw thrown error (which carries the provider's own status code
+// and response body — see callLlm above) into something an Admin can act on,
+// instead of the same generic line for every failure. Falls back to a short
+// excerpt of the real error when it doesn't match a known pattern, so
+// nothing gets swallowed even for cases this doesn't specifically recognize.
+function describeAiError(err) {
+  const msg = String(err && err.message || err);
+  if (/401|invalid[_ ]?api[_ ]?key|incorrect api key|authentication/i.test(msg)) {
+    return 'The stored API key was rejected by the provider — ask an Admin to check or replace it under Security ▸ AI Studio.';
+  }
+  if (/model[_ ]?not[_ ]?found|does not exist|invalid model|unknown model/i.test(msg)) {
+    return 'The configured model doesn\'t exist for this provider — check Security ▸ AI Studio ▸ Model matches the selected Provider.';
+  }
+  if (/429|rate[_ ]?limit/i.test(msg)) {
+    return 'The AI provider is rate-limiting this key — wait a moment and try again.';
+  }
+  if (/insufficient_quota|billing|exceeded your current quota/i.test(msg)) {
+    return 'The AI provider says this key is out of quota/credit — check billing for the org\'s AI provider account.';
+  }
+  // Unrecognized failure — still give something diagnosable rather than a flat "it failed".
+  return `The AI request failed: ${msg.slice(0, 200)}`;
+}
+
 // Every prompt below asks for JSON-only output; models occasionally still
 // wrap it in ```json fences or add a stray sentence, so this strips both
 // before parsing instead of trusting the raw string.
@@ -245,7 +296,7 @@ Infer missing pieces sensibly from context rather than leaving fields empty; if 
     res.json(parsed);
   } catch (err) {
     console.error('POST /api/ai/structure failed:', err);
-    res.status(502).json({ error: 'The AI request failed. Check the organisation\'s API key and try again.' });
+    res.status(502).json({ error: describeAiError(err) });
   }
 });
 
@@ -277,7 +328,7 @@ Use exactly the method, path, params, headers and body shape given — do not in
     res.json(parsed);
   } catch (err) {
     console.error('POST /api/ai/generate-openapi failed:', err);
-    res.status(502).json({ error: 'The AI request failed. Check the organisation\'s API key and try again.' });
+    res.status(502).json({ error: describeAiError(err) });
   }
 });
 

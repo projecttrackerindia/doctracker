@@ -7132,7 +7132,8 @@ async function aiApi(method, path, body){
 function renderAiSettingsTab(body){
   body.innerHTML = `<div class="al-loading" style="padding:40px 0;text-align:center;color:var(--text-faint);font-size:13px;">Loading AI configuration…</div>`;
   aiApi('GET', '/config').then(cfg=>{
-    const providerOptions = cfg.providers.map(p=>`<option value="${p.id}" ${p.id===cfg.provider?'selected':''}>${escapeHtml(p.label)}</option>`).join('');
+    const providerOptions = cfg.providers.map(p=>`<option value="${p.id}" data-default-model="${escapeHtml(p.defaultModel)}" ${p.id===cfg.provider?'selected':''}>${escapeHtml(p.label)}</option>`).join('');
+    const knownDefaults = cfg.providers.map(p=>p.defaultModel);
     body.innerHTML = `
       <div class="section" style="margin-bottom:18px;max-width:760px;">
         <div class="sec-card" style="--sc-accent:${cfg.configured?'var(--post)':'var(--put)'};">
@@ -7152,6 +7153,7 @@ function renderAiSettingsTab(body){
         <div class="field" style="margin-bottom:14px;">
           <label>Model</label>
           <input type="text" id="aiModelInput" value="${escapeHtml(cfg.model||'')}" placeholder="e.g. claude-sonnet-4-6">
+          <span class="hint" style="margin-top:4px;">Switching Provider resets this to that provider's default model — clear it and try Save again if you've customized it and hit a mismatch error.</span>
         </div>
         <div class="field" style="margin-bottom:14px;">
           <label>API key ${cfg.configured ? '<span class="hint" style="margin:0;">— leave blank to keep the current key</span>' : ''}</label>
@@ -7164,6 +7166,19 @@ function renderAiSettingsTab(body){
       </div>` : `<div class="hint">Only an organisation Admin can add or change the AI key.</div>`}
     `;
     if(!cfg.canManage) return;
+    // Switching Provider is exactly what caused the original bug — the Model
+    // field kept whatever text it had, which could belong to the OTHER
+    // provider (e.g. "claude-sonnet-4-6" left in place after picking OpenAI).
+    // Auto-resetting Model to the newly-picked provider's default whenever
+    // the field still holds ANY known default (i.e. hasn't been deliberately
+    // customized) prevents that mismatch from happening silently again.
+    document.getElementById('aiProviderSelect').addEventListener('change', (e)=>{
+      const modelInput = document.getElementById('aiModelInput');
+      const opt = e.target.selectedOptions[0];
+      if(knownDefaults.includes(modelInput.value.trim()) || !modelInput.value.trim()){
+        modelInput.value = opt.getAttribute('data-default-model');
+      }
+    });
     document.getElementById('btnAiSaveConfig').addEventListener('click', async ()=>{
       const btn = document.getElementById('btnAiSaveConfig');
       const provider = document.getElementById('aiProviderSelect').value;
