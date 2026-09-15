@@ -1,0 +1,2702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Endpoint Editor · DocTracker</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script src="/js/idle-session.js"></script>
+<script nonce="__CSP_NONCE__">
+// Apply the theme before first paint (same localStorage key the main Studio
+// tab uses) so this tab never flashes dark when Studio is set to light, or
+// vice versa. Runs synchronously, ahead of the stylesheet below.
+(function(){
+  var t = localStorage.getItem('apiStudio_theme');
+  document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+})();
+</script>
+<style nonce="__CSP_NONCE__">
+:root{
+  --bg:#0b0e14; --surface:#11151d; --surface-2:#161c26; --surface-hover:#1b2230;
+  --border:#232b39; --border-strong:#2c3646;
+  --text:#e8ecf3; --text-dim:#a9b3c4; --text-faint:#6c7789;
+  --accent:#6d8dff; --accent-ink:#0b0e14; --accent-soft:rgba(109,141,255,.15); --accent-soft-strong:rgba(92,124,250,.22);
+  --danger:#ef5a6f; --danger-soft:rgba(239,90,111,.14);
+  --warn:#e8a33d; --warn-soft:rgba(232,163,61,.14);
+  --ok:#38c793; --ok-soft:rgba(56,199,147,.14);
+  --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  --get:#38c793; --post:#6d8dff; --put:#e8a33d; --delete:#ef5a6f; --patch:#b988f0;
+  --get-bg:rgba(56,199,147,.14); --post-bg:rgba(109,141,255,.14); --put-bg:rgba(232,163,61,.14);
+  --delete-bg:rgba(239,90,111,.14); --patch-bg:rgba(185,136,240,.14);
+  --glass-strong:rgba(17,21,29,.94);
+}
+/* Same light palette as the main Studio tab (server/views/studio.html
+   [data-theme="light"]) so the two never look like different products. */
+[data-theme="light"]{
+  --bg:#f5f6fa; --surface:#ffffff; --surface-2:#f1f3f8; --surface-hover:#e9ecf4;
+  --border:#e1e5ee; --border-strong:#ccd3e2;
+  --text:#12151f; --text-dim:#5a6479; --text-faint:#8993a8;
+  --accent:#4a5fe0; --accent-ink:#ffffff; --accent-soft:rgba(74,95,224,.09); --accent-soft-strong:rgba(74,95,224,.16);
+  --danger:#d13750; --danger-soft:rgba(209,55,80,.10);
+  --warn:#a06f10; --warn-soft:rgba(160,111,16,.10);
+  --ok:#1c8f66; --ok-soft:rgba(28,143,102,.10);
+  --get:#1f6fd6; --post:#1c8f66; --put:#a06f10; --delete:#d13750; --patch:#7a4fd1;
+  --get-bg:rgba(31,111,214,.10); --post-bg:rgba(28,143,102,.10); --put-bg:rgba(160,111,16,.10);
+  --delete-bg:rgba(209,55,80,.10); --patch-bg:rgba(122,79,209,.10);
+  --glass-strong:rgba(255,255,255,.86);
+}
+*{ box-sizing:border-box; }
+html{ color-scheme:dark; }
+html[data-theme="light"]{ color-scheme:light; }
+body{ margin:0; background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
+input,select,textarea,button{ font:inherit; color:inherit; }
+button{ cursor:pointer; }
+.hidden{ display:none !important; }
+
+/* ---------- Top bar ---------- */
+.topbar{
+  position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:14px;
+  padding:12px 20px; background:var(--glass-strong); backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border);
+}
+.topbar .mark{ font-family:var(--mono); font-weight:800; color:var(--accent); }
+.topbar-title{ font-weight:700; font-size:13.5px; }
+.topbar-sub{ font-size:11.5px; color:var(--text-faint); font-family:var(--mono); }
+.topbar-spacer{ flex:1; }
+.user-chip{
+  display:flex; align-items:center; gap:7px; font-size:12px; color:var(--text-dim);
+  background:var(--surface-2); border:1px solid var(--border); border-radius:999px; padding:5px 12px 5px 6px;
+}
+.user-dot{ width:20px; height:20px; border-radius:6px; background:var(--accent); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:800; }
+.theme-toggle{
+  display:flex; align-items:center; justify-content:center; width:30px; height:30px;
+  background:none; border:1px solid var(--border-strong); border-radius:8px; color:var(--text-dim); font-size:14px;
+}
+.theme-toggle:hover{ background:var(--surface-hover); color:var(--text); }
+
+/* ---------- Attribution strip ---------- */
+.attrib{
+  display:flex; flex-wrap:wrap; gap:18px; padding:10px 20px; background:var(--surface-2);
+  border-bottom:1px solid var(--border); font-size:11.5px; color:var(--text-dim);
+}
+.attrib b{ color:var(--text); font-weight:600; }
+.attrib .chip{ display:flex; align-items:center; gap:6px; }
+.attrib .dot{ width:6px; height:6px; border-radius:50%; background:var(--text-faint); }
+
+.banner{ margin:14px 20px 0; padding:10px 14px; border-radius:8px; font-size:12.5px; display:flex; align-items:center; gap:10px; }
+.banner.warn{ background:var(--warn-soft); color:var(--warn); border:1px solid rgba(232,163,61,.35); }
+.banner.ok{ background:var(--ok-soft); color:var(--ok); border:1px solid rgba(56,199,147,.35); }
+.banner button{ margin-left:auto; background:none; border:1px solid currentColor; border-radius:6px; padding:4px 10px; font-size:11.5px; color:inherit; }
+
+/* ---------- Layout ---------- */
+.wrap{ max-width:1600px; margin:0 auto; padding:20px clamp(20px,4vw,56px) 150px; }
+.card{
+  background:var(--surface); border:1px solid var(--border); border-radius:12px;
+  padding:18px 22px; margin-bottom:16px;
+}
+/* Section accent colors — same palette as the endpoint doc viewer and the
+   +New endpoint modal (studio.html), so a section reads as "the same
+   colored tab" whether you're viewing docs or editing them here. */
+.card.accent-auth{ border-left:3px solid var(--patch); }
+.card.accent-header{ border-left:3px solid var(--get); }
+.card.accent-request{ border-left:3px solid var(--post); }
+.card.accent-response{ border-left:3px solid var(--item-accent, var(--accent)); }
+.card.accent-custom{ border-left:3px solid var(--accent); }
+.card-head{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+.card-title{ font-weight:700; font-size:13px; flex:1; }
+.card-title-input{
+  flex:1; font-weight:700; font-size:13px; border:1px solid transparent; background:transparent;
+  padding:4px 6px; border-radius:6px; color:var(--text);
+}
+.card-title-input:hover{ border-color:var(--border); }
+.card-title-input:focus{ border-color:var(--accent-soft-strong); background:var(--surface); outline:none; }
+.drag-handle{
+  display:flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:6px;
+  color:var(--text-faint); cursor:grab; flex-shrink:0; letter-spacing:-2px; font-size:14px; user-select:none;
+}
+.drag-handle:hover{ color:var(--text-dim); background:var(--surface-hover); }
+.card.dragging{ opacity:.4; }
+.card.drag-over-top{ box-shadow: inset 0 2px 0 0 var(--accent); }
+.card.drag-over-bottom{ box-shadow: inset 0 -2px 0 0 var(--accent); }
+.card-kill{
+  display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:6px;
+  color:var(--text-faint); border:none; background:none; font-size:13px;
+}
+.card-kill:hover{ color:var(--danger); background:var(--danger-soft); }
+.field-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(230px,1fr)); gap:12px 16px; }
+.field{ display:flex; flex-direction:column; gap:5px; }
+.field.span2{ grid-column:1 / -1; }
+.field label{ font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint); font-weight:700; }
+.field input, .field select, .field textarea{
+  background:var(--surface-2); border:1px solid var(--border-strong); border-radius:7px;
+  padding:8px 10px; font-size:13px; width:100%;
+}
+.field textarea{ resize:vertical; min-height:56px; font-family:var(--mono); font-size:12px; }
+.field input:focus, .field select:focus, .field textarea:focus{ outline:none; border-color:var(--accent); }
+.hint{ font-size:11px; color:var(--text-faint); }
+
+/* Project details / Authentication — shared project-level sections */
+.checkbox-row{ display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text-dim); }
+.checkbox-row input{ width:auto; }
+.flow-custom-builder{ margin-top:10px; padding:12px; background:var(--surface-2); border:1px dashed var(--border-strong); border-radius:8px; }
+.subsection{ margin-top:16px; }
+.subsection-head{ display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.subsection-title{ font-weight:700; font-size:12px; flex:1; }
+
+/* API-level (info.) description — Markdown toolbar + preview */
+.md-toolbar{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+.md-toolbar button{ font-size:11px; padding:5px 10px; background:var(--surface-2); border:1px solid var(--border); color:var(--text-dim); border-radius:6px; cursor:pointer; }
+.md-toolbar button:hover{ color:var(--text); border-color:var(--border-strong); }
+.md-toolbar .spacer{ flex:1; }
+.md-toolbar .md-preview-toggle{ color:var(--accent); border-color:var(--accent-soft-strong); background:var(--accent-soft); }
+.md-preview-pane{ display:none; min-height:180px; max-height:420px; overflow-y:auto; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:14px 16px; font-size:13px; }
+.md-preview-pane.show{ display:block; }
+.hidden-src{ display:none; }
+.md-h{ font-weight:800; color:var(--text); margin:14px 0 6px; line-height:1.3; }
+.md-h:first-child{ margin-top:0; }
+.md-h1,.md-h2{ font-size:15px; }
+.md-h3{ font-size:13.5px; }
+.md-h4{ font-size:12.5px; text-transform:uppercase; letter-spacing:.3px; color:var(--text-faint); }
+.md-p{ margin:0 0 8px; }
+.md-p:last-child{ margin-bottom:0; }
+.md-list{ margin:0 0 10px; padding-left:20px; }
+.md-list li{ margin-bottom:4px; }
+.md-list:last-child{ margin-bottom:0; }
+
+.badge{ font-family:var(--mono); font-size:10.5px; font-weight:800; padding:2px 7px; border-radius:5px; text-transform:uppercase; }
+.badge.get{ color:var(--get); background:rgba(56,199,147,.14); }
+.badge.post{ color:var(--post); background:rgba(109,141,255,.14); }
+.badge.put{ color:var(--put); background:rgba(232,163,61,.14); }
+.badge.delete{ color:var(--delete); background:rgba(239,90,111,.14); }
+.badge.patch{ color:var(--patch); background:rgba(185,136,240,.14); }
+
+/* JSON paste box */
+.json-paste{
+  background:var(--surface-2); border:1px dashed var(--border-strong); border-radius:8px; padding:10px; margin-bottom:12px;
+}
+.json-paste textarea{ width:100%; min-height:74px; background:var(--bg); border:1px solid var(--border-strong); border-radius:6px; padding:8px; font-family:var(--mono); font-size:12px; color:var(--text); }
+.json-paste-actions{ display:flex; align-items:center; gap:8px; margin-top:8px; }
+.json-paste-actions .err{ color:var(--danger); font-size:11.5px; }
+
+/* Named examples (scenarios) — alternate JSON payloads for a request body
+   or a response, tagged with a name so Try It can match a request example
+   to the response example that shares its name. Response-side examples
+   also carry their own status code, so a single Response block can host
+   several status codes without needing a new block per code. */
+.examples-section{ margin-top:14px; padding-top:14px; border-top:1px dashed var(--border-strong); }
+.examples-section-head{ margin-bottom:10px; }
+.examples-section-head .hint{ margin:0; }
+.example-item{ background:var(--surface-2); border:1px solid var(--border-strong); border-radius:10px; padding:14px; margin-bottom:12px; }
+/* Coloured the same way the parent Response card is (2xx green / 3xx blue /
+   4xx amber / 5xx red) — so a scenario documenting a 400 reads as amber at a
+   glance instead of every named example looking identical regardless of code. */
+.example-item.accent-response{ border-left:3px solid var(--item-accent, var(--border-strong)); }
+.example-item-top{ display:flex; align-items:flex-start; gap:10px; margin-bottom:12px; }
+.example-item-top .code-pill{ font-family:var(--mono); font-weight:800; font-size:11.5px; padding:6px 10px; border-radius:999px; flex-shrink:0; margin-top:18px; }
+.example-item-top .field-grid{ flex:1; }
+.example-item-kill{ background:none; border:none; color:var(--text-faint); padding:6px; border-radius:6px; margin-top:18px; flex-shrink:0; }
+.example-item-kill:hover{ color:var(--danger); background:var(--danger-soft); }
+.example-item .json-paste{ margin-bottom:12px; }
+.example-item-err{ color:var(--danger); font-size:11px; margin-top:4px; display:block; }
+.example-item .rows-table-wrap{ margin-top:2px; }
+
+/* Rows table */
+.rows-table-wrap{ overflow-x:auto; margin:0 -2px; }
+.rows-table{ width:100%; min-width:640px; border-collapse:collapse; }
+.rows-table th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint); padding:0 8px 6px; font-weight:700; white-space:nowrap; }
+.rows-table td{ padding:4px 6px; vertical-align:middle; }
+.rows-table input, .rows-table select{ background:var(--surface-2); border:1px solid var(--border-strong); border-radius:6px; padding:6px 8px; font-size:12.5px; width:100%; }
+.rows-table input[type="checkbox"]{ width:auto; }
+.row-del{ background:none; border:none; color:var(--text-faint); padding:5px; border-radius:5px; }
+.row-del:hover{ color:var(--danger); background:var(--danger-soft); }
+.add-row-btn{ margin-top:8px; background:none; border:1px dashed var(--border-strong); color:var(--text-dim); border-radius:7px; padding:6px 12px; font-size:12px; }
+.add-row-btn:hover{ border-color:var(--accent); color:var(--accent); }
+
+/* Add-block control — floating, same treatment as the studio's "+ New endpoint" FAB */
+.add-block{ position:fixed; right:24px; bottom:92px; z-index:45; }
+.add-block-btn{
+  display:flex; align-items:center; gap:9px;
+  height:52px; padding:0 20px 0 18px; border-radius:999px;
+  background:var(--accent); color:var(--accent-ink); border:1px solid var(--accent);
+  font-size:13.5px; font-weight:700; letter-spacing:.1px;
+  box-shadow:0 8px 24px -6px rgba(0,0,0,.5), 0 2px 8px -2px var(--accent-soft);
+  cursor:pointer; transition:transform .12s ease, filter .12s ease, box-shadow .12s ease;
+}
+.add-block-btn:hover{ filter:brightness(1.08); transform:translateY(-1px); box-shadow:0 10px 28px -6px rgba(0,0,0,.55), 0 2px 10px -2px var(--accent-soft); border-color:var(--accent); color:var(--accent-ink); }
+.add-block-btn:active{ transform:translateY(0); }
+.add-block-plus{ display:flex; align-items:center; justify-content:center; width:18px; height:18px; flex-shrink:0; }
+.add-block-menu{
+  position:absolute; bottom:calc(100% + 10px); right:0; background:var(--surface-2); border:1px solid var(--border-strong);
+  border-radius:9px; box-shadow:0 10px 30px rgba(0,0,0,.4); min-width:220px; padding:6px; display:none; z-index:10;
+}
+.add-block-menu.open{ display:block; }
+.add-block-menu button{ display:flex; flex-direction:column; align-items:flex-start; width:100%; text-align:left; background:none; border:none; color:var(--text); padding:8px 10px; border-radius:6px; font-size:12.5px; }
+.add-block-menu button:hover{ background:var(--surface-hover); }
+.add-block-menu button:disabled{ opacity:.35; cursor:not-allowed; }
+.add-block-menu button .sub{ font-size:10.5px; color:var(--text-faint); }
+.add-block-menu button .menu-added-badge{ font-size:9.5px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; color:var(--accent); margin-top:2px; }
+@keyframes cardFlash{ 0%{ box-shadow:0 0 0 2px var(--accent); } 100%{ box-shadow:0 0 0 0 transparent; } }
+.card.card-flash{ animation:cardFlash 1s ease-out; }
+@media (max-width:640px){
+  .add-block{ right:16px; bottom:82px; }
+  .add-block-btn{ height:48px; padding:0 16px 0 14px; }
+  .add-block-label{ display:none; }
+}
+
+/* Footer action bar */
+.footer-bar{
+  position:fixed; left:0; right:0; bottom:0; z-index:20; display:flex; align-items:center; gap:12px;
+  padding:12px 20px; background:var(--glass-strong); backdrop-filter:blur(10px); border-top:1px solid var(--border);
+}
+.footer-bar .spacer{ flex:1; }
+.footer-bar select{ background:var(--surface-2); border:1px solid var(--border-strong); border-radius:7px; padding:8px 10px; font-size:12.5px; }
+.btn-primary{ background:var(--accent); color:var(--accent-ink); border:none; border-radius:8px; padding:9px 18px; font-weight:700; font-size:12.5px; }
+.btn-primary:hover{ filter:brightness(1.08); }
+.btn-primary:disabled{ opacity:.5; cursor:not-allowed; }
+.btn-ghost{ background:none; border:1px solid var(--border-strong); color:var(--text-dim); border-radius:8px; padding:9px 16px; font-size:12.5px; }
+.btn-ghost:hover{ border-color:var(--accent); color:var(--accent); }
+
+#toast{
+  position:fixed; bottom:70px; left:50%; transform:translateX(-50%) translateY(12px); opacity:0; pointer-events:none;
+  background:var(--surface-2); border:1px solid var(--border-strong); color:var(--text); padding:9px 16px; border-radius:8px;
+  font-size:12.5px; transition:opacity .15s ease, transform .15s ease; z-index:60;
+}
+#toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="mark">{ }</span>
+  <div>
+    <div class="topbar-title" id="topTitle">New endpoint</div>
+    <div class="topbar-sub" id="topSub">Not saved yet</div>
+  </div>
+  <div class="topbar-spacer"></div>
+  <button type="button" class="btn-ghost" id="btnAiStudio" title="Draft notes or upload a document — AI structures it into this endpoint's docs">✨ AI Studio</button>
+  <button type="button" class="btn-primary" id="btnSave">Publish</button>
+  <button type="button" class="theme-toggle" id="btnTheme" title="Switch theme">◐</button>
+  <div class="user-chip"><span class="user-dot" id="userDot">?</span><span id="userLabel">—</span></div>
+</div>
+
+<div class="attrib" id="attribStrip"></div>
+<div id="conflictBanner" class="banner warn hidden">
+  <span id="conflictMsg"></span>
+  <button id="conflictReload">Reload latest</button>
+  <button id="conflictForce">Save anyway</button>
+</div>
+<div id="savedBanner" class="banner ok hidden">
+  <span id="savedMsg"></span>
+</div>
+
+<div class="wrap">
+
+  <!-- Basic info — always present, not a removable block -->
+  <div class="card">
+    <div class="card-head"><div class="card-title">Basic info</div></div>
+    <div class="field-grid">
+      <div class="field span2">
+        <label>Project / API name</label>
+        <input type="text" id="fProject" list="projectNames" placeholder="e.g. Razor Pay">
+        <datalist id="projectNames"></datalist>
+      </div>
+      <div class="field">
+        <label>Method</label>
+        <select id="fMethod">
+          <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Path</label>
+        <input type="text" id="fPath" placeholder="/api/v1/create">
+      </div>
+      <div class="field">
+        <label>Tag / category</label>
+        <input type="text" id="fTag" placeholder="e.g. PAYMENT">
+      </div>
+      <div class="field">
+        <label>Version</label>
+        <input type="text" id="fVersion" placeholder="e.g. v1">
+      </div>
+      <div class="field">
+        <label>Content type</label>
+        <input type="text" id="fContentType" value="application/json">
+      </div>
+      <div class="field">
+        <label>Visibility</label>
+        <select id="fVisibility">
+          <option value="private">Private — only you</option>
+          <option value="public">Public — your organisation</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- API-level (info.) description — the Overview / Flow / Authentication
+       markdown shown on the project's rendered Overview page. Shared across
+       every endpoint in the project, same as "Description" used to be in
+       Project settings. -->
+  <div class="card">
+    <div class="card-head"><div class="card-title">API-level description</div></div>
+    <div class="hint" style="margin-bottom:10px;">Shown once, on the project's Overview page — describes the whole API (Overview / Flow / Authentication), not just this one endpoint.</div>
+    <div class="md-toolbar">
+      <button type="button" data-md-insert="overview" data-md-target="fApiDesc">+ Overview</button>
+      <button type="button" data-md-insert="flow" data-md-target="fApiDesc">+ Flow (numbered steps)</button>
+      <button type="button" data-md-insert="auth" data-md-target="fApiDesc">+ Authentication</button>
+      <span class="spacer"></span>
+      <button type="button" class="md-preview-toggle" id="fApiDescPreviewToggle">Preview</button>
+    </div>
+    <div class="field" style="margin-bottom:0;">
+      <textarea id="fApiDesc" style="min-height:180px; font-family:var(--mono); font-size:12.5px;" placeholder="## Overview&#10;&#10;What this API is for, the end-to-end flow, and how authentication works…"></textarea>
+    </div>
+    <div class="md-preview-pane" id="fApiDescPreview"></div>
+  </div>
+
+  <!-- Project details — shared across every endpoint in this project. Editing
+       these here updates the same project record (Project settings only
+       covers Release Pipeline, Documents and Architecture now). -->
+  <div class="card">
+    <div class="card-head"><div class="card-title">Project details</div></div>
+    <div class="hint" style="margin-bottom:12px;">Shared across every endpoint in this project.</div>
+    <div class="field-grid">
+      <div class="field">
+        <label>Lifecycle stage</label>
+        <select id="fLifecycle"></select>
+      </div>
+      <div class="field">
+        <label>Owner</label>
+        <input type="text" id="fOwner" placeholder="e.g. Jane Smith">
+      </div>
+      <div class="field">
+        <label>Team</label>
+        <input type="text" id="fTeam" placeholder="e.g. Payments Platform">
+      </div>
+      <div class="field">
+        <label>Terms of service URL</label>
+        <input type="text" id="fTerms" placeholder="https://example.com/terms">
+      </div>
+      <div class="field">
+        <label>Contact name</label>
+        <input type="text" id="fContactName" placeholder="e.g. Developer Support">
+      </div>
+      <div class="field">
+        <label>Contact email</label>
+        <input type="text" id="fContactEmail" placeholder="e.g. dev-support@example.com">
+      </div>
+      <div class="field">
+        <label>License name</label>
+        <input type="text" id="fLicenseName" placeholder="e.g. Proprietary">
+      </div>
+      <div class="field">
+        <label>License URL</label>
+        <input type="text" id="fLicenseUrl" placeholder="https://example.com/license">
+      </div>
+      <div class="field span2">
+        <label>Request flow direction <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— how the Request flow diagram on the overview page renders</span></label>
+        <select id="fFlowDirection"></select>
+        <div class="flow-custom-builder hidden" id="fFlowCustomBuilder">
+          <div class="hint" style="margin-bottom:8px;">Describe your own flow direction — it's saved and reusable across every project.</div>
+          <div class="field-grid">
+            <div class="field">
+              <label>Label</label>
+              <input type="text" id="fFlowCustomLabel" placeholder="e.g. Three-way — request, response &amp; async callback">
+            </div>
+            <div class="field">
+              <label>Arrow style</label>
+              <select id="fFlowCustomPattern">
+                <option value="1-way">One-way (forward only)</option>
+                <option value="2-way">Two-way (forward + return)</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+            <button type="button" class="btn-ghost" id="fFlowCustomCancel">Cancel</button>
+            <button type="button" class="btn-primary" id="fFlowCustomAdd">Add direction</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Authentication — shared across every endpoint in this project. One
+       project has one auth config, so editing it here updates that same
+       config rather than a separate per-endpoint copy. -->
+  <div class="card accent-auth">
+    <div class="card-head"><div class="card-title">Authentication</div></div>
+    <div class="hint" style="margin-bottom:12px;">Shared across every endpoint in this project.</div>
+    <div class="field-grid">
+      <div class="field">
+        <label>Auth type</label>
+        <input type="text" id="fAuthType" placeholder="e.g. Bearer token, API key, JWT">
+      </div>
+      <div class="field">
+        <label>Method</label>
+        <select id="fAuthMethod">
+          <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Endpoint / path</label>
+        <input type="text" id="fAuthPath" placeholder="/auth/jwt/token">
+      </div>
+      <div class="field">
+        <label>Header name</label>
+        <input type="text" id="fAuthHeader" placeholder="Authorization">
+      </div>
+      <div class="field span2">
+        <label>Notes</label>
+        <textarea id="fAuthDesc" placeholder="How to obtain a token, expiry, scopes…" style="min-height:56px; font-family:inherit;"></textarea>
+      </div>
+    </div>
+
+    <div class="subsection">
+      <div class="subsection-head">
+        <div class="subsection-title">Request parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what's needed to authenticate</span></div>
+        <button type="button" class="add-row-btn" id="addAuthReqRow" style="margin-top:0;">+ Add parameter</button>
+      </div>
+      <div id="authReqTableWrap"></div>
+      <div class="json-paste" style="margin-top:10px;">
+        <div class="json-paste-actions" style="justify-content:space-between; margin-top:0; margin-bottom:6px;">
+          <span class="hint">Request JSON (auto-generated — editable)</span>
+          <button type="button" class="add-row-btn" data-auth-json-regen="req" style="margin-top:0;">↻ Regenerate</button>
+        </div>
+        <textarea id="fAuthReqJsonPreview" placeholder='{ "user": "string", "password": "string" }'></textarea>
+      </div>
+    </div>
+
+    <div class="subsection">
+      <div class="subsection-head">
+        <div class="subsection-title">Response parameters <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— what auth returns (token, expiry…)</span></div>
+        <button type="button" class="add-row-btn" id="addAuthRespRow" style="margin-top:0;">+ Add parameter</button>
+      </div>
+      <div id="authRespTableWrap"></div>
+      <div class="json-paste" style="margin-top:10px;">
+        <div class="json-paste-actions" style="justify-content:space-between; margin-top:0; margin-bottom:6px;">
+          <span class="hint">Response JSON (auto-generated — editable)</span>
+          <button type="button" class="add-row-btn" data-auth-json-regen="resp" style="margin-top:0;">↻ Regenerate</button>
+        </div>
+        <textarea id="fAuthRespJsonPreview" placeholder='{ "token": "string", "expiration": "string" }'></textarea>
+      </div>
+    </div>
+
+    <div class="field" style="margin-top:16px;">
+      <label>Include auth parameters in</label>
+      <div style="display:flex; gap:18px; margin-top:4px;">
+        <label class="checkbox-row"><input type="checkbox" id="fAuthIncludeDocs"> Documentation</label>
+        <label class="checkbox-row"><input type="checkbox" id="fAuthIncludeSwagger"> Swagger / OpenAPI</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dynamic blocks render here -->
+  <div id="blocksContainer"></div>
+
+</div>
+
+<div class="add-block">
+  <button class="add-block-btn" id="addBlockBtn">
+    <span class="add-block-plus"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></span>
+    <span class="add-block-label">Add block</span>
+  </button>
+  <div class="add-block-menu" id="addBlockMenu">
+    <button data-block="summary" id="menuSummary"><span>Summary &amp; description</span><span class="sub">One-line summary + full markdown description</span></button>
+    <button data-block="parameters" id="menuParameters"><span>Parameters</span><span class="sub">Query / path parameters table</span></button>
+    <button data-block="headers" id="menuHeaders"><span>Headers</span><span class="sub">Request header table</span></button>
+    <button data-block="requestBody" id="menuRequestBody"><span>Request body (JSON)</span><span class="sub">Paste JSON or build it manually</span></button>
+    <button data-block="response"><span>Response</span><span class="sub">Add another status code / example</span></button>
+    <button data-block="custom" id="menuCustom"><span>Custom section</span><span class="sub">Any title, any markdown — for anything the fields above don't cover</span></button>
+  </div>
+</div>
+
+<div class="footer-bar">
+  <span class="hint" id="footerHint">Saves to the endpoint's live draft.</span>
+  <div class="spacer"></div>
+</div>
+
+<div id="toast"></div>
+
+<!-- ==================== AI Studio modal ====================
+     Two ways in: paste/draft freeform notes (BRD or technical, or both),
+     or upload a text-based document — either way it goes through the same
+     /api/ai/structure call and comes back as endpoint fields + as many
+     freeform "custom" blocks as the model decided the content needed.
+     A third tab turns the endpoint you're currently editing into an
+     OpenAPI fragment + ready-to-run cURL commands. -->
+<div id="aiStudioOverlay" class="ai-overlay hidden">
+  <div class="ai-modal">
+    <div class="ai-modal-head">
+      <div class="ai-modal-head-left">
+        <div class="ai-modal-badge">✨</div>
+        <div>
+          <div class="ai-modal-title">AI Studio</div>
+          <div class="ai-modal-subtitle">Turn notes, docs, or an endpoint's fields into documentation</div>
+        </div>
+      </div>
+      <button type="button" class="card-kill" id="aiStudioClose" title="Close">✕</button>
+    </div>
+    <div class="ai-tabs">
+      <button type="button" class="ai-tab active" data-ai-tab="draft"><span class="ai-tab-ic">📝</span>Draft → Docs</button>
+      <button type="button" class="ai-tab" data-ai-tab="upload"><span class="ai-tab-ic">📤</span>Upload → Docs</button>
+    </div>
+    <div id="aiTabBody" class="ai-tab-body"></div>
+  </div>
+</div>
+
+<style>
+.ai-overlay{ position:fixed; inset:0; background:rgba(0,0,0,.55); backdrop-filter:blur(2px); display:flex; align-items:center; justify-content:center; z-index:200; }
+.ai-overlay.hidden{ display:none; }
+.ai-modal{ background:var(--surface); border:1px solid var(--border); border-radius:16px; width:min(720px, 94vw); max-height:88vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 24px 70px rgba(0,0,0,.4); }
+.ai-modal-head{ display:flex; align-items:center; justify-content:space-between; padding:18px 20px; border-bottom:1px solid var(--border); }
+.ai-modal-head-left{ display:flex; align-items:center; gap:12px; }
+.ai-modal-badge{ width:36px; height:36px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0; background:linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #a06bff)); box-shadow:0 4px 14px var(--accent-soft-strong); }
+.ai-modal-title{ font-weight:800; font-size:15px; color:var(--text); line-height:1.3; }
+.ai-modal-subtitle{ font-size:11.5px; color:var(--text-faint); margin-top:1px; }
+.ai-tabs{ display:flex; gap:4px; padding:12px 16px; background:var(--surface-2); border-bottom:1px solid var(--border); }
+.ai-tab{ display:flex; align-items:center; gap:6px; flex:1; justify-content:center; background:none; border:1px solid transparent; border-radius:8px; padding:9px 12px; font-size:12px; font-weight:700; color:var(--text-dim); cursor:pointer; transition:all .15s ease; }
+.ai-tab-ic{ font-size:13px; }
+.ai-tab:hover{ color:var(--text); background:var(--surface-hover); }
+.ai-tab.active{ color:var(--accent-ink); background:var(--accent); box-shadow:0 2px 8px var(--accent-soft-strong); }
+.ai-tab-body{ padding:20px; overflow-y:auto; }
+.ai-field-label{ font-size:11.5px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:.03em; margin-bottom:8px; }
+.ai-audience-row{ display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:16px; }
+.ai-audience-chip{
+  display:flex; flex-direction:column; align-items:center; gap:4px; text-align:center; padding:12px 10px; border-radius:10px;
+  font-size:11.5px; font-weight:600; cursor:pointer; border:1.5px solid var(--border); background:var(--surface-2); color:var(--text-dim);
+  transition:all .15s ease; user-select:none;
+}
+.ai-audience-chip .ai-audience-ic{ font-size:17px; }
+.ai-audience-chip .ai-audience-sub{ font-size:10.5px; font-weight:500; color:var(--text-faint); }
+.ai-audience-chip input{ position:absolute; opacity:0; width:1px; height:1px; }
+.ai-audience-chip:hover{ border-color:var(--border-strong); background:var(--surface-hover); }
+.ai-audience-chip:has(input:checked){ background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
+.ai-audience-chip:has(input:checked) .ai-audience-sub{ color:var(--accent); opacity:.8; }
+.ai-audience-chip:has(input:focus-visible){ outline:2px solid var(--accent); outline-offset:2px; }
+#aiDraftText{ width:100%; min-height:180px; font-family:inherit; font-size:13px; padding:14px; border-radius:10px; border:1.5px solid var(--border); background:var(--surface-2); color:var(--text); resize:vertical; transition:border-color .15s ease, box-shadow .15s ease; }
+#aiDraftText:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+.ai-drop{ position:relative; border:1.5px dashed var(--border-strong); border-radius:12px; padding:32px 20px; text-align:center; color:var(--text-dim); font-size:12.5px; cursor:pointer; transition:border-color .15s ease, background .15s ease; background:var(--surface-2); }
+.ai-drop:hover, .ai-drop.dragover{ border-color:var(--accent); background:var(--accent-soft); }
+.ai-drop.disabled{ pointer-events:none; opacity:.6; }
+.ai-drop-icon{ width:42px; height:42px; margin:0 auto 12px; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; font-size:18px; }
+.ai-drop-title{ font-weight:700; color:var(--text); margin-bottom:3px; font-size:13px; }
+.ai-drop-sub{ color:var(--text-faint); font-size:11.5px; }
+.ai-file-card{ border:1px solid var(--border); border-radius:12px; background:var(--surface-2); overflow:hidden; animation:ai-fade-in .15s ease; }
+@keyframes ai-fade-in{ from{ opacity:0; transform:translateY(-4px); } to{ opacity:1; transform:translateY(0); } }
+.ai-file-card-head{ display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--border); }
+.ai-file-icon{ width:38px; height:38px; border-radius:9px; display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0; }
+.ai-file-meta{ flex:1; min-width:0; }
+.ai-file-name{ font-weight:700; font-size:12.5px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ai-file-sub{ font-size:11px; color:var(--text-faint); margin-top:2px; }
+.ai-file-change{ font-size:11px; font-weight:600; color:var(--accent); background:none; border:1px solid var(--border-strong); border-radius:6px; padding:5px 10px; cursor:pointer; flex-shrink:0; }
+.ai-file-change:hover{ border-color:var(--accent); background:var(--accent-soft); }
+.ai-file-preview-label{ display:flex; align-items:center; justify-content:space-between; padding:10px 16px 0; font-size:10.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--text-faint); }
+.ai-file-preview{ position:relative; max-height:150px; overflow:hidden; margin-top:6px; }
+.ai-file-preview pre{ margin:0; padding:2px 16px 14px; font-family:var(--mono); font-size:11px; color:var(--text-dim); white-space:pre-wrap; word-break:break-word; }
+.ai-file-preview::after{ content:''; position:absolute; left:0; right:0; bottom:0; height:36px; background:linear-gradient(to bottom, transparent, var(--surface-2)); pointer-events:none; }
+.ai-file-body{ padding:16px; padding-top:12px; }
+.ai-format-badges{ display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; justify-content:center; }
+.ai-format-badge{ font-size:10.5px; font-weight:600; padding:3px 9px; border-radius:999px; background:var(--surface); border:1px solid var(--border-strong); color:var(--text-faint); }
+
+/* Unified status feedback — replaces the old one-box-fits-all-states panel.
+   Loading / success / error each get their own colour and icon, matching
+   the app's existing --ok/--warn/--danger token set (see .banner above)
+   instead of a flat grey box that looked identical no matter what happened. */
+.ai-status{ margin-top:14px; border-radius:10px; padding:12px 14px; display:flex; gap:10px; align-items:flex-start; border:1px solid var(--border); background:var(--surface-hover); font-size:12.5px; line-height:1.5; }
+.ai-status-icon{ flex-shrink:0; width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; margin-top:1px; }
+.ai-status-body{ flex:1; min-width:0; color:var(--text); }
+.ai-status-title{ font-weight:700; margin-bottom:2px; }
+.ai-status-actions{ margin-top:8px; display:flex; gap:8px; }
+.ai-status-actions button{ font-size:11.5px; padding:5px 12px; border-radius:6px; border:1px solid currentColor; background:none; cursor:pointer; }
+.ai-status.loading{ background:var(--surface-hover); border-color:var(--border); }
+.ai-status.loading .ai-status-icon{ background:var(--surface-2); color:var(--text-dim); animation:ai-pulse 1.1s ease-in-out infinite; }
+.ai-status.success{ background:var(--ok-soft); border-color:rgba(56,199,147,.35); }
+.ai-status.success .ai-status-icon{ background:var(--ok); color:#fff; }
+.ai-status.success .ai-status-title{ color:var(--ok); }
+.ai-status.error{ background:var(--danger-soft); border-color:rgba(239,90,111,.35); }
+.ai-status.error .ai-status-icon{ background:var(--danger); color:#fff; }
+.ai-status.error .ai-status-title{ color:var(--danger); }
+.ai-status.error .ai-status-actions button{ color:var(--danger); }
+@keyframes ai-pulse{ 0%,100%{ opacity:.5; } 50%{ opacity:1; } }
+
+/* Per-section checklist shown while the staged Draft → Docs generator runs —
+   each row tracks one section from pending through generated/applied (or
+   failed, with its own inline retry) independently of the others. */
+.ai-section-list{ display:flex; flex-direction:column; gap:6px; margin-top:4px; }
+.ai-section-row{ display:flex; align-items:center; gap:8px; border:1px solid var(--border); background:var(--surface-hover); border-radius:8px; padding:8px 10px; font-size:12px; }
+.ai-section-row-icon{ flex-shrink:0; width:16px; text-align:center; }
+.ai-section-row-title{ flex:1; min-width:0; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ai-section-row-status{ flex-shrink:0; color:var(--text-dim); display:flex; align-items:center; gap:8px; }
+.ai-section-row.ai-section-row-error{ border-color:rgba(239,90,111,.35); background:var(--danger-soft); }
+.ai-section-row.ai-section-row-error .ai-section-row-status{ color:var(--danger); }
+.ai-section-retry-btn{ font-size:11px; padding:3px 9px; border-radius:6px; border:1px solid currentColor; background:none; color:var(--danger); cursor:pointer; }
+
+/* Output panels (generated OpenAPI JSON / cURL) — visually distinct from
+   the status feedback above, styled like a code card rather than a notice. */
+.ai-not-configured{ display:flex; gap:12px; align-items:flex-start; text-align:left; padding:16px; border-radius:10px; background:var(--warn-soft); border:1px solid rgba(232,163,61,.35); color:var(--text); font-size:12.5px; line-height:1.5; }
+.ai-not-configured-icon{ flex-shrink:0; font-size:16px; margin-top:1px; }
+</style>
+
+<script nonce="__CSP_NONCE__">
+/* ==================== Injected from server (see server.js) ==================== */
+const AUTH_USER = __AUTH_USER_JSON__;
+const ORG_TOKEN = '__ORG_TOKEN__';
+const INITIAL_PROJECT_SLUG = __PROJECT_SLUG__;
+const INITIAL_ENDPOINT_SLUG = __ENDPOINT_SLUG__;
+
+/* ==================== Small utilities (mirrors studio.html) ==================== */
+function uid(){ return Math.random().toString(36).slice(2,10); }
+function escapeHtml(str){
+  if(str === undefined || str === null) return '';
+  return String(str).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+function slugify(str){
+  return String(str||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'x';
+}
+function endpointSlug(method, path){ return slugify((method||'get') + '-' + (path||'')); }
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(()=>t.classList.remove('show'), 2800);
+}
+function methodClass(m){ return (m||'get').toLowerCase(); }
+// Same 2xx/3xx/4xx/5xx → color mapping as the endpoint doc viewer's
+// respColorVar (studio.html) — 2xx green, 3xx blue, 4xx amber, 5xx+ red —
+// so a Response block's left-border accent matches its status code.
+function respAccentVar(code){
+  const c = String(code||'')[0];
+  if(c==='2') return '--post';
+  if(c==='3') return '--get';
+  if(c==='4') return '--put';
+  return '--delete';
+}
+async function apiGet(path){
+  const res = await fetch('/api/workspace' + path, { credentials:'same-origin' });
+  if(!res.ok) throw new Error('Request failed: ' + res.status);
+  return res.json();
+}
+async function apiSend(method, path, body){
+  const res = await fetch('/api/workspace' + path, {
+    method, credentials:'same-origin', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body),
+  });
+  if(!res.ok) throw new Error('Request failed: ' + res.status);
+  return res.json();
+}
+function postAuditEvent(fields){
+  fetch('/api/audit/events', { method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'}, body: JSON.stringify(fields) })
+    .catch(e=>console.error('Audit log write failed', e));
+}
+// Same channel name any tab of this app can listen on to know workspace data changed elsewhere.
+const syncChannel = ('BroadcastChannel' in window) ? new BroadcastChannel('doctracker-sync') : null;
+
+/* ==================== Type inference from pasted JSON ==================== */
+const PARAM_TYPES = ['String','Integer','Number','Boolean','Object','Array'];
+function inferType(value){
+  if(value === null || value === undefined) return 'String';
+  if(Array.isArray(value)) return 'Array';
+  if(typeof value === 'boolean') return 'Boolean';
+  if(typeof value === 'number') return Number.isInteger(value) ? 'Integer' : 'Number';
+  if(typeof value === 'object') return 'Object';
+  return 'String';
+}
+function exampleFor(value){
+  if(value === null || value === undefined) return '';
+  if(typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+// Recursively flattens pasted JSON into one row per actual key/value pair —
+// nested objects walk into dotted paths (e.g. "response.responseInfo.status")
+// and arrays walk into their first element (e.g. "items[0].id") rather than
+// collapsing straight to a single opaque "Object"/"Array" row. Empty objects/
+// arrays still get one row each so nothing pasted is silently dropped.
+function inferFieldsFromJson(obj){
+  const rows = [];
+  function walk(value, path){
+    if(Array.isArray(value)){
+      if(value.length === 0){
+        rows.push({ id:uid(), name:path, type:'Array', required:true, example:'[]', description:'' });
+        return;
+      }
+      const first = value[0];
+      if(first && typeof first === 'object'){
+        walk(first, `${path}[0]`);
+      } else {
+        rows.push({ id:uid(), name:path, type:'Array', required:true, example: exampleFor(value), description:'' });
+      }
+      return;
+    }
+    if(value && typeof value === 'object'){
+      const keys = Object.keys(value);
+      if(keys.length === 0){
+        rows.push({ id:uid(), name:path, type:'Object', required:true, example:'{}', description:'' });
+        return;
+      }
+      keys.forEach(k=> walk(value[k], path ? `${path}.${k}` : k));
+      return;
+    }
+    rows.push({ id:uid(), name:path, type: inferType(value), required:true, example: exampleFor(value), description:'' });
+  }
+  if(!obj || typeof obj !== 'object') return rows;
+  Object.keys(obj).forEach(key=> walk(obj[key], key));
+  return rows;
+}
+
+/* ==================== API-level description (Overview/Flow/Auth markdown) ====================
+   Drives the Overview / Flow / Authentication sections on the project's
+   rendered Overview page (proj.description). Shared across every endpoint —
+   same field that used to be "Description" in Project settings. */
+function renderMarkdown(str){
+  if(!str) return '';
+  const src = String(str).replace(/\r\n?/g, '\n');
+  const lines = escapeHtml(src).split('\n');
+  const inline = s => s
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(?:^|\s)\*([^*\s][^*]*)\*(?=\s|$)/g, (m,g)=>m.replace('*'+g+'*','<em>'+g+'</em>'));
+
+  const out = [];
+  let list = null; // {type:'ul'|'ol', items:[]}
+  const flushList = () => {
+    if(!list) return;
+    const tag = list.type;
+    out.push(`<${tag} class="md-list">${list.items.map(it=>`<li>${inline(it)}</li>`).join('')}</${tag}>`);
+    list = null;
+  };
+
+  lines.forEach(raw=>{
+    const line = raw.trim();
+    if(!line){ flushList(); return; }
+    let m;
+    if((m = line.match(/^(#{1,4})\s+(.*)$/))){
+      flushList();
+      out.push(`<div class="md-h md-h${m[1].length}">${inline(m[2])}</div>`);
+    } else if((m = line.match(/^[-*]\s+(.*)$/))){
+      if(!list || list.type!=='ul'){ flushList(); list = {type:'ul', items:[]}; }
+      list.items.push(m[1]);
+    } else if((m = line.match(/^\d+[.)]\s+(.*)$/))){
+      if(!list || list.type!=='ol'){ flushList(); list = {type:'ol', items:[]}; }
+      list.items.push(m[1]);
+    } else {
+      flushList();
+      out.push(`<p class="md-p">${inline(line)}</p>`);
+    }
+  });
+  flushList();
+  return out.join('');
+}
+
+const MD_TEMPLATES = {
+  overview: `## Overview\n\nThis API enables merchants to initiate payment orders and generate the order details required for seamless and secure payment processing.\n\nThe **Create Order** endpoint is the first step in the payment flow. It creates an order on the server side, which is then used by the client (web / mobile checkout) to collect payment from the customer.\n`,
+  flow: `## Flow\n\n1. Merchant backend calls \`Create Order\` with amount, currency and receipt.\n2. The API returns an \`order_id\` and order metadata.\n3. \`order_id\` is passed to the checkout on the client side.\n4. Customer completes the payment.\n5. Merchant verifies the payment signature on the backend (separate API).\n`,
+  auth: `## Authentication\n\nAll requests must include \`CLIENT-ID\` / \`CLIENT-SECRET\` as well as the \`Authorization\` header. Never expose \`CLIENT-SECRET\` in client-side code, logs, or public documentation.\n`,
+};
+
+function insertAtCursor(textarea, text){
+  const start = textarea.selectionStart ?? textarea.value.length;
+  const end = textarea.selectionEnd ?? textarea.value.length;
+  const before = textarea.value.slice(0, start);
+  const after = textarea.value.slice(end);
+  const needsLeadingBreak = before.length && !before.endsWith('\n\n') ? (before.endsWith('\n') ? '\n' : '\n\n') : '';
+  const insert = needsLeadingBreak + text;
+  textarea.value = before + insert + after;
+  const pos = (before + insert).length;
+  textarea.setSelectionRange(pos, pos);
+  textarea.focus();
+}
+
+document.querySelectorAll('[data-md-insert]').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    const tpl = MD_TEMPLATES[btn.getAttribute('data-md-insert')];
+    const targetId = btn.getAttribute('data-md-target') || 'fApiDesc';
+    if(tpl) insertAtCursor(document.getElementById(targetId), tpl);
+  });
+});
+function wireMdPreviewToggle(toggleId, textareaId, previewId){
+  const toggleEl = document.getElementById(toggleId);
+  if(!toggleEl) return;
+  toggleEl.addEventListener('click', (e)=>{
+    const ta = document.getElementById(textareaId);
+    const pane = document.getElementById(previewId);
+    const showing = pane.classList.toggle('show');
+    e.currentTarget.textContent = showing ? 'Edit' : 'Preview';
+    if(showing){
+      pane.innerHTML = ta.value.trim() ? renderMarkdown(ta.value) : '<span style="color:var(--text-faint);">Nothing to preview yet.</span>';
+      ta.classList.add('hidden-src');
+    } else {
+      ta.classList.remove('hidden-src');
+    }
+  });
+}
+wireMdPreviewToggle('fApiDescPreviewToggle', 'fApiDesc', 'fApiDescPreview');
+
+/* ==================== Project details / Authentication ====================
+   Shared across every endpoint in a project — editing these here updates the
+   same project record. Mirrors server/views/studio.html's now-removed
+   Project settings ▸ General/Auth tabs; this editor tab is now the one place
+   these shared project fields are created or edited (Project settings only
+   covers Release Pipeline, Documents and Architecture). */
+const LIFECYCLE_STAGES = ['DRAFT','DESIGN','DEVELOPMENT','SIT','UAT','PRE-PROD','PRODUCTION','DEPRECATED','RETIRED'];
+const FLOW_DIRECTION_PRESETS = [
+  { id:'1-way', label:'One-way — request only (Client → Gateway → Flow → Downstream)', pattern:'1-way' },
+  { id:'2-way', label:'Two-way — request and response (Client ⇄ Gateway ⇄ Flow ⇄ Downstream)', pattern:'2-way' },
+];
+function allFlowDirections(){ return FLOW_DIRECTION_PRESETS.concat((workspace && workspace.customFlowDirections) || []); }
+function populateFlowDirectionSelect(selectedId){
+  const sel = document.getElementById('fFlowDirection');
+  const dirs = allFlowDirections();
+  sel.innerHTML = dirs.map(d=>`<option value="${d.id}">${escapeHtml(d.label)}</option>`).join('')
+    + `<option value="__add_custom__">+ Add custom direction…</option>`;
+  sel.value = dirs.some(d=>d.id===selectedId) ? selectedId : dirs[0].id;
+}
+function saveCustomFlowDirections(list){
+  workspace.customFlowDirections = list;
+  apiSend('PUT', '/custom-flow-directions', { customFlowDirections: list })
+    .catch(e=>{ console.error('Save flow direction presets failed', e); toast('Could not save flow direction presets to the server.'); });
+}
+
+function exampleValueFor(type, example){
+  if(example !== undefined && example !== '' && example !== null) return coerceByType(type, example);
+  switch((type||'String').toLowerCase()){
+    case 'integer': return 0;
+    case 'number': return 0.0;
+    case 'boolean': return true;
+    case 'object': return {};
+    case 'array': return [];
+    default: return 'string';
+  }
+}
+function coerceByType(type, val){
+  switch((type||'String').toLowerCase()){
+    case 'integer': { const n = parseInt(val,10); return isNaN(n) ? 0 : n; }
+    case 'number': { const n = parseFloat(val); return isNaN(n) ? 0 : n; }
+    case 'boolean': return val === true || val === 'true';
+    case 'object': try{ return JSON.parse(val); }catch(e){ return {}; }
+    case 'array': try{ const p = JSON.parse(val); return Array.isArray(p)?p:[val]; }catch(e){ return [val]; }
+    default: return String(val);
+  }
+}
+function buildJsonFromRows(rows){
+  const obj = {};
+  rows.filter(r=>r.name.trim()).forEach(r=>{ obj[r.name.trim()] = exampleValueFor(r.type, r.example); });
+  return obj;
+}
+
+// The project record currently backing these two sections (set on load, or
+// when the typed project name in "New endpoint" matches one) — used so the
+// flow-direction custom-preset builder's Cancel can fall back to the
+// project's saved direction.
+let currentProjectForFields = null;
+const authRows = { req: [], resp: [] };
+const authJsonAutoValue = { req: '', resp: '' };
+
+function newAuthParamRow(){ return { id:uid(), name:'', type:'String', required:false, example:'', description:'' }; }
+function cloneAuthParams(list){
+  return (Array.isArray(list) ? list : []).map(p=>({
+    id: uid(), name: p.name || '', type: PARAM_TYPES.includes(p.type) ? p.type : 'String',
+    required: !!p.required, example: p.example || '', description: p.description || '',
+  }));
+}
+
+function renderAuthRows(kind){
+  const rows = authRows[kind];
+  const wrap = document.getElementById(kind==='req' ? 'authReqTableWrap' : 'authRespTableWrap');
+  wrap.innerHTML = `
+    <div class="rows-table-wrap">
+    <table class="rows-table">
+      <thead><tr>
+        <th style="width:18%;">Name</th><th style="width:12%;">Type</th><th style="width:7%;">Req.</th>
+        <th style="width:20%;">Example</th><th style="width:auto;">Description</th><th style="width:28px;"></th>
+      </tr></thead>
+      <tbody>
+        ${rows.length ? rows.map(r=>`
+          <tr data-row="${r.id}">
+            <td><input type="text" data-f="name" value="${escapeHtml(r.name)}" placeholder="${kind==='req'?'apiKey':'access_token'}"></td>
+            <td><select data-f="type">${PARAM_TYPES.map(t=>`<option ${t===r.type?'selected':''}>${t}</option>`).join('')}</select></td>
+            <td style="text-align:center;"><input type="checkbox" data-f="required" ${r.required?'checked':''}></td>
+            <td><input type="text" data-f="example" value="${escapeHtml(r.example)}" placeholder="e.g. xxxxx"></td>
+            <td><input type="text" data-f="description" value="${escapeHtml(r.description)}" placeholder="What this is for"></td>
+            <td><button type="button" class="row-del" data-del-row="${r.id}" title="Remove row">✕</button></td>
+          </tr>`).join('') : `<tr><td colspan="6" class="hint" style="padding:8px;">No ${kind==='req'?'request':'response'} parameters yet.</td></tr>`}
+      </tbody>
+    </table>
+    </div>`;
+  wrap.querySelectorAll('input,select').forEach(inp=>{
+    const evt = inp.type==='checkbox' ? 'change' : 'input';
+    inp.addEventListener(evt, ()=>{
+      const row = rows.find(r=>r.id===inp.closest('tr').getAttribute('data-row'));
+      if(!row) return;
+      row[inp.getAttribute('data-f')] = inp.type === 'checkbox' ? inp.checked : inp.value;
+      updateAuthJsonPreview(kind);
+    });
+  });
+  wrap.querySelectorAll('[data-del-row]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const id = btn.getAttribute('data-del-row');
+      authRows[kind] = authRows[kind].filter(r=>r.id!==id);
+      renderAuthRows(kind);
+    });
+  });
+  updateAuthJsonPreview(kind);
+}
+
+function updateAuthJsonPreview(kind){
+  const ta = document.getElementById(kind==='req' ? 'fAuthReqJsonPreview' : 'fAuthRespJsonPreview');
+  const generated = JSON.stringify(buildJsonFromRows(authRows[kind]), null, 2);
+  if(ta.value === '' || ta.value === authJsonAutoValue[kind]){ ta.value = generated; }
+  authJsonAutoValue[kind] = generated;
+}
+
+document.getElementById('addAuthReqRow').addEventListener('click', ()=>{ authRows.req.push(newAuthParamRow()); renderAuthRows('req'); });
+document.getElementById('addAuthRespRow').addEventListener('click', ()=>{ authRows.resp.push(newAuthParamRow()); renderAuthRows('resp'); });
+document.querySelectorAll('[data-auth-json-regen]').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    const kind = btn.getAttribute('data-auth-json-regen');
+    const ta = document.getElementById(kind==='req' ? 'fAuthReqJsonPreview' : 'fAuthRespJsonPreview');
+    const generated = JSON.stringify(buildJsonFromRows(authRows[kind]), null, 2);
+    ta.value = generated;
+    authJsonAutoValue[kind] = generated;
+  });
+});
+
+// Populates Project details + Authentication from a real project record —
+// used both when editing an existing endpoint and when the typed project
+// name in "New endpoint" matches one.
+function hydrateProjectFields(proj){
+  currentProjectForFields = proj;
+  document.getElementById('fApiDesc').value = proj.description || '';
+  document.getElementById('fLifecycle').innerHTML = LIFECYCLE_STAGES.map(s=>`<option value="${s}">${s}</option>`).join('');
+  document.getElementById('fLifecycle').value = proj.lifecycle || 'PRODUCTION';
+  document.getElementById('fOwner').value = proj.owner || '';
+  document.getElementById('fTeam').value = proj.team || '';
+  document.getElementById('fTerms').value = proj.termsOfService || '';
+  document.getElementById('fContactName').value = (proj.contact && proj.contact.name) || '';
+  document.getElementById('fContactEmail').value = (proj.contact && proj.contact.email) || '';
+  document.getElementById('fLicenseName').value = (proj.license && proj.license.name) || '';
+  document.getElementById('fLicenseUrl').value = (proj.license && proj.license.url) || '';
+  populateFlowDirectionSelect(proj.requestFlowDirection || '1-way');
+  document.getElementById('fFlowCustomBuilder').classList.add('hidden');
+
+  document.getElementById('fAuthType').value = (proj.auth && proj.auth.type) || '';
+  document.getElementById('fAuthMethod').value = (proj.auth && proj.auth.method) || 'POST';
+  document.getElementById('fAuthPath').value = (proj.auth && proj.auth.path) || '';
+  document.getElementById('fAuthHeader').value = (proj.auth && proj.auth.headerName) || '';
+  document.getElementById('fAuthDesc').value = (proj.auth && proj.auth.description) || '';
+  document.getElementById('fAuthIncludeDocs').checked = !!(proj.auth && proj.auth.includeInDocs);
+  document.getElementById('fAuthIncludeSwagger').checked = !!(proj.auth && proj.auth.includeInSwagger);
+  authRows.req = cloneAuthParams(proj.auth && proj.auth.requestParams);
+  authRows.resp = cloneAuthParams(proj.auth && proj.auth.responseParams);
+  renderAuthRows('req');
+  renderAuthRows('resp');
+  const savedReq = proj.auth && proj.auth.requestExample;
+  const savedResp = proj.auth && proj.auth.responseExample;
+  if(savedReq) document.getElementById('fAuthReqJsonPreview').value = savedReq;
+  if(savedResp) document.getElementById('fAuthRespJsonPreview').value = savedResp;
+}
+
+// Blank-slate version for "New endpoint" when no matching project exists yet.
+function clearProjectFields(){
+  currentProjectForFields = null;
+  document.getElementById('fApiDesc').value = '';
+  document.getElementById('fLifecycle').innerHTML = LIFECYCLE_STAGES.map(s=>`<option value="${s}">${s}</option>`).join('');
+  document.getElementById('fLifecycle').value = 'PRODUCTION';
+  ['fOwner','fTeam','fTerms','fContactName','fContactEmail','fLicenseName','fLicenseUrl',
+   'fAuthType','fAuthPath','fAuthHeader','fAuthDesc'].forEach(id=>document.getElementById(id).value = '');
+  document.getElementById('fAuthMethod').value = 'POST';
+  document.getElementById('fAuthIncludeDocs').checked = false;
+  document.getElementById('fAuthIncludeSwagger').checked = false;
+  populateFlowDirectionSelect('1-way');
+  document.getElementById('fFlowCustomBuilder').classList.add('hidden');
+  authRows.req = [];
+  authRows.resp = [];
+  renderAuthRows('req');
+  renderAuthRows('resp');
+}
+
+document.getElementById('fFlowDirection').addEventListener('change', (e)=>{
+  const builder = document.getElementById('fFlowCustomBuilder');
+  if(e.target.value === '__add_custom__'){
+    builder.classList.remove('hidden');
+    document.getElementById('fFlowCustomLabel').focus();
+  } else {
+    builder.classList.add('hidden');
+  }
+});
+document.getElementById('fFlowCustomCancel').addEventListener('click', ()=>{
+  document.getElementById('fFlowCustomBuilder').classList.add('hidden');
+  populateFlowDirectionSelect(currentProjectForFields ? (currentProjectForFields.requestFlowDirection || '1-way') : '1-way');
+});
+document.getElementById('fFlowCustomAdd').addEventListener('click', ()=>{
+  const label = document.getElementById('fFlowCustomLabel').value.trim();
+  if(!label){ toast('Enter a label for the custom direction'); return; }
+  const pattern = document.getElementById('fFlowCustomPattern').value === '2-way' ? '2-way' : '1-way';
+  const id = 'custom_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const list = (workspace.customFlowDirections || []).slice();
+  list.push({ id, label, pattern });
+  saveCustomFlowDirections(list);
+  document.getElementById('fFlowCustomBuilder').classList.add('hidden');
+  document.getElementById('fFlowCustomLabel').value = '';
+  populateFlowDirectionSelect(id);
+  toast('Custom flow direction added');
+});
+
+/* ==================== Application state ==================== */
+let workspace = null;          // last-fetched { projects, environments, ... }
+let projectId = null;          // resolved existing project id, or null = new project
+let endpointId = null;         // resolved existing endpoint id, or null = new endpoint
+let loadedUpdatedAt = null;    // endpoint.updatedAt at load time, for conflict detection
+let saving = false;
+
+const blocks = [];             // [{type:'parameters'|'headers'|'requestBody'|'response', id, ...data}]
+
+function findProjectBySlug(slug){
+  if(!slug) return null;
+  const list = Object.values(workspace.projects || {});
+  return list.find(p=>slugify(p.name) === slug) || null;
+}
+function findEndpointBySlug(proj, slug){
+  if(!proj || !slug) return null;
+  return (proj.endpoints||[]).find(ep=>endpointSlug(ep.method, ep.path) === slug) || null;
+}
+
+/* One-shot prefill from Try It's "Document this scenario" button (see
+   documentTryItScenario() in studio.html) — the request body the person
+   actually tried, dropped in as a new named example on the request body
+   block. Never fabricates a response: the whole point is that only a human
+   who knows what the real API returns for this case can document it. */
+function applyTryItPrefillIfAny(epId){
+  const key = `apiStudio_tryitPrefill_${epId}`;
+  let raw;
+  try{ raw = localStorage.getItem(key); }catch(e){ return; }
+  if(!raw) return;
+  try{ localStorage.removeItem(key); }catch(e){}
+  let payload;
+  try{ payload = JSON.parse(raw); }catch(e){ return; }
+  if(!payload || !payload.requestJson) return;
+
+  const bodyBlock = addBlock('requestBody', {});
+  bodyBlock.examples = bodyBlock.examples || [];
+  bodyBlock.examples.push({ id: uid(), name: payload.name || 'New scenario from Try It', value: payload.requestJson });
+  toast('Pulled in the request you tried in Try It — add the matching response below and save.');
+}
+
+function userInitials(name){
+  const w = (name||'?').trim().split(/\s+/).slice(0,2);
+  return (w.map(x=>x[0]).join('') || '?').toUpperCase();
+}
+
+async function boot(){
+  document.getElementById('userLabel').textContent = AUTH_USER.username || 'Unknown';
+  document.getElementById('userDot').textContent = userInitials(AUTH_USER.username);
+
+  try{
+    workspace = await apiGet('');
+  }catch(e){
+    console.error(e);
+    toast('Could not load your workspace — check your connection and reload.');
+    workspace = { projects:{} };
+  }
+
+  // Populate the project name datalist for autocomplete.
+  const dl = document.getElementById('projectNames');
+  dl.innerHTML = Object.values(workspace.projects||{}).map(p=>`<option value="${escapeHtml(p.name)}">`).join('');
+
+  const proj = findProjectBySlug(INITIAL_PROJECT_SLUG);
+  const ep = proj ? findEndpointBySlug(proj, INITIAL_ENDPOINT_SLUG) : null;
+
+  if(proj){
+    projectId = proj.id;
+    document.getElementById('fProject').value = proj.name;
+    hydrateProjectFields(proj);
+  } else {
+    clearProjectFields();
+  }
+
+  if(ep){
+    endpointId = ep.id;
+    loadedUpdatedAt = ep.updatedAt || null;
+    fillFormFromEndpoint(proj, ep);
+    applyTryItPrefillIfAny(ep.id);
+  } else {
+    // Brand new endpoint — start from one empty response block, same default
+    // shape the rest of the app expects an endpoint to have.
+    addBlock('response', { code:200, description:'', example:'', fields:[] });
+  }
+
+  renderAttribution(proj, ep);
+  renderBlocks();
+  updateTopBar(proj, ep);
+}
+
+function renderAttribution(proj, ep){
+  const strip = document.getElementById('attribStrip');
+  const chips = [];
+  chips.push(`<span class="chip">Editing as <b>${escapeHtml(AUTH_USER.username||'Unknown')}</b></span>`);
+  if(ep && ep.createdAt){
+    chips.push(`<span class="chip"><span class="dot"></span>Created by <b>${escapeHtml(ep.createdBy||'Unknown')}</b> · ${escapeHtml(formatDateTime(ep.createdAt))}</span>`);
+  }
+  if(ep && ep.updatedAt){
+    chips.push(`<span class="chip"><span class="dot"></span>Last modified by <b>${escapeHtml(ep.updatedBy||'Unknown')}</b> · ${escapeHtml(formatDateTime(ep.updatedAt))}</span>`);
+  }
+  if(proj && !ep){
+    chips.push(`<span class="chip"><span class="dot"></span>Adding to existing project <b>${escapeHtml(proj.name)}</b></span>`);
+  }
+  strip.innerHTML = chips.join('');
+}
+
+function formatDateTime(iso){
+  try{ return new Date(iso).toLocaleString(); }catch(e){ return iso; }
+}
+
+function updateTopBar(proj, ep){
+  const title = document.getElementById('topTitle');
+  const sub = document.getElementById('topSub');
+  if(ep){
+    title.textContent = `${ep.method} ${ep.path}`;
+    sub.textContent = `${proj.name} · editing existing endpoint`;
+  } else if(proj){
+    title.textContent = 'New endpoint';
+    sub.textContent = `${proj.name} · new endpoint in existing project`;
+  } else {
+    title.textContent = 'New endpoint';
+    sub.textContent = 'New project';
+  }
+}
+
+/* ==================== Fill form from an existing endpoint ==================== */
+function fillFormFromEndpoint(proj, ep){
+  document.getElementById('fMethod').value = ep.method || 'GET';
+  document.getElementById('fPath').value = ep.path || '';
+  document.getElementById('fTag').value = ep.tag || '';
+  document.getElementById('fVersion').value = ep.version || '';
+  document.getElementById('fContentType').value = ep.contentType || 'application/json';
+  document.getElementById('fVisibility').value = ep.visibility === 'public' ? 'public' : 'private';
+
+  if(ep.summary || ep.description){
+    addBlock('summary', { summary: ep.summary || '', description: ep.description || '' });
+  }
+  (ep.customSections || []).forEach(sec=>{
+    addBlock('custom', { title: sec.title || '', content: sec.content || '' });
+  });
+  if((ep.parameters||[]).length){
+    addBlock('parameters', { rows: ep.parameters.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'', sendAs:'query' })) });
+  }
+  if((ep.headers||[]).length){
+    addBlock('headers', { rows: ep.headers.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'' })) });
+  }
+  if(ep.requestBody && (ep.requestBody.example || (ep.requestBody.fields||[]).length || (ep.requestBody.examples||[]).length)){
+    addBlock('requestBody', {
+      example: ep.requestBody.example || '',
+      fields: (ep.requestBody.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+      examples: (ep.requestBody.examples||[]).map(ex=>({
+        id:uid(), name:ex.name||'', description:ex.description||'', value:ex.value||'',
+        fields: (ex.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+      })),
+    });
+  }
+  const responses = (ep.responses && ep.responses.length) ? ep.responses : [{ code:200, description:'', example:'', fields:[], examples:[] }];
+  responses.forEach(r=>{
+    addBlock('response', {
+      code: r.code || 200, description: r.description || '', example: r.example || '',
+      fields: (r.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+      examples: (r.examples||[]).map(ex=>({
+        id:uid(), name:ex.name||'', statusCode:ex.statusCode||'', description:ex.description||'', value:ex.value||'',
+        fields: (ex.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+      })),
+    });
+  });
+}
+
+/* ==================== Blocks ==================== */
+// 'summary' intentionally excluded — Summary & description is a freeform,
+// custom block, so people can add another one whenever they want instead of
+// being capped at one.
+const SINGLETON_BLOCKS = ['parameters','headers','requestBody'];
+function addBlock(type, data){
+  if(SINGLETON_BLOCKS.includes(type) && blocks.some(b=>b.type===type)){
+    const existing = blocks.find(b=>b.type===type);
+    highlightBlock(existing.id);
+    return existing;
+  }
+  const block = Object.assign({ id: uid(), type }, data || {});
+  if(type==='summary'){ block.summary = block.summary || ''; block.description = block.description || ''; }
+  if(type==='parameters' || type==='headers'){ block.rows = block.rows || []; }
+  if(type==='requestBody'){ block.example = block.example || ''; block.fields = block.fields || []; block.examples = block.examples || []; }
+  if(type==='response'){ block.code = block.code || 200; block.description = block.description || ''; block.example = block.example || ''; block.fields = block.fields || []; block.examples = block.examples || []; }
+  if(type==='custom'){ block.title = block.title || ''; block.content = block.content || ''; }
+  // Summary & description reads best pinned right under Basic info, ahead of
+  // parameters/headers/body/response — insert it first regardless of click order.
+  if(type==='summary') blocks.unshift(block); else blocks.push(block);
+  return block;
+}
+// Menu items are never disabled (see updateAddMenuAvailability) — clicking a
+// singleton block type that already exists scrolls to it and flashes its
+// border instead of silently doing nothing, so "why won't this add" never
+// happens without an answer.
+function highlightBlock(id){
+  requestAnimationFrame(()=>{
+    const el = document.querySelector(`[data-block="${id}"]`);
+    if(!el) return;
+    el.scrollIntoView({ behavior:'smooth', block:'center' });
+    el.classList.remove('card-flash'); void el.offsetWidth; el.classList.add('card-flash');
+  });
+}
+function removeBlock(id){
+  const idx = blocks.findIndex(b=>b.id===id);
+  if(idx>=0) blocks.splice(idx,1);
+  renderBlocks();
+}
+function blockById(id){ return blocks.find(b=>b.id===id); }
+
+function renderBlocks(){
+  const container = document.getElementById('blocksContainer');
+  container.innerHTML = blocks.map(renderBlockHtml).join('');
+  bindBlockEvents(container);
+  updateAddMenuAvailability();
+}
+
+/* Live path-param names, read straight from the Path input on every call —
+   deliberately not cached/state-tracked so it can never drift out of sync
+   with what's actually typed. Only used to decide, at render time, whether a
+   Parameters row's "Sends as" column shows the fixed "Path" label or the
+   Query/Payload picker below. Not re-evaluated on every keystroke of a row's
+   own name (that would force a renderBlocks() on every keypress there, which
+   is exactly the cursor-jumping regression the search/render logic was fixed
+   for elsewhere) — it only refreshes whenever renderBlocks() next runs, same
+   as the path/query split already worked at save time. */
+function livePathParamNames(){
+  const pathInput = document.getElementById('fPath');
+  const path = pathInput ? pathInput.value : '';
+  return new Set([...path.matchAll(/\{([^}]+)\}/g)].map(m=>m[1].trim()).filter(Boolean));
+}
+
+/* showSendAs is only passed true for the top-level Parameters block. It adds
+   a "Sends as" column so a row can be marked Query param (goes into the
+   endpoint's query string / ?in=query, same as before) or Payload (folded
+   into the Request body block instead at save time — see
+   gatherEndpointFromForm). Path parameters are still detected automatically
+   from {name} in the path above and aren't affected by this picker. */
+function rowsTableHtml(block, isHeaderStyle, showSendAs){
+  const rows = block.rows;
+  const pathNames = showSendAs ? livePathParamNames() : null;
+  return `
+    <div class="rows-table-wrap">
+    <table class="rows-table">
+      <thead><tr>
+        <th style="width:18%;">Name</th><th style="width:12%;">Type</th><th style="width:7%;">Req.</th>
+        ${showSendAs ? `<th style="width:15%;">Sends as</th>` : ''}
+        <th style="width:20%;">Example</th><th style="width:auto;">Description</th><th style="width:28px;"></th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(r=>{
+          const isPathRow = showSendAs && pathNames.has((r.name||'').trim());
+          const sendAsCell = !showSendAs ? '' : isPathRow
+            ? `<td><span class="mono" style="font-size:11px; color:var(--text-faint);" title="Detected automatically from {${escapeHtml((r.name||'').trim())}} in the path above">Path</span></td>`
+            : `<td><select data-f="sendAs">
+                 <option value="query" ${r.sendAs!=='payload'?'selected':''}>Query param</option>
+                 <option value="payload" ${r.sendAs==='payload'?'selected':''}>Payload (JSON)</option>
+               </select></td>`;
+          return `
+          <tr data-row="${r.id}">
+            <td><input type="text" data-f="name" value="${escapeHtml(r.name)}" placeholder="${isHeaderStyle?'X-Request-Id':'orderId'}"></td>
+            <td><select data-f="type">${PARAM_TYPES.map(t=>`<option ${t===r.type?'selected':''}>${t}</option>`).join('')}</select></td>
+            <td style="text-align:center;"><input type="checkbox" data-f="required" ${r.required?'checked':''}></td>
+            ${sendAsCell}
+            <td><input type="text" data-f="example" value="${escapeHtml(r.example)}" placeholder="e.g. 12345"></td>
+            <td><input type="text" data-f="description" value="${escapeHtml(r.description)}" placeholder="What this is for"></td>
+            <td><button type="button" class="row-del" data-del-row="${r.id}" title="Remove row">✕</button></td>
+          </tr>`;}).join('')}
+      </tbody>
+    </table>
+    </div>
+    <button type="button" class="add-row-btn" data-add-row="${block.id}">+ Add row</button>
+    ${showSendAs ? `<div class="hint" style="margin-top:8px;">Path parameters are detected automatically from <span class="mono">{like-this}</span> in the path above. For everything else, choose whether it's sent as a query string parameter or folded into the JSON request payload — payload rows show up under Request body once saved.</div>` : ''}
+  `;
+}
+
+function jsonPasteHtml(block, fieldKey){
+  return `
+    <div class="json-paste">
+      <div class="hint" style="margin-bottom:6px;">Paste a JSON example — fields below will be filled in automatically (type, example value, key names).</div>
+      <textarea data-paste-target="${fieldKey}" placeholder='{ "amount": 500, "currency": "INR", "notes": { "orderId": "abc" } }'>${escapeHtml(block.example||'')}</textarea>
+      <div class="json-paste-actions">
+        <button type="button" class="add-row-btn" data-infer="${block.id}">Infer fields from JSON</button>
+        <span class="err hidden" data-json-err="${block.id}"></span>
+      </div>
+    </div>`;
+}
+
+function namedExamplesHtml(block){
+  const isResponse = block.type === 'response';
+  const examples = block.examples || [];
+  return `
+    <div class="examples-section" data-examples="${block.id}">
+      <div class="examples-section-head">
+        <span class="hint">Named examples — extra scenarios beyond the default above (e.g. "Amount too low"). ${isResponse ? 'Each can have its own status code — no need to add another Response block just to vary the code within this scenario.' : 'Give a request-body example and a response example the same name to pair them in Try It.'}</span>
+      </div>
+      ${examples.map(ex=>namedExampleItemHtml(ex, isResponse, block.code)).join('')}
+      <button type="button" class="add-row-btn" data-add-example="${block.id}">+ Add named example</button>
+    </div>`;
+}
+
+// fallbackCode is the parent Response block's own status code — an example
+// that hasn't set its own status code yet still documents *some* response,
+// so it's coloured/labelled off the block's code rather than looking blank
+// until the person fills one in.
+function namedExampleItemHtml(ex, isResponse, fallbackCode){
+  const fields = ex.fields || [];
+  const effectiveCode = isResponse ? (ex.statusCode || fallbackCode) : null;
+  const accentStyle = isResponse ? ` style="--item-accent:var(${respAccentVar(effectiveCode)});"` : '';
+  return `
+    <div class="example-item${isResponse?' accent-response':''}" data-example="${ex.id}"${accentStyle}>
+      <div class="example-item-top">
+        ${isResponse ? `<span class="code-pill" data-example-code-pill style="background:var(${respAccentVar(effectiveCode)}-bg, var(--surface-2));color:var(${respAccentVar(effectiveCode)});">${escapeHtml(String(effectiveCode||'—'))}</span>` : ''}
+        <div class="field-grid">
+          <div class="field">
+            <label>Scenario name</label>
+            <input type="text" data-ef="name" value="${escapeHtml(ex.name)}" placeholder="e.g. Amount too low">
+          </div>
+          ${isResponse ? `
+          <div class="field">
+            <label>Status code</label>
+            <input type="text" data-ef="statusCode" value="${escapeHtml(ex.statusCode||'')}" placeholder="e.g. 400">
+          </div>` : ''}
+          <div class="field span2">
+            <label>Description</label>
+            <input type="text" data-ef="description" value="${escapeHtml(ex.description||'')}" placeholder="${isResponse ? 'e.g. Order amount below the minimum' : 'When does this request happen?'}">
+          </div>
+        </div>
+        <button type="button" class="example-item-kill" data-del-example="${ex.id}" title="Remove example">✕</button>
+      </div>
+      <div class="json-paste">
+        <div class="hint" style="margin-bottom:6px;">Paste a JSON example — fields below will be filled in automatically.</div>
+        <textarea data-ef="value" placeholder='{ "amount": 10, "currency": "INR" }'>${escapeHtml(ex.value)}</textarea>
+        <div class="json-paste-actions">
+          <button type="button" class="add-row-btn" data-infer-example="${ex.id}">Infer fields from JSON</button>
+          <span class="err hidden" data-example-err="${ex.id}"></span>
+        </div>
+      </div>
+      ${fields.length ? rowsTableHtml({ id: ex.id, rows: fields }, false) : `<div class="hint">No fields yet — paste JSON above, or add rows once inferred.</div>`}
+    </div>`;
+}
+
+const DRAG_HANDLE = `<span class="drag-handle" data-drag-handle title="Drag to reorder">⠿</span>`;
+
+function renderBlockHtml(block){
+  if(block.type==='summary'){
+    return `<div class="card" data-block="${block.id}" draggable="true">
+      <div class="card-head">${DRAG_HANDLE}<div class="card-title">Summary &amp; description</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
+      <div class="field-grid">
+        <div class="field span2">
+          <label>Summary</label>
+          <input type="text" data-f="summary" value="${escapeHtml(block.summary)}" placeholder="One-line summary of what this endpoint does">
+        </div>
+        <div class="field span2">
+          <label>Description</label>
+          <textarea data-f="description" placeholder="Markdown supported — full explanation, flow, notes…">${escapeHtml(block.description)}</textarea>
+        </div>
+      </div>
+    </div>`;
+  }
+  if(block.type==='parameters'){
+    return `<div class="card accent-request" data-block="${block.id}" draggable="true">
+      <div class="card-head">${DRAG_HANDLE}<div class="card-title">Parameters</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
+      ${rowsTableHtml(block, false, true)}
+    </div>`;
+  }
+  if(block.type==='headers'){
+    return `<div class="card accent-header" data-block="${block.id}" draggable="true">
+      <div class="card-head">${DRAG_HANDLE}<div class="card-title">Headers</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
+      ${rowsTableHtml(block, true)}
+    </div>`;
+  }
+  if(block.type==='requestBody'){
+    return `<div class="card accent-request" data-block="${block.id}" draggable="true">
+      <div class="card-head">${DRAG_HANDLE}<div class="card-title">Request body (JSON)</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
+      ${jsonPasteHtml(block, 'requestBody')}
+      ${block.fields.length ? rowsTableHtml({ id:block.id, rows:block.fields }, false) : `<div class="hint">No fields yet — paste JSON above, or add rows once inferred.</div>`}
+      ${namedExamplesHtml(block)}
+    </div>`;
+  }
+  if(block.type==='response'){
+    return `<div class="card accent-response" data-block="${block.id}" draggable="true" style="--item-accent:var(${respAccentVar(block.code)});">
+      <div class="card-head">
+        ${DRAG_HANDLE}
+        <div class="card-title">Response</div>
+        <button type="button" class="card-kill" data-kill="${block.id}" title="Remove response">✕</button>
+      </div>
+      <div class="field-grid" style="margin-bottom:12px;">
+        <div class="field">
+          <label>Status code</label>
+          <input type="text" data-f="code" value="${escapeHtml(block.code)}" placeholder="200">
+        </div>
+        <div class="field">
+          <label>Description</label>
+          <input type="text" data-f="description" value="${escapeHtml(block.description)}" placeholder="e.g. Order created successfully">
+        </div>
+      </div>
+      ${jsonPasteHtml(block, 'response')}
+      ${block.fields.length ? rowsTableHtml({ id:block.id, rows:block.fields }, false) : `<div class="hint">No fields yet — paste a JSON example above, or add rows once inferred.</div>`}
+      ${namedExamplesHtml(block)}
+    </div>`;
+  }
+  if(block.type==='custom'){
+    // Deliberately unrestricted: any title, any amount of markdown — this is
+    // the block to reach for when nothing else fits (business justification,
+    // compliance notes, SLAs, risk assessment, architecture rationale,
+    // rollout plan, anything a BRD or a technical write-up needs that the
+    // built-in block types don't cover). AI Studio's "Draft → Docs" also
+    // emits these when the model invents a section type on the fly.
+    return `<div class="card accent-custom" data-block="${block.id}" draggable="true">
+      <div class="card-head">${DRAG_HANDLE}
+        <input type="text" class="card-title-input" data-f="title" value="${escapeHtml(block.title || '')}" placeholder="Section title — e.g. Business justification, SLA, Risk notes…">
+        <button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button>
+      </div>
+      <div class="md-toolbar">
+        <span class="hint">Markdown supported. Freeform — write anything this section needs.</span>
+        <span class="spacer"></span>
+        <button type="button" class="md-preview-toggle" data-custom-preview="${block.id}">Preview</button>
+      </div>
+      <div class="field" style="margin-bottom:0;">
+        <textarea data-f="content" style="min-height:140px; font-family:inherit;" placeholder="Write freely — this section is never templated or restricted.">${escapeHtml(block.content || '')}</textarea>
+      </div>
+      <div class="md-preview-pane hidden" id="customPreview-${block.id}"></div>
+    </div>`;
+  }
+  return '';
+}
+
+/* A "rows" array can live at three levels now: a Parameters/Headers block's
+   own rows, a Request-body/Response block's top-level fields, or a nested
+   named example's own fields. This resolves any of their ids to the right
+   array so add/remove-row handlers don't need to know which level they're at. */
+function findRowsArrayById(id){
+  const block = blocks.find(b=>b.id===id);
+  if(block) return block.type==='parameters'||block.type==='headers' ? block.rows : block.fields;
+  for(const b of blocks){
+    const ex = (b.examples||[]).find(e=>e.id===id);
+    if(ex){ ex.fields = ex.fields || []; return ex.fields; }
+  }
+  return null;
+}
+function findExampleById(id){
+  for(const b of blocks){
+    const ex = (b.examples||[]).find(e=>e.id===id);
+    if(ex) return ex;
+  }
+  return null;
+}
+
+function bindBlockEvents(container){
+  container.querySelectorAll('[data-kill]').forEach(btn=>{
+    btn.addEventListener('click', ()=> removeBlock(btn.getAttribute('data-kill')));
+  });
+  container.querySelectorAll('[data-add-row]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const rows = findRowsArrayById(btn.getAttribute('data-add-row'));
+      if(!rows) return;
+      rows.push({ id:uid(), name:'', type:'String', required:false, example:'', description:'', sendAs:'query' });
+      renderBlocks();
+    });
+  });
+  container.querySelectorAll('[data-del-row]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const rowId = btn.getAttribute('data-del-row');
+      blocks.forEach(b=>{
+        const rows = b.type==='parameters'||b.type==='headers' ? b.rows : (b.fields||null);
+        if(rows){ const i = rows.findIndex(r=>r.id===rowId); if(i>=0) rows.splice(i,1); }
+        (b.examples||[]).forEach(ex=>{
+          if(!ex.fields) return;
+          const i = ex.fields.findIndex(r=>r.id===rowId);
+          if(i>=0) ex.fields.splice(i,1);
+        });
+      });
+      renderBlocks();
+    });
+  });
+  container.querySelectorAll('[data-block]').forEach(cardEl=>{
+    const block = blockById(cardEl.getAttribute('data-block'));
+    if(!block) return;
+    cardEl.querySelectorAll('tr[data-row]').forEach(rowEl=>{
+      if(rowEl.closest('.example-item')) return; // nested example rows are bound separately below
+      const rowId = rowEl.getAttribute('data-row');
+      const rows = block.type==='parameters'||block.type==='headers' ? block.rows : block.fields;
+      const row = rows.find(r=>r.id===rowId);
+      if(!row) return;
+      rowEl.querySelectorAll('[data-f]').forEach(input=>{
+        const key = input.getAttribute('data-f');
+        const evt = input.type==='checkbox' ? 'change' : 'input';
+        input.addEventListener(evt, ()=>{
+          row[key] = input.type==='checkbox' ? input.checked : input.value;
+        });
+      });
+    });
+    if(block.type==='response'){
+      cardEl.querySelectorAll('[data-f="code"], [data-f="description"]').forEach(input=>{
+        const key = input.getAttribute('data-f');
+        input.addEventListener('input', ()=>{
+          block[key] = input.value;
+          // Live-update the card's colored left border as the status code
+          // changes, without a full re-render (which would drop focus).
+          if(key==='code') cardEl.style.setProperty('--item-accent', `var(${respAccentVar(input.value)})`);
+        });
+      });
+    }
+    if(block.type==='summary'){
+      cardEl.querySelectorAll('[data-f="summary"], [data-f="description"]').forEach(input=>{
+        const key = input.getAttribute('data-f');
+        input.addEventListener('input', ()=>{ block[key] = input.value; });
+      });
+    }
+    if(block.type==='custom'){
+      cardEl.querySelectorAll('[data-f="title"], [data-f="content"]').forEach(input=>{
+        const key = input.getAttribute('data-f');
+        input.addEventListener('input', ()=>{ block[key] = input.value; });
+      });
+      const previewBtn = cardEl.querySelector(`[data-custom-preview="${block.id}"]`);
+      if(previewBtn){
+        previewBtn.addEventListener('click', ()=>{
+          const pane = document.getElementById(`customPreview-${block.id}`);
+          const showing = !pane.classList.contains('hidden');
+          if(showing){ pane.classList.add('hidden'); previewBtn.textContent = 'Preview'; }
+          else { pane.innerHTML = renderMarkdown(block.content || ''); pane.classList.remove('hidden'); previewBtn.textContent = 'Edit'; }
+        });
+      }
+    }
+  });
+  container.querySelectorAll('[data-add-example]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const block = blockById(btn.getAttribute('data-add-example'));
+      block.examples = block.examples || [];
+      const fresh = { id: uid(), name: '', description: '', value: '', fields: [] };
+      if(block.type==='response') fresh.statusCode = '';
+      block.examples.push(fresh);
+      renderBlocks();
+    });
+  });
+  container.querySelectorAll('[data-del-example]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const exId = btn.getAttribute('data-del-example');
+      blocks.forEach(b=>{
+        if(!b.examples) return;
+        const i = b.examples.findIndex(ex=>ex.id===exId);
+        if(i>=0) b.examples.splice(i,1);
+      });
+      renderBlocks();
+    });
+  });
+  container.querySelectorAll('[data-example]').forEach(exEl=>{
+    const exId = exEl.getAttribute('data-example');
+    const ex = findExampleById(exId);
+    if(!ex) return;
+    exEl.querySelectorAll('[data-ef]').forEach(input=>{
+      const key = input.getAttribute('data-ef');
+      input.addEventListener('input', ()=>{
+        ex[key] = input.value;
+        const errEl = container.querySelector(`[data-example-err="${exId}"]`);
+        if(key==='value' && errEl) errEl.classList.add('hidden');
+        // Live-update this example's colored left border + status pill as
+        // its code changes, same idea as the parent Response block's own
+        // code input — no full re-render, so focus/cursor position survives.
+        if(key==='statusCode'){
+          const parentBlock = blocks.find(b=>(b.examples||[]).includes(ex));
+          const effectiveCode = input.value || (parentBlock && parentBlock.code) || '';
+          const accentVar = respAccentVar(effectiveCode);
+          exEl.style.setProperty('--item-accent', `var(${accentVar})`);
+          const pill = exEl.querySelector('[data-example-code-pill]');
+          if(pill){
+            pill.textContent = effectiveCode || '—';
+            pill.style.color = `var(${accentVar})`;
+            pill.style.background = `var(${accentVar}-bg, var(--surface-2))`;
+          }
+        }
+      });
+      input.addEventListener('blur', ()=>{
+        if(key!=='value' || !input.value.trim()) return;
+        const errEl = container.querySelector(`[data-example-err="${exId}"]`);
+        try{ JSON.parse(input.value); errEl.classList.add('hidden'); }
+        catch(e){ errEl.textContent = "Couldn't parse that as JSON — check for a missing comma or quote."; errEl.classList.remove('hidden'); }
+      });
+    });
+    exEl.querySelectorAll('tr[data-row]').forEach(rowEl=>{
+      const rowId = rowEl.getAttribute('data-row');
+      const row = (ex.fields||[]).find(r=>r.id===rowId);
+      if(!row) return;
+      rowEl.querySelectorAll('[data-f]').forEach(input=>{
+        const key = input.getAttribute('data-f');
+        const evt = input.type==='checkbox' ? 'change' : 'input';
+        input.addEventListener(evt, ()=>{
+          row[key] = input.type==='checkbox' ? input.checked : input.value;
+        });
+      });
+    });
+  });
+  container.querySelectorAll('[data-infer-example]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const exId = btn.getAttribute('data-infer-example');
+      const ex = findExampleById(exId);
+      if(!ex) return;
+      const errEl = container.querySelector(`[data-example-err="${exId}"]`);
+      errEl.classList.add('hidden');
+      try{
+        const parsed = JSON.parse(ex.value || '{}');
+        const fields = inferFieldsFromJson(parsed);
+        if(!fields.length){ errEl.textContent = 'That JSON has no top-level keys to infer.'; errEl.classList.remove('hidden'); return; }
+        ex.fields = fields;
+        renderBlocks();
+        toast(`Inferred ${fields.length} field${fields.length===1?'':'s'} from JSON`);
+      }catch(e){
+        errEl.textContent = "Couldn't parse that as JSON — check for a missing comma or quote.";
+        errEl.classList.remove('hidden');
+      }
+    });
+  });
+  container.querySelectorAll('[data-paste-target]').forEach(ta=>{
+    ta.addEventListener('input', ()=>{
+      const block = blocks.find(b=>b.id===ta.closest('[data-block]').getAttribute('data-block'));
+      if(block) block.example = ta.value;
+    });
+  });
+  container.querySelectorAll('[data-infer]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const block = blockById(btn.getAttribute('data-infer'));
+      const errEl = container.querySelector(`[data-json-err="${block.id}"]`);
+      errEl.classList.add('hidden');
+      try{
+        const parsed = JSON.parse(block.example || '{}');
+        const fields = inferFieldsFromJson(parsed);
+        if(!fields.length){ errEl.textContent = 'That JSON has no top-level keys to infer.'; errEl.classList.remove('hidden'); return; }
+        block.fields = fields;
+        renderBlocks();
+        toast(`Inferred ${fields.length} field${fields.length===1?'':'s'} from JSON`);
+      }catch(e){
+        errEl.textContent = "Couldn't parse that as JSON — check for a missing comma or quote.";
+        errEl.classList.remove('hidden');
+      }
+    });
+  });
+  bindBlockDragAndDrop(container);
+}
+
+/* ==================== Drag-and-drop block reordering ====================
+   Blocks (Summary, Parameters, Headers, Request body, Response...) can be
+   reordered by dragging the ⠿ handle in a card's header — no need to delete
+   an accidentally-added block and rebuild it, just drag it to where it
+   belongs. Native HTML5 DnD; drag only starts from the handle so clicking
+   inside inputs/textareas still works normally. */
+let dragAllowed = false;
+let draggedBlockId = null;
+function bindBlockDragAndDrop(container){
+  container.querySelectorAll('[data-drag-handle]').forEach(handle=>{
+    handle.addEventListener('mousedown', ()=>{ dragAllowed = true; });
+  });
+  container.querySelectorAll('[data-block]').forEach(cardEl=>{
+    cardEl.addEventListener('dragstart', (e)=>{
+      if(!dragAllowed){ e.preventDefault(); return; }
+      draggedBlockId = cardEl.getAttribute('data-block');
+      e.dataTransfer.effectAllowed = 'move';
+      try{ e.dataTransfer.setData('text/plain', draggedBlockId); }catch(err){}
+      requestAnimationFrame(()=> cardEl.classList.add('dragging'));
+    });
+    cardEl.addEventListener('dragend', ()=>{
+      dragAllowed = false;
+      draggedBlockId = null;
+      container.querySelectorAll('.card').forEach(c=>c.classList.remove('dragging','drag-over-top','drag-over-bottom'));
+    });
+    cardEl.addEventListener('dragover', (e)=>{
+      if(!draggedBlockId || draggedBlockId === cardEl.getAttribute('data-block')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const rect = cardEl.getBoundingClientRect();
+      const before = (e.clientY - rect.top) < rect.height / 2;
+      cardEl.classList.toggle('drag-over-top', before);
+      cardEl.classList.toggle('drag-over-bottom', !before);
+    });
+    cardEl.addEventListener('dragleave', ()=>{
+      cardEl.classList.remove('drag-over-top','drag-over-bottom');
+    });
+    cardEl.addEventListener('drop', (e)=>{
+      e.preventDefault();
+      const targetId = cardEl.getAttribute('data-block');
+      const before = cardEl.classList.contains('drag-over-top');
+      cardEl.classList.remove('drag-over-top','drag-over-bottom');
+      if(!draggedBlockId || draggedBlockId === targetId) return;
+      const fromIdx = blocks.findIndex(b=>b.id===draggedBlockId);
+      if(fromIdx < 0) return;
+      const [moved] = blocks.splice(fromIdx, 1);
+      let toIdx = blocks.findIndex(b=>b.id===targetId);
+      if(toIdx < 0) toIdx = blocks.length;
+      blocks.splice(before ? toIdx : toIdx + 1, 0, moved);
+      renderBlocks();
+    });
+  });
+  document.addEventListener('mouseup', ()=>{ dragAllowed = false; }, { once:true });
+}
+
+/* ==================== Add-block menu ==================== */
+function updateAddMenuAvailability(){
+  // Nothing is ever disabled here — every block type stays clickable. For the
+  // singleton types (Parameters/Headers/Request body), clicking again when
+  // one already exists just scrolls to and flashes it (see addBlock/highlightBlock)
+  // instead of doing nothing, and this badge tells you why before you click.
+  const singletonMenuIds = { parameters:'menuParameters', headers:'menuHeaders', requestBody:'menuRequestBody' };
+  Object.entries(singletonMenuIds).forEach(([type, id])=>{
+    const btn = document.getElementById(id);
+    const sub = btn.querySelector('.sub');
+    let badge = btn.querySelector('.menu-added-badge');
+    const exists = blocks.some(b=>b.type===type);
+    if(exists && !badge){
+      badge = document.createElement('span');
+      badge.className = 'menu-added-badge';
+      badge.textContent = 'Added — click to jump to it';
+      btn.appendChild(badge);
+    } else if(!exists && badge){
+      badge.remove();
+    }
+  });
+}
+document.getElementById('addBlockBtn').addEventListener('click', (e)=>{
+  e.stopPropagation();
+  document.getElementById('addBlockMenu').classList.toggle('open');
+});
+document.getElementById('addBlockMenu').addEventListener('click', (e)=>{
+  const btn = e.target.closest('[data-block]');
+  if(!btn) return;
+  addBlock(btn.getAttribute('data-block'), {});
+  document.getElementById('addBlockMenu').classList.remove('open');
+  renderBlocks();
+});
+document.addEventListener('click', (e)=>{
+  const menu = document.getElementById('addBlockMenu');
+  if(menu.classList.contains('open') && !e.target.closest('.add-block')) menu.classList.remove('open');
+});
+
+/* ==================== Save / publish ==================== */
+function gatherEndpointFromForm(){
+  const cleanRows = rows => (rows||[]).filter(r=>r.name.trim()).map(r=>({ name:r.name.trim(), type:r.type, required:!!r.required, example:r.example||'', description:r.description||'' }));
+  const cleanExamples = (examples, isResponse) => (examples||[]).filter(ex=>ex.name.trim() && ex.value.trim()).map(ex=>({
+    name: ex.name.trim(),
+    description: ex.description||'',
+    value: ex.value.trim(),
+    fields: cleanRows(ex.fields),
+    ...(isResponse ? { statusCode: ex.statusCode ? (parseInt(ex.statusCode,10) || ex.statusCode.trim()) : '' } : {}),
+  }));
+  const path = document.getElementById('fPath').value.trim() || '/untitled';
+  const pathParamNames = new Set([...path.matchAll(/\{([^}]+)\}/g)].map(m=>m[1]));
+  const summaryBlock = blocks.find(b=>b.type==='summary');
+  const paramsBlock = blocks.find(b=>b.type==='parameters');
+  const headersBlock = blocks.find(b=>b.type==='headers');
+  const bodyBlock = blocks.find(b=>b.type==='requestBody');
+  const responseBlocks = blocks.filter(b=>b.type==='response');
+
+  // Split the Parameters block's rows three ways: anything whose name matches
+  // a {placeholder} in the path above is always a path param regardless of
+  // its "Sends as" picker; everything else follows what that picker says —
+  // "Query param" (default, same as the old always-query behaviour) or
+  // "Payload", which doesn't belong in `parameters` at all and instead gets
+  // folded into requestBody below, right alongside anything already entered
+  // directly in the Request body block.
+  const allParamRows = (paramsBlock && paramsBlock.rows || []).filter(r=>r.name.trim());
+  const pathRows = [], queryRows = [], payloadRows = [];
+  allParamRows.forEach(r=>{
+    const name = r.name.trim();
+    if(pathParamNames.has(name)) pathRows.push(r);
+    else if(r.sendAs === 'payload') payloadRows.push(r);
+    else queryRows.push(r);
+  });
+  const cleanParam = r => ({ name:r.name.trim(), type:r.type, required:!!r.required, example:r.example||'', description:r.description||'' });
+
+  const hasExplicitBody = !!(bodyBlock && (bodyBlock.example.trim() || (bodyBlock.fields||[]).length || (bodyBlock.examples||[]).some(ex=>ex.name.trim() || ex.value.trim())));
+  let requestBody = null;
+  if(hasExplicitBody || payloadRows.length){
+    const existingFields = cleanRows(bodyBlock && bodyBlock.fields);
+    // A payload row with the same name as a field already in the Request
+    // body block loses to that explicit field — it was documented there on
+    // purpose, so a same-named Parameters row shouldn't silently override it.
+    const existingNames = new Set(existingFields.map(f=>f.name));
+    const mergedFields = [...existingFields, ...payloadRows.map(cleanParam).filter(f=>!existingNames.has(f.name))];
+
+    // Merge into the example JSON too, so a payload row someone only typed
+    // into the Parameters table still shows up in Try It and the docs'
+    // Request JSON tab, not just in the fields list.
+    const rawExample = (bodyBlock && bodyBlock.example || '').trim();
+    let exampleObj = null;
+    if(rawExample){ try{ const parsed = JSON.parse(rawExample); if(parsed && typeof parsed==='object' && !Array.isArray(parsed)) exampleObj = parsed; }catch(e){ /* not a JSON object — leave as-is, don't guess */ } }
+    let example = rawExample;
+    if(payloadRows.length){
+      const base = exampleObj || {};
+      payloadRows.forEach(r=>{
+        const name = r.name.trim();
+        if(!(name in base)) base[name] = exampleValueFor(r.type, r.example);
+      });
+      // Only rewrite the example text when we actually had (or now have) a
+      // JSON object to merge into — an existing non-JSON/non-object example
+      // is left untouched rather than clobbered with a guess.
+      if(exampleObj || !rawExample) example = JSON.stringify(base, null, 2);
+    }
+
+    requestBody = { example, fields: mergedFields, examples: cleanExamples(bodyBlock && bodyBlock.examples, false) };
+  }
+
+  return {
+    method: document.getElementById('fMethod').value,
+    path,
+    visibility: document.getElementById('fVisibility').value === 'public' ? 'public' : 'private',
+    tag: document.getElementById('fTag').value.trim() || 'General',
+    version: document.getElementById('fVersion').value.trim(),
+    contentType: document.getElementById('fContentType').value.trim() || 'application/json',
+    summary: (summaryBlock && summaryBlock.summary || '').trim(),
+    description: (summaryBlock && summaryBlock.description || '').trim(),
+    parameters: [
+      ...pathRows.map(p=>({ ...cleanParam(p), in:'path' })),
+      ...queryRows.map(p=>({ ...cleanParam(p), in:'query' })),
+    ],
+    headers: cleanRows(headersBlock && headersBlock.rows),
+    requestBody,
+    responses: responseBlocks.map(r=>({
+      code: parseInt(r.code,10) || 200,
+      description: r.description || '',
+      fields: cleanRows(r.fields),
+      example: r.example || '',
+      examples: cleanExamples(r.examples, true),
+    })),
+    // Freeform, unrestricted documentation sections — any title, any markdown,
+    // any number of them. Not part of any fixed schema on purpose: this is
+    // where BRD-style context, technical deep-dives, compliance notes, SLAs,
+    // or anything else that doesn't fit the built-in blocks lives. Order is
+    // preserved so drag-reordering in the editor round-trips.
+    customSections: blocks.filter(b=>b.type==='custom' && (b.title.trim() || b.content.trim()))
+      .map(b=>({ title: b.title.trim(), content: b.content })),
+  };
+}
+
+function blankProjectStub(name){
+  return {
+    id: uid(), name, description:'', visibility:'private', environments:{}, auth:{ type:'', headerName:'', description:'' },
+    notes:'', lifecycle:'DEVELOPMENT', owner:'', team:'', requestFlowDirection:'1-way',
+    termsOfService:'', contact:{name:'',email:''}, license:{name:'',url:''},
+    createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), endpoints:[], attachments:[], _open:true,
+  };
+}
+
+async function performSave(force){
+  const projectName = document.getElementById('fProject').value.trim();
+  if(!projectName){ toast('Project / API name is required.'); return; }
+  if(!document.getElementById('fPath').value.trim()){ toast('Path is required.'); return; }
+  if(saving) return;
+  saving = true;
+  document.getElementById('btnSave').disabled = true;
+
+  try{
+    // Always re-fetch right before saving — this is the conflict check: if the
+    // endpoint changed underneath us (another tab, another teammate) since we
+    // opened it, we surface that instead of silently overwriting it.
+    const fresh = await apiGet('');
+    let proj = Object.values(fresh.projects||{}).find(p=> projectId ? p.id===projectId : p.name.toLowerCase()===projectName.toLowerCase());
+
+    if(proj && endpointId && !force){
+      const liveEp = (proj.endpoints||[]).find(e=>e.id===endpointId);
+      if(liveEp && loadedUpdatedAt && liveEp.updatedAt && liveEp.updatedAt !== loadedUpdatedAt){
+        showConflict(liveEp);
+        saving = false;
+        document.getElementById('btnSave').disabled = false;
+        return;
+      }
+    }
+
+    if(!proj){ proj = blankProjectStub(projectName); }
+    if(proj._readonly){ toast("You can only view this project — it's public content from someone else in your organisation."); saving=false; document.getElementById('btnSave').disabled=false; return; }
+
+    // The API-level description and all Project details / Authentication
+    // fields below live on the project, not the endpoint — persisting them
+    // here means this editor tab is the one place these shared project
+    // fields are created or edited (Project settings only covers Release
+    // Pipeline, Documents and Architecture now).
+    const apiDesc = document.getElementById('fApiDesc').value.trim();
+    if(apiDesc) proj.description = apiDesc;
+
+    if(LIFECYCLE_STAGES.includes(document.getElementById('fLifecycle').value)){
+      proj.lifecycle = document.getElementById('fLifecycle').value;
+    }
+    proj.owner = document.getElementById('fOwner').value.trim();
+    proj.team = document.getElementById('fTeam').value.trim();
+    proj.termsOfService = document.getElementById('fTerms').value.trim();
+    proj.contact = {
+      name: document.getElementById('fContactName').value.trim(),
+      email: document.getElementById('fContactEmail').value.trim(),
+    };
+    proj.license = {
+      name: document.getElementById('fLicenseName').value.trim(),
+      url: document.getElementById('fLicenseUrl').value.trim(),
+    };
+    const flowVal = document.getElementById('fFlowDirection').value;
+    proj.requestFlowDirection = (flowVal && flowVal !== '__add_custom__') ? flowVal : (proj.requestFlowDirection || '1-way');
+    const cleanAuthRows = (list)=> list.filter(r=>r.name.trim()).map(r=>(
+      { name:r.name.trim(), type:r.type, required:!!r.required, example:r.example.trim(), description:r.description.trim() }
+    ));
+    proj.auth = {
+      type: document.getElementById('fAuthType').value.trim(),
+      method: document.getElementById('fAuthMethod').value,
+      path: document.getElementById('fAuthPath').value.trim(),
+      headerName: document.getElementById('fAuthHeader').value.trim(),
+      description: document.getElementById('fAuthDesc').value.trim(),
+      requestParams: cleanAuthRows(authRows.req),
+      responseParams: cleanAuthRows(authRows.resp),
+      requestExample: (document.getElementById('fAuthReqJsonPreview').value || '').trim(),
+      responseExample: (document.getElementById('fAuthRespJsonPreview').value || '').trim(),
+      includeInDocs: document.getElementById('fAuthIncludeDocs').checked,
+      includeInSwagger: document.getElementById('fAuthIncludeSwagger').checked,
+    };
+
+    const now = new Date().toISOString();
+    const fields = gatherEndpointFromForm();
+    const actor = AUTH_USER.username || 'Unknown';
+    let savedEpId = endpointId;
+
+    const existingIdx = endpointId ? (proj.endpoints||[]).findIndex(e=>e.id===endpointId) : -1;
+    if(existingIdx >= 0){
+      const prevEp = proj.endpoints[existingIdx];
+      proj.endpoints[existingIdx] = { ...prevEp, ...fields, id: prevEp.id, createdAt: prevEp.createdAt, createdBy: prevEp.createdBy, updatedAt: now, updatedBy: actor };
+      postAuditEvent({ action:'updated', entityType:'endpoint', entityName:`${fields.method} ${fields.path}`, projectName: proj.name, details:`Edited endpoint ${fields.method} ${fields.path} via editor tab` });
+    } else {
+      const newEp = { id: uid(), ...fields, createdAt: now, createdBy: actor, updatedAt: now, updatedBy: actor };
+      proj.endpoints = proj.endpoints || [];
+      proj.endpoints.push(newEp);
+      savedEpId = newEp.id;
+      postAuditEvent({ action:'created', entityType:'endpoint', entityName:`${fields.method} ${fields.path}`, projectName: proj.name, details:`Added endpoint ${fields.method} ${fields.path} via editor tab` });
+    }
+    proj.updatedAt = now;
+
+    await apiSend('PUT', '/projects', { projects: { [proj.id]: proj } });
+
+    projectId = proj.id;
+    endpointId = savedEpId;
+    loadedUpdatedAt = now;
+
+    if(syncChannel) syncChannel.postMessage({ type:'endpoint-saved', projectId: proj.id, endpointId: savedEpId, at: now });
+
+    const newUrl = `/${ORG_TOKEN}/${slugify(proj.name)}/${endpointSlug(fields.method, fields.path)}/edit.studio`;
+    window.history.replaceState(null, '', newUrl);
+
+    hideConflict();
+    const savedEp = proj.endpoints.find(e=>e.id===savedEpId);
+    renderAttribution(proj, savedEp);
+    updateTopBar(proj, savedEp);
+    showSavedBanner(fields.visibility);
+    toast(fields.visibility === 'public' ? 'Published' : 'Saved as private');
+  }catch(e){
+    console.error(e);
+    toast('Could not save — check your connection and try again.');
+  }finally{
+    saving = false;
+    document.getElementById('btnSave').disabled = false;
+  }
+}
+
+function showConflict(liveEp){
+  document.getElementById('conflictMsg').textContent =
+    `This endpoint was changed by ${liveEp.updatedBy || 'someone else'} at ${formatDateTime(liveEp.updatedAt)} since you opened it.`;
+  document.getElementById('conflictBanner').classList.remove('hidden');
+}
+function hideConflict(){ document.getElementById('conflictBanner').classList.add('hidden'); }
+document.getElementById('conflictReload').addEventListener('click', ()=>window.location.reload());
+document.getElementById('conflictForce').addEventListener('click', ()=>performSave(true));
+
+function showSavedBanner(visibility){
+  const banner = document.getElementById('savedBanner');
+  document.getElementById('savedMsg').textContent = visibility === 'public'
+    ? 'Published — visible to your organisation on this endpoint\u2019s page.'
+    : 'Saved as private — only visible to you.';
+  banner.classList.remove('hidden');
+  clearTimeout(banner._timer);
+  banner._timer = setTimeout(()=>banner.classList.add('hidden'), 5000);
+}
+
+document.getElementById('btnSave').addEventListener('click', ()=>performSave(false));
+
+// When adding a NEW endpoint and the typed project name matches an existing
+// project, pull in that project's real Project details / Authentication
+// fields — otherwise it's easy to leave stale/blank values that would
+// overwrite them on save.
+document.getElementById('fProject').addEventListener('input', (e)=>{
+  if(endpointId) return; // don't clobber an existing endpoint's loaded project
+  const match = Object.values((workspace && workspace.projects)||{}).find(p=>p.name.toLowerCase() === e.target.value.trim().toLowerCase());
+  if(match) hydrateProjectFields(match); else clearProjectFields();
+});
+
+/* ==================== Theme ====================
+   Mirrors the main Studio tab's toggle (server/views/studio.html) and shares
+   its localStorage key, so switching here updates Studio too, and switching
+   there updates this tab live via the 'storage' event — the two never drift
+   out of sync while both are open. */
+function applyThemeButton(){
+  const btn = document.getElementById('btnTheme');
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  btn.textContent = isLight ? '◑' : '◐';
+  btn.title = isLight ? 'Switch to dark theme' : 'Switch to light theme';
+}
+function toggleTheme(){
+  const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('apiStudio_theme', next);
+  applyThemeButton();
+}
+document.getElementById('btnTheme').addEventListener('click', toggleTheme);
+window.addEventListener('storage', (e)=>{
+  if(e.key !== 'apiStudio_theme') return;
+  document.documentElement.setAttribute('data-theme', e.newValue === 'light' ? 'light' : 'dark');
+  applyThemeButton();
+});
+applyThemeButton();
+
+/* ==================== AI Studio ==================== */
+// Thin fetch wrapper for the /api/ai/* routes — separate from apiGet/apiSend
+// above since those are hard-scoped to /api/workspace. Surfaces the server's
+// own error message (e.g. "AI isn't set up for your organisation yet…")
+// instead of a generic failure whenever the response includes one.
+async function aiApi(method, path, body){
+  const res = await fetch('/api/ai' + path, {
+    method, credentials:'same-origin',
+    headers: body ? { 'Content-Type':'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let data = null;
+  try{ data = await res.json(); }catch(e){ /* no body */ }
+  if(!res.ok){
+    const err = new Error((data && data.error) || `Request failed: ${res.status}`);
+    err.retryable = !!(data && data.retryable);
+    err.code = data && data.errorCode;
+    throw err;
+  }
+  return data;
+}
+
+// Single place that renders loading / success / error feedback for every
+// AI Studio panel, so the same three states always look the same way
+// instead of each tab drawing its own ad-hoc grey box.
+function renderAiStatus(el, { type, title, message, onRetry, retryLabel }){
+  const icon = type==='loading' ? '…' : type==='success' ? '✓' : '!';
+  el.innerHTML = `<div class="ai-status ${type}">
+    <div class="ai-status-icon">${icon}</div>
+    <div class="ai-status-body">
+      ${title ? `<div class="ai-status-title">${escapeHtml(title)}</div>` : ''}
+      <div>${message}</div>
+      ${onRetry ? `<div class="ai-status-actions"><button type="button" id="aiStatusRetryBtn">${escapeHtml(retryLabel || 'Try again')}</button></div>` : ''}
+    </div>
+  </div>`;
+  if(onRetry){
+    document.getElementById('aiStatusRetryBtn').addEventListener('click', onRetry);
+  }
+}
+
+let aiTab = 'draft';
+let aiConfigCache = null;
+function openAiStudio(){
+  document.getElementById('aiStudioOverlay').classList.remove('hidden');
+  renderAiTab();
+}
+function closeAiStudio(){
+  document.getElementById('aiStudioOverlay').classList.add('hidden');
+}
+document.getElementById('btnAiStudio').addEventListener('click', openAiStudio);
+document.getElementById('aiStudioClose').addEventListener('click', closeAiStudio);
+document.getElementById('aiStudioOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'aiStudioOverlay') closeAiStudio();
+});
+document.querySelectorAll('[data-ai-tab]').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    aiTab = btn.getAttribute('data-ai-tab');
+    document.querySelectorAll('[data-ai-tab]').forEach(b=>b.classList.toggle('active', b===btn));
+    renderAiTab();
+  });
+});
+
+async function ensureAiConfig(){
+  if(aiConfigCache) return aiConfigCache;
+  try{ aiConfigCache = await aiApi('GET', '/config'); }
+  catch(e){ aiConfigCache = { configured:false, canManage:false }; }
+  return aiConfigCache;
+}
+
+async function renderAiTab(){
+  const body = document.getElementById('aiTabBody');
+  const cfg = await ensureAiConfig();
+  if(!cfg.configured){
+    body.innerHTML = `<div class="ai-not-configured">
+      <div class="ai-not-configured-icon">⚠️</div>
+      <div>
+        <div style="font-weight:700; margin-bottom:2px;">AI isn't set up for your organisation yet</div>
+        ${cfg.canManage ? 'Add an API key under <b>Security ▸ AI Studio</b> in the main Studio to turn this on.' : 'Ask an organisation Admin to add an API key under Security ▸ AI Studio.'}
+      </div>
+    </div>`;
+    return;
+  }
+  if(aiTab === 'draft') renderAiDraftTab(body);
+  else renderAiUploadTab(body);
+}
+
+function renderAiDraftTab(body){
+  body.innerHTML = `
+    <div class="hint" style="margin-bottom:16px;">Paste anything — a BRD paragraph, a technical spec, meeting notes, a mix of both. AI structures it into this endpoint's fields and adds whatever sections the content actually needs.</div>
+    <div class="ai-field-label">Who is this for?</div>
+    <div class="ai-audience-row">
+      <label class="ai-audience-chip">
+        <input type="radio" name="aiAudience" value="both" checked>
+        <span class="ai-audience-ic">🔀</span><span>Both audiences</span>
+        <span class="ai-audience-sub">Business + technical</span>
+      </label>
+      <label class="ai-audience-chip">
+        <input type="radio" name="aiAudience" value="business">
+        <span class="ai-audience-ic">💼</span><span>Business / BRD</span>
+        <span class="ai-audience-sub">Plain language</span>
+      </label>
+      <label class="ai-audience-chip">
+        <input type="radio" name="aiAudience" value="technical">
+        <span class="ai-audience-ic">⚙️</span><span>Technical</span>
+        <span class="ai-audience-sub">Implementation detail</span>
+      </label>
+    </div>
+    <div class="ai-field-label">Your notes</div>
+    <textarea id="aiDraftText" placeholder="Paste your notes here…"></textarea>
+    <div style="display:flex; justify-content:flex-end; margin-top:14px;">
+      <button type="button" class="btn-primary" id="aiDraftGo">Generate documentation</button>
+    </div>
+    <div id="aiDraftResult"></div>
+  `;
+  document.getElementById('aiDraftGo').addEventListener('click', async ()=>{
+    const rawText = document.getElementById('aiDraftText').value.trim();
+    if(!rawText){ toast('Paste some notes first.'); return; }
+    const audience = document.querySelector('input[name="aiAudience"]:checked').value;
+    await runAiStructure(rawText, audience, document.getElementById('aiDraftResult'), document.getElementById('aiDraftGo'));
+  });
+}
+
+const AI_UPLOAD_EXTENSIONS = ['.txt','.md','.markdown','.csv','.json','.log','.yml','.yaml'];
+const AI_UPLOAD_MAX_BYTES = 5 * 1024 * 1024; // 5MB max file size
+const AI_UPLOAD_TEXT_CHAR_LIMIT = 200000; // matches the server's per-request character cap in routes/ai.js
+const AI_FILE_ICON = {
+  txt:{ ic:'📄', bg:'rgba(109,141,255,.15)', fg:'#6d8dff' },
+  md:{ ic:'📝', bg:'rgba(109,141,255,.15)', fg:'#6d8dff' },
+  markdown:{ ic:'📝', bg:'rgba(109,141,255,.15)', fg:'#6d8dff' },
+  csv:{ ic:'📊', bg:'rgba(56,199,147,.15)', fg:'#38c793' },
+  json:{ ic:'{ }', bg:'rgba(232,163,61,.15)', fg:'#e8a33d' },
+  log:{ ic:'🧾', bg:'rgba(169,179,196,.18)', fg:'#a9b3c4' },
+  yml:{ ic:'⚙️', bg:'rgba(160,111,255,.15)', fg:'#a06fff' },
+  yaml:{ ic:'⚙️', bg:'rgba(160,111,255,.15)', fg:'#a06fff' },
+};
+function formatBytes(n){
+  if(n < 1024) return `${n} B`;
+  if(n < 1024*1024) return `${(n/1024).toFixed(1)} KB`;
+  return `${(n/1024/1024).toFixed(1)} MB`;
+}
+
+function renderAiUploadTab(body){
+  body.innerHTML = `
+    <div class="hint" style="margin-bottom:14px;">Upload a text-based document — a BRD, a spec, an email thread. AI reads it and structures it the same way as pasting notes.</div>
+    <div id="aiUploadStage"></div>
+  `;
+  renderAiDropzone(document.getElementById('aiUploadStage'));
+}
+
+function renderAiDropzone(stage){
+  stage.innerHTML = `
+    <label class="ai-drop" id="aiDropZone">
+      <input type="file" id="aiFileInput" accept="${AI_UPLOAD_EXTENSIONS.join(',')}" style="display:none;">
+      <div class="ai-drop-icon">⬆️</div>
+      <div class="ai-drop-title">Click to choose a file, or drag one here</div>
+      <div class="ai-drop-sub">Up to 5MB</div>
+      <div class="ai-format-badges">${AI_UPLOAD_EXTENSIONS.map(e=>`<span class="ai-format-badge">${e}</span>`).join('')}</div>
+    </label>
+    <div id="aiUploadResult"></div>
+  `;
+  const input = document.getElementById('aiFileInput');
+  const zone = document.getElementById('aiDropZone');
+  zone.addEventListener('click', ()=>input.click());
+  ['dragover','dragenter'].forEach(evt=>zone.addEventListener(evt, e=>{ e.preventDefault(); zone.classList.add('dragover'); }));
+  ['dragleave','drop'].forEach(evt=>zone.addEventListener(evt, e=>{ e.preventDefault(); zone.classList.remove('dragover'); }));
+  zone.addEventListener('drop', e=>{ if(e.dataTransfer.files[0]) handleAiFile(e.dataTransfer.files[0]); });
+  input.addEventListener('change', ()=>{ if(input.files[0]) handleAiFile(input.files[0]); });
+}
+
+function looksLikeBinary(text){
+  // Heuristic: real text files essentially never contain NUL bytes or the
+  // Unicode replacement character (which is what you get from decoding a
+  // .docx/.pdf/.xlsx as UTF-8). A tiny sample check is enough to catch it
+  // before wasting an AI call on unreadable content.
+  const sample = text.slice(0, 4000);
+  const badChars = (sample.match(/\u0000|\uFFFD/g) || []).length;
+  return badChars > 3;
+}
+
+async function handleAiFile(file){
+  const stage = document.getElementById('aiUploadStage');
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+
+  if(!AI_UPLOAD_EXTENSIONS.includes('.' + ext)){
+    renderAiDropzone(stage);
+    renderAiStatus(document.getElementById('aiUploadResult'), {
+      type:'error',
+      title:'Unsupported file type',
+      message:`"${escapeHtml(file.name)}" isn't a supported format. Upload one of: ${AI_UPLOAD_EXTENSIONS.join(', ')} — or paste the content into the Draft → Docs tab instead.`,
+    });
+    return;
+  }
+  if(file.size > AI_UPLOAD_MAX_BYTES){
+    renderAiDropzone(stage);
+    renderAiStatus(document.getElementById('aiUploadResult'), {
+      type:'error',
+      title:'File too large',
+      message:`"${escapeHtml(file.name)}" is ${formatBytes(file.size)} — please keep uploads under 5MB, or paste the relevant section into the Draft → Docs tab.`,
+    });
+    return;
+  }
+
+  stage.innerHTML = `<div class="ai-status loading"><div class="ai-status-icon">…</div><div class="ai-status-body">Reading “${escapeHtml(file.name)}”…</div></div>`;
+
+  let text;
+  try{
+    text = await file.text();
+  }catch(e){
+    renderAiDropzone(stage);
+    renderAiStatus(document.getElementById('aiUploadResult'), { type:'error', title:'Could not read file', message:'The browser couldn\'t read that file. Try a different file or paste the content directly.' });
+    return;
+  }
+
+  if(!text.trim()){
+    renderAiDropzone(stage);
+    renderAiStatus(document.getElementById('aiUploadResult'), { type:'error', title:'Empty file', message:'That file looks empty — nothing to structure.' });
+    return;
+  }
+  if(looksLikeBinary(text)){
+    renderAiDropzone(stage);
+    renderAiStatus(document.getElementById('aiUploadResult'), {
+      type:'error',
+      title:'File isn\'t plain text',
+      message:`"${escapeHtml(file.name)}" looks like a binary format (e.g. an actual Word/PDF/Excel file saved with a text extension), not plain text. Export it as .txt/.md first, or paste the content into the Draft → Docs tab.`,
+    });
+    return;
+  }
+
+  let wasTruncated = false;
+  if(text.length > AI_UPLOAD_TEXT_CHAR_LIMIT){
+    text = text.slice(0, AI_UPLOAD_TEXT_CHAR_LIMIT);
+    wasTruncated = true;
+  }
+
+  renderAiFilePreview(stage, file, text, wasTruncated);
+}
+
+// Instead of firing the AI call the instant a file lands, show what was
+// actually read — icon, size, a peek at the content — with an audience
+// choice (mirroring the Draft tab), so the person can confirm this is the
+// right file/section before spending an AI call on it.
+function renderAiFilePreview(stage, file, text, wasTruncated){
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  const iconInfo = AI_FILE_ICON[ext] || AI_FILE_ICON.txt;
+  const previewText = text.slice(0, 1200);
+
+  stage.innerHTML = `
+    <div class="ai-file-card">
+      <div class="ai-file-card-head">
+        <div class="ai-file-icon" style="background:${iconInfo.bg}; color:${iconInfo.fg};">${iconInfo.ic}</div>
+        <div class="ai-file-meta">
+          <div class="ai-file-name">${escapeHtml(file.name)}</div>
+          <div class="ai-file-sub">${formatBytes(file.size)} · ${text.length.toLocaleString()} characters${wasTruncated ? ' (truncated)' : ''}</div>
+        </div>
+        <button type="button" class="ai-file-change" id="aiFileChangeBtn">Change file</button>
+      </div>
+      <div class="ai-file-preview-label"><span>Preview</span></div>
+      <div class="ai-file-preview"><pre>${escapeHtml(previewText)}${text.length > previewText.length ? '…' : ''}</pre></div>
+      <div class="ai-file-body">
+        <div class="ai-field-label">Who is this for?</div>
+        <div class="ai-audience-row">
+          <label class="ai-audience-chip">
+            <input type="radio" name="aiUploadAudience" value="both" checked>
+            <span class="ai-audience-ic">🔀</span><span>Both audiences</span>
+            <span class="ai-audience-sub">Business + technical</span>
+          </label>
+          <label class="ai-audience-chip">
+            <input type="radio" name="aiUploadAudience" value="business">
+            <span class="ai-audience-ic">💼</span><span>Business / BRD</span>
+            <span class="ai-audience-sub">Plain language</span>
+          </label>
+          <label class="ai-audience-chip">
+            <input type="radio" name="aiUploadAudience" value="technical">
+            <span class="ai-audience-ic">⚙️</span><span>Technical</span>
+            <span class="ai-audience-sub">Implementation detail</span>
+          </label>
+        </div>
+        <div style="display:flex; justify-content:flex-end;">
+          <button type="button" class="btn-primary" id="aiUploadGo">Generate documentation</button>
+        </div>
+      </div>
+    </div>
+    <div id="aiUploadResult">${wasTruncated ? `<div class="hint" style="margin-top:10px;">This file was longer than the ${AI_UPLOAD_TEXT_CHAR_LIMIT.toLocaleString()}-character limit for a single pass, so only the beginning is shown/used. Run it again on the remaining section if you need the rest documented.</div>` : ''}</div>
+  `;
+
+  document.getElementById('aiFileChangeBtn').addEventListener('click', ()=>renderAiDropzone(stage));
+  document.getElementById('aiUploadGo').addEventListener('click', ()=>{
+    const audience = document.querySelector('input[name="aiUploadAudience"]:checked').value;
+    runAiStructure(text, audience, document.getElementById('aiUploadResult'), document.getElementById('aiUploadGo'));
+  });
+}
+
+// Legacy single-shot generator — kept for reference/direct use if ever
+// needed, but no longer wired to a button; see runAiStructureStaged below,
+// which the "Generate documentation" buttons actually call now.
+async function runAiStructureQuick(rawText, audience, resultEl, btn){
+  if(btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
+  renderAiStatus(resultEl, { type:'loading', message:'Reading the content and structuring it into sections…' });
+  try{
+    const parsed = await aiApi('POST', '/structure', { rawText, audience });
+    applyAiStructureResult(parsed);
+    renderAiStatus(resultEl, {
+      type:'success',
+      title:'Applied to this endpoint',
+      message:`${escapeHtml(parsed.endpoint?.method||'')} ${escapeHtml(parsed.endpoint?.path||'')} — ${(parsed.blocks||[]).length} section(s) added below. Review, edit, then Publish when ready.`,
+    });
+  }catch(err){
+    renderAiStatus(resultEl, {
+      type:'error',
+      title: err.retryable ? 'Temporary problem' : 'Could not generate documentation',
+      message: escapeHtml(err.message),
+      onRetry: err.retryable ? ()=>runAiStructureQuick(rawText, audience, resultEl, btn) : null,
+    });
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
+  }
+}
+
+// Fills the Basic info / API-level description fields only (no blocks) —
+// shared by both the legacy single-shot result and the staged plan result,
+// which both carry the same project/endpoint/apiLevelDescription shape.
+function applyAiMetadata(parsed) {
+  if (parsed.project?.name && !document.getElementById('fProject').value.trim()) document.getElementById('fProject').value = parsed.project.name;
+  if (parsed.project?.tag && !document.getElementById('fTag').value.trim()) document.getElementById('fTag').value = parsed.project.tag;
+  if (parsed.endpoint?.method) document.getElementById('fMethod').value = parsed.endpoint.method;
+  if (parsed.endpoint?.path && !document.getElementById('fPath').value.trim()) document.getElementById('fPath').value = parsed.endpoint.path;
+  if (parsed.endpoint?.summary) {
+    let sBlock = blocks.find(b => b.type === 'summary');
+    if (!sBlock) sBlock = addBlock('summary', {});
+    if (!sBlock.summary) sBlock.summary = parsed.endpoint.summary;
+  }
+  if (parsed.apiLevelDescription && !document.getElementById('fApiDesc').value.trim()) {
+    document.getElementById('fApiDesc').value = parsed.apiLevelDescription;
+  }
+}
+
+// Fills the Basic info / API-level description fields (only if still empty,
+// so this never silently clobbers something already typed) and appends one
+// "custom" block per AI-suggested section — never replacing existing blocks.
+function applyAiStructureResult(parsed){
+  applyAiMetadata(parsed);
+  (parsed.blocks||[]).forEach(b=>{
+    if(!b || (!b.title && !b.content)) return;
+    addBlock('custom', { title: b.title || (b.type||'').replace(/[-_]/g,' '), content: b.content || '' });
+  });
+  renderBlocks();
+}
+
+// ==================== Staged generation (plan, then one piece at a time) ====================
+// Same "Generate documentation" button, but instead of one big all-or-
+// nothing call, this plans the endpoints and sections first, then
+// generates and applies each piece as its own small call. Every piece
+// that finishes is added to the editor immediately — a failure partway
+// through only costs the pieces after it, and each failed row gets its
+// own inline retry instead of redoing the whole document.
+//
+// Each planned section carries a "kind" (headers/parameters/requestBody/
+// response/custom/overview) that says exactly which real editor block it
+// belongs in — see applyAiSectionResult below — instead of every section
+// landing as one undifferentiated "custom" text block regardless of what
+// it actually contains.
+function renderAiSectionChecklist(container, sections){
+  container.innerHTML = `
+    <div class="ai-status-title" style="margin-bottom:8px;">Generating ${sections.length} section(s)…</div>
+    <div id="aiSectionList" class="ai-section-list"></div>
+  `;
+  const list = document.getElementById('aiSectionList');
+  sections.forEach((s, i)=>{
+    const row = document.createElement('div');
+    row.className = 'ai-section-row';
+    row.id = `aiSectionRow-${i}`;
+    row.innerHTML = `<span class="ai-section-row-icon">⏳</span><span class="ai-section-row-title">${escapeHtml(s.title)}</span><span class="ai-section-row-status">Waiting…</span>`;
+    list.appendChild(row);
+  });
+}
+function updateAiSectionRow(i, { icon, status, error, onRetry }){
+  const row = document.getElementById(`aiSectionRow-${i}`);
+  if(!row) return;
+  row.querySelector('.ai-section-row-icon').textContent = icon;
+  row.classList.toggle('ai-section-row-error', !!error);
+  const statusEl = row.querySelector('.ai-section-row-status');
+  statusEl.innerHTML = error
+    ? `${escapeHtml(status)} <button type="button" class="ai-section-retry-btn">Retry</button>`
+    : escapeHtml(status);
+  if(error && onRetry){
+    statusEl.querySelector('.ai-section-retry-btn').addEventListener('click', onRetry);
+  }
+}
+
+// Converts AI-returned rows ({name,type,required,example,description}) into
+// the exact per-row shape the editor's blocks store (fresh id per row —
+// same shape fillFormFromEndpoint uses when loading a saved endpoint).
+function aiRowsToBlockRows(rows, extra){
+  return (rows||[]).filter(r=>r && r.name).map(r=>Object.assign({
+    id: uid(), name: r.name||'', type: r.type||'String', required: !!r.required,
+    example: r.example||'', description: r.description||'',
+  }, extra||{}));
+}
+
+// Headers/Parameters/Request body are singleton blocks (see SINGLETON_
+// BLOCKS) — addBlock() on a type that already exists just highlights it
+// and ignores the data you passed, which is right for the "+ Add block"
+// menu but wrong here: two AI sections of the same kind (or a retry) need
+// their rows merged into the one block, not silently dropped. Matches
+// existing rows by name (case-insensitive) so a retry never duplicates a
+// row that already landed.
+function upsertSingletonRows(type, newRows){
+  if(!newRows.length) return;
+  let block = blocks.find(b=>b.type===type);
+  if(!block) block = addBlock(type, { rows: [] });
+  const existingNames = new Set((block.rows||[]).map(r=>r.name.toLowerCase()));
+  block.rows = [...(block.rows||[]), ...newRows.filter(r=>!existingNames.has(r.name.toLowerCase()))];
+}
+
+function upsertRequestBody(example, fields){
+  let block = blocks.find(b=>b.type==='requestBody');
+  if(!block) block = addBlock('requestBody', {});
+  if(example && !block.example.trim()) block.example = example;
+  const existingNames = new Set((block.fields||[]).map(f=>f.name.toLowerCase()));
+  const rows = aiRowsToBlockRows(fields).filter(f=>!existingNames.has(f.name.toLowerCase()));
+  block.fields = [...(block.fields||[]), ...rows];
+}
+
+// response blocks are NOT singleton (one endpoint can have several — 200,
+// 400, 401...), so each response-kind section just adds its own. A brand
+// new endpoint starts with one blank placeholder response block (see
+// boot()) purely so the form isn't empty before anything is generated —
+// once a real AI-generated response is about to land, that empty
+// placeholder is removed rather than left behind as a stray duplicate. It
+// is only ever removed when it's still completely untouched, so this
+// never discards anything a person (or an earlier AI pass) actually
+// entered.
+function removeBlankSeedResponseBlock(){
+  if(endpointId) return; // only ever applies to a brand new, unsaved endpoint
+  const idx = blocks.findIndex(b=>b.type==='response'
+    && (b.code||200)===200 && !(b.description||'').trim() && !(b.example||'').trim()
+    && (b.fields||[]).length===0 && (b.examples||[]).length===0);
+  if(idx>=0 && blocks.length===1) blocks.splice(idx,1);
+}
+
+// Routes one finished /structure/section result to the real block its
+// "kind" belongs in. Returns the updated apiLevelDescription (unchanged
+// unless this was the overview).
+function applyAiSectionResult(result, apiLevelDescription){
+  const kind = result.kind || 'custom';
+  if(kind === 'overview'){
+    const content = result.content || '';
+    if(!document.getElementById('fApiDesc').value.trim()) document.getElementById('fApiDesc').value = content;
+    return content;
+  }
+  if(kind === 'headers'){
+    upsertSingletonRows('headers', aiRowsToBlockRows(result.rows));
+  } else if(kind === 'parameters'){
+    upsertSingletonRows('parameters', aiRowsToBlockRows(result.rows, { sendAs:'query' }));
+  } else if(kind === 'requestBody'){
+    removeBlankSeedResponseBlock();
+    upsertRequestBody(result.example, result.fields);
+  } else if(kind === 'response'){
+    removeBlankSeedResponseBlock();
+    addBlock('response', {
+      code: result.statusCode || 200,
+      description: result.description || '',
+      example: result.example || '',
+      fields: aiRowsToBlockRows(result.fields),
+    });
+  } else {
+    addBlock('custom', { title: result.title, content: result.content || '' });
+  }
+  return apiLevelDescription;
+}
+
+// Project-level facts from the plan — name/tag and the shared auth model,
+// if the notes described one. Auth is project-wide (Project details ▸
+// Authentication applies to every endpoint), so this is only ever applied
+// once, from the first endpoint's pass, and never overwrites anything
+// already filled in.
+function applyAiPlanBasics(plan){
+  if(plan.project?.name && !document.getElementById('fProject').value.trim()) document.getElementById('fProject').value = plan.project.name;
+  if(plan.project?.tag && !document.getElementById('fTag').value.trim()) document.getElementById('fTag').value = plan.project.tag;
+  if(plan.projectAuth){
+    if(!document.getElementById('fAuthType').value.trim()) document.getElementById('fAuthType').value = plan.projectAuth.type || '';
+    if(!document.getElementById('fAuthHeader').value.trim()) document.getElementById('fAuthHeader').value = plan.projectAuth.headerName || '';
+    if(!document.getElementById('fAuthDesc').value.trim()) document.getElementById('fAuthDesc').value = plan.projectAuth.description || '';
+  }
+}
+function applyAiEndpointBasics(ep){
+  if(ep.method) document.getElementById('fMethod').value = ep.method;
+  if(ep.path && !document.getElementById('fPath').value.trim()) document.getElementById('fPath').value = ep.path;
+  if(ep.summary){
+    let sBlock = blocks.find(b=>b.type==='summary');
+    if(!sBlock) sBlock = addBlock('summary', {});
+    if(!sBlock.summary) sBlock.summary = ep.summary;
+  }
+}
+
+// Resets ONLY the endpoint-scoped state (method/path/tag/version/content
+// type/visibility, the blocks list, and the loaded-endpoint id) so the
+// next Save creates a NEW endpoint instead of overwriting this one.
+// Project-scoped state — name, Project details tab, Authentication —
+// is deliberately left untouched, since the next endpoint belongs to the
+// same project.
+function resetEndpointFieldsForNewEndpoint(){
+  endpointId = null;
+  loadedUpdatedAt = null;
+  document.getElementById('fMethod').value = 'GET';
+  document.getElementById('fPath').value = '';
+  document.getElementById('fTag').value = '';
+  document.getElementById('fVersion').value = '';
+  document.getElementById('fContentType').value = 'application/json';
+  document.getElementById('fVisibility').value = 'private';
+  blocks.length = 0;
+  addBlock('response', { code:200, description:'', example:'', fields:[] });
+  updateTopBar({ name: document.getElementById('fProject').value.trim() || 'this project' }, null);
+}
+
+// If the plan found more than one endpoint, offer the next one instead of
+// silently drafting it — merging it into the endpoint just generated would
+// recreate exactly the "two endpoints' info in one endpoint" problem this
+// was built to avoid. Each endpoint is reviewed and saved on its own,
+// consistent with the rest of this editor's one-endpoint-at-a-time model.
+function maybeOfferNextEndpoint(plan, endpoints, index, rawText, audience, resultEl, btn){
+  if(index + 1 >= endpoints.length) return;
+  const next = endpoints[index+1];
+  const box = document.createElement('div');
+  box.className = 'hint';
+  box.style.marginTop = '14px';
+  box.innerHTML = `
+    <div>The notes also described another endpoint:</div>
+    <div style="display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-top:6px;">
+      <span><b>${escapeHtml(next.method)} ${escapeHtml(next.path)}</b>${next.summary ? ' — '+escapeHtml(next.summary) : ''}</span>
+      <button type="button" class="btn-ghost" id="aiNextEndpointBtn-${index}">Save this one, then draft that one →</button>
+    </div>
+  `;
+  resultEl.appendChild(box);
+  document.getElementById(`aiNextEndpointBtn-${index}`).addEventListener('click', ()=>{
+    const current = `${document.getElementById('fMethod').value} ${document.getElementById('fPath').value}`;
+    if(!confirm(`This clears the form to start drafting ${next.method} ${next.path} as a new endpoint in this project. Make sure you've saved ${current} first — anything unsaved on it will be lost. Continue?`)) return;
+    resetEndpointFieldsForNewEndpoint();
+    renderBlocks();
+    runAiEndpointQueue(plan, endpoints, index+1, rawText, audience, resultEl, btn);
+  });
+}
+
+// Generates the project-wide overview (once, on the first endpoint only)
+// plus one queued endpoint's own sections, then offers to draft the next
+// endpoint the plan found, if any.
+async function runAiEndpointQueue(plan, endpoints, index, rawText, audience, resultEl, btn){
+  const ep = endpoints[index];
+  applyAiEndpointBasics(ep);
+  renderBlocks();
+
+  const includeOverview = index === 0 && plan.overview && plan.overview.title;
+  const checklist = [
+    ...(includeOverview ? [{ kind:'overview', title: plan.overview.title, hint: plan.overview.hint }] : []),
+    ...(ep.sections || []),
+  ];
+
+  if(btn){ btn.textContent = 'Generating…'; }
+
+  if(checklist.length === 0){
+    if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
+    renderAiStatus(resultEl, { type:'success', title:'Applied to this endpoint', message:`${escapeHtml(ep.method)} ${escapeHtml(ep.path)} — endpoint fields were added. The notes didn't call for any additional sections here.` });
+    maybeOfferNextEndpoint(plan, endpoints, index, rawText, audience, resultEl, btn);
+    return;
+  }
+
+  renderAiSectionChecklist(resultEl, checklist);
+
+  // Filled in once the overview section comes back, then passed as
+  // context to every section generated after it.
+  let apiLevelDescription = document.getElementById('fApiDesc').value || '';
+
+  // One section's failure is isolated to its own row/retry, so this can
+  // simply await each call in turn — no need for a shared error path that
+  // would otherwise abandon sections that haven't run yet.
+  async function generateOne(i){
+    const section = checklist[i];
+    updateAiSectionRow(i, { icon:'…', status:'Generating…' });
+    try{
+      const result = await aiApi('POST', '/structure/section', { rawText, audience, section, apiLevelDescription });
+      apiLevelDescription = applyAiSectionResult(result, apiLevelDescription) || apiLevelDescription;
+      renderBlocks();
+      updateAiSectionRow(i, { icon:'✓', status:'Added' });
+      return true;
+    }catch(err){
+      updateAiSectionRow(i, { icon:'!', status: err.message, error:true, onRetry: ()=>generateOne(i) });
+      return false;
+    }
+  }
+
+  for(let i=0; i<checklist.length; i++){
+    await generateOne(i);
+  }
+
+  if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
+  const failedCount = resultEl.querySelectorAll('.ai-section-row-error').length;
+  const summaryEl = document.createElement('div');
+  summaryEl.className = 'hint';
+  summaryEl.style.marginTop = '10px';
+  summaryEl.textContent = failedCount === 0
+    ? `All ${checklist.length} piece(s) generated and added below for ${ep.method} ${ep.path}. Review, edit, then Publish when ready.`
+    : `${checklist.length - failedCount} of ${checklist.length} piece(s) added below for ${ep.method} ${ep.path}; ${failedCount} need a retry (click Retry on that row above) — nothing else needs to be redone.`;
+  resultEl.appendChild(summaryEl);
+
+  maybeOfferNextEndpoint(plan, endpoints, index, rawText, audience, resultEl, btn);
+}
+
+async function runAiStructureStaged(rawText, audience, resultEl, btn){
+  if(btn){ btn.disabled = true; btn.textContent = 'Planning…'; }
+  renderAiStatus(resultEl, { type:'loading', message:'Reading the content and planning out the endpoints and sections it needs…' });
+
+  let plan;
+  try{
+    plan = await aiApi('POST', '/structure/plan', { rawText, audience });
+  }catch(err){
+    if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
+    renderAiStatus(resultEl, {
+      type:'error',
+      title: err.retryable ? 'Temporary problem' : 'Could not plan documentation',
+      message: escapeHtml(err.message),
+      onRetry: err.retryable ? ()=>runAiStructureStaged(rawText, audience, resultEl, btn) : null,
+    });
+    return;
+  }
+
+  applyAiPlanBasics(plan);
+  renderBlocks();
+
+  const endpoints = plan.endpoints || [];
+  if(endpoints.length === 0){
+    if(btn){ btn.disabled = false; btn.textContent = 'Generate documentation'; }
+    renderAiStatus(resultEl, {
+      type:'error', title:'Nothing to generate',
+      message:'The notes didn\'t contain enough to identify even one endpoint — check what you pasted and try again.',
+      onRetry: ()=>runAiStructureStaged(rawText, audience, resultEl, btn),
+    });
+    return;
+  }
+
+  await runAiEndpointQueue(plan, endpoints, 0, rawText, audience, resultEl, btn);
+}
+
+async function runAiStructure(rawText, audience, resultEl, btn){
+  return runAiStructureStaged(rawText, audience, resultEl, btn);
+}
+
+
+boot();
+
+</script>
+</body>
+</html>
