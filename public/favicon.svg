@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="DocTracker">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5c7cfa"/>
+      <stop offset="1" stop-color="#2e4bd6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Matches the in-app brand mark (.brand .mark in studio.html): a
+       gradient rounded-square tile with a monospace "{ }" glyph — this SVG
+       just recreates that same mark as a standalone icon for the favicon
+       and the login/register brand lockup, so all three stay visually
+       identical instead of drifting (previously the favicon was an
+       unrelated document icon). -->
+  <rect width="64" height="64" rx="16" fill="url(#tile)"/>
+  <rect x="1.2" y="1.2" width="61.6" height="61.6" rx="14.8" fill="none" stroke="#ffffff" stroke-opacity=".16" stroke-width="1.4"/>
+
+  <text x="32" y="41" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, 'SF Mono', monospace" font-weight="700" font-size="28" fill="#f4f7ff">{ }</text>
+</svg>

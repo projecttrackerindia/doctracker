@@ -1,0 +1,46 @@
+{
+  "name": "doctracker-auth",
+  "version": "1.0.0",
+  "description": "Authentication service (login, register, roles) for DocTracker",
+  "main": "server/server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "nodemon server/server.js",
+    "migrate": "node server/migrations/cli.js up",
+    "migrate:down": "node server/migrations/cli.js down",
+    "migrate:status": "node server/migrations/cli.js status",
+    "test": "node --test test/**/*.test.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "audit:check": "npm audit --omit=dev --audit-level=high"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.744.0",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.2.0",
+    "helmet": "^7.1.0",
+    "ioredis": "^5.4.1",
+    "js-yaml": "^4.1.0",
+    "jsonrepair": "^3.15.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.11.5",
+    "rate-limit-redis": "^4.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "eslint": "^9.39.0",
+    "eslint-config-prettier": "^9.1.2",
+    "globals": "^15.15.0",
+    "nodemon": "^3.1.0",
+    "prettier": "^3.9.6"
+  }
+}
