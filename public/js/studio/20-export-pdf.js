@@ -542,15 +542,18 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
   // a deliberately spare, balanced cover. 860 is this container's fixed pixel width
   // (see .pdf-print-root), so this converts the page's mm aspect ratio into px at
   // that same scale.
-  // Math.floor (never round/ceil) plus an explicit safety margin: rounding UP even by
-  // a fraction of a px, once converted back to mm for the PDF, was enough to make this
-  // block register as very slightly taller than one page's usable height — which
-  // silently diverts it into the oversized-atom pixel-slicing path below instead of
-  // placing it as one clean page, cropping it at an arbitrary point (this is exactly
-  // how the cover's meta block ended up stranded alone on page 2). The margin trades a
-  // few mm of imperceptible extra tightness in the flex spacing for guaranteed headroom.
-  const coverBlankSafetyPx = 10;
-  const coverBlankHeightPx = Math.floor((PDF_PAGE_CONTENT_HEIGHT_MM / PDF_CONTENT_WIDTH_MM) * 860) - coverBlankSafetyPx;
+  // Deliberately conservative: target 90% of the page's usable height rather than
+  // shaving a fixed few px off 100%. The previous version (a fixed 10px margin off
+  // an exact 100% target) was verified correct in isolation — real Chrome, the real
+  // 'Inter' font stack, a worst-case tall logo aspect ratio — and still wasn't enough
+  // margin against whatever combination of real-world conditions (an actual deployed
+  // font, actual org/project name lengths, a caching layer serving a stale build,
+  // etc.) produced the same page-2 split again in practice. Rather than keep chasing
+  // an exact-fit number that has now been wrong twice, this leaves ~10% (well over
+  // 25mm) of genuine slack — a page-content atom this far under the limit cannot
+  // plausibly be pushed over by font metrics or minor content differences, and the
+  // extra unused whitespace on an already-spare cover page is not visible as a flaw.
+  const coverBlankHeightPx = Math.floor(0.90 * (PDF_PAGE_CONTENT_HEIGHT_MM / PDF_CONTENT_WIDTH_MM) * 860);
   const coverBlankHtml = opts.includeOverview ? `
     <div class="pdf-atom" data-pdf-force-page-break-after>
     <section class="pdf-cover-blank" style="min-height:${coverBlankHeightPx}px;">
