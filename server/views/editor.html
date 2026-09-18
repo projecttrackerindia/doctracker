@@ -1011,6 +1011,10 @@ function hydrateProjectFields(proj){
   document.getElementById('fLicenseUrl').value = (proj.license && proj.license.url) || '';
   document.getElementById('fFlowPattern').value = proj.requestFlowDirection === '2-way' ? '2-way' : '1-way';
   document.getElementById('fFlowLabel').value = proj.requestFlowLabel || '';
+  // Version is a project-wide value now (see performSave) — prefilled here so
+  // typing an existing project's name for a new endpoint picks up its current
+  // version instead of leaving the field blank/stale.
+  document.getElementById('fVersion').value = proj.version || '';
 
   document.getElementById('fAuthType').value = (proj.auth && proj.auth.type) || '';
   document.getElementById('fAuthMethod').value = (proj.auth && proj.auth.method) || 'POST';
@@ -1228,7 +1232,7 @@ function fillFormFromEndpoint(proj, ep){
   document.getElementById('fMethod').value = ep.method || 'GET';
   document.getElementById('fPath').value = ep.path || '';
   document.getElementById('fTag').value = ep.tag || '';
-  document.getElementById('fVersion').value = ep.version || '';
+  document.getElementById('fVersion').value = proj.version || ep.version || '';
   document.getElementById('fContentType').value = ep.contentType || 'application/json';
   document.getElementById('fVisibility').value = ep.visibility === 'public' ? 'public' : 'private';
 
@@ -1952,7 +1956,7 @@ function gatherEndpointFromForm(){
 function blankProjectStub(name){
   return {
     id: uid(), name, description:'', visibility:'private', environments:{}, auth:{ type:'', headerName:'', description:'' },
-    notes:'', lifecycle:'DEVELOPMENT', owner:'', team:'', requestFlowDirection:'1-way', requestFlowLabel:'',
+    notes:'', lifecycle:'DEVELOPMENT', owner:'', team:'', requestFlowDirection:'1-way', requestFlowLabel:'', version:'',
     termsOfService:'', contact:{name:'',email:''}, license:{name:'',url:''},
     createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), endpoints:[], attachments:[], _open:true,
   };
@@ -2010,6 +2014,12 @@ async function performSave(force){
     };
     proj.requestFlowDirection = document.getElementById('fFlowPattern').value === '2-way' ? '2-way' : '1-way';
     proj.requestFlowLabel = document.getElementById('fFlowLabel').value.trim();
+    // Version reads as a per-endpoint field in the Basics tab, but it's really
+    // one value per project — every endpoint should show the same version, so
+    // saving here writes it onto the project (source of truth for Overview/PDF
+    // display) as well as onto this endpoint (via gatherEndpointFromForm below,
+    // kept for backward compatibility with existing per-endpoint data).
+    proj.version = document.getElementById('fVersion').value.trim();
     const cleanAuthRows = (list)=> list.filter(r=>r.name.trim()).map(r=>(
       { name:r.name.trim(), type:r.type, required:!!r.required, example:r.example.trim(), description:r.description.trim() }
     ));
@@ -2703,7 +2713,10 @@ function resetEndpointFieldsForNewEndpoint(){
   document.getElementById('fMethod').value = 'GET';
   document.getElementById('fPath').value = '';
   document.getElementById('fTag').value = '';
-  document.getElementById('fVersion').value = '';
+  // Version now lives at the project level (see performSave) — carry the
+  // current project's version forward instead of blanking it, since the next
+  // endpoint belongs to the same project and should show the same version.
+  document.getElementById('fVersion').value = (currentProjectForFields && currentProjectForFields.version) || '';
   document.getElementById('fContentType').value = 'application/json';
   document.getElementById('fVisibility').value = 'private';
   blocks.length = 0;
