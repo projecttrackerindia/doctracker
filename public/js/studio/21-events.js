@@ -3,7 +3,10 @@ document.getElementById('fileInput').addEventListener('change', (e)=>{
   if(e.target.files[0]) handleImportedFile(e.target.files[0]);
   e.target.value = '';
 });
-document.getElementById('btnAuditLog').addEventListener('click', openAuditLogTab);
+document.getElementById('btnAuditLog').addEventListener('click', ()=>{
+  closeTopbarMoreMenu();
+  openAuditLogTab();
+});
 document.getElementById('btnSecurityCenter').addEventListener('click', ()=>{
   state.selected = { type:'security' };
   state.securityTab = state.securityTab || (isAdmin() ? 'summary' : 'docaccess');
@@ -56,8 +59,25 @@ document.getElementById('fabImportProject').addEventListener('click', ()=>{
 // project open (e.g. right after deleting one, or from a blank Control Center),
 // so it can't depend on that context existing.
 document.getElementById('btnImportProjectTop').addEventListener('click', ()=>{
+  closeTopbarMoreMenu();
   if(!canEditHere()){ toast(isViewingDraftEnv() ? `Your role (${roleMeta(state.authorRole).label}) is read-only` : `Switch to ${envMeta(draftEnvId()).label} to make changes`); return; }
   document.getElementById('projectImportInput').click();
+});
+
+/* ---------- Topbar "More" overflow menu (Audit Log, Import project) ---------- */
+function closeTopbarMoreMenu(){
+  document.getElementById('topbarMoreMenu').classList.remove('open');
+  document.getElementById('btnTopbarMore').setAttribute('aria-expanded', 'false');
+}
+document.getElementById('btnTopbarMore').addEventListener('click', (e)=>{
+  e.stopPropagation();
+  const menu = document.getElementById('topbarMoreMenu');
+  const willOpen = !menu.classList.contains('open');
+  menu.classList.toggle('open', willOpen);
+  document.getElementById('btnTopbarMore').setAttribute('aria-expanded', String(willOpen));
+});
+document.addEventListener('click', (e)=>{
+  if(!e.target.closest('#topbarMoreMenu') && !e.target.closest('#btnTopbarMore')) closeTopbarMoreMenu();
 });
 document.getElementById('projectImportInput').addEventListener('change', (e)=>{
   if(e.target.files[0]) importProjectFromJsonFile(e.target.files[0]);
@@ -227,6 +247,7 @@ document.addEventListener('keydown', (e)=>{
     document.querySelectorAll('.modal-overlay.show').forEach(m=>m.classList.remove('show'));
     closeRenderView();
     closePalette();
+    closeTopbarMoreMenu();
   }
 });
 

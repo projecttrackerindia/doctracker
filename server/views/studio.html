@@ -281,6 +281,13 @@ kbd{
 .topbar-divider{ width:1px; height:22px; background:var(--border); flex-shrink:0; margin:0 2px; }
 .theme-toggle{ position:relative; }
 
+.topbar-more-menu{
+  position:absolute; top:calc(100% + 8px); right:0; width:max-content; min-width:200px; z-index:400;
+  background:var(--surface); border:1px solid var(--border); border-radius:10px;
+  box-shadow:0 12px 40px -8px rgba(0,0,0,.4); padding:6px; display:none;
+}
+.topbar-more-menu.open{ display:block; }
+
 #btnAuthor{
   display:flex; align-items:center; gap:8px; padding:4px 12px 4px 4px; border-radius:999px;
   background:var(--surface-2); border:1px solid var(--border); color:var(--text-dim); font-size:12px; font-weight:600;
@@ -2862,12 +2869,7 @@ pre.json-raw{ max-height:360px; margin:0; }
     <div class="top-actions">
       <div class="env-switcher" id="envSwitcher"></div>
       <span class="topbar-divider"></span>
-      <button id="btnAuditLog" title="Audit log — see who changed what, when">
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-2px;"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>Audit Log
-      </button>
-      <button class="icon" id="btnImportProjectTop" title="Import project (JSON) — restore a project export, from anywhere in the app">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-      </button>
+
       <div class="nav-btn-wrap">
         <button class="icon" id="btnNotifBell" title="Notifications">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
@@ -2881,13 +2883,38 @@ pre.json-raw{ max-height:360px; margin:0; }
           <div id="notifList"></div>
         </div>
       </div>
+
       <div class="nav-btn-wrap">
-        <button id="btnSecurityCenter" title="Security — PII masking rules, browser storage inventory" style="display:none;">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-2px;"><path d="M12 2l8 4v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6l8-4z"></path></svg>Security
+        <button class="icon" id="btnSecurityCenter" title="Security — PII masking rules, browser storage inventory" style="display:none;">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6l8-4z"></path></svg>
         </button>
         <span class="nav-count-badge" id="securityBadge" style="display:none;"></span>
       </div>
+
       <button class="icon" id="btnTheme" title="Toggle theme">◐</button>
+
+      <span class="topbar-divider"></span>
+
+      <div class="nav-btn-wrap">
+        <button class="icon" id="btnTopbarMore" title="More" aria-haspopup="true" aria-expanded="false" aria-controls="topbarMoreMenu">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>
+        </button>
+        <div class="topbar-more-menu" id="topbarMoreMenu" role="menu">
+          <button type="button" class="ep-actions-item" id="btnAuditLog" role="menuitem">
+            <span class="item-label">
+              <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg></span>
+              <span>Audit Log</span>
+            </span>
+          </button>
+          <button type="button" class="ep-actions-item" id="btnImportProjectTop" role="menuitem" title="Restore a project export, from anywhere in the app">
+            <span class="item-label">
+              <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></span>
+              <span>Import project (JSON)</span>
+            </span>
+          </button>
+        </div>
+      </div>
+
       <input type="file" id="fileInput" accept=".json,.yaml,.yml">
       <button id="btnAuthor" title="Your profile — name, and the role that controls which actions and environments you can reach">
         <span class="avatar-circle" id="authorAvatar"></span>
