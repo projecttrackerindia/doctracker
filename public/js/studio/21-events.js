@@ -54,6 +54,12 @@ document.getElementById('mProject').addEventListener('input', (e)=>{
   if(match && !apiDescEl.value.trim()){
     apiDescEl.value = match.description || '';
   }
+  // Version is a project-wide value (see saveManualEndpoint) — pull it in too
+  // when the typed name matches an existing project, same as the description.
+  const versionEl = document.getElementById('mVersion');
+  if(match && !versionEl.value.trim()){
+    versionEl.value = match.version || '';
+  }
   // Pull in that project's real "Project details" / "Authentication" fields
   // too, so typing an existing project's name shows its actual shared
   // settings instead of leaving stale/blank values that would overwrite them

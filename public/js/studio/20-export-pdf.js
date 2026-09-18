@@ -424,7 +424,7 @@ function buildExportPdfEndpointSection(proj, ep, index){
         <span class="pdf-ep-index">${String(index+1).padStart(2,'0')}</span>
         <span class="badge-lg ${mClass}">${escapeHtml(ep.method)}</span>
         <span class="pdf-ep-path">${escapeHtml(ep.path)}</span>
-        ${ep.version ? `<span class="pdf-ep-version">v${escapeHtml(ep.version)}</span>` : ''}
+        ${(proj.version || ep.version) ? `<span class="pdf-ep-version">v${escapeHtml(proj.version || ep.version)}</span>` : ''}
       </div>
       ${ep.summary ? `<div class="pdf-ep-summary">${escapeHtml(ep.summary)}</div>` : ''}
       ${ep.description ? `<div class="pdf-ep-desc">${renderMarkdown(ep.description)}</div>` : ''}
@@ -587,6 +587,7 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
         <div class="pdf-cover-stat"><div class="n">${Object.keys(groups).length}</div><div class="l">Tag${Object.keys(groups).length===1?'':'s'}</div></div>
         <div class="pdf-cover-stat"><div class="n">${proj.auth && proj.auth.type ? escapeHtml(proj.auth.type) : 'None'}</div><div class="l">Authentication</div></div>
         <div class="pdf-cover-stat"><div class="n">${proj.lifecycle ? escapeHtml(proj.lifecycle) : '—'}</div><div class="l">Lifecycle</div></div>
+        <div class="pdf-cover-stat"><div class="n">${proj.version ? 'v'+escapeHtml(proj.version) : '—'}</div><div class="l">Version</div></div>
       </div>
     </section>
     </div>

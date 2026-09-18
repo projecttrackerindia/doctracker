@@ -1492,7 +1492,7 @@ function buildRenderSheetHtml(proj, ep){
         <div class="render-path">${escapeHtml(ep.path)}</div>
         ${ep.summary ? `<div class="render-summary">${escapeHtml(ep.summary)}</div>` : ''}
         ${ep.description ? `<div class="render-desc">${renderMarkdown(ep.description)}</div>` : ''}
-        <div class="render-crumb">${escapeHtml(proj.name||'Untitled API')} · ${escapeHtml(ep.tag||'General')}${ep.version?` · v${escapeHtml(ep.version)}`:''} · ${escapeHtml(ep.contentType||'application/json')}</div>
+        <div class="render-crumb">${escapeHtml(proj.name||'Untitled API')} · ${escapeHtml(ep.tag||'General')}${(proj.version||ep.version)?` · v${escapeHtml(proj.version||ep.version)}`:''} · ${escapeHtml(ep.contentType||'application/json')}</div>
       </div>
     </div>
     <div class="render-body">

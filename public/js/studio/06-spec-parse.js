@@ -261,7 +261,7 @@ function blankProject(name){
     auth: { type:'', headerName:'', description:'' },
     notes:'',
     lifecycle: 'DEVELOPMENT',
-    owner:'', team:'',
+    owner:'', team:'', version:'',
     requestFlowDirection: '1-way', requestFlowLabel: '',
     termsOfService:'', contact:{ name:'', email:'' }, license:{ name:'', url:'' },
     createdAt: now, updatedAt: now,

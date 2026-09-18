@@ -383,7 +383,7 @@ function swaggerSample(proj, ep){
     info: {
       title: proj.name || 'Untitled API',
       description: proj.description || undefined,
-      version: ep.version || '1.0.0',
+      version: proj.version || ep.version || '1.0.0',
       ...(proj.termsOfService ? { termsOfService: proj.termsOfService } : {}),
       ...((proj.contact && (proj.contact.name || proj.contact.email)) ? {
         contact: {

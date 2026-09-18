@@ -1134,7 +1134,7 @@ function renderEndpointDoc(main, proj, ep){
   const metaChipsHtml = `
     <div class="endpoint-meta-chips">
       <span class="meta-chip"><span class="meta-chip-dot" style="background:${ep.visibility==='public' ? 'var(--get)' : 'var(--text-faint)'};"></span><span class="k">Visibility</span><span class="v">${ep.visibility==='public' ? 'Public' : 'Private'}</span></span>
-      <span class="meta-chip"><span class="meta-chip-dot" style="background:var(--accent);"></span><span class="k">Version</span><span class="v">${ep.version ? escapeHtml(ep.version) : '—'}</span></span>
+      <span class="meta-chip"><span class="meta-chip-dot" style="background:var(--accent);"></span><span class="k">Version</span><span class="v">${(proj.version||ep.version) ? escapeHtml(proj.version||ep.version) : '—'}</span></span>
       <span class="meta-chip"><span class="meta-chip-dot" style="background:var(--patch);"></span><span class="k">Content type</span><span class="v">${escapeHtml(ep.contentType||'application/json')}</span></span>
       <span class="meta-chip"><span class="meta-chip-dot" style="background:var(--post);"></span><span class="k">Added</span><span class="v">${ep.createdAt ? escapeHtml(formatDateTime(ep.createdAt)) : 'Unknown'}${ep.createdBy ? ' · ' + escapeHtml(ep.createdBy) : ''}</span></span>
       <span class="meta-chip"><span class="meta-chip-dot" style="background:var(--put);"></span><span class="k">Modified</span><span class="v">${ep.updatedAt ? escapeHtml(formatDateTime(ep.updatedAt)) : 'Unknown'}${ep.updatedBy ? ' · ' + escapeHtml(ep.updatedBy) : ''}</span></span>

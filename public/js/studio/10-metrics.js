@@ -9,7 +9,7 @@ const DOC_CHECKS = [
   { key:'respschema',  label:'Response schema',    test:(ep)=> (ep.responses||[]).some(r=>r.example || (r.fields&&r.fields.length)) },
   { key:'errors',      label:'Error responses',    test:(ep)=> (ep.responses||[]).some(r=>String(r.code)[0] && String(r.code)[0] !== '2') },
   { key:'auth',        label:'Authentication',     test:(ep, proj)=> !!(proj && proj.auth && proj.auth.type) },
-  { key:'version',     label:'Version',            test:(ep)=> !!(ep.version||'').trim() },
+  { key:'version',     label:'Version',            test:(ep, proj)=> !!((proj && proj.version) || ep.version || '').trim() },
   { key:'contenttype', label:'Content type',       test:(ep)=> !!(ep.contentType||'').trim() },
 ];
 

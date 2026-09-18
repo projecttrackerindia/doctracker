@@ -486,7 +486,7 @@ function openManualModal(epId){
     document.getElementById('mMethod').value = ep.method;
     document.getElementById('mPath').value = ep.path;
     document.getElementById('mTag').value = ep.tag;
-    document.getElementById('mVersion').value = ep.version || '';
+    document.getElementById('mVersion').value = proj.version || ep.version || '';
     document.getElementById('mContentType').value = ep.contentType || 'application/json';
     document.getElementById('mSummary').value = ep.summary || '';
     document.getElementById('mDesc').value = ep.description || '';
@@ -517,6 +517,10 @@ function openManualModal(epId){
       if(proj){
         document.getElementById('mProject').value = proj.name;
         document.getElementById('mApiDesc').value = proj.description || '';
+        // Version is a project-wide value (see saveManualEndpoint) — prefill
+        // from the project so a new endpoint starts on the same version
+        // instead of blank.
+        document.getElementById('mVersion').value = proj.version || '';
         hydrateEndpointProjectFields(proj);
       }
     }
@@ -580,6 +584,12 @@ function saveManualEndpoint(){
   };
   proj.requestFlowDirection = document.getElementById('mFlowPattern').value === '2-way' ? '2-way' : '1-way';
   proj.requestFlowLabel = document.getElementById('mFlowLabel').value.trim();
+  // Version reads as a per-endpoint field in this modal, but it's really one
+  // value per project — every endpoint should show the same version, so
+  // saving here writes it onto the project (source of truth for Overview/PDF
+  // display) as well as onto this endpoint (via gatherFormAsEndpoint below,
+  // kept for backward compatibility with existing per-endpoint data).
+  proj.version = document.getElementById('mVersion').value.trim();
   const cleanMAuthParams = (list)=> list.filter(r=>r.name.trim()).map(r=>(
     { name:r.name.trim(), type:r.type, required:!!r.required, example:r.example.trim(), description:r.description.trim() }
   ));
