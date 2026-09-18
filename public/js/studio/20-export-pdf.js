@@ -553,17 +553,17 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
   // 25mm) of genuine slack — a page-content atom this far under the limit cannot
   // plausibly be pushed over by font metrics or minor content differences, and the
   // extra unused whitespace on an already-spare cover page is not visible as a flaw.
-  const coverBlankHeightPx = Math.floor(0.90 * (PDF_PAGE_CONTENT_HEIGHT_MM / PDF_CONTENT_WIDTH_MM) * 860);
+  // Page 1 now carries only the logo/org identity and the created/modified/generated
+  // meta block, grouped tightly together near the top of the page (not spread across
+  // the full page height) — the badge + project title have moved to the top of page 2,
+  // right above "Overview". data-pdf-force-page-break-after still guarantees page 1
+  // stands alone even though its content no longer fills the page.
   const coverBlankHtml = opts.includeOverview ? `
     <div class="pdf-atom" data-pdf-force-page-break-after>
-    <section class="pdf-cover-blank" style="min-height:${coverBlankHeightPx}px;">
+    <section class="pdf-cover-blank">
       <div class="pdf-cover-blank-top">
         ${coverLogoDataUrl ? `<img class="pdf-cover-blank-logo" src="${coverLogoDataUrl}" alt="">` : ''}
         ${coverOrgLabel ? `<div class="pdf-cover-blank-org">${escapeHtml(coverOrgLabel)}</div>` : ''}
-      </div>
-      <div class="pdf-cover-blank-mid">
-        <div class="pdf-cover-badge"><span class="dot"></span>DocTracker · ${escapeHtml(envLabel)} environment</div>
-        <h1>${escapeHtml(proj.name)}</h1>
       </div>
       <div class="pdf-cover-blank-meta">
         <div><span class="k">Created By</span>${escapeHtml(author)}</div>
@@ -576,10 +576,16 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
   // Everything that used to live inside the cover atom itself (description, stats,
   // the auth card, auth params, integration notes) now starts page 2 as an ordinary
   // "Overview" section — same visual language as Lifecycle/Request flow below it —
-  // instead of being squeezed onto the now-deliberately-spare cover page.
+  // instead of being squeezed onto the now-deliberately-spare cover page. The badge
+  // + project title (formerly the cover's "mid" block) now sit here too, directly
+  // above the "Overview" heading.
   const overviewHtml = opts.includeOverview ? `
     <div class="pdf-atom">
     <section>
+      <div class="pdf-cover-badge-row">
+        <div class="pdf-cover-badge"><span class="dot"></span>DocTracker · ${escapeHtml(envLabel)} environment</div>
+        <h1 class="pdf-cover-title">${escapeHtml(proj.name)}</h1>
+      </div>
       <div class="pdf-section-title">Overview</div>
       <div class="pdf-cover-sub">${proj.description ? renderMarkdown(proj.description) : 'API documentation export.'}</div>
       <div class="pdf-cover-stats">
