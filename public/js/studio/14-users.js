@@ -639,6 +639,14 @@ function renderProjectOverview(main, projectId){
                   <span>Export as PDF</span>
                 </span>
               </button>
+              ${proj._readonly ? '' : `
+              <button type="button" class="ep-actions-item proj-actions-item" id="btnExportProjectJson" role="menuitem">
+                <span class="item-label">
+                  <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></span>
+                  <span>Export project (JSON)</span>
+                </span>
+                <span class="item-sub">Full backup — everything, unmasked</span>
+              </button>`}
               <button type="button" class="ep-actions-item proj-actions-item" id="btnOpenSwaggerEditor" role="menuitem">
                 <span class="item-label">
                   <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></span>
@@ -735,6 +743,11 @@ function renderProjectOverview(main, projectId){
   document.getElementById('btnExportPdf').addEventListener('click', ()=>{
     document.getElementById('projActionsDD').classList.remove('open');
     openExportPdfModal(proj.id);
+  });
+  const btnExportProjectJson = document.getElementById('btnExportProjectJson');
+  if(btnExportProjectJson) btnExportProjectJson.addEventListener('click', ()=>{
+    document.getElementById('projActionsDD').classList.remove('open');
+    exportProjectAsJson(proj.id);
   });
   document.getElementById('btnOpenArchStudioMenu').addEventListener('click', ()=>{
     document.getElementById('projActionsDD').classList.remove('open');

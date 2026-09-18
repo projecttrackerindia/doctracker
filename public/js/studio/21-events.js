@@ -43,6 +43,15 @@ document.getElementById('fabNewProject').addEventListener('click', ()=>{
   document.getElementById('btnFab').setAttribute('aria-expanded', 'false');
   openEditorTab(null, null);
 });
+document.getElementById('fabImportProject').addEventListener('click', ()=>{
+  document.getElementById('fabDD').classList.remove('open');
+  document.getElementById('btnFab').setAttribute('aria-expanded', 'false');
+  document.getElementById('projectImportInput').click();
+});
+document.getElementById('projectImportInput').addEventListener('change', (e)=>{
+  if(e.target.files[0]) importProjectFromJsonFile(e.target.files[0]);
+  e.target.value = '';
+});
 
 // When adding a NEW endpoint and the typed project name matches an existing
 // project, pull that project's API-level description in automatically —

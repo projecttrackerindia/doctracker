@@ -585,3 +585,148 @@ function exportBackup(){
   URL.revokeObjectURL(url);
   toast('Backup downloaded');
 }
+
+/* ---------- Single-project export / import (full backup & restore, unmasked) ----------
+   Different from the OpenAPI/Swagger "Import spec file" flow above: that one only
+   understands endpoints and rebuilds a project from scratch. This round-trips a
+   *complete* DocTracker project — every endpoint, environment URL, auth doc, note,
+   and attachment — so it can be pulled out of the workspace entirely and put back
+   later exactly as it was. */
+const DOCTRACKER_EXPORT_FORMAT_VERSION = 1;
+
+// Attachments large enough to have been offloaded to object storage (see
+// MAX_PROJECT_ATTACHMENT_BYTES / doc.storageKey in routes/workspace.js) only carry
+// a storage reference client-side, not their actual bytes — fetch the real content
+// and inline it as a data: URL so the exported file is genuinely self-contained
+// instead of silently dropping large documents.
+async function inlineAttachmentForExport(projectId, att){
+  if(att.dataUrl || !att.storageKey) return att; // already inline, or nothing to fetch
+  try{
+    const res = await fetch(`/api/workspace/projects/${projectId}/attachments/${att.id}`, { credentials:'same-origin' });
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const dataUrl = await new Promise((resolve, reject)=>{
+      const reader = new FileReader();
+      reader.onload = ()=>resolve(reader.result);
+      reader.onerror = ()=>reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+    const { storageKey, ...rest } = att;
+    return { ...rest, dataUrl };
+  }catch(e){
+    console.error('Could not inline attachment for export:', att.name, e);
+    return { ...att, exportWarning: "Could not fetch this attachment's content — it was skipped in this export." };
+  }
+}
+
+// Exports one project as a single JSON file. Deliberately unmasked (unlike the PDF
+// export): this is for backing your own project up and restoring it exactly, not
+// for handing to someone whose role shouldn't see secrets — it always uses the
+// real environment URLs and auth values regardless of the current reveal setting.
+async function exportProjectAsJson(projectId){
+  const proj = state.projects[projectId];
+  if(!proj){ toast('Project not found.'); return; }
+
+  const hasOffloaded = (proj.attachments||[]).some(a=>a.storageKey && !a.dataUrl);
+  if(hasOffloaded) toast('Preparing export — fetching attachment content…');
+
+  const cloned = JSON.parse(JSON.stringify(proj));
+  cloned.attachments = await Promise.all((cloned.attachments||[]).map(att=>inlineAttachmentForExport(proj.id, att)));
+  // View-only flags are computed per-viewer by the server (see resolveAccess() in
+  // routes/workspace.js) and never belong in the exported file — whoever imports
+  // this owns the result.
+  delete cloned._readonly;
+  delete cloned._owned;
+
+  const envelope = {
+    docTrackerExport: true,
+    formatVersion: DOCTRACKER_EXPORT_FORMAT_VERSION,
+    exportedAt: new Date().toISOString(),
+    exportedBy: state.authorName || 'Unknown',
+    project: cloned,
+  };
+
+  const data = JSON.stringify(envelope, null, 2);
+  const blob = new Blob([data], { type:'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${slugify(proj.name)}-export-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  logAudit('exported', 'project', proj.name, `Exported project "${proj.name}" as a JSON file`, proj.name);
+  toast('Project exported');
+}
+
+// Deep-regenerates every id in an imported project (the project itself and every
+// endpoint) so it can never collide with anything already in the workspace — used
+// for the "import as a new project" conflict choice.
+function regenerateProjectIds(proj){
+  proj.id = uid();
+  (proj.endpoints||[]).forEach(ep=>{ ep.id = uid(); });
+  return proj;
+}
+
+function readFileAsText(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>resolve(reader.result);
+    reader.onerror = ()=>reject(reader.error);
+    reader.readAsText(file);
+  });
+}
+
+// Counterpart to exportProjectAsJson(). Validates the envelope, then either imports
+// straight away — the common "I deleted this and want it back exactly" case, where
+// nothing in the workspace collides with it — or asks the person to choose when it
+// would clash with a project that's already there.
+async function importProjectFromJsonFile(file){
+  let envelope;
+  try{
+    envelope = JSON.parse(await readFileAsText(file));
+  }catch(e){
+    toast('That file is not valid JSON.');
+    return;
+  }
+  if(!envelope || envelope.docTrackerExport !== true || !envelope.project || typeof envelope.project !== 'object'){
+    toast("That file doesn't look like a DocTracker project export.");
+    return;
+  }
+  if(envelope.formatVersion && envelope.formatVersion > DOCTRACKER_EXPORT_FORMAT_VERSION){
+    toast('This file was exported from a newer version of DocTracker — importing it here, but some fields may not carry over.');
+  }
+
+  let incoming = envelope.project;
+  delete incoming._readonly;
+  delete incoming._owned;
+  if(!incoming.id) incoming.id = uid();
+  if(!incoming.name || !incoming.name.trim()) incoming.name = 'Imported project';
+
+  const existingById = state.projects[incoming.id];
+  const existingByName = Object.values(state.projects).find(p=>p.name.toLowerCase() === (incoming.name||'').toLowerCase());
+  const conflict = existingById || existingByName;
+
+  let choice = null;
+  if(conflict){
+    choice = await openImportConflictModal(conflict.name);
+    if(!choice || choice === 'cancel') return;
+    if(choice === 'new'){
+      incoming = regenerateProjectIds(incoming);
+      if(existingByName) incoming.name = `${incoming.name} (imported)`;
+    } else if(choice === 'overwrite'){
+      incoming.id = conflict.id; // land in whichever slot the existing project occupies
+    }
+  }
+
+  ensureProjectDefaults(incoming);
+  state.projects[incoming.id] = incoming;
+  await apiSend('PUT', '/projects', { projects: { [incoming.id]: incoming } });
+  state.selected = { type:'overview', projectId: incoming.id };
+  renderAll();
+  logAudit('imported', 'project', incoming.name,
+    conflict ? `Imported project "${incoming.name}" (${choice==='overwrite' ? 'overwrote existing' : 'as a new project'})` : `Imported project "${incoming.name}"`,
+    incoming.name);
+  toast(`"${incoming.name}" imported — ${(incoming.endpoints||[]).length} endpoint${(incoming.endpoints||[]).length===1?'':'s'}.`);
+}
+

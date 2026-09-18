@@ -36,6 +36,30 @@ document.getElementById('confirmModal').addEventListener('click', (e)=>{
   if(e.target.id === 'confirmModal') closeConfirmModal(false);
 });
 
+// ---------- Import-conflict modal: "new project" vs "overwrite" vs "cancel" ----------
+// Used by importProjectFromJsonFile() (06-spec-parse.js) whenever the project being
+// imported collides — by id or by name — with one already in the workspace.
+// Resolves to 'new' | 'overwrite' | 'cancel'.
+let _importConflictResolve = null;
+function openImportConflictModal(existingName){
+  return new Promise(resolve=>{
+    _importConflictResolve = resolve;
+    document.getElementById('importConflictMsg').textContent =
+      `A project named "${existingName}" already exists in your workspace. What would you like to do with the imported file?`;
+    document.getElementById('importConflictModal').classList.add('show');
+  });
+}
+function closeImportConflictModal(result){
+  document.getElementById('importConflictModal').classList.remove('show');
+  if(_importConflictResolve){ _importConflictResolve(result); _importConflictResolve = null; }
+}
+document.getElementById('importConflictNew').addEventListener('click', ()=> closeImportConflictModal('new'));
+document.getElementById('importConflictOverwrite').addEventListener('click', ()=> closeImportConflictModal('overwrite'));
+document.getElementById('importConflictCancel').addEventListener('click', ()=> closeImportConflictModal('cancel'));
+document.getElementById('importConflictModal').addEventListener('click', (e)=>{
+  if(e.target.id === 'importConflictModal') closeImportConflictModal('cancel');
+});
+
 // ---------- Authorized reveal: reason prompt + audit event + auto-remask ----------
 // Every "eye" toggle in the app (env URLs, header secrets, code-sample rail)
 // funnels through this so revealing is never a silent client-side flip: it's
