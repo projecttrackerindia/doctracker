@@ -211,6 +211,14 @@ document.getElementById('btnLogout').addEventListener('click', async ()=>{
   window.location.href = '/login.html';
 });
 
+document.getElementById('btnCommandPalette').addEventListener('click', openPalette);
+// The stored ⌘K hint only makes sense on macOS — everywhere else the actual
+// shortcut is Ctrl+K (see the keydown handler below), so the visible hint
+// should match what the person's hand is actually pressing.
+if(!/Mac|iPod|iPhone|iPad/.test(navigator.platform)){
+  document.querySelector('#btnCommandPalette .kbd-hint').innerHTML = '<kbd>Ctrl</kbd><kbd>K</kbd>';
+}
+
 /* ---------- Command palette wiring ---------- */
 document.getElementById('paletteOverlay').addEventListener('click', (e)=>{ if(e.target.id === 'paletteOverlay') closePalette(); });
 document.getElementById('paletteInput').addEventListener('input', (e)=>renderPaletteResults(e.target.value));

@@ -195,6 +195,13 @@ function renderAuthorLabel(){
     pill.textContent = role.label;
     pill.className = 'role-pill role-' + role.id;
   }
+  const authorBtn = document.getElementById('btnAuthor');
+  if(authorBtn){
+    const role = roleMeta(state.authorRole);
+    authorBtn.title = state.authorName
+      ? `${state.authorName} · ${role.label} — click to view your profile`
+      : 'Set up your profile';
+  }
   applyRoleGatedUI();
 }
 
