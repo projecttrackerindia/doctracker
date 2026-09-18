@@ -537,30 +537,21 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
   const coverLogoDataUrl = (state.branding && state.branding.logoDataUrl) || null;
   const coverOrgLabel = (state.branding && state.branding.orgDisplayName && state.branding.orgDisplayName.trim()) || state.organisation || '';
   // Sized to the page's real usable content height (not just this block's own natural
-  // height) so the flex layout below has genuine full-page room to spread across —
-  // otherwise a short block would just hug the top of the page instead of reading as
-  // a deliberately spare, balanced cover. 860 is this container's fixed pixel width
-  // (see .pdf-print-root), so this converts the page's mm aspect ratio into px at
-  // that same scale.
-  // Deliberately conservative: target 90% of the page's usable height rather than
-  // shaving a fixed few px off 100%. The previous version (a fixed 10px margin off
-  // an exact 100% target) was verified correct in isolation — real Chrome, the real
-  // 'Inter' font stack, a worst-case tall logo aspect ratio — and still wasn't enough
-  // margin against whatever combination of real-world conditions (an actual deployed
-  // font, actual org/project name lengths, a caching layer serving a stale build,
-  // etc.) produced the same page-2 split again in practice. Rather than keep chasing
-  // an exact-fit number that has now been wrong twice, this leaves ~10% (well over
-  // 25mm) of genuine slack — a page-content atom this far under the limit cannot
-  // plausibly be pushed over by font metrics or minor content differences, and the
-  // extra unused whitespace on an already-spare cover page is not visible as a flaw.
+  // height) so justify-content:center in the CSS has genuine full-page room to center
+  // the (now much shorter) logo/org/meta group within — otherwise it would just hug
+  // the top of the page. 860 is this container's fixed pixel width (see .pdf-print-root),
+  // so this converts the page's mm aspect ratio into px at that same scale. Kept at 90%
+  // of the page's usable height (not a full 100%) as deliberate slack against real-world
+  // font-metric/content-length variance pushing the block onto a second page.
+  //
   // Page 1 now carries only the logo/org identity and the created/modified/generated
-  // meta block, grouped tightly together near the top of the page (not spread across
-  // the full page height) — the badge + project title have moved to the top of page 2,
-  // right above "Overview". data-pdf-force-page-break-after still guarantees page 1
-  // stands alone even though its content no longer fills the page.
+  // meta block, vertically centered as a group — the badge + project title have moved
+  // to the top of page 2, right above "Overview". data-pdf-force-page-break-after still
+  // guarantees page 1 stands alone even though its content no longer fills the page.
+  const coverBlankHeightPx = Math.floor(0.90 * (PDF_PAGE_CONTENT_HEIGHT_MM / PDF_CONTENT_WIDTH_MM) * 860);
   const coverBlankHtml = opts.includeOverview ? `
     <div class="pdf-atom" data-pdf-force-page-break-after>
-    <section class="pdf-cover-blank">
+    <section class="pdf-cover-blank" style="min-height:${coverBlankHeightPx}px;">
       <div class="pdf-cover-blank-top">
         ${coverLogoDataUrl ? `<img class="pdf-cover-blank-logo" src="${coverLogoDataUrl}" alt="">` : ''}
         ${coverOrgLabel ? `<div class="pdf-cover-blank-org">${escapeHtml(coverOrgLabel)}</div>` : ''}
