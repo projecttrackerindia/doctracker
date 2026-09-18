@@ -46,6 +46,17 @@ document.getElementById('fabNewProject').addEventListener('click', ()=>{
 document.getElementById('fabImportProject').addEventListener('click', ()=>{
   document.getElementById('fabDD').classList.remove('open');
   document.getElementById('btnFab').setAttribute('aria-expanded', 'false');
+  if(!canEditHere()){ toast(isViewingDraftEnv() ? `Your role (${roleMeta(state.authorRole).label}) is read-only` : `Switch to ${envMeta(draftEnvId()).label} to make changes`); return; }
+  document.getElementById('projectImportInput').click();
+});
+// Primary entry point — always visible in the top bar, unlike the FAB's copy of
+// this action, which only appears in the dropdown when a project is currently
+// in view (see updateFabIntent/currentProjectForEnvContext in 08-render-chrome.js).
+// Import is exactly the action someone reaches for when there's NO relevant
+// project open (e.g. right after deleting one, or from a blank Control Center),
+// so it can't depend on that context existing.
+document.getElementById('btnImportProjectTop').addEventListener('click', ()=>{
+  if(!canEditHere()){ toast(isViewingDraftEnv() ? `Your role (${roleMeta(state.authorRole).label}) is read-only` : `Switch to ${envMeta(draftEnvId()).label} to make changes`); return; }
   document.getElementById('projectImportInput').click();
 });
 document.getElementById('projectImportInput').addEventListener('change', (e)=>{
