@@ -966,7 +966,7 @@ router.put('/custom-icons', async (req, res) => {
 // Stored in `org_workspace.branding`, so it persists in Postgres across
 // restarts/redeploys rather than living only in a browser or on local disk.
 router.put('/branding', requireAdmin, async (req, res) => {
-  const { orgDisplayName, logoDataUrl } = req.body || {};
+  const { orgDisplayName, logoDataUrl, logoWidth, logoHeight } = req.body || {};
   if (orgDisplayName !== undefined && typeof orgDisplayName !== 'string') {
     return res.status(400).json({ error: 'orgDisplayName must be a string.' });
   }
@@ -985,13 +985,25 @@ router.put('/branding', requireAdmin, async (req, res) => {
     if (logoDataUrl.length > MAX_BRAND_LOGO_BYTES) {
       return res.status(400).json({ error: `Logo is too large (max ${Math.floor(MAX_BRAND_LOGO_BYTES / 1024)}KB after compression).` });
     }
+    // logoWidth/logoHeight: the logo's natural pixel dimensions, captured client-side
+    // at upload time — lets the PDF header/cover fit the logo to its real aspect
+    // ratio instead of assuming it's square. Optional (older clients may omit them),
+    // but when a fresh logoDataUrl is sent they should be sane positive numbers.
+    if (logoWidth !== undefined && logoWidth !== null && (typeof logoWidth !== 'number' || !(logoWidth > 0 && logoWidth <= 20000))) {
+      return res.status(400).json({ error: 'logoWidth must be a positive number.' });
+    }
+    if (logoHeight !== undefined && logoHeight !== null && (typeof logoHeight !== 'number' || !(logoHeight > 0 && logoHeight <= 20000))) {
+      return res.status(400).json({ error: 'logoHeight must be a positive number.' });
+    }
   }
   try {
     const existing = await pool.query(`SELECT branding FROM org_workspace WHERE organisation = $1`, [req.authUser.organisation]);
-    const prevLogo = (existing.rows[0] && existing.rows[0].branding && existing.rows[0].branding.logoDataUrl) || null;
+    const prevBranding = (existing.rows[0] && existing.rows[0].branding) || {};
     const branding = {
       orgDisplayName: (orgDisplayName || '').trim(),
-      logoDataUrl: logoDataUrl === undefined ? prevLogo : logoDataUrl,
+      logoDataUrl: logoDataUrl === undefined ? (prevBranding.logoDataUrl || null) : logoDataUrl,
+      logoWidth: logoDataUrl === undefined ? (prevBranding.logoWidth || null) : (logoDataUrl === null ? null : (logoWidth || null)),
+      logoHeight: logoDataUrl === undefined ? (prevBranding.logoHeight || null) : (logoDataUrl === null ? null : (logoHeight || null)),
       updatedAt: new Date().toISOString(),
       updatedBy: req.authUser.username || null,
     };

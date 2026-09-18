@@ -159,25 +159,39 @@ function splitTallCodeAtomsForPdf(container){
 // overlapped by the atom-pagination logic — it only ever touches the margin
 // band that logic was told (via PDF_MARGIN_TOP_MM/PDF_MARGIN_BOTTOM_MM above)
 // to leave empty.
-function pdfOrgLabel(){
-  const b = state.branding || {};
-  return (b.orgDisplayName && b.orgDisplayName.trim()) || state.organisation || 'DocTracker';
-}
-function pdfLogoDataUrl(){
-  const b = state.branding || {};
-  return b.logoDataUrl || null;
-}
 function pdfImageFormatFromDataUrl(dataUrl){
   if(/^data:image\/webp/i.test(dataUrl)) return 'WEBP';
   if(/^data:image\/jpe?g/i.test(dataUrl)) return 'JPEG';
   return 'PNG'; // the branding upload (12-security-center.js) always normalizes to PNG
 }
-function stampPdfPage(pdf, { pageNum, totalPages, proj, generatedAtStr, author }){
+const PDF_LOGO_MAX_W_MM = 30, PDF_LOGO_MAX_H_MM = 8; // the letterhead's logo box — fit-within, like CSS object-fit:contain, never a forced square
+// Resolves the logo's draw size in mm, preserving its real aspect ratio so a wide
+// banner-shaped logo doesn't get squashed into a square. Prefers branding.logoWidth/
+// logoHeight (captured at upload time — see 12-security-center.js); falls back to a
+// one-time async decode for logos saved before that existed, so older uploads don't
+// need to be re-uploaded to render correctly. Computed ONCE before the per-page
+// stamping loop in generateProjectPdf() — never per-page — since it never changes
+// across pages of the same export.
+function resolvePdfLogoBox(logoDataUrl, storedWidth, storedHeight){
+  return new Promise((resolve)=>{
+    const fit = (w, h)=>{
+      const aspect = (w > 0 && h > 0) ? (w / h) : 1;
+      return aspect >= (PDF_LOGO_MAX_W_MM / PDF_LOGO_MAX_H_MM)
+        ? { w: PDF_LOGO_MAX_W_MM, h: PDF_LOGO_MAX_W_MM / aspect }
+        : { h: PDF_LOGO_MAX_H_MM, w: PDF_LOGO_MAX_H_MM * aspect };
+    };
+    if(!logoDataUrl){ resolve(null); return; }
+    if(storedWidth > 0 && storedHeight > 0){ resolve(fit(storedWidth, storedHeight)); return; }
+    const img = new Image();
+    img.onload = ()=>resolve(fit(img.naturalWidth, img.naturalHeight));
+    img.onerror = ()=>resolve(fit(1, 1)); // couldn't decode it — fall back to a square rather than failing the export
+    img.src = logoDataUrl;
+  });
+}
+function stampPdfPage(pdf, { pageNum, totalPages, proj, generatedAtStr, author, orgLabel, logo, logoBox }){
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const marginX = PDF_MARGIN_X_MM;
-  const orgLabel = pdfOrgLabel();
-  const logo = pdfLogoDataUrl();
 
   // Outer page frame — a thin, professional border on every page. Inset far
   // enough from the edge (PDF_FRAME_INSET_MM) that it can never collide with
@@ -186,30 +200,32 @@ function stampPdfPage(pdf, { pageNum, totalPages, proj, generatedAtStr, author }
   pdf.setLineWidth(0.4);
   pdf.roundedRect(PDF_FRAME_INSET_MM, PDF_FRAME_INSET_MM, pageWidth - PDF_FRAME_INSET_MM * 2, pageHeight - PDF_FRAME_INSET_MM * 2, 2, 2, 'S');
 
-  // Letterhead: logo + org slug, top-left; project name, top-right.
-  const logoSizeMM = 8;
+  // Letterhead: logo (real aspect ratio, fit within an 8mm-tall/30mm-wide box) +
+  // org name top-left; project name top-right. Small size + subtle letter-spacing
+  // (charSpace) instead of large all-caps bold — a running header should read as
+  // quiet metadata, not a second title.
   const bandTop = 6;
   const headBaselineY = bandTop + PDF_LETTERHEAD_HEIGHT_MM / 2 + 1.2;
   let textStartX = marginX;
-  if(logo){
+  if(logo && logoBox){
     try{
-      pdf.addImage(logo, pdfImageFormatFromDataUrl(logo), marginX, bandTop + (PDF_LETTERHEAD_HEIGHT_MM - logoSizeMM) / 2, logoSizeMM, logoSizeMM);
-      textStartX = marginX + logoSizeMM + 3;
+      pdf.addImage(logo, pdfImageFormatFromDataUrl(logo), marginX, bandTop + (PDF_LETTERHEAD_HEIGHT_MM - logoBox.h) / 2, logoBox.w, logoBox.h);
+      textStartX = marginX + logoBox.w + 3;
     }catch(e){
       // A malformed/unsupported dataUrl shouldn't take the whole export down — fall back to text-only.
       console.warn('Could not draw org logo on PDF page', e);
     }
   }
   pdf.setFont('helvetica', 'bold');
-  pdf.setFontSize(11);
+  pdf.setFontSize(10);
   pdf.setTextColor(15, 20, 32); // #0f1420
-  pdf.text(orgLabel, textStartX, headBaselineY);
+  pdf.text(orgLabel, textStartX, headBaselineY, { charSpace: 0.05 });
   pdf.setFont('helvetica', 'normal');
-  pdf.setFontSize(8.5);
-  pdf.setTextColor(136, 144, 163); // #8890a3
-  pdf.text('API Documentation', textStartX, headBaselineY + 4.2);
+  pdf.setFontSize(7.5);
+  pdf.setTextColor(150, 155, 168);
+  pdf.text('API DOCUMENTATION', textStartX, headBaselineY + 4, { charSpace: 0.35 });
   pdf.setFontSize(9);
-  pdf.setTextColor(75, 84, 104); // #4b5468
+  pdf.setTextColor(90, 97, 115);
   pdf.text(proj.name || '', pageWidth - marginX, headBaselineY, { align:'right' });
 
   pdf.setDrawColor(226, 230, 238);
@@ -222,9 +238,9 @@ function stampPdfPage(pdf, { pageNum, totalPages, proj, generatedAtStr, author }
   pdf.setLineWidth(0.3);
   pdf.line(marginX, footerRuleY, pageWidth - marginX, footerRuleY);
   pdf.setFont('helvetica', 'normal');
-  pdf.setFontSize(8);
-  pdf.setTextColor(136, 144, 163);
-  pdf.text(`${proj.name || ''} \u00b7 Generated by DocTracker \u00b7 ${generatedAtStr} \u00b7 by ${author}`, marginX, footerRuleY + 4.5);
+  pdf.setFontSize(7.8);
+  pdf.setTextColor(150, 155, 168);
+  pdf.text(`${proj.name || ''} \u00b7 Generated by DocTracker \u00b7 ${generatedAtStr} \u00b7 by ${author}`, marginX, footerRuleY + 4.5, { charSpace: 0.03 });
   pdf.text(`Page ${pageNum} of ${totalPages}`, pageWidth - marginX, footerRuleY + 4.5, { align:'right' });
 }
 
@@ -350,12 +366,17 @@ async function generateProjectPdf(){
     // Every atom is placed now, and the page count is final — stamp the letterhead,
     // border, and page-numbered footer onto every page in one pass. See the "Native
     // per-page letterhead, footer, and border" comment above for why this happens
-    // here rather than inline with atom placement.
+    // here rather than inline with atom placement. The logo's fitted box is resolved
+    // once (not per page) since it's identical on every page of this export.
     setStage('Adding letterhead…');
+    const brand = state.branding || {};
+    const orgLabel = (brand.orgDisplayName && brand.orgDisplayName.trim()) || state.organisation || 'DocTracker';
+    const logo = brand.logoDataUrl || null;
+    const logoBox = await resolvePdfLogoBox(logo, brand.logoWidth, brand.logoHeight);
     const totalPages = pdf.internal.getNumberOfPages();
     for(let p = 1; p <= totalPages; p++){
       pdf.setPage(p);
-      stampPdfPage(pdf, { pageNum:p, totalPages, proj, generatedAtStr, author });
+      stampPdfPage(pdf, { pageNum:p, totalPages, proj, generatedAtStr, author, orgLabel, logo, logoBox });
     }
 
     setStage('Saving file…');

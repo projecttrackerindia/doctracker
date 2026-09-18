@@ -785,6 +785,7 @@ function renderProfilePage(main){
 const BRAND_LOGO_TARGET_PX = 240;       // rendered small (cover + a ~8mm page-header mark) — no need to carry a huge source photo through
 const MAX_BRAND_LOGO_BYTES_CLIENT = 250 * 1024; // mirrors MAX_BRAND_LOGO_BYTES in server/routes/workspace.js
 let brandPendingLogoDataUrl; // undefined = no change since last save; null = explicit "remove logo"; string = a newly-picked file, pre-compression-checked
+let brandPendingLogoWidth, brandPendingLogoHeight; // natural pixel size of brandPendingLogoDataUrl — lets the PDF header/cover fit the logo to its real aspect ratio instead of assuming it's square
 
 function renderBrandingSectionHtml(){
   const b = state.branding || {};
@@ -818,11 +819,14 @@ function renderBrandingSectionHtml(){
   `;
 }
 
-// Downscales to a small square on a canvas and re-encodes as PNG before it's
-// ever turned into a dataUrl (same reasoning as Architecture Studio's custom-icon
-// uploader) — plus jsPDF's addImage (used for the native per-page header) only
-// accepts raster PNG/JPEG/WebP, never SVG, so this deliberately always normalizes
-// to PNG rather than passing the source file's own format through untouched.
+// Downscales on a canvas and re-encodes as PNG before it's ever turned into a
+// dataUrl (same reasoning as Architecture Studio's custom-icon uploader) —
+// plus jsPDF's addImage (used for the native per-page header) only accepts
+// raster PNG/JPEG/WebP, never SVG, so this deliberately always normalizes to
+// PNG rather than passing the source file's own format through untouched.
+// Resolves the natural width/height alongside the dataUrl (rather than just
+// assuming a square) so the PDF header/cover can fit a wide banner-shaped
+// logo without squashing it into a square box.
 function brandFileToProcessedDataUrl(file){
   return new Promise((resolve, reject)=>{
     if(file.size > 5 * 1024 * 1024) return reject(new Error('That file is too large to read in (max 5MB before compression).'));
@@ -836,7 +840,7 @@ function brandFileToProcessedDataUrl(file){
         const canvas = document.createElement('canvas');
         canvas.width = w; canvas.height = h;
         canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/png', 0.92)); // PNG keeps transparency — most logos need it
+        resolve({ dataUrl: canvas.toDataURL('image/png', 0.92), width: w, height: h }); // PNG keeps transparency — most logos need it
       };
       img.onerror = ()=>reject(new Error('Could not read that image.'));
       img.src = reader.result; // data: URL — always allowed by this app's CSP
@@ -849,6 +853,8 @@ function wireBrandingSection(main){
   const zone = document.getElementById('brandLogoZone');
   if(!zone) return; // not rendered (non-admin) — nothing to wire
   brandPendingLogoDataUrl = undefined;
+  brandPendingLogoWidth = undefined;
+  brandPendingLogoHeight = undefined;
   const input = document.getElementById('brandLogoInput');
   const errEl = document.getElementById('brandError');
   const showBrandError = (msg)=>{ errEl.textContent = msg; errEl.style.display = 'block'; };
@@ -858,9 +864,11 @@ function wireBrandingSection(main){
     if(!file) return;
     if(!['image/png','image/jpeg','image/webp'].includes(file.type)){ showBrandError('Please choose a PNG, JPEG, or WebP file.'); return; }
     try{
-      const dataUrl = await brandFileToProcessedDataUrl(file);
+      const { dataUrl, width, height } = await brandFileToProcessedDataUrl(file);
       if(dataUrl.length > MAX_BRAND_LOGO_BYTES_CLIENT){ showBrandError('That image is still too large after compression — try a simpler source image.'); return; }
       brandPendingLogoDataUrl = dataUrl;
+      brandPendingLogoWidth = width;
+      brandPendingLogoHeight = height;
       const img = document.getElementById('brandLogoPreviewImg');
       img.src = dataUrl; img.style.display = '';
       document.getElementById('brandLogoPlaceholder').style.display = 'none';
@@ -877,6 +885,8 @@ function wireBrandingSection(main){
   const removeBtn = document.getElementById('brandRemoveBtn');
   if(removeBtn) removeBtn.addEventListener('click', ()=>{
     brandPendingLogoDataUrl = null;
+    brandPendingLogoWidth = null;
+    brandPendingLogoHeight = null;
     document.getElementById('brandLogoPreviewImg').style.display = 'none';
     document.getElementById('brandLogoPlaceholder').style.display = '';
   });
@@ -885,7 +895,11 @@ function wireBrandingSection(main){
     const btn = document.getElementById('brandSaveBtn');
     const nameVal = document.getElementById('brandNameInput').value.trim();
     const body = { orgDisplayName: nameVal };
-    if(brandPendingLogoDataUrl !== undefined) body.logoDataUrl = brandPendingLogoDataUrl;
+    if(brandPendingLogoDataUrl !== undefined){
+      body.logoDataUrl = brandPendingLogoDataUrl;
+      body.logoWidth = brandPendingLogoWidth;
+      body.logoHeight = brandPendingLogoHeight;
+    }
     const prevLabel = btn.textContent;
     btn.disabled = true; btn.textContent = 'Saving…';
     try{
