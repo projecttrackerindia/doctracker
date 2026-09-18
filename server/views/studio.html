@@ -682,7 +682,36 @@ kbd{
 /* ---------- Offscreen render target used to rasterize the PDF (light "shareable
    document" theme — kept separate from the app's dark UI so the exported file
    reads like real documentation rather than a screenshot of the app). ---------- */
-.pdf-print-root{ position:fixed; left:-9999px; top:0; width:860px; background:#ffffff; color:#0f1420; font-family:var(--sans); padding:40px 44px; z-index:-1; }
+.pdf-print-root{
+  position:fixed; left:-9999px; top:0; width:860px; background:#ffffff; color:#0f1420; font-family:var(--sans); padding:40px 44px; z-index:-1;
+  /* The export container is appended to <body>, so any CSS var() reference inside it
+     otherwise inherits the LIVE app's current theme — which defaults to dark (see
+     :root above). Most of this stylesheet avoids that by hardcoding colors, but a
+     PDF atom is built from shared functions also used by the live (often dark-mode)
+     UI — e.g. paramSection() in public/js/studio/14-users.js — so a stray var(--text)
+     etc. in one of those can silently resolve to a near-white dark-mode color and go
+     invisible against this always-white page. Redeclaring the full light palette here
+     makes every var() in this subtree resolve to a print-safe value regardless of the
+     app's active theme, instead of chasing down each call site individually.
+  */
+  --bg:#f5f6fa; --bg-elevated:#ffffff; --surface:#ffffff; --surface-2:#f1f3f8; --surface-hover:#e9ecf4;
+  --border:#e1e5ee; --border-strong:#ccd3e2;
+  --text:#12151f; --text-dim:#5a6479; --text-faint:#8993a8;
+  --accent:#4a5fe0; --accent-ink:#ffffff; --accent-soft:rgba(74,95,224,.09); --accent-soft-strong:rgba(74,95,224,.16);
+  --danger:#d13750; --danger-soft:rgba(209,55,80,.10);
+  --get:#1f6fd6; --get-bg:rgba(31,111,214,.10);
+  --post:#1c8f66; --post-bg:rgba(28,143,102,.10);
+  --put:#a06f10; --put-bg:rgba(160,111,16,.10);
+  --patch:#7a4fd1; --patch-bg:rgba(122,79,209,.10);
+  --delete:#d13750; --delete-bg:rgba(209,55,80,.10);
+  --env-dev:#5b6478; --env-dev-bg:rgba(91,100,120,.10);
+  --env-sit:#147f8c; --env-sit-bg:rgba(20,127,140,.10);
+  --env-uat:#6a4fe0; --env-uat-bg:rgba(106,79,224,.10);
+  --env-preprod:#a06f10; --env-preprod-bg:rgba(160,111,16,.10);
+  --env-prod:#d13750; --env-prod-bg:rgba(209,55,80,.10);
+  --env-dr:#9c3a79; --env-dr-bg:rgba(156,58,121,.10);
+  --st-2:#1c8f66; --st-3:#1f6fd6; --st-4:#a06f10; --st-5:#d13750;
+}
 .pdf-print-root *{ box-sizing:border-box; }
 .pdf-print-root .pdf-cover{ text-align:center; padding:10px 10px 30px; border-bottom:1px solid #e2e6ee; margin-bottom:24px; }
 .pdf-print-root .pdf-cover-meta-strip{ display:flex; justify-content:center; align-items:center; gap:9px; flex-wrap:wrap; font-size:11px; color:#4b5468; padding-bottom:16px; margin-bottom:22px; border-bottom:1px solid #e2e6ee; }
@@ -709,7 +738,18 @@ kbd{
 .pdf-print-root .pdf-toc-path{ font-family:var(--mono); color:#4b5468; word-break:break-all; }
 .pdf-print-root .pdf-section-title{ font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.6px; color:#8890a3; margin:18px 0 9px; }
 .pdf-print-root .pdf-endpoint{ padding:24px 0; border-bottom:1px solid #e2e6ee; }
-.pdf-print-root .pdf-ep-banner{ display:flex; align-items:center; gap:12px; padding:14px 16px; border-radius:11px; margin-bottom:13px; background:#f6f8fb; border:1px solid #e2e6ee; }
+.pdf-print-root .pdf-ep-banner{ display:flex; align-items:center; gap:12px; padding:14px 16px 14px 20px; border-radius:11px; margin-bottom:13px; background:#f6f8fb; border:1px solid #e2e6ee; position:relative; }
+.pdf-print-root .pdf-ep-banner::before{ content:''; position:absolute; left:0; top:8px; bottom:8px; width:4px; border-radius:3px; background:#c7cdda; }
+.pdf-print-root .pdf-ep-banner.grad-get{ background:linear-gradient(120deg, rgba(31,111,214,.09), #f6f8fb 65%); border-color:rgba(47,127,209,.28); }
+.pdf-print-root .pdf-ep-banner.grad-get::before{ background:#1f6fd6; }
+.pdf-print-root .pdf-ep-banner.grad-post{ background:linear-gradient(120deg, rgba(28,143,102,.09), #f6f8fb 65%); border-color:rgba(31,157,111,.28); }
+.pdf-print-root .pdf-ep-banner.grad-post::before{ background:#1c8f66; }
+.pdf-print-root .pdf-ep-banner.grad-put{ background:linear-gradient(120deg, rgba(160,111,16,.10), #f6f8fb 65%); border-color:rgba(177,121,31,.28); }
+.pdf-print-root .pdf-ep-banner.grad-put::before{ background:#a06f10; }
+.pdf-print-root .pdf-ep-banner.grad-patch{ background:linear-gradient(120deg, rgba(122,79,209,.10), #f6f8fb 65%); border-color:rgba(122,83,201,.28); }
+.pdf-print-root .pdf-ep-banner.grad-patch::before{ background:#7a4fd1; }
+.pdf-print-root .pdf-ep-banner.grad-delete{ background:linear-gradient(120deg, rgba(209,55,80,.09), #f6f8fb 65%); border-color:rgba(199,59,77,.28); }
+.pdf-print-root .pdf-ep-banner.grad-delete::before{ background:#d13750; }
 .pdf-print-root .pdf-ep-index{ font-family:var(--mono); font-size:10.5px; color:#8890a3; font-weight:700; }
 .pdf-print-root .pdf-ep-path{ font-family:var(--mono); font-size:14.5px; font-weight:600; color:#0f1420; word-break:break-all; }
 .pdf-print-root .pdf-ep-version{ margin-left:auto; font-family:var(--mono); font-size:10.5px; color:#8890a3; }
