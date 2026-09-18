@@ -555,12 +555,15 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
       <div class="pdf-cover-blank-top">
         ${coverLogoDataUrl ? `<img class="pdf-cover-blank-logo" src="${coverLogoDataUrl}" alt="">` : ''}
         ${coverOrgLabel ? `<div class="pdf-cover-blank-org">${escapeHtml(coverOrgLabel)}</div>` : ''}
+        <div class="pdf-cover-blank-projtag">${escapeHtml(proj.name)}</div>
       </div>
+      <div class="pdf-cover-blank-divider"></div>
       <div class="pdf-cover-blank-meta">
-        <div><span class="k">Created By</span>${escapeHtml(author)}</div>
-        <div><span class="k">Last Modified</span>${escapeHtml(lastModifiedStr)}</div>
-        <div><span class="k">Generated On</span>${escapeHtml(generatedAtStr)}</div>
+        <div class="row"><span class="k">Created By</span><span class="v">${escapeHtml(author)}</span></div>
+        <div class="row"><span class="k">Last Modified</span><span class="v">${escapeHtml(lastModifiedStr)}</span></div>
+        <div class="row"><span class="k">Generated On</span><span class="v">${escapeHtml(generatedAtStr)}</span></div>
       </div>
+      <div class="pdf-cover-blank-confidential">Confidential — Internal Use Only</div>
     </section>
     </div>` : '';
 
