@@ -542,7 +542,15 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
   // a deliberately spare, balanced cover. 860 is this container's fixed pixel width
   // (see .pdf-print-root), so this converts the page's mm aspect ratio into px at
   // that same scale.
-  const coverBlankHeightPx = Math.round((PDF_PAGE_CONTENT_HEIGHT_MM / PDF_CONTENT_WIDTH_MM) * 860);
+  // Math.floor (never round/ceil) plus an explicit safety margin: rounding UP even by
+  // a fraction of a px, once converted back to mm for the PDF, was enough to make this
+  // block register as very slightly taller than one page's usable height — which
+  // silently diverts it into the oversized-atom pixel-slicing path below instead of
+  // placing it as one clean page, cropping it at an arbitrary point (this is exactly
+  // how the cover's meta block ended up stranded alone on page 2). The margin trades a
+  // few mm of imperceptible extra tightness in the flex spacing for guaranteed headroom.
+  const coverBlankSafetyPx = 10;
+  const coverBlankHeightPx = Math.floor((PDF_PAGE_CONTENT_HEIGHT_MM / PDF_CONTENT_WIDTH_MM) * 860) - coverBlankSafetyPx;
   const coverBlankHtml = opts.includeOverview ? `
     <div class="pdf-atom" data-pdf-force-page-break-after>
     <section class="pdf-cover-blank" style="min-height:${coverBlankHeightPx}px;">
