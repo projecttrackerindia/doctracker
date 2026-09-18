@@ -83,7 +83,7 @@ const PDF_PAGE_WIDTH_MM = 210;   // A4 portrait
 const PDF_PAGE_HEIGHT_MM = 297;  // A4 portrait
 const PDF_MARGIN_X_MM = 12;
 const PDF_FRAME_INSET_MM = 5;        // outer bordered frame, inset from the physical page edge — sits entirely outside PDF_MARGIN_X_MM, so it never touches content
-const PDF_LETTERHEAD_HEIGHT_MM = 15; // reserved band at the top of every page for the org logo/slug letterhead + its rule line
+const PDF_LETTERHEAD_HEIGHT_MM = 11; // reserved band at the top of every page for the org logo/slug letterhead + its rule line — kept small/quiet since page 1 already carries the full-size branding moment
 const PDF_FOOTER_BAND_HEIGHT_MM = 10; // reserved band at the bottom of every page for the footer rule + page number
 // The letterhead and footer are drawn natively with jsPDF (see stampPdfPage below), stamped
 // once per finished physical page, well after every content "atom" has already been placed —
@@ -164,7 +164,7 @@ function pdfImageFormatFromDataUrl(dataUrl){
   if(/^data:image\/jpe?g/i.test(dataUrl)) return 'JPEG';
   return 'PNG'; // the branding upload (12-security-center.js) always normalizes to PNG
 }
-const PDF_LOGO_MAX_W_MM = 30, PDF_LOGO_MAX_H_MM = 8; // the letterhead's logo box — fit-within, like CSS object-fit:contain, never a forced square
+const PDF_LOGO_MAX_W_MM = 20, PDF_LOGO_MAX_H_MM = 5.5; // the running header's logo box — small and quiet; the cover page carries the large version
 // Resolves the logo's draw size in mm, preserving its real aspect ratio so a wide
 // banner-shaped logo doesn't get squashed into a square. Prefers branding.logoWidth/
 // logoHeight (captured at upload time — see 12-security-center.js); falls back to a
@@ -188,51 +188,51 @@ function resolvePdfLogoBox(logoDataUrl, storedWidth, storedHeight){
     img.src = logoDataUrl;
   });
 }
-function stampPdfPage(pdf, { pageNum, totalPages, proj, generatedAtStr, author, orgLabel, logo, logoBox }){
+function stampPdfPage(pdf, { pageNum, totalPages, proj, generatedAtStr, author, orgLabel, logo, logoBox, skipLetterhead }){
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const marginX = PDF_MARGIN_X_MM;
 
-  // Outer page frame — a thin, professional border on every page. Inset far
-  // enough from the edge (PDF_FRAME_INSET_MM) that it can never collide with
-  // content, which never draws closer to the edge than marginX.
+  // Outer page frame — a thin, professional border on every page, cover included.
+  // Inset far enough from the edge (PDF_FRAME_INSET_MM) that it can never collide
+  // with content, which never draws closer to the edge than marginX.
   pdf.setDrawColor(226, 230, 238); // #e2e6ee — this doc's own border color
   pdf.setLineWidth(0.4);
   pdf.roundedRect(PDF_FRAME_INSET_MM, PDF_FRAME_INSET_MM, pageWidth - PDF_FRAME_INSET_MM * 2, pageHeight - PDF_FRAME_INSET_MM * 2, 2, 2, 'S');
 
-  // Letterhead: logo (real aspect ratio, fit within an 8mm-tall/30mm-wide box) +
-  // org name top-left; project name top-right. Small size + subtle letter-spacing
-  // (charSpace) instead of large all-caps bold — a running header should read as
-  // quiet metadata, not a second title.
-  const bandTop = 6;
-  const headBaselineY = bandTop + PDF_LETTERHEAD_HEIGHT_MM / 2 + 1.2;
-  let textStartX = marginX;
-  if(logo && logoBox){
-    try{
-      pdf.addImage(logo, pdfImageFormatFromDataUrl(logo), marginX, bandTop + (PDF_LETTERHEAD_HEIGHT_MM - logoBox.h) / 2, logoBox.w, logoBox.h);
-      textStartX = marginX + logoBox.w + 3;
-    }catch(e){
-      // A malformed/unsupported dataUrl shouldn't take the whole export down — fall back to text-only.
-      console.warn('Could not draw org logo on PDF page', e);
+  // Running letterhead: logo (real aspect ratio) + org name top-left; project name
+  // top-right. Skipped on the cover page — it already carries its own, much larger
+  // branding moment, so repeating a second (smaller) logo+org row right above it
+  // would just be visual noise. Starts from page 2 instead, small and quiet: 8.5pt,
+  // subtle letter-spacing, a running header rather than a second title.
+  if(!skipLetterhead){
+    const bandTop = 6;
+    const headBaselineY = bandTop + PDF_LETTERHEAD_HEIGHT_MM / 2 + 1;
+    let textStartX = marginX;
+    if(logo && logoBox){
+      try{
+        pdf.addImage(logo, pdfImageFormatFromDataUrl(logo), marginX, bandTop + (PDF_LETTERHEAD_HEIGHT_MM - logoBox.h) / 2, logoBox.w, logoBox.h);
+        textStartX = marginX + logoBox.w + 2.5;
+      }catch(e){
+        // A malformed/unsupported dataUrl shouldn't take the whole export down — fall back to text-only.
+        console.warn('Could not draw org logo on PDF page', e);
+      }
     }
-  }
-  pdf.setFont('helvetica', 'bold');
-  pdf.setFontSize(10);
-  pdf.setTextColor(15, 20, 32); // #0f1420
-  pdf.text(orgLabel, textStartX, headBaselineY, { charSpace: 0.05 });
-  pdf.setFont('helvetica', 'normal');
-  pdf.setFontSize(7.5);
-  pdf.setTextColor(150, 155, 168);
-  pdf.text('API DOCUMENTATION', textStartX, headBaselineY + 4, { charSpace: 0.35 });
-  pdf.setFontSize(9);
-  pdf.setTextColor(90, 97, 115);
-  pdf.text(proj.name || '', pageWidth - marginX, headBaselineY, { align:'right' });
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(8.5);
+    pdf.setTextColor(15, 20, 32); // #0f1420
+    pdf.text(orgLabel, textStartX, headBaselineY, { charSpace: 0.04 });
+    pdf.setFontSize(8);
+    pdf.setTextColor(140, 146, 160);
+    pdf.text(proj.name || '', pageWidth - marginX, headBaselineY, { align:'right' });
 
-  pdf.setDrawColor(226, 230, 238);
-  pdf.setLineWidth(0.3);
-  pdf.line(marginX, bandTop + PDF_LETTERHEAD_HEIGHT_MM - 1, pageWidth - marginX, bandTop + PDF_LETTERHEAD_HEIGHT_MM - 1);
+    pdf.setDrawColor(226, 230, 238);
+    pdf.setLineWidth(0.3);
+    pdf.line(marginX, bandTop + PDF_LETTERHEAD_HEIGHT_MM - 1, pageWidth - marginX, bandTop + PDF_LETTERHEAD_HEIGHT_MM - 1);
+  }
 
   // Footer: rule line, generated-by/date/author on the left, page count on the right.
+  // Present on every page including the cover, so a loose page always identifies itself.
   const footerRuleY = pageHeight - PDF_FOOTER_BAND_HEIGHT_MM - 4;
   pdf.setDrawColor(226, 230, 238);
   pdf.setLineWidth(0.3);
@@ -361,6 +361,17 @@ async function generateProjectPdf(){
         pdf.addImage(imgData, 'JPEG', marginX, cursorY, imgWidth, imgHeight);
         cursorY += imgHeight + gapMM;
       }
+
+      // The cover page opts out of the normal "keep packing atoms onto this page
+      // until they stop fitting" flow: it's meant to stand alone (large logo, lots
+      // of quiet whitespace), never sharing a page with Overview/Stats/etc. just
+      // because there happened to be room left over. data-pdf-force-page-break-after
+      // forces the next atom onto a fresh page unconditionally, regardless of how
+      // little vertical space this one actually used.
+      if(atomEl.hasAttribute('data-pdf-force-page-break-after') && idx < atoms.length - 1){
+        pdf.addPage();
+        cursorY = marginTop;
+      }
     }
 
     // Every atom is placed now, and the page count is final — stamp the letterhead,
@@ -376,7 +387,7 @@ async function generateProjectPdf(){
     const totalPages = pdf.internal.getNumberOfPages();
     for(let p = 1; p <= totalPages; p++){
       pdf.setPage(p);
-      stampPdfPage(pdf, { pageNum:p, totalPages, proj, generatedAtStr, author, orgLabel, logo, logoBox });
+      stampPdfPage(pdf, { pageNum:p, totalPages, proj, generatedAtStr, author, orgLabel, logo, logoBox, skipLetterhead: p === 1 && opts.includeOverview });
     }
 
     setStage('Saving file…');
@@ -523,18 +534,42 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
       ${groups[tag].map(ep=>`<a class="pdf-toc-row" href="#ep-${escapeHtml(ep.id)}"><span class="badge ${methodClass(ep.method)}">${escapeHtml(ep.method)}</span><span class="pdf-toc-path">${escapeHtml(ep.path)}</span></a>`).join('')}
     </div>`).join('');
 
-  const coverHtml = opts.includeOverview ? `
-    <div class="pdf-atom">
-    <section class="pdf-cover">
-      <div class="pdf-cover-meta-strip">
-        <span><span class="k">Generated by</span>${escapeHtml(author)}</span>
-        <span class="sep">·</span>
-        <span><span class="k">Last modified</span>${escapeHtml(lastModifiedStr)}</span>
-        <span class="sep">·</span>
-        <span><span class="k">Generated on</span>${escapeHtml(generatedAtStr)}</span>
+  const coverLogoDataUrl = (state.branding && state.branding.logoDataUrl) || null;
+  const coverOrgLabel = (state.branding && state.branding.orgDisplayName && state.branding.orgDisplayName.trim()) || state.organisation || '';
+  // Sized to the page's real usable content height (not just this block's own natural
+  // height) so the flex layout below has genuine full-page room to spread across —
+  // otherwise a short block would just hug the top of the page instead of reading as
+  // a deliberately spare, balanced cover. 860 is this container's fixed pixel width
+  // (see .pdf-print-root), so this converts the page's mm aspect ratio into px at
+  // that same scale.
+  const coverBlankHeightPx = Math.round((PDF_PAGE_CONTENT_HEIGHT_MM / PDF_CONTENT_WIDTH_MM) * 860);
+  const coverBlankHtml = opts.includeOverview ? `
+    <div class="pdf-atom" data-pdf-force-page-break-after>
+    <section class="pdf-cover-blank" style="min-height:${coverBlankHeightPx}px;">
+      <div class="pdf-cover-blank-top">
+        ${coverLogoDataUrl ? `<img class="pdf-cover-blank-logo" src="${coverLogoDataUrl}" alt="">` : ''}
+        ${coverOrgLabel ? `<div class="pdf-cover-blank-org">${escapeHtml(coverOrgLabel)}</div>` : ''}
       </div>
-      <div class="pdf-cover-badge"><span class="dot"></span>DocTracker · ${escapeHtml(envLabel)} environment</div>
-      <h1>${escapeHtml(proj.name)}</h1>
+      <div class="pdf-cover-blank-mid">
+        <div class="pdf-cover-badge"><span class="dot"></span>DocTracker · ${escapeHtml(envLabel)} environment</div>
+        <h1>${escapeHtml(proj.name)}</h1>
+      </div>
+      <div class="pdf-cover-blank-meta">
+        <div><span class="k">Created By</span>${escapeHtml(author)}</div>
+        <div><span class="k">Last Modified</span>${escapeHtml(lastModifiedStr)}</div>
+        <div><span class="k">Generated On</span>${escapeHtml(generatedAtStr)}</div>
+      </div>
+    </section>
+    </div>` : '';
+
+  // Everything that used to live inside the cover atom itself (description, stats,
+  // the auth card, auth params, integration notes) now starts page 2 as an ordinary
+  // "Overview" section — same visual language as Lifecycle/Request flow below it —
+  // instead of being squeezed onto the now-deliberately-spare cover page.
+  const overviewHtml = opts.includeOverview ? `
+    <div class="pdf-atom">
+    <section>
+      <div class="pdf-section-title">Overview</div>
       <div class="pdf-cover-sub">${proj.description ? renderMarkdown(proj.description) : 'API documentation export.'}</div>
       <div class="pdf-cover-stats">
         <div class="pdf-cover-stat"><div class="n">${endpoints.length}</div><div class="l">Endpoints in this export</div></div>
@@ -542,15 +577,22 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
         <div class="pdf-cover-stat"><div class="n">${proj.auth && proj.auth.type ? escapeHtml(proj.auth.type) : 'None'}</div><div class="l">Authentication</div></div>
         <div class="pdf-cover-stat"><div class="n">${proj.lifecycle ? escapeHtml(proj.lifecycle) : '—'}</div><div class="l">Lifecycle</div></div>
       </div>
-      ${proj.auth && proj.auth.type ? `<div class="pdf-auth-card"><div class="ic">🔑</div><div><div class="h">${escapeHtml(proj.auth.type)}${proj.auth.headerName ? ' · '+escapeHtml(proj.auth.headerName)+' header' : ''}</div>${proj.auth.path ? `<div class="d" style="margin-top:4px;"><span class="badge ${methodClass(proj.auth.method||'POST')}" style="margin-right:8px;">${escapeHtml(proj.auth.method||'POST')}</span><span style="font-family:var(--mono);">${escapeHtml(proj.auth.path)}</span></div>` : ''}<div class="d">${proj.auth.description ? escapeHtml(proj.auth.description) : 'No further notes.'}</div></div></div>` : ''}
-      ${proj.auth && proj.auth.includeInDocs && ((proj.auth.requestParams||[]).length || (proj.auth.responseParams||[]).length) ? `
-      <div style="text-align:left; max-width:640px; margin:14px auto 0;">
-        ${paramSection('Auth request parameters', proj.auth.requestParams||[])}
-        ${paramSection('Auth response parameters', proj.auth.responseParams||[])}
-      </div>` : ''}
-      ${opts.includeNotes && proj.notes ? `<div class="pdf-notes-card"><div class="pdf-notes-title">Integration notes</div><div class="pdf-notes-body">${escapeHtml(proj.notes)}</div></div>` : ''}
     </section>
     </div>
+    ${proj.auth && proj.auth.type ? `<div class="pdf-atom"><div class="pdf-auth-card"><div class="ic">🔑</div><div><div class="h">${escapeHtml(proj.auth.type)}${proj.auth.headerName ? ' · '+escapeHtml(proj.auth.headerName)+' header' : ''}</div>${proj.auth.path ? `<div class="d" style="margin-top:4px;"><span class="badge ${methodClass(proj.auth.method||'POST')}" style="margin-right:8px;">${escapeHtml(proj.auth.method||'POST')}</span><span style="font-family:var(--mono);">${escapeHtml(proj.auth.path)}</span></div>` : ''}<div class="d">${proj.auth.description ? escapeHtml(proj.auth.description) : 'No further notes.'}</div></div></div></div>` : ''}
+    ${proj.auth && proj.auth.includeInDocs && ((proj.auth.requestParams||[]).length || (proj.auth.responseParams||[]).length) ? `
+    <div class="pdf-atom">
+    <div style="text-align:left; max-width:640px; margin:0 auto;">
+      ${paramSection('Auth request parameters', proj.auth.requestParams||[])}
+      ${paramSection('Auth response parameters', proj.auth.responseParams||[])}
+    </div>
+    </div>` : ''}
+    ${opts.includeNotes && proj.notes ? `<div class="pdf-atom"><div class="pdf-notes-card"><div class="pdf-notes-title">Integration notes</div><div class="pdf-notes-body">${escapeHtml(proj.notes)}</div></div></div>` : ''}
+  ` : '';
+
+  const coverHtml = opts.includeOverview ? `
+    ${coverBlankHtml}
+    ${overviewHtml}
     ${lifecycleHtml}
     ${requestFlowHtml}
     ${endpointsHistoryHtml}
