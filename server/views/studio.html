@@ -2924,8 +2924,17 @@ pre.json-raw{ max-height:360px; margin:0; }
         </span>
         <span class="item-sub">Starts blank</span>
       </button>
+      <div class="ep-actions-divider"></div>
+      <button type="button" class="ep-actions-item" id="fabImportProject" role="menuitem">
+        <span class="item-label">
+          <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg></span>
+          <span>Import project (JSON)</span>
+        </span>
+        <span class="item-sub">Restore a project export</span>
+      </button>
     </div>
   </div>
+  <input type="file" id="projectImportInput" accept=".json" style="display:none;">
 
   <div class="sidebar" id="sidebar">
     <button type="button" class="sidebar-edge-toggle" id="btnSidebarEdgeToggle" aria-expanded="true" aria-controls="sidebar" title="Collapse sidebar (Ctrl/Cmd+B)">
@@ -3270,6 +3279,18 @@ pre.json-raw{ max-height:360px; margin:0; }
         <button type="button" id="confirmModalCancel">Cancel</button>
         <button type="button" class="danger" id="confirmModalOk">Delete</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="importConflictModal">
+  <div class="modal" style="width:420px;">
+    <h2>Project already exists</h2>
+    <div class="modal-sub" id="importConflictMsg" style="margin-bottom:22px;"></div>
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <button type="button" class="primary" id="importConflictNew" style="width:100%;">Import as a new project</button>
+      <button type="button" id="importConflictOverwrite" style="width:100%;">Overwrite the existing project</button>
+      <button type="button" id="importConflictCancel" style="width:100%;">Cancel</button>
     </div>
   </div>
 </div>
