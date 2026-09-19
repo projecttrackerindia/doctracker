@@ -407,7 +407,7 @@ async function generateProjectPdf(){
   }
 }
 
-function buildExportPdfEndpointSection(proj, ep, index){
+function buildExportPdfEndpointSection(proj, ep, index, env){
   const mClass = methodClass(ep.method);
   const pathParams = (ep.parameters||[]).filter(p=>p.in==='path');
   const queryParams = (ep.parameters||[]).filter(p=>!p.in || p.in==='query');
@@ -416,6 +416,16 @@ function buildExportPdfEndpointSection(proj, ep, index){
 
   const hasReqBody = !!(ep.requestBody && ep.requestBody.example);
   const responses = ep.responses || [];
+
+  // Each endpoint gets its own Request flow section — its own flows if it
+  // has any, otherwise it falls back to the project's (see
+  // resolveRequestFlows's ep parameter), same as the on-screen doc page.
+  const epRequestFlowHtml = `
+    <div class="pdf-atom">
+    <section>
+      ${pdfRequestFlowSectionInnerHtml(proj, env, ep)}
+    </section>
+    </div>`;
 
   return `
   <section class="pdf-endpoint" id="ep-${escapeHtml(ep.id)}">
@@ -434,6 +444,8 @@ function buildExportPdfEndpointSection(proj, ep, index){
         <span class="pdf-chip">${escapeHtml(envMeta(state.env).label)} environment</span>
       </div>
     </div>
+
+    ${epRequestFlowHtml}
 
     <div class="pdf-atom" data-pdf-code-chunkable data-pdf-chunk-label="Request" data-pdf-chunk-sub="host masked unless revealed by an Admin">
       <div class="pdf-code-card">
@@ -601,7 +613,7 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
     </section>
     </div>` : '';
 
-  const endpointsHtml = endpoints.map((ep,i)=>buildExportPdfEndpointSection(proj, ep, i)).join('');
+  const endpointsHtml = endpoints.map((ep,i)=>buildExportPdfEndpointSection(proj, ep, i, env)).join('');
 
   // No trailing "pdf-footer" HTML atom here anymore — the native per-page footer
   // stamped in stampPdfPage() (see generateProjectPdf()) now carries this same

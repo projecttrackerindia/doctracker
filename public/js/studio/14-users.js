@@ -1217,6 +1217,11 @@ function renderEndpointDoc(main, proj, ep){
       </div>
     </div>`;
 
+  const epRequestFlowHtml = `
+    <div class="section">
+      ${requestFlowSectionInnerHtml(proj, envMeta(state.env), ep)}
+    </div>`;
+
   main.innerHTML = `
     <div class="crumb">${escapeHtml(proj.name)} <span class="sep">/</span> ${escapeHtml(ep.tag)} <span class="env-chip">${envMeta(state.env).label}</span></div>
     ${!isViewingDraftEnv() ? `
@@ -1263,6 +1268,8 @@ function renderEndpointDoc(main, proj, ep){
     ${apiOverviewHtml}
 
     ${authSectionHtml}
+
+    ${epRequestFlowHtml}
 
     ${headersHtml ? `<div class="section"><div class="section-title">Headers</div>${headersHtml}</div>` : ''}
 

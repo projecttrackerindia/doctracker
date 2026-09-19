@@ -414,6 +414,18 @@ html{ scroll-behavior:smooth; }
     </div>
   </div>
 
+  <!-- This endpoint's own flow diagram — separate from the project-wide
+       Request flows below (Project details), which every endpoint falls
+       back to when this is left empty. Shown on this endpoint's doc page
+       and in its own section of the PDF export. -->
+  <div class="card section-anchor" id="cardEpFlow">
+    <div class="card-head"><div class="card-title">This endpoint's flow diagram</div></div>
+    <div class="hint" style="margin-bottom:10px;">Optional — describes this endpoint's own request flow, shown on this endpoint's page and in its own PDF section. Leave empty to fall back to the project-wide Request flows below.</div>
+    <div class="field" style="margin-bottom:0;">
+      <div id="fEpFlowsRoot"></div>
+    </div>
+  </div>
+
   <!-- API-level (info.) description — the Overview / Flow / Authentication
        markdown shown on the project's rendered Overview page. Shared across
        every endpoint in the project, same as "Description" used to be in
@@ -924,6 +936,10 @@ const LIFECYCLE_STAGES = ['DRAFT','DESIGN','DEVELOPMENT','SIT','UAT','PRE-PROD',
 // public/js/studio/03-notifications.js (falls back to the legacy single chain,
 // then to the default Client/Gateway/Flow/Downstream template).
 const flowEditor = FlowEditor.create({ root: document.getElementById('fFlowsRoot') });
+// This endpoint's own flow diagram — separate instance/mount, backed by
+// ep.requestFlows (not proj.requestFlows). Empty means "use the project's
+// flows", handled by resolveRequestFlows's ep fallback.
+const epFlowEditor = FlowEditor.create({ root: document.getElementById('fEpFlowsRoot') });
 
 function exampleValueFor(type, example){
   if(example !== undefined && example !== '' && example !== null) return coerceByType(type, example);
@@ -1162,11 +1178,13 @@ async function boot(){
     endpointId = ep.id;
     loadedUpdatedAt = ep.updatedAt || null;
     fillFormFromEndpoint(proj, ep);
+    epFlowEditor.load(ep);
     applyTryItPrefillIfAny(ep.id);
   } else {
     // Brand new endpoint — start from one empty response block, same default
     // shape the rest of the app expects an endpoint to have.
     addBlock('response', { code:200, description:'', example:'', fields:[] });
+    epFlowEditor.load({});
   }
 
   renderAttribution(proj, ep);
@@ -2071,6 +2089,10 @@ async function performSave(force){
 
     const now = new Date().toISOString();
     const fields = gatherEndpointFromForm();
+    // This endpoint's own flow diagram (separate from the project-wide one
+    // applied to `proj` above) — empty collect() result means "none set",
+    // so resolveRequestFlows falls back to the project's flows for display.
+    fields.requestFlows = epFlowEditor.collect();
     const actor = AUTH_USER.username || 'Unknown';
     let savedEpId = endpointId;
 

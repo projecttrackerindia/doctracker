@@ -116,8 +116,8 @@ function rfHopLabel(text, cx, y, kind, pdf){
 // diagram per flow (each with its name + "when it runs" line when the project
 // defines several), and the legend. Projects without requestFlows resolve to a
 // single legacy/default flow and look exactly as before.
-function requestFlowSectionInnerHtml(proj, env){
-  const res = resolveRequestFlows(proj, env);
+function requestFlowSectionInnerHtml(proj, env, ep){
+  const res = resolveRequestFlows(proj, env, ep);
   const multi = res.flows.length > 1;
   const anyTwoWay = res.flows.some(f => f.pattern === '2-way');
   const sub = res.custom
@@ -357,8 +357,8 @@ function pdfLifecycleWheelSvg(currentStage){
 }
 
 // PDF counterpart of requestFlowSectionInnerHtml (print-safe colors).
-function pdfRequestFlowSectionInnerHtml(proj, env){
-  const res = resolveRequestFlows(proj, env);
+function pdfRequestFlowSectionInnerHtml(proj, env, ep){
+  const res = resolveRequestFlows(proj, env, ep);
   const multi = res.flows.length > 1;
   const anyTwoWay = res.flows.some(f => f.pattern === '2-way');
   const sub = res.custom ? `${res.flows.length} flow${multi ? 's' : ''}` : res.flows[0].caption;

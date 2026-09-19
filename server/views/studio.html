@@ -3126,6 +3126,23 @@ pre.json-raw{ max-height:360px; margin:0; }
       <textarea id="mDesc" placeholder="What this endpoint does…" style="min-height:80px;"></textarea>
     </div>
 
+    <!-- Per-endpoint request flow — unlike Project details below, this is
+         NOT shared: it's this one endpoint's own diagram, shown in its doc
+         page and its own section of the PDF export. Leave empty to fall
+         back to the project's Request flows (Project details, below), same
+         as the Overview page does. -->
+    <div class="builder-section">
+      <div class="builder-head">
+        <span class="builder-title">This endpoint's flow diagram <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— shown on this endpoint's page and in its own PDF section</span></span>
+      </div>
+      <div class="builder-body" style="padding:14px 14px 4px;">
+        <div class="field">
+          <div id="mEpFlowsRoot"></div>
+          <div class="hint" style="margin-top:6px;">Optional — describes this endpoint's own request flow. If left empty, this endpoint falls back to the project-wide Request flows set below (Project details), same as the project Overview page.</div>
+        </div>
+      </div>
+    </div>
+
     <!-- API-level (info.) description — this is the field that ends up in the
          generated YAML's top-level `info.description`, not the endpoint's own
          description above. It's shared across every endpoint in the project,

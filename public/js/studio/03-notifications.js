@@ -735,13 +735,13 @@ function resolveFlowStages(proj, env){
 // builder in public/js/flow-editor.js.
 //
 // Returns { custom, flows:[{ name, when, pattern, caption, stages }] }.
-// `custom` is false when the project has no requestFlows: it then resolves to
-// ONE flow built from the legacy requestFlowStages / requestFlowDirection /
-// requestFlowLabel (or the default four-box template), so projects saved
-// before multi-flow existed render exactly as they did.
-function resolveRequestFlows(proj, env){
-  const raw = Array.isArray(proj && proj.requestFlows) ? proj.requestFlows : [];
-  const flows = raw.map(f => {
+// `custom` is false when neither the endpoint nor the project has any
+// requestFlows: it then resolves to ONE flow built from the legacy
+// requestFlowStages / requestFlowDirection / requestFlowLabel (or the
+// default four-box template), so projects saved before multi-flow existed
+// render exactly as they did.
+function normalizeRawFlows(raw){
+  return (Array.isArray(raw) ? raw : []).map(f => {
     const stages = (Array.isArray(f && f.stages) ? f.stages : [])
       .filter(s => s && (s.k || (s.systems || []).length))
       .map(s => ({
@@ -768,6 +768,17 @@ function resolveRequestFlows(proj, env){
       stages,
     };
   }).filter(f => f.stages.length);
+}
+// `ep` is optional: when it has its own requestFlows, they take precedence
+// over the project's — each endpoint can have its own flow diagram (e.g. one
+// endpoint's own token exchange), shown on that endpoint's doc page and in
+// its own PDF section, instead of every endpoint being stuck sharing the
+// one project-wide diagram. An endpoint with no requestFlows of its own
+// falls straight back to the project's, same as before.
+function resolveRequestFlows(proj, env, ep){
+  const epFlows = normalizeRawFlows(ep && ep.requestFlows);
+  if(epFlows.length) return { custom: true, flows: epFlows };
+  const flows = normalizeRawFlows(proj && proj.requestFlows);
   if(flows.length) return { custom: true, flows };
   const preset = resolveFlowDirection(proj);
   return {

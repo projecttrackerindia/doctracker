@@ -428,6 +428,10 @@ let currentEndpointProject = null;
 // (10-metrics.js) — an empty list falls back to the default Client/Gateway/
 // Flow/Downstream template.
 const endpointFlowEditor = FlowEditor.create({ root: document.getElementById('mFlowsRoot') });
+// Per-endpoint flow diagram — separate instance/mount from the project-wide
+// one above. Backed by ep.requestFlows (not proj.requestFlows). Empty means
+// "use the project's flows", handled by resolveRequestFlows's ep fallback.
+const epFlowEditor = FlowEditor.create({ root: document.getElementById('mEpFlowsRoot') });
 
 function hydrateEndpointProjectFields(proj){
   currentEndpointProject = proj;
@@ -511,6 +515,7 @@ function openManualModal(epId){
     builderReqExamples = (ep.requestBody && ep.requestBody.examples || []).map(ex=>({id:uid(), name:ex.name||'', value:ex.value||'', condition: ex.condition ? {...ex.condition} : null}));
 
     document.getElementById('mBody').value = (ep.requestBody && ep.requestBody.example) || '';
+    epFlowEditor.load(ep);
   } else {
     title.textContent = 'Add endpoint';
     deleteBtn.classList.add('hidden');
@@ -519,6 +524,7 @@ function openManualModal(epId){
     document.getElementById('mContentType').value = 'application/json';
     document.getElementById('mVisibility').value = 'private';
     clearEndpointProjectFields();
+    epFlowEditor.load({});
     if(state.selected && state.selected.type==='overview'){
       const proj = state.projects[state.selected.projectId];
       if(proj){
@@ -566,6 +572,10 @@ function saveManualEndpoint(){
   if(proj._readonly){ toast("You can only view this project — it's public content from someone else in your organisation."); return; }
   const fields = gatherFormAsEndpoint();
   fields.path = path;
+  // This endpoint's own flow diagram (separate from the project-wide one
+  // applied to `proj` below) — empty collect() result means "none set",
+  // so resolveRequestFlows falls back to the project's flows for display.
+  fields.requestFlows = epFlowEditor.collect();
 
   // The API-level description and all "Project details" / "Authentication"
   // fields below live on the project, not the endpoint — persisting them
