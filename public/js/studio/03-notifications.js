@@ -751,6 +751,14 @@ function resolveRequestFlows(proj, env){
         mid: !!s.mid,
         next: typeof s.next === 'string' ? s.next.trim() : '',
         back: typeof s.back === 'string' ? s.back.trim() : '',
+        // Optional side branch (e.g. a token fetch this stage does off to the
+        // side) — drawn above the stage in requestFlowSvg. See flow-editor.js.
+        token: (s.token && (s.token.k || (s.token.systems||[]).length || s.token.note)) ? {
+          k: s.token.k || 'Token',
+          systems: (Array.isArray(s.token.systems) && s.token.systems.length) ? s.token.systems : [],
+          icon: s.token.icon || 'custom',
+          note: typeof s.token.note === 'string' ? s.token.note.trim() : '',
+        } : null,
       }));
     return {
       name: typeof f.name === 'string' ? f.name.trim() : '',

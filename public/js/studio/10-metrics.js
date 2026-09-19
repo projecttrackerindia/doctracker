@@ -138,20 +138,65 @@ function requestFlowSectionInnerHtml(proj, env){
       </div>`;
 }
 
+// A stage's optional "token" side branch: a small box drawn above the main
+// row with a connector down into the stage, for a one-hop side exchange
+// (e.g. "this stage also fetches/caches a token") that doesn't need a whole
+// separate flow of its own. `pdf` picks print-safe inline styling instead of
+// the themed CSS classes used on-screen.
+function rfTokenBranchSvg(cx, token, topPad, mainBoxTopY, pdf){
+  const boxW = 132, boxH = 48, iconR = 12;
+  const boxY = topPad;
+  const iconCy = boxY + iconR + 7;
+  const systems = Array.isArray(token.systems) ? token.systems : [];
+  const icon = RF_ICONS[token.icon] || RF_ICONS.custom;
+  const connX = cx, connY1 = boxY + boxH, connY2 = mainBoxTopY;
+  const noteY = (connY1 + connY2) / 2;
+  const rect = pdf
+    ? `<rect x="${cx-boxW/2}" y="${boxY}" width="${boxW}" height="${boxH}" rx="9" fill="#ffffff" stroke="#5c7cfa" stroke-width="1.3"></rect>`
+    : `<rect x="${cx-boxW/2}" y="${boxY}" width="${boxW}" height="${boxH}" rx="9" class="rf-token-rect"></rect>`;
+  const ring = pdf
+    ? `<circle cx="${cx}" cy="${iconCy}" r="${iconR}" fill="#f6f8fb" stroke="#c7ccd8" stroke-width="1.1"></circle>
+       <g transform="translate(${cx},${iconCy})" stroke="#4b5468" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round">${icon}</g>`
+    : `<circle cx="${cx}" cy="${iconCy}" r="${iconR}" class="rf-icon-ring"></circle>
+       <g transform="translate(${cx},${iconCy})" class="rf-icon">${icon}</g>`;
+  const kLabel = pdf
+    ? `<text x="${cx}" y="${iconCy+iconR+9}" text-anchor="middle" font-size="7.5px" letter-spacing=".5px" font-weight="700" fill="#8890a3">${escapeHtml(String(token.k||'TOKEN').toUpperCase())}</text>`
+    : `<text x="${cx}" y="${iconCy+iconR+9}" text-anchor="middle" class="rf-token-k">${escapeHtml(String(token.k||'TOKEN').toUpperCase())}</text>`;
+  const valueLine = systems.length
+    ? (pdf
+      ? `<text x="${cx}" y="${boxY+boxH-6}" text-anchor="middle" font-size="10px" font-weight="700" fill="#0f1420">${escapeHtml(systems[0])}</text>`
+      : `<text x="${cx}" y="${boxY+boxH-6}" text-anchor="middle" class="rf-box-v" style="font-size:10px;">${escapeHtml(systems[0])}</text>`)
+    : '';
+  const line = pdf
+    ? `<line x1="${connX}" y1="${connY1}" x2="${connX}" y2="${connY2-8}" stroke="#5c7cfa" stroke-width="1.4" opacity="0.55"></line>`
+    : `<line x1="${connX}" y1="${connY1}" x2="${connX}" y2="${connY2-8}" class="rf-line"></line>`;
+  const head = pdf
+    ? `<polygon points="${connX-4},${connY2-8} ${connX+4},${connY2-8} ${connX},${connY2}" fill="#5c7cfa" opacity="0.7"></polygon>`
+    : `<polygon points="${connX-4},${connY2-8} ${connX+4},${connY2-8} ${connX},${connY2}" class="rf-arrowhead"></polygon>`;
+  const note = rfHopLabel(token.note, connX - boxW/2 - 6, noteY - 4, 'fwd', pdf)
+    .replace('text-anchor="middle"', 'text-anchor="end"');
+  return `<g class="rf-token">${rect}${ring}${kLabel}${valueLine}${line}${head}${note}</g>`;
+}
+
 function requestFlowSvg(stages, direction){
-  // stages: [{k, systems:[...], icon, mid}, ...] left-to-right. `systems` is
-  // ALWAYS an array now — a stage with more than one entry (e.g. two source
+  // stages: [{k, systems:[...], icon, mid, token}, ...] left-to-right. `systems`
+  // is ALWAYS an array now — a stage with more than one entry (e.g. two source
   // systems feeding the same gateway, or two downstream targets) renders
   // them stacked as separate lines in the same box rather than needing a
   // separate box per system, which keeps the diagram a simple straight
-  // chain regardless of how many systems sit at any one stage.
+  // chain regardless of how many systems sit at any one stage. `token` is an
+  // optional side branch (see rfTokenBranchSvg) — a small box drawn above the
+  // stage for a one-hop side exchange that doesn't need a whole separate flow.
   // direction: '1-way' (forward arrows only) or '2-way' (forward + return arrows).
   const n = stages.length;
   // Arrow labels (stage.next / stage.back) need room to sit above/below the
   // connector, so the gap between boxes widens when any hop is labelled.
   const hasHops = stages.slice(0,-1).some(s => s.next || (direction==='2-way' && s.back));
   const boxW = 152, gap = hasHops ? 150 : 68, padX = 22;
-  const iconR = 16, topPad = 8;
+  const iconR = 16;
+  const hasTokens = stages.some(s => s.token);
+  const tokenBoxH = 48, tokenConnLen = 20, tokenTopPad = 8;
+  const topPad = hasTokens ? (tokenTopPad + tokenBoxH + tokenConnLen) : 8;
   const iconCy = topPad + iconR;
   const boxY = iconCy + iconR + 12;
   const baseBoxH = 62, lineH = 15, maxShown = 3;
@@ -181,6 +226,7 @@ function requestFlowSvg(stages, direction){
       ? `<text x="${cx}" y="${boxY+42+s.shown.length*lineH}" text-anchor="middle" class="rf-box-v rf-box-more">+${s.extraCount} more</text>`
       : '');
     const fullList = s.systems.join(', ');
+    const tokenBranch = s.token ? rfTokenBranchSvg(cx, s.token, tokenTopPad, boxY, false) : '';
     return `<g class="rf-box${mid?' rf-box-mid':''}">
       <circle cx="${cx}" cy="${iconCy}" r="${iconR+7}" class="rf-icon-glow${mid?' mid-glow':''}"></circle>
       <rect x="${x}" y="${boxY}" width="${boxW}" height="${s.boxH}" rx="10" class="rf-box-rect${mid?' mid':''}"></rect>
@@ -189,6 +235,7 @@ function requestFlowSvg(stages, direction){
       <text x="${cx}" y="${boxY+22}" text-anchor="middle" class="rf-box-k${mid?' mid-k':''}">${escapeHtml(String(s.k).toUpperCase())}</text>
       ${valueLines}
       ${(s.systems.length > 1) ? `<title>${escapeHtml(fullList)}</title>` : ''}
+      ${tokenBranch}
     </g>`;
   }).join('');
 
@@ -336,7 +383,10 @@ function pdfRequestFlowSvg(stages, direction){
   // connector, so the gap between boxes widens when any hop is labelled.
   const hasHops = stages.slice(0,-1).some(s => s.next || (direction==='2-way' && s.back));
   const boxW = 152, gap = hasHops ? 150 : 68, padX = 22;
-  const iconR = 16, topPad = 8;
+  const iconR = 16;
+  const hasTokens = stages.some(s => s.token);
+  const tokenBoxH = 48, tokenConnLen = 20, tokenTopPad = 8;
+  const topPad = hasTokens ? (tokenTopPad + tokenBoxH + tokenConnLen) : 8;
   const iconCy = topPad + iconR;
   const boxY = iconCy + iconR + 12;
   const baseBoxH = 62, lineH = 15, maxShown = 3;
@@ -363,6 +413,7 @@ function pdfRequestFlowSvg(stages, direction){
     ).join('') + (s.extraCount>0
       ? `<text x="${cx}" y="${boxY+42+s.shown.length*lineH}" text-anchor="middle" font-size="10.5px" font-weight="600" fill="#8890a3">+${s.extraCount} more</text>`
       : '');
+    const tokenBranch = s.token ? rfTokenBranchSvg(cx, s.token, tokenTopPad, boxY, true) : '';
     return `<g>
       <circle cx="${cx}" cy="${iconCy}" r="${iconR+7}" fill="${mid?'rgba(92,124,250,.14)':'#eef1f6'}"></circle>
       <rect x="${x}" y="${boxY}" width="${boxW}" height="${s.boxH}" rx="10" fill="#ffffff" stroke="${mid?accent:'#e2e6ee'}" stroke-width="${mid?1.6:1.2}"></rect>
@@ -370,6 +421,7 @@ function pdfRequestFlowSvg(stages, direction){
       <g transform="translate(${cx},${iconCy})" stroke="${mid?accent:'#4b5468'}" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round">${icon}</g>
       <text x="${cx}" y="${boxY+22}" text-anchor="middle" font-size="8.5px" letter-spacing=".6px" font-weight="700" fill="${mid?accent:'#8890a3'}">${escapeHtml(String(s.k).toUpperCase())}</text>
       ${valueLines}
+      ${tokenBranch}
     </g>`;
   }).join('');
 

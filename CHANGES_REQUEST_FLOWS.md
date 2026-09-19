@@ -12,9 +12,15 @@ describe each of those as its own **flow**.
 
 - `name` / `when` — what the flow is and when it runs (shown above its diagram)
 - `direction` — `'1-way'` or `'2-way'` (per flow)
-- `stages[]` — `{ k, systems[], icon, mid, next, back }`
+- `stages[]` — `{ k, systems[], icon, mid, next, back, token }`
   - `next` — label on the arrow leaving this stage toward the next one
   - `back` — label on the return arrow (two-way flows only)
+  - `token` — optional side branch: `{ k, systems[], icon, note }`. Draws a
+    small box above this stage with a connector down into it, for a one-hop
+    side exchange (e.g. "this stage also fetches/caches a token") that isn't
+    worth a whole separate flow. `note` is the text shown beside the
+    connector. Built in the same stage row in the flow editor ("+ Token
+    branch above this stage"); omit it (`token: null`) for a plain stage.
 
 ## Back-compat
 

@@ -77,6 +77,15 @@
   function uid() { return 'flow_' + Math.random().toString(36).slice(2, 9); }
   function str(v) { return typeof v === 'string' ? v : ''; }
 
+  function normToken(t) {
+    if (!t || typeof t !== 'object') return null;
+    return {
+      k: str(t.k),
+      systems: Array.isArray(t.systems) ? t.systems.map(function (v) { return String(v); }) : [],
+      icon: t.icon || 'custom',
+      note: str(t.note)
+    };
+  }
   function normStage(s) {
     s = s || {};
     return {
@@ -85,7 +94,11 @@
       icon: s.icon || 'custom',
       mid: !!s.mid,
       next: str(s.next),
-      back: str(s.back)
+      back: str(s.back),
+      // Optional side branch — e.g. "this stage also fetches/caches a token" —
+      // drawn as a small box above the stage with a connector down into it,
+      // instead of needing a whole separate flow for a one-hop side exchange.
+      token: normToken(s.token)
     };
   }
   function normFlow(f) {
@@ -122,13 +135,19 @@
     return flows.map(function (f) {
       var two = f.direction === '2-way';
       var stages = f.stages.map(function (s) {
+        var tok = null;
+        if (s.token) {
+          var tk = s.token.k.trim(), tsys = s.token.systems.map(function (v) { return v.trim(); }).filter(Boolean), tnote = s.token.note.trim();
+          if (tk || tsys.length || tnote) tok = { k: tk, systems: tsys, icon: s.token.icon || 'custom', note: tnote };
+        }
         return {
           k: s.k.trim(),
           systems: s.systems.map(function (v) { return v.trim(); }).filter(Boolean),
           icon: s.icon || 'custom',
           mid: !!s.mid,
           next: s.next.trim(),
-          back: two ? s.back.trim() : ''
+          back: two ? s.back.trim() : '',
+          token: tok
         };
       }).filter(function (s) { return s.k || s.systems.length; });
       if (stages.length) { stages[stages.length - 1].next = ''; stages[stages.length - 1].back = ''; }
@@ -166,6 +185,23 @@
           (two ? '<div class="field"><label>Return arrow <span class="fe-sub">— label</span></label>' +
             '<input type="text" data-f="back" value="' + esc(s.back) + '" placeholder="e.g. Response"></div>' : '') +
         '</div>';
+      var token = s.token
+        ? '<div class="fsr-token">' +
+            '<div class="fsr-token-head"><span class="fe-sub">Token / side branch — drawn above this stage</span>' +
+              '<button type="button" class="fsr-icon-btn danger" data-act="token-remove" title="Remove token branch">✕</button></div>' +
+            '<div class="fsr-fields">' +
+              '<div class="field"><label>Label</label>' +
+                '<input type="text" data-tf="k" value="' + esc(s.token.k) + '" placeholder="e.g. Mule JWT Token"></div>' +
+              '<div class="field" style="flex:2;"><label>System(s) <span class="fe-sub">— comma-separated</span></label>' +
+                '<input type="text" data-tf="systems" value="' + esc(s.token.systems.join(', ')) + '" placeholder="e.g. Token service"></div>' +
+              '<div class="field"><label>Icon</label><select data-tf="icon">' +
+                ICONS.map(function (o) { return '<option value="' + o.id + '"' + ((s.token.icon || 'custom') === o.id ? ' selected' : '') + '>' + o.label + '</option>'; }).join('') +
+              '</select></div>' +
+              '<div class="field" style="flex:2;"><label>Note <span class="fe-sub">— shown beside the connector</span></label>' +
+                '<input type="text" data-tf="note" value="' + esc(s.token.note) + '" placeholder="e.g. Generates the access token. Valid for 25 minutes."></div>' +
+            '</div>' +
+          '</div>'
+        : '<button type="button" class="fe-btn fsr-token-add" data-act="token-add">+ Token branch above this stage</button>';
       return '<div class="flow-stage-row" data-si="' + si + '">' +
         '<div class="fsr-fields">' +
           '<div class="field"><label>Role label</label>' +
@@ -176,6 +212,7 @@
             ICONS.map(function (o) { return '<option value="' + o.id + '"' + ((s.icon || 'custom') === o.id ? ' selected' : '') + '>' + o.label + '</option>'; }).join('') +
           '</select></div>' +
           hops +
+          '<div class="fsr-token-wrap">' + token + '</div>' +
         '</div>' +
         '<div class="fsr-side">' +
           '<label class="fsr-mid-label" title="Highlights this stage in the diagram — use it for your own system, e.g. the gateway or API">' +
@@ -238,23 +275,34 @@
     root.addEventListener('input', function (e) {
       var t = e.target;
       if (t.tagName !== 'INPUT' || t.type !== 'text') return;
-      var f = t.getAttribute('data-f'); if (!f) return;
       var p = loc(t); var fl = flows[p.fi]; if (!fl) return;
-      if (p.si < 0) { if (f === 'name' || f === 'when') fl[f] = t.value; return; }
-      var st = fl.stages[p.si]; if (!st) return;
-      if (f === 'systems') st.systems = t.value.split(',').map(function (v) { return v.trim(); }).filter(Boolean);
-      else if (f === 'k' || f === 'next' || f === 'back') st[f] = t.value;
+      var f = t.getAttribute('data-f');
+      if (f) {
+        if (p.si < 0) { if (f === 'name' || f === 'when') fl[f] = t.value; return; }
+        var st = fl.stages[p.si]; if (!st) return;
+        if (f === 'systems') st.systems = t.value.split(',').map(function (v) { return v.trim(); }).filter(Boolean);
+        else if (f === 'k' || f === 'next' || f === 'back') st[f] = t.value;
+        return;
+      }
+      var tf = t.getAttribute('data-tf'); if (!tf) return;
+      var st2 = fl.stages[p.si]; if (!st2 || !st2.token) return;
+      if (tf === 'systems') st2.token.systems = t.value.split(',').map(function (v) { return v.trim(); }).filter(Boolean);
+      else if (tf === 'k' || tf === 'note') st2.token[tf] = t.value;
     });
 
     root.addEventListener('change', function (e) {
       var t = e.target;
-      var f = t.getAttribute && t.getAttribute('data-f'); if (!f) return;
+      var f = t.getAttribute && t.getAttribute('data-f');
+      var tf = t.getAttribute && t.getAttribute('data-tf');
+      if (!f && !tf) return;
       var p = loc(t); var fl = flows[p.fi]; if (!fl) return;
       if (t.tagName === 'SELECT' && p.si < 0 && f === 'direction') {
         fl.direction = t.value === '2-way' ? '2-way' : '1-way';
         render(); // return-arrow fields appear/disappear with the direction
       } else if (t.tagName === 'SELECT' && p.si >= 0 && f === 'icon') {
         fl.stages[p.si].icon = t.value;
+      } else if (t.tagName === 'SELECT' && p.si >= 0 && tf === 'icon') {
+        var st3 = fl.stages[p.si]; if (st3 && st3.token) st3.token.icon = t.value;
       } else if (t.type === 'radio' && f === 'mid') {
         fl.stages.forEach(function (s, j) { s.mid = (j === p.si); });
       }
@@ -278,6 +326,8 @@
       else if (fl && act === 'stage-up') move(fl.stages, p.si, -1);
       else if (fl && act === 'stage-down') move(fl.stages, p.si, 1);
       else if (fl && act === 'stage-remove') fl.stages.splice(p.si, 1);
+      else if (fl && act === 'token-add' && fl.stages[p.si]) fl.stages[p.si].token = { k: '', systems: [], icon: 'custom', note: '' };
+      else if (fl && act === 'token-remove' && fl.stages[p.si]) fl.stages[p.si].token = null;
       else return;
       render();
     });
