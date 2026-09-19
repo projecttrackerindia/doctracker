@@ -94,31 +94,61 @@ const RF_ICONS = {
   gateway: `<path d="M0 -9l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9v-5l7-3z"></path><path d="M-3 0l2 2 4-4"></path>`,
   flow: `<path d="M2 -9-7 3h5l-1 8 9-12h-5l1-8z"></path>`,
   downstream: `<ellipse cx="0" cy="-6" rx="8" ry="3"></ellipse><path d="M-8 -6v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path><path d="M-8 0v6c0 1.7 3.6 3 8 3s8-1.3 8-3V0"></path>`,
+  // Generic "system" node — used for any custom stage that isn't specifically
+  // the client, the gateway, the flow itself, or the final downstream target
+  // (e.g. an intermediate token service, object store, or a second/third
+  // source or target system in a fan-in/fan-out flow).
+  custom: `<rect x="-7" y="-9" width="14" height="18" rx="2.5"></rect><line x1="-7" y1="-3" x2="7" y2="-3"></line><line x1="-3.5" y1="3" x2="3.5" y2="3"></line>`,
 };
 
 function requestFlowSvg(stages, direction){
-  // stages: [{k,v,icon}, ...] left-to-right. direction: '1-way' (forward arrows only) or '2-way' (forward + return arrows).
+  // stages: [{k, systems:[...], icon, mid}, ...] left-to-right. `systems` is
+  // ALWAYS an array now — a stage with more than one entry (e.g. two source
+  // systems feeding the same gateway, or two downstream targets) renders
+  // them stacked as separate lines in the same box rather than needing a
+  // separate box per system, which keeps the diagram a simple straight
+  // chain regardless of how many systems sit at any one stage.
+  // direction: '1-way' (forward arrows only) or '2-way' (forward + return arrows).
   const n = stages.length;
-  const boxW = 152, boxH = 62, gap = 68, padX = 22;
+  const boxW = 152, gap = 68, padX = 22;
   const iconR = 16, topPad = 8;
   const iconCy = topPad + iconR;
   const boxY = iconCy + iconR + 12;
+  const baseBoxH = 62, lineH = 15, maxShown = 3;
+  const normalized = stages.map(s=>{
+    const systems = (Array.isArray(s.systems) && s.systems.length) ? s.systems : ['—'];
+    const shown = systems.slice(0, maxShown);
+    const extraCount = systems.length - shown.length;
+    const h = baseBoxH + Math.max(0, shown.length - 1) * lineH;
+    return { ...s, systems, shown, extraCount, boxH: h };
+  });
+  const maxBoxH = Math.max(baseBoxH, ...normalized.map(s=>s.boxH));
   const totalW = padX*2 + n*boxW + (n-1)*gap;
-  const totalH = boxY + boxH + (direction==='2-way' ? 30 : 16);
-  const midY = boxY + boxH/2;
+  const totalH = boxY + maxBoxH + (direction==='2-way' ? 30 : 16);
+  // Connectors always sit at the single-line reference height, regardless of
+  // how tall any individual box grows — keeps the arrow row straight even
+  // when adjacent stages have different numbers of systems.
+  const midY = boxY + baseBoxH/2;
 
-  const boxes = stages.map((s,i)=>{
+  const boxes = normalized.map((s,i)=>{
     const x = padX + i*(boxW+gap);
     const cx = x + boxW/2;
-    const mid = i===1;
-    const icon = RF_ICONS[s.icon] || RF_ICONS.flow;
+    const mid = !!s.mid;
+    const icon = RF_ICONS[s.icon] || RF_ICONS.custom;
+    const valueLines = s.shown.map((sys,li)=>
+      `<text x="${cx}" y="${boxY+42+li*lineH}" text-anchor="middle" class="rf-box-v">${escapeHtml(sys)}</text>`
+    ).join('') + (s.extraCount>0
+      ? `<text x="${cx}" y="${boxY+42+s.shown.length*lineH}" text-anchor="middle" class="rf-box-v rf-box-more">+${s.extraCount} more</text>`
+      : '');
+    const fullList = s.systems.join(', ');
     return `<g class="rf-box${mid?' rf-box-mid':''}">
       <circle cx="${cx}" cy="${iconCy}" r="${iconR+7}" class="rf-icon-glow${mid?' mid-glow':''}"></circle>
-      <rect x="${x}" y="${boxY}" width="${boxW}" height="${boxH}" rx="10" class="rf-box-rect${mid?' mid':''}"></rect>
+      <rect x="${x}" y="${boxY}" width="${boxW}" height="${s.boxH}" rx="10" class="rf-box-rect${mid?' mid':''}"></rect>
       <circle cx="${cx}" cy="${iconCy}" r="${iconR}" class="rf-icon-ring${mid?' mid-ring':''}"></circle>
       <g transform="translate(${cx},${iconCy})" class="rf-icon${mid?' mid-icon':''}">${icon}</g>
       <text x="${cx}" y="${boxY+22}" text-anchor="middle" class="rf-box-k${mid?' mid-k':''}">${escapeHtml(String(s.k).toUpperCase())}</text>
-      <text x="${cx}" y="${boxY+42}" text-anchor="middle" class="rf-box-v">${escapeHtml(s.v)}</text>
+      ${valueLines}
+      ${(s.systems.length > 1) ? `<title>${escapeHtml(fullList)}</title>` : ''}
     </g>`;
   }).join('');
 
@@ -241,27 +271,41 @@ function pdfLifecycleWheelSvg(currentStage){
 
 function pdfRequestFlowSvg(stages, direction){
   const n = stages.length;
-  const boxW = 152, boxH = 62, gap = 68, padX = 22;
+  const boxW = 152, gap = 68, padX = 22;
   const iconR = 16, topPad = 8;
   const iconCy = topPad + iconR;
   const boxY = iconCy + iconR + 12;
-  const totalW = padX*2 + n*boxW + (n-1)*gap;
-  const totalH = boxY + boxH + (direction==='2-way' ? 30 : 16);
-  const midY = boxY + boxH/2;
+  const baseBoxH = 62, lineH = 15, maxShown = 3;
   const accent = '#5c7cfa';
+  const normalized = stages.map(s=>{
+    const systems = (Array.isArray(s.systems) && s.systems.length) ? s.systems : ['—'];
+    const shown = systems.slice(0, maxShown);
+    const extraCount = systems.length - shown.length;
+    const h = baseBoxH + Math.max(0, shown.length - 1) * lineH;
+    return { ...s, systems, shown, extraCount, boxH: h };
+  });
+  const maxBoxH = Math.max(baseBoxH, ...normalized.map(s=>s.boxH));
+  const totalW = padX*2 + n*boxW + (n-1)*gap;
+  const totalH = boxY + maxBoxH + (direction==='2-way' ? 30 : 16);
+  const midY = boxY + baseBoxH/2;
 
-  const boxes = stages.map((s,i)=>{
+  const boxes = normalized.map((s,i)=>{
     const x = padX + i*(boxW+gap);
     const cx = x + boxW/2;
-    const mid = i===1;
-    const icon = RF_ICONS[s.icon] || RF_ICONS.flow;
+    const mid = !!s.mid;
+    const icon = RF_ICONS[s.icon] || RF_ICONS.custom;
+    const valueLines = s.shown.map((sys,li)=>
+      `<text x="${cx}" y="${boxY+42+li*lineH}" text-anchor="middle" font-size="12px" font-weight="700" fill="#0f1420">${escapeHtml(sys)}</text>`
+    ).join('') + (s.extraCount>0
+      ? `<text x="${cx}" y="${boxY+42+s.shown.length*lineH}" text-anchor="middle" font-size="10.5px" font-weight="600" fill="#8890a3">+${s.extraCount} more</text>`
+      : '');
     return `<g>
       <circle cx="${cx}" cy="${iconCy}" r="${iconR+7}" fill="${mid?'rgba(92,124,250,.14)':'#eef1f6'}"></circle>
-      <rect x="${x}" y="${boxY}" width="${boxW}" height="${boxH}" rx="10" fill="#ffffff" stroke="${mid?accent:'#e2e6ee'}" stroke-width="${mid?1.6:1.2}"></rect>
+      <rect x="${x}" y="${boxY}" width="${boxW}" height="${s.boxH}" rx="10" fill="#ffffff" stroke="${mid?accent:'#e2e6ee'}" stroke-width="${mid?1.6:1.2}"></rect>
       <circle cx="${cx}" cy="${iconCy}" r="${iconR}" fill="#f6f8fb" stroke="${mid?accent:'#c7ccd8'}" stroke-width="1.2"></circle>
       <g transform="translate(${cx},${iconCy})" stroke="${mid?accent:'#4b5468'}" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round">${icon}</g>
       <text x="${cx}" y="${boxY+22}" text-anchor="middle" font-size="8.5px" letter-spacing=".6px" font-weight="700" fill="${mid?accent:'#8890a3'}">${escapeHtml(String(s.k).toUpperCase())}</text>
-      <text x="${cx}" y="${boxY+42}" text-anchor="middle" font-size="12px" font-weight="700" fill="#0f1420">${escapeHtml(s.v)}</text>
+      ${valueLines}
     </g>`;
   }).join('');
 

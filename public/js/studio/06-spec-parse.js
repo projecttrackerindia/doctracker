@@ -252,6 +252,7 @@ function ensureProjectDefaults(proj){
   if(!proj.license || typeof proj.license !== 'object') proj.license = { name:'', url:'' };
   if(typeof proj.requestFlowDirection !== 'string' || !proj.requestFlowDirection) proj.requestFlowDirection = '1-way';
   if(typeof proj.requestFlowLabel !== 'string') proj.requestFlowLabel = '';
+  if(!Array.isArray(proj.requestFlowStages)) proj.requestFlowStages = [];
   if(!proj.createdAt) proj.createdAt = now;
   if(!proj.updatedAt) proj.updatedAt = proj.createdAt;
   if(!Array.isArray(proj.attachments)) proj.attachments = [];
@@ -269,7 +270,7 @@ function blankProject(name){
     notes:'',
     lifecycle: 'DEVELOPMENT',
     owner:'', team:'', version:'',
-    requestFlowDirection: '1-way', requestFlowLabel: '',
+    requestFlowDirection: '1-way', requestFlowLabel: '', requestFlowStages: [],
     termsOfService:'', contact:{ name:'', email:'' }, license:{ name:'', url:'' },
     createdAt: now, updatedAt: now,
     endpoints: [],
@@ -540,7 +541,7 @@ function parseSpecToProject(spec){
   const now = new Date().toISOString();
   return {
     id: uid(), name: title, description, environments, auth, notes:'',
-    lifecycle: 'DEVELOPMENT', owner:'', team:'', requestFlowDirection: '1-way', requestFlowLabel: '', createdAt: now, updatedAt: now,
+    lifecycle: 'DEVELOPMENT', owner:'', team:'', requestFlowDirection: '1-way', requestFlowLabel: '', requestFlowStages: [], createdAt: now, updatedAt: now,
     endpoints, _open: true,
   };
 }

@@ -476,12 +476,7 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
 
   const flowPreset = resolveFlowDirection(proj);
   const direction = flowPreset.pattern;
-  const flowStages = [
-    { k:'Client', v:'Consumer app', icon:'client' },
-    { k:`${env.label} · MuleSoft`, v:'API Gateway', icon:'gateway' },
-    { k:'Flow', v: proj.name, icon:'flow' },
-    { k:'Downstream', v:'Backend system', icon:'downstream' },
-  ];
+  const flowStages = resolveFlowStages(proj, env);
 
   const lifecycleHtml = proj.lifecycle ? `
     <div class="pdf-atom">

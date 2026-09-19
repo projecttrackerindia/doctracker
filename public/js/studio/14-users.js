@@ -559,12 +559,7 @@ function renderProjectOverview(main, projectId){
 
   const flowPreset = resolveFlowDirection(proj);
   const direction = flowPreset.pattern;
-  const flowStages = [
-    { k:'Client', v:'Consumer app', icon:'client' },
-    { k:`${env.label} · MuleSoft`, v:'API Gateway', icon:'gateway' },
-    { k:'Flow', v: proj.name, icon:'flow' },
-    { k:'Downstream', v:'Backend system', icon:'downstream' },
-  ];
+  const flowStages = resolveFlowStages(proj, env);
 
   const docs = (proj.attachments || []).slice().sort((a,b)=> new Date(b.uploadedAt) - new Date(a.uploadedAt));
   const docsHtml = docs.length

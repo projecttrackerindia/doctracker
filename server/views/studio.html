@@ -1301,6 +1301,22 @@ pre.code-block{
 .rf-box-k{ font-size:8.5px; letter-spacing:.6px; fill:var(--text-faint); font-weight:700; }
 .rf-box-k.mid-k{ fill:var(--env-accent, var(--accent)); font-weight:800; }
 .rf-box-v{ font-size:12px; fill:var(--text); font-weight:700; }
+.rf-box-v.rf-box-more{ font-size:10.5px; fill:var(--text-faint); font-weight:600; }
+
+/* ---- Request flow stage editor (Edit settings) ---- */
+.flow-stage-row{ display:flex; align-items:flex-start; gap:8px; padding:10px; border:1px solid var(--border); border-radius:9px; background:var(--surface-2); margin-bottom:8px; }
+.flow-stage-row .fsr-fields{ flex:1; display:flex; flex-wrap:wrap; gap:8px; min-width:0; }
+.flow-stage-row .fsr-fields .field{ flex:1; min-width:120px; margin:0; }
+.flow-stage-row .fsr-fields .field label{ font-size:9.5px; margin-bottom:3px; }
+.flow-stage-row .fsr-fields select, .flow-stage-row .fsr-fields input{ font-size:12px; padding:6px 8px; }
+.fsr-side{ display:flex; flex-direction:column; align-items:center; gap:4px; padding-top:2px; }
+.fsr-mid-label{ display:flex; align-items:center; gap:4px; font-size:10px; color:var(--text-faint); font-weight:650; white-space:nowrap; cursor:pointer; }
+.fsr-move-btns{ display:flex; gap:3px; }
+.fsr-icon-btn{ background:none; border:1px solid var(--border); border-radius:6px; width:22px; height:22px; display:flex; align-items:center; justify-content:center; color:var(--text-dim); cursor:pointer; font-size:11px; padding:0; }
+.fsr-icon-btn:hover{ border-color:var(--border-strong); color:var(--text); }
+.fsr-icon-btn:disabled{ opacity:.35; cursor:not-allowed; }
+.fsr-icon-btn.danger{ color:var(--danger); }
+.fsr-icon-btn.danger:hover{ background:var(--danger-soft); border-color:var(--danger); }
 .rf-icon-glow{ fill:var(--surface-2); opacity:.9; }
 .rf-icon-glow.mid-glow{ fill:var(--env-accent-bg, var(--surface-2)); }
 .rf-icon-ring{ fill:var(--bg-elevated); stroke:var(--border-strong); stroke-width:1.2; }
@@ -3163,6 +3179,13 @@ pre.json-raw{ max-height:360px; margin:0; }
               <input type="text" id="mFlowLabel" placeholder="e.g. Two-way — request and response (Client ⇄ Gateway ⇄ Flow ⇄ Downstream)">
             </div>
           </div>
+          <div class="hint" style="margin-top:4px;">This is just the small caption shown next to "Request flow" — it doesn't change the diagram itself. Edit the actual boxes below.</div>
+        </div>
+        <div class="field">
+          <label>Request flow stages <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— the actual boxes in the diagram, left to right</span></label>
+          <div id="mFlowStagesList"></div>
+          <button type="button" class="ghost" id="mFlowStageAdd" style="margin-top:8px;text-transform:none;letter-spacing:0;font-weight:600;font-size:11.5px;padding:6px 12px;">+ Add stage</button>
+          <div class="hint" style="margin-top:6px;">Each stage can list more than one system — e.g. a "Source" stage with two upstream systems, or a "Target" stage with two downstream ones. Leave every stage empty to use the default Client → Gateway → Flow → Downstream template.</div>
         </div>
       </div>
     </div>

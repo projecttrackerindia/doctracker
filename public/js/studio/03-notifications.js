@@ -690,6 +690,41 @@ function resolveFlowDirection(proj){
   return { pattern, label: FLOW_DIRECTION_DEFAULT_LABELS[pattern] };
 }
 
+// ---------- Request flow STAGES (the actual diagram content) ----------
+// Historically the "Request flow" diagram's four boxes (Client → Gateway →
+// Flow → Downstream) were hardcoded in every renderer — the only thing a
+// project could actually customise was requestFlowLabel above, which is
+// just the small caption text next to the section title, not the diagram
+// itself. That's confusing: typing a custom flow into that one text field
+// looks like it should redraw the boxes, and it silently doesn't. This is
+// the real, editable stage list: proj.requestFlowStages, an array of
+// { k: 'Role label', systems: ['System A', 'System B', ...], icon, mid }.
+// `systems` being an array (not a single string) is what lets a stage
+// represent more than one source or target system — see requestFlowSvg's
+// handling of multi-line boxes.
+// Projects created or edited before this existed have an empty/missing
+// requestFlowStages, so this falls back to exactly the old hardcoded
+// four-stage template in that case — nothing changes visually until someone
+// actually edits the stages in Project settings.
+function resolveFlowStages(proj, env){
+  const custom = Array.isArray(proj && proj.requestFlowStages) ? proj.requestFlowStages.filter(s => s && (s.k || (s.systems || []).length)) : [];
+  if(custom.length){
+    return custom.map(s => ({
+      k: s.k || 'Stage',
+      systems: (Array.isArray(s.systems) && s.systems.length) ? s.systems : ['—'],
+      icon: s.icon || 'custom',
+      mid: !!s.mid,
+    }));
+  }
+  return [
+    { k:'Client', systems:['Consumer app'], icon:'client' },
+    { k:`${env.label} · MuleSoft`, systems:['API Gateway'], icon:'gateway', mid:true },
+    { k:'Flow', systems:[proj.name], icon:'flow' },
+    { k:'Downstream', systems:['Backend system'], icon:'downstream' },
+  ];
+}
+
+
 // Roles are a local UI preference (this tool has no login/backend), but they still
 // gate what the interface offers: which environments show up in the switcher, and
 // whether create/edit/delete affordances render at all.

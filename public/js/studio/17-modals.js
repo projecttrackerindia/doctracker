@@ -420,6 +420,82 @@ let currentEndpointProject = null;
 // sections from a real project record — used both when editing an existing
 // endpoint and when the typed project name in "Add endpoint" matches one.
 // This modal is now the only place these shared project fields are edited.
+// ---- Request flow stage editor ----
+// Backs the "Request flow stages" list in the endpoint modal's Project
+// details section — see resolveFlowStages (03-notifications.js) for how an
+// empty array here falls back to the old hardcoded Client/Gateway/Flow/
+// Downstream template, and requestFlowSvg (10-metrics.js) for how each
+// stage's `systems` array renders (more than one entry = multiple source or
+// target systems stacked in the same box).
+const FLOW_STAGE_ICONS = [
+  { id:'client', label:'Client' },
+  { id:'gateway', label:'Gateway' },
+  { id:'flow', label:'Flow / API' },
+  { id:'downstream', label:'Downstream' },
+  { id:'custom', label:'System (generic)' },
+];
+let flowStagesEditorState = [];
+
+function renderFlowStagesEditor(){
+  const list = document.getElementById('mFlowStagesList');
+  if(!list) return;
+  if(!flowStagesEditorState.length){
+    list.innerHTML = `<div class="empty-field">Not customized — the diagram is showing the default Client → Gateway → Flow → Downstream template. Add a stage to start customizing.</div>`;
+    return;
+  }
+  list.innerHTML = flowStagesEditorState.map((s, i)=>`
+    <div class="flow-stage-row" data-idx="${i}">
+      <div class="fsr-fields">
+        <div class="field">
+          <label>Role label</label>
+          <input type="text" data-fsr="k" value="${escapeHtml(s.k || '')}" placeholder="e.g. Source">
+        </div>
+        <div class="field" style="flex:2;">
+          <label>System(s) <span style="text-transform:none;font-weight:500;">— comma-separated</span></label>
+          <input type="text" data-fsr="systems" value="${escapeHtml((s.systems||[]).join(', '))}" placeholder="e.g. Employee Portal, WhatsApp Payment Endpoint">
+        </div>
+        <div class="field">
+          <label>Icon</label>
+          <select data-fsr="icon">${FLOW_STAGE_ICONS.map(o=>`<option value="${o.id}" ${((s.icon||'custom')===o.id)?'selected':''}>${o.label}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="fsr-side">
+        <label class="fsr-mid-label" title="Highlights this stage in the diagram — use it for your own system, e.g. the gateway or API"><input type="radio" name="fsrMid" data-fsr="mid" ${s.mid?'checked':''}> Highlight</label>
+        <div class="fsr-move-btns">
+          <button type="button" class="fsr-icon-btn" data-fsr-act="up" title="Move left" ${i===0?'disabled':''}>◂</button>
+          <button type="button" class="fsr-icon-btn" data-fsr-act="down" title="Move right" ${i===flowStagesEditorState.length-1?'disabled':''}>▸</button>
+          <button type="button" class="fsr-icon-btn danger" data-fsr-act="remove" title="Remove stage">✕</button>
+        </div>
+      </div>
+    </div>`).join('');
+
+  list.querySelectorAll('.flow-stage-row').forEach(row=>{
+    const idx = parseInt(row.getAttribute('data-idx'), 10);
+    row.querySelectorAll('[data-fsr="k"]').forEach(el=> el.addEventListener('input', ()=>{ flowStagesEditorState[idx].k = el.value; }));
+    row.querySelectorAll('[data-fsr="icon"]').forEach(el=> el.addEventListener('change', ()=>{ flowStagesEditorState[idx].icon = el.value; }));
+    row.querySelectorAll('[data-fsr="systems"]').forEach(el=> el.addEventListener('input', ()=>{
+      flowStagesEditorState[idx].systems = el.value.split(',').map(v=>v.trim()).filter(Boolean);
+    }));
+    row.querySelectorAll('[data-fsr="mid"]').forEach(el=> el.addEventListener('change', ()=>{
+      flowStagesEditorState.forEach((s,j)=> s.mid = (j===idx));
+    }));
+    row.querySelectorAll('[data-fsr-act]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const act = btn.getAttribute('data-fsr-act');
+        if(act==='remove') flowStagesEditorState.splice(idx,1);
+        else if(act==='up' && idx>0) [flowStagesEditorState[idx-1], flowStagesEditorState[idx]] = [flowStagesEditorState[idx], flowStagesEditorState[idx-1]];
+        else if(act==='down' && idx<flowStagesEditorState.length-1) [flowStagesEditorState[idx+1], flowStagesEditorState[idx]] = [flowStagesEditorState[idx], flowStagesEditorState[idx+1]];
+        renderFlowStagesEditor();
+      });
+    });
+  });
+}
+
+document.getElementById('mFlowStageAdd').addEventListener('click', ()=>{
+  flowStagesEditorState.push({ k:'', systems:[], icon:'custom', mid:false });
+  renderFlowStagesEditor();
+});
+
 function hydrateEndpointProjectFields(proj){
   currentEndpointProject = proj;
   document.getElementById('mLifecycle').innerHTML = LIFECYCLE_STAGES.map(s=>`<option value="${s}">${s}</option>`).join('');
@@ -433,6 +509,10 @@ function hydrateEndpointProjectFields(proj){
   document.getElementById('mLicenseUrl').value = (proj.license && proj.license.url) || '';
   document.getElementById('mFlowPattern').value = proj.requestFlowDirection === '2-way' ? '2-way' : '1-way';
   document.getElementById('mFlowLabel').value = proj.requestFlowLabel || '';
+  flowStagesEditorState = Array.isArray(proj.requestFlowStages)
+    ? proj.requestFlowStages.map(s=>({ k: s.k || '', systems: Array.isArray(s.systems) ? s.systems.slice() : [], icon: s.icon || 'custom', mid: !!s.mid }))
+    : [];
+  renderFlowStagesEditor();
 
   document.getElementById('mAuthType').value = (proj.auth && proj.auth.type) || '';
   document.getElementById('mAuthMethod').value = (proj.auth && proj.auth.method) || 'POST';
@@ -584,6 +664,12 @@ function saveManualEndpoint(){
   };
   proj.requestFlowDirection = document.getElementById('mFlowPattern').value === '2-way' ? '2-way' : '1-way';
   proj.requestFlowLabel = document.getElementById('mFlowLabel').value.trim();
+  // Only keep stages that actually have a role label or at least one system —
+  // an editor row someone added and then abandoned blank shouldn't render as
+  // an empty box in the diagram.
+  proj.requestFlowStages = flowStagesEditorState
+    .map(s=>({ k:(s.k||'').trim(), systems:(s.systems||[]).map(v=>v.trim()).filter(Boolean), icon:s.icon||'custom', mid:!!s.mid }))
+    .filter(s=> s.k || s.systems.length);
   // Version reads as a per-endpoint field in this modal, but it's really one
   // value per project — every endpoint should show the same version, so
   // saving here writes it onto the project (source of truth for Overview/PDF
