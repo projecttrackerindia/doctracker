@@ -495,6 +495,56 @@ async function initDb() {
   await pool.query(`ALTER TABLE project_env_version_history ADD COLUMN IF NOT EXISTS breaking_changes JSONB NOT NULL DEFAULT '[]';`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_env_version_history_project_feed ON project_env_version_history (project_id, promoted_at DESC);`);
 
+  // ---- Promotion requests (Release Pipeline "protected branch" workflow) ----
+  // GitHub's branch-protection model requires a SECOND person to approve a
+  // merge into a protected branch — the person who opened the PR can't also
+  // approve it. This is the equivalent for environments flagged
+  // `requiresApproval` in org_workspace.environments (see getOrgEnvironments
+  // in workspace.js — a plain boolean on each environment object, editable
+  // from Your Profile ▸ Environments same as color/access): promoting
+  // straight into such a stage is refused by POST /promote, and the caller
+  // must instead open a request here for a DIFFERENT Admin to approve.
+  // Approving actually performs the promotion (see applyPromotion in
+  // workspace.js) — this table never holds the "live" state itself, only
+  // the pending/decided request envelope around one promotion.
+  // `diff_snapshot`/`breaking_changes` are captured at request time (same
+  // reasoning as project_env_version_history.breaking_changes — an honest
+  // record of what was true when requested) and re-validated by hash at
+  // approval time (see checkDiffToken's sibling, checkRequestStillFresh) so
+  // a request can't be silently approved against content that has since
+  // moved out from under it.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_promotion_requests (
+      id BIGSERIAL PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      from_environment_id TEXT NOT NULL,
+      to_environment_id TEXT NOT NULL,
+      diff_hash TEXT NOT NULL,
+      diff_snapshot JSONB NOT NULL,
+      breaking_changes JSONB NOT NULL DEFAULT '[]',
+      ack_breaking_changes BOOLEAN NOT NULL DEFAULT false,
+      release_note TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+      requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      requested_by_username TEXT,
+      decided_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      decided_by_username TEXT,
+      decision_note TEXT,
+      decided_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_promotion_requests_project ON project_promotion_requests (project_id, status, created_at DESC);`);
+  // At most one pending request per (project, target environment) at a time —
+  // mirrors "one open PR against a branch for a given change" closely enough
+  // for this app's needs, and avoids two Admins racing to approve conflicting
+  // requests into the same stage.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_promotion_request_pending_target
+    ON project_promotion_requests (project_id, to_environment_id)
+    WHERE status = 'pending';
+  `);
+
   // ---- Org-wide AI configuration (AI Studio) ----
   // One row per organisation. `api_key_enc` is the org's own LLM API key,
   // field-encrypted with the same envelope scheme as everything else (see

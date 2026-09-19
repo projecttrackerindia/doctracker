@@ -151,6 +151,33 @@ function requestFlowSvg(stages, direction){
   </div>`;
 }
 
+// Breaking-changes-per-release sparkline for the Overview page (Release
+// Pipeline v2 — turns severity tagging that's otherwise only visible mid-
+// promotion into an at-a-glance release-health signal). One bar per release
+// that reached the pipeline's last stage, oldest to newest, bar height by
+// breaking-change count so a run of clean releases is visually obvious
+// against a stretch of churn.
+function releaseHealthSparklineSvg(points){
+  const n = points.length;
+  const barW = 20, gap = 10, padX = 4, chartH = 46, padTop = 6;
+  const totalW = padX*2 + n*barW + (n-1)*gap;
+  const totalH = chartH + padTop + 14;
+  const maxCount = Math.max(1, ...points.map(p=>p.breakingChangesCount));
+  const bars = points.map((p,i)=>{
+    const x = padX + i*(barW+gap);
+    const h = p.breakingChangesCount === 0 ? 4 : Math.max(6, Math.round((p.breakingChangesCount / maxCount) * chartH));
+    const y = padTop + (chartH - h);
+    const color = p.breakingChangesCount === 0 ? 'var(--get)' : (p.breakingChangesCount >= 3 ? 'var(--danger)' : 'var(--patch)');
+    const title = `${escapeHtml(p.versionLabel)} — ${p.breakingChangesCount} breaking change${p.breakingChangesCount===1?'':'s'}`;
+    return `<g>
+      <title>${title}</title>
+      <rect x="${x}" y="${y}" width="${barW}" height="${h}" rx="3" fill="${color}" opacity="${p.breakingChangesCount===0 ? 0.55 : 0.92}"></rect>
+      <text x="${x+barW/2}" y="${totalH-2}" text-anchor="middle" font-size="8" fill="var(--text-faint)">${escapeHtml(p.versionLabel.split('.').pop())}</text>
+    </g>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${totalW} ${totalH}" width="${totalW}" height="${totalH}" role="img" aria-label="Breaking changes per release">${bars}</svg>`;
+}
+
 // ---------- Print-safe variants for PDF export ----------
 // The on-screen versions above (lifecycleWheelSvg, requestFlowSvg) color themselves with
 // CSS custom properties (var(--accent), var(--surface-2), etc.) that resolve against the

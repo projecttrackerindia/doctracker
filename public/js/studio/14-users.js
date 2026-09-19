@@ -514,6 +514,36 @@ function roleHintText(roleId){
   return `Read-only. Can browse and try endpoints in ${envList}, but can't create, edit, or delete anything.`;
 }
 
+// Release health section — breaking-changes-per-release sparkline (see
+// releaseHealthSparklineSvg in 10-metrics.js and releaseHealthEntry's fetch
+// in 05-util.js). Renders nothing but a loading placeholder until the fetch
+// resolves; renderAll() re-runs once it does.
+function releaseHealthSectionHtml(projId){
+  const entry = releaseHealthEntry(projId);
+  let body;
+  if(entry.status === 'loading'){
+    body = `<div class="empty-field">Loading release history…</div>`;
+  } else if(entry.status === 'error'){
+    body = `<div class="empty-field">Could not load release health.</div>`;
+  } else if(!entry.points || entry.points.length < 2){
+    body = `<div class="empty-field">Not enough release history yet — this fills in once a few releases have reached ${escapeHtml(entry.lastStageLabel || 'the last stage')}.</div>`;
+  } else {
+    const totalBreaking = entry.points.reduce((sum,p)=>sum+p.breakingChangesCount, 0);
+    body = `
+      <div style="display:flex; align-items:flex-end; gap:16px; flex-wrap:wrap;">
+        ${releaseHealthSparklineSvg(entry.points)}
+        <div class="hint" style="margin:0;">${totalBreaking
+          ? `${totalBreaking} breaking change${totalBreaking===1?'':'s'} across the last ${entry.points.length} releases into ${escapeHtml(entry.lastStageLabel)}.`
+          : `No breaking changes across the last ${entry.points.length} releases into ${escapeHtml(entry.lastStageLabel)} — clean run.`}</div>
+      </div>`;
+  }
+  return `
+    <div class="section">
+      <div class="section-title">Release health <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— breaking changes per release into production</span></div>
+      ${body}
+    </div>`;
+}
+
 function renderProjectOverview(main, projectId){
   const proj = state.projects[projectId];
   if(!proj){ state.selected = null; renderMain(); return; }
@@ -679,6 +709,8 @@ function renderProjectOverview(main, projectId){
         ${lifecycleWheelSvg(proj.lifecycle)}
       </div>
     </div>
+
+    ${releaseHealthSectionHtml(proj.id)}
 
     <div class="section">
       <div class="section-title">Request flow <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— ${escapeHtml(flowPreset.label)}, set from Edit settings</span></div>

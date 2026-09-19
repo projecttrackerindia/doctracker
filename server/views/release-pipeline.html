@@ -212,9 +212,67 @@ button{ font-family:var(--sans); cursor:pointer; }
 .mh-breaking-list li{ list-style:none; }
 .mh-load-more{
   margin-top:14px; width:100%; padding:9px; border-radius:8px; background:var(--surface-2); border:1px solid var(--border);
-  color:var(--text-dim); font-size:12px; font-weight:650;
+  color:var(--text-dim); font-size:12px; font-weight:650; cursor:pointer;
 }
 .mh-load-more:hover{ color:var(--text); border-color:var(--border-strong); }
+.mh-load-more:disabled{ opacity:.5; cursor:not-allowed; }
+
+/* ---- Merge history filter bar ---- */
+.mh-filterbar{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+.mh-filterbar select, .mh-filterbar input[type="text"]{ padding:7px 9px; font-size:11.5px; min-width:0; }
+.mh-filterbar-search{ flex:1; min-width:140px; }
+.mh-filterbar-check{ display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--text-dim); font-weight:600; white-space:nowrap; cursor:pointer; }
+.mh-filterbar-clear{ font-size:11px; font-weight:650; color:var(--accent); background:none; border:none; cursor:pointer; white-space:nowrap; }
+.mh-filterbar-clear:hover{ text-decoration:underline; }
+
+/* ---- Pending approvals (GitHub-style protected-branch review queue) ---- */
+.pa-item{ border:1px solid var(--border); border-radius:10px; padding:12px 14px; margin-bottom:10px; background:var(--surface-2); }
+.pa-item:last-child{ margin-bottom:0; }
+.pa-item-head{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:12.5px; font-weight:650; }
+.pa-item-meta{ font-size:11px; color:var(--text-faint); margin-top:3px; }
+.pa-item-note{ font-size:12px; color:var(--text-dim); margin:8px 0; white-space:pre-wrap; }
+.pa-item-actions{ display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap; }
+.pa-btn{ font-size:11.5px; font-weight:700; padding:6px 13px; border-radius:999px; border:1px solid var(--border); background:var(--surface); color:var(--text-dim); cursor:pointer; }
+.pa-btn.approve{ background:var(--accent); border-color:var(--accent); color:var(--accent-contrast,#fff); }
+.pa-btn.approve:disabled{ opacity:.4; cursor:not-allowed; background:var(--surface-2); border-color:var(--border); color:var(--text-faint); }
+.pa-btn.reject{ color:var(--danger); border-color:color-mix(in srgb, var(--danger) 40%, var(--border)); }
+.pa-btn.reject:hover{ background:var(--danger-soft); }
+.pa-btn:hover:not(:disabled){ border-color:var(--border-strong); }
+.pa-self-note{ font-size:11px; color:var(--text-faint); font-style:italic; }
+.pa-breaking-flag{ font-size:10.5px; font-weight:700; color:#c98a1f; }
+.rp-request-btn{ background:var(--surface-2); border-color:var(--border-strong); }
+
+/* ---- Stage-by-stage breakdown (full-pipeline preview) ---- */
+.rp-stagebreak{ margin-top:6px; font-size:10.5px; color:var(--text-faint); }
+.rp-stagebreak b{ color:var(--text-dim); font-weight:700; }
+
+/* ---- Release health sparkline (used only when embedded via query, kept
+   here for shared styling with the Overview page copy in studio.html) ---- */
+.rp-sparkline-wrap{ display:flex; align-items:flex-end; gap:2px; }
+
+/* ---- Responsive breakpoints — this page previously had none while every
+   other tab (Studio, Audit Log, Architecture Studio) already adapted for
+   narrow viewports. ---- */
+@media (max-width:900px){
+  .rp-diff-ep-summary{ display:none; }
+  .mh-filterbar{ flex-direction:column; align-items:stretch; }
+  .mh-filterbar select, .mh-filterbar input[type="text"]{ width:100%; }
+}
+@media (max-width:640px){
+  .rp-wrap{ padding:18px 14px 60px; }
+  .rp-header{ gap:10px; }
+  .rp-title h1{ font-size:16px; }
+  .rp-back span{ display:none; }
+  .rp-strip-chip{ flex:1 1 auto; min-width:0; }
+  .rp-strip-chip-label{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rp-mergebar{ flex-direction:column; align-items:stretch; }
+  .rp-merge-btn{ width:100%; }
+  .rp-diff-ep-head{ flex-wrap:wrap; row-gap:4px; }
+  .rp-diff-ep-path{ min-width:100%; order:1; white-space:normal; word-break:break-all; }
+  .mh-item-head{ row-gap:4px; }
+  .pa-item-actions{ flex-direction:column; align-items:stretch; }
+  .pa-btn{ width:100%; }
+}
 </style>
 </head>
 <body>
@@ -228,7 +286,7 @@ button{ font-family:var(--sans); cursor:pointer; }
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;">
-      <a class="rp-back" id="rpBackLink" href="/dashboard.html">← Back to dashboard</a>
+      <a class="rp-back" id="rpBackLink" href="/dashboard.html">← <span>Back to dashboard</span></a>
       <button type="button" class="rp-theme-toggle" id="btnTheme" title="Switch theme">◐</button>
     </div>
   </div>
@@ -237,8 +295,19 @@ button{ font-family:var(--sans); cursor:pointer; }
     <div class="rp-loading">Loading pipeline status…</div>
   </div>
 
+  <div class="rp-section" id="rpApprovalsSection" style="display:none;">
+    <div class="rp-section-title">Pending approvals</div>
+    <div id="rpApprovals"><div class="rp-loading">Loading pending approvals…</div></div>
+  </div>
+
   <div class="rp-section" id="rpHistorySection">
     <div class="rp-section-title">Merge history</div>
+    <div class="mh-filterbar">
+      <select id="mhFilterEnv" title="Filter by environment"><option value="">All environments</option></select>
+      <input type="text" id="mhFilterAuthor" class="mh-filterbar-search" placeholder="Filter by author…">
+      <label class="mh-filterbar-check"><input type="checkbox" id="mhFilterBreaking"> Breaking changes only</label>
+      <button type="button" class="mh-filterbar-clear" id="mhFilterClear">Clear filters</button>
+    </div>
     <div id="rpMergeHistory"><div class="rp-loading">Loading merge history…</div></div>
   </div>
 </div>
@@ -337,6 +406,7 @@ async function renderReleasePipeline(){
     return;
   }
   const stages = data.stages;
+  pipelineStagesCache = stages;
 
   const stripHtml = stages.map((s, idx)=>{
     const isDraft = s.isDraftStage;
@@ -449,6 +519,32 @@ async function renderReleasePipeline(){
   const toSel = document.getElementById('rpToSelect');
   let previewMode = false;
 
+  // ---- Stage-by-stage breakdown (item #4) ----
+  // The aggregate Draft-vs-<last stage> diff answers "what's different",
+  // not "which stage would this land in first" — an endpoint that's already
+  // sitting in UAT but not yet in Staging looks identical, in that
+  // aggregate, to one that hasn't left the draft at all. This walks every
+  // adjacent pair in the pipeline (Draft→SIT, SIT→UAT, …) and records the
+  // FIRST pair where each endpoint id actually differs — that pair's target
+  // stage is where promoting right now would first place the change.
+  async function computeStageBreakdown(){
+    const pairs = [];
+    for(let i = 0; i < stages.length - 1; i++) pairs.push([stages[i], stages[i+1]]);
+    const results = await Promise.all(pairs.map(([f,t])=>
+      apiGet(`/projects/${encodeURIComponent(proj.id)}/diff?from=${encodeURIComponent(f.environmentId)}&to=${encodeURIComponent(t.environmentId)}`)
+        .catch(()=>null)
+    ));
+    const landsIn = new Map(); // endpoint id -> stage label
+    results.forEach((d, i)=>{
+      if(!d) return;
+      const targetLabel = pairs[i][1].label;
+      [...d.added, ...d.removed, ...d.modified].forEach(ep=>{
+        if(!landsIn.has(ep.id)) landsIn.set(ep.id, targetLabel);
+      });
+    });
+    return landsIn;
+  }
+
   async function loadDiff(){
     const from = fromSel.value, to = toSel.value;
     const panel = document.getElementById('rpDiffPanel');
@@ -464,7 +560,13 @@ async function renderReleasePipeline(){
       panel.innerHTML = `<div class="rp-diff-nochanges">${escapeHtml(e.message || 'Could not load diff.')}</div>`;
       return;
     }
-    renderReleaseDiffPanel(panel, diff, previewMode);
+    let stageBreakdown = null;
+    if(previewMode && !diff.canMerge){
+      // Only meaningful for the "skip straight to the end" preview — an
+      // adjacent-pair diff already IS the next stage, nothing to break down.
+      stageBreakdown = await computeStageBreakdown();
+    }
+    renderReleaseDiffPanel(panel, diff, previewMode, stageBreakdown);
   }
 
   fromSel.addEventListener('change', ()=>{ previewMode = false; loadDiff(); });
@@ -498,7 +600,7 @@ function renderReleaseDiffField(c){
   return `<div class="rp-diff-field"><div class="rp-diff-field-path mono">${escapeHtml(c.path || '(root)')}</div>${lines}</div>`;
 }
 
-function renderReleaseDiffPanel(panel, diff, previewMode){
+function renderReleaseDiffPanel(panel, diff, previewMode, stageBreakdown){
   const total = diff.summary.added + diff.summary.removed + diff.summary.modified;
   const summaryHtml = `
     <div class="rp-diff-summary">
@@ -508,7 +610,7 @@ function renderReleaseDiffPanel(panel, diff, previewMode){
     </div>`;
 
   const previewBannerHtml = (previewMode && !diff.canMerge) ? `
-    <div class="rp-preview-banner">👁 Preview only — comparing ${escapeHtml(diff.from.label)} directly against ${escapeHtml(diff.to.label)}, skipping the stages in between. Promote through each stage in order to actually ship this.</div>
+    <div class="rp-preview-banner">👁 Preview only — comparing ${escapeHtml(diff.from.label)} directly against ${escapeHtml(diff.to.label)}, skipping the stages in between. Promote through each stage in order to actually ship this.${stageBreakdown ? ' Each row below shows the first stage this change would actually land in.' : ''}</div>
   ` : '';
 
   // Severity-ranked (server already sorts critical-first — see
@@ -534,6 +636,7 @@ function renderReleaseDiffPanel(panel, diff, previewMode){
 
   const epRow = (kind, ep, marker)=>{
     const changeCount = kind === 'modified' ? ep.changes.length : 0;
+    const landsIn = stageBreakdown ? stageBreakdown.get(ep.id) : null;
     return `
       <div class="rp-diff-ep ${kind}" data-ep-id="${escapeHtml(ep.id)}">
         <div class="rp-diff-ep-head">
@@ -544,6 +647,7 @@ function renderReleaseDiffPanel(panel, diff, previewMode){
           ${changeCount ? `<span class="rp-diff-ep-count">${changeCount} field${changeCount === 1 ? '' : 's'} changed</span>` : ''}
           ${kind === 'modified' ? `<span class="rp-diff-ep-caret">▸</span>` : ''}
         </div>
+        ${landsIn ? `<div class="rp-stagebreak">First reaches: <b>${escapeHtml(landsIn)}</b></div>` : ''}
         ${kind === 'modified' ? `<div class="rp-diff-ep-body">${ep.changes.map(renderReleaseDiffField).join('')}</div>` : ''}
       </div>`;
   };
@@ -557,6 +661,7 @@ function renderReleaseDiffPanel(panel, diff, previewMode){
   // Required release note (Release Pipeline v2) — captured on the actual
   // promote call, not just implied by the diff. Only shown when merging is
   // actually possible (adjacent stages) — a pure preview has nothing to note.
+  const targetNeedsApproval = diff.canMerge && !!diff.to.requiresApproval;
   const noteHtml = diff.canMerge ? `
     <div class="rp-note-field">
       <label for="rpNoteInput" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-faint);display:block;margin-bottom:5px;">Release note (required)</label>
@@ -574,9 +679,11 @@ function renderReleaseDiffPanel(panel, diff, previewMode){
     ${noteHtml}
     <div class="rp-mergebar">
       <div class="rp-mergebar-note">${diff.canMerge
-        ? `Merging freezes ${escapeHtml(diff.from.label)}'s current content and makes it live in ${escapeHtml(diff.to.label)}.`
+        ? (targetNeedsApproval
+            ? `${escapeHtml(diff.to.label)} requires a second Admin's approval — this opens a request instead of promoting immediately.`
+            : `Merging freezes ${escapeHtml(diff.from.label)}'s current content and makes it live in ${escapeHtml(diff.to.label)}.`)
         : `${escapeHtml(diff.to.label)} isn't the next stage after ${escapeHtml(diff.from.label)} — promote through each stage in order.`}</div>
-      <button type="button" class="rp-merge-btn" id="rpMergeBtn" ${(diff.canMerge && total) ? '' : 'disabled'}>Merge into ${escapeHtml(diff.to.label)}</button>
+      <button type="button" class="rp-merge-btn${targetNeedsApproval ? ' rp-request-btn' : ''}" id="rpMergeBtn" ${(diff.canMerge && total) ? '' : 'disabled'}>${targetNeedsApproval ? `Request approval to promote into ${escapeHtml(diff.to.label)}` : `Merge into ${escapeHtml(diff.to.label)}`}</button>
     </div>
   `;
 
@@ -603,6 +710,24 @@ function renderReleaseDiffPanel(panel, diff, previewMode){
       if(releaseNote.length < 10){
         toast('Say a bit more in the release note — at least 10 characters.');
         if(noteInput) noteInput.focus();
+        return;
+      }
+      if(targetNeedsApproval){
+        const confirmMsg = `This opens a request to promote ${diff.from.label}'s current content into ${diff.to.label}. A different Admin will need to approve it before it actually goes live.`;
+        if(!confirm(`Request promotion into ${diff.to.label}?\n\n${confirmMsg}`)) return;
+        mergeBtn.disabled = true; mergeBtn.textContent = 'Requesting…';
+        try{
+          const result = await apiSend('POST', `/projects/${encodeURIComponent(proj.id)}/promotion-requests`, {
+            fromEnvironmentId: diff.from.environmentId,
+            ackBreakingChanges: hasBreaking ? !!(ackBox && ackBox.checked) : undefined,
+            releaseNote,
+          });
+          toast(`Requested promotion into ${result.toEnvironmentLabel} — waiting on a second Admin's approval.`);
+          renderPendingApprovals();
+        }catch(e){
+          toast(e.message || 'Could not open a promotion request.');
+          mergeBtn.disabled = false; mergeBtn.textContent = `Request approval to promote into ${diff.to.label}`;
+        }
         return;
       }
       const confirmMsg = hasBreaking
@@ -643,18 +768,60 @@ function mhActionMeta(entry){
   return { icon: '↑', cls: 'promote', headline: `Promoted into ${entry.environmentLabel}` };
 }
 
-async function renderMergeHistory(){
+function debounce(fn, ms){
+  let t;
+  return (...args)=>{ clearTimeout(t); t = setTimeout(()=>fn(...args), ms); };
+}
+
+let pipelineStagesCache = [];
+let mhEnvFilterPopulated = false;
+function populateMhEnvFilterOnce(){
+  if(mhEnvFilterPopulated || !pipelineStagesCache.length) return;
+  const sel = document.getElementById('mhFilterEnv');
+  if(!sel) return;
+  pipelineStagesCache.filter(s=>!s.isDraftStage).forEach(s=>{
+    const opt = document.createElement('option');
+    opt.value = s.environmentId; opt.textContent = s.label;
+    sel.appendChild(opt);
+  });
+  mhEnvFilterPopulated = true;
+}
+
+function currentMhFilters(){
+  return {
+    environmentId: document.getElementById('mhFilterEnv')?.value || '',
+    author: (document.getElementById('mhFilterAuthor')?.value || '').trim(),
+    breakingOnly: !!document.getElementById('mhFilterBreaking')?.checked,
+  };
+}
+function hasActiveMhFilters(){
+  const f = currentMhFilters();
+  return !!(f.environmentId || f.author || f.breakingOnly);
+}
+function mhQueryString(before){
+  const f = currentMhFilters();
+  const params = new URLSearchParams();
+  params.set('limit', '30');
+  if(before) params.set('before', String(before));
+  if(f.environmentId) params.set('environmentId', f.environmentId);
+  if(f.author) params.set('author', f.author);
+  if(f.breakingOnly) params.set('breakingOnly', 'true');
+  return params.toString();
+}
+
+// ---- Merge history: pagination + filters (items #2 and #3) ----
+// `mhState` holds everything currently rendered so "Load older" can append
+// rather than re-fetch from the top, and so changing a filter can reset
+// cleanly back to page one.
+let mhState = { entries: [], nextBefore: null, hasMore: false };
+
+function renderMhList(){
   const el = document.getElementById('rpMergeHistory');
-  el.innerHTML = `<div class="rp-loading">Loading merge history…</div>`;
-  let data;
-  try{ data = await apiGet(`/projects/${encodeURIComponent(proj.id)}/release-history?limit=100`); }
-  catch(e){
-    el.innerHTML = `<div class="rp-empty">${escapeHtml(e.message || 'Could not load merge history.')}</div>`;
-    return;
-  }
-  const entries = data.entries || [];
+  const entries = mhState.entries;
   if(!entries.length){
-    el.innerHTML = `<div class="rp-empty">Nothing has been promoted yet — merge history will show up here once you promote out of Draft.</div>`;
+    el.innerHTML = `<div class="rp-empty">${hasActiveMhFilters()
+      ? 'No merge history matches these filters.'
+      : 'Nothing has been promoted yet — merge history will show up here once you promote out of Draft.'}</div>`;
     return;
   }
   const itemsHtml = entries.map(entry=>{
@@ -680,13 +847,119 @@ async function renderMergeHistory(){
         </div>
       </div>`;
   }).join('');
-  el.innerHTML = `<div class="mh-list">${itemsHtml}</div>`;
+  el.innerHTML = `<div class="mh-list">${itemsHtml}</div>${mhState.hasMore ? `<button type="button" class="mh-load-more" id="mhLoadMoreBtn">Load older entries</button>` : ''}`;
   el.querySelectorAll('[data-mh-toggle]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const list = document.getElementById(btn.getAttribute('data-mh-toggle'));
       const open = list.classList.toggle('open');
       const count = list.querySelectorAll('li').length;
       btn.textContent = `⚠ ${count} breaking change${count===1?'':'s'} — ${open ? 'hide' : 'show'}`;
+    });
+  });
+  const loadMoreBtn = document.getElementById('mhLoadMoreBtn');
+  if(loadMoreBtn) loadMoreBtn.addEventListener('click', async ()=>{
+    loadMoreBtn.disabled = true; loadMoreBtn.textContent = 'Loading…';
+    await renderMergeHistory(false);
+  });
+}
+
+async function renderMergeHistory(reset){
+  if(reset === undefined) reset = true;
+  const el = document.getElementById('rpMergeHistory');
+  populateMhEnvFilterOnce();
+  if(reset){
+    mhState = { entries: [], nextBefore: null, hasMore: false };
+    el.innerHTML = `<div class="rp-loading">Loading merge history…</div>`;
+  }
+  let data;
+  try{
+    data = await apiGet(`/projects/${encodeURIComponent(proj.id)}/release-history?${mhQueryString(reset ? null : mhState.nextBefore)}`);
+  }catch(e){
+    el.innerHTML = `<div class="rp-empty">${escapeHtml(e.message || 'Could not load merge history.')}</div>`;
+    return;
+  }
+  mhState.entries = reset ? (data.entries || []) : mhState.entries.concat(data.entries || []);
+  mhState.hasMore = !!data.hasMore;
+  mhState.nextBefore = data.nextBefore;
+  renderMhList();
+}
+
+// ---- Pending approvals (GitHub-style protected-branch review queue) ----
+async function renderPendingApprovals(){
+  const section = document.getElementById('rpApprovalsSection');
+  const el = document.getElementById('rpApprovals');
+  let data;
+  try{
+    data = await apiGet(`/projects/${encodeURIComponent(proj.id)}/promotion-requests?status=pending`);
+  }catch(e){
+    section.style.display = 'none';
+    return;
+  }
+  const requests = data.requests || [];
+  if(!requests.length){ section.style.display = 'none'; return; }
+  section.style.display = '';
+  el.innerHTML = requests.map(r=>{
+    const breaking = Array.isArray(r.breakingChanges) ? r.breakingChanges : [];
+    let actionsHtml;
+    if(r.canApprove){
+      actionsHtml = `
+        <button type="button" class="pa-btn approve" data-act="approve">Approve &amp; promote</button>
+        <button type="button" class="pa-btn reject" data-act="reject">Reject</button>`;
+    } else {
+      actionsHtml = `<span class="pa-self-note">${r.canCancel ? "Waiting on another Admin to approve — you can't approve your own request." : 'Waiting on another Admin to approve.'}</span>`
+        + (r.canCancel ? `<button type="button" class="pa-btn" data-act="cancel">Cancel request</button>` : '');
+    }
+    return `
+      <div class="pa-item" data-req-id="${r.id}">
+        <div class="pa-item-head">
+          <span>${escapeHtml(r.fromEnvironmentLabel)} → ${escapeHtml(r.toEnvironmentLabel)}</span>
+          ${breaking.length ? `<span class="pa-breaking-flag">⚠ ${breaking.length} breaking change${breaking.length===1?'':'s'}</span>` : ''}
+        </div>
+        <div class="pa-item-meta">Requested by ${escapeHtml(r.requestedByUsername || 'unknown')} · ${timeAgo(r.createdAt)}</div>
+        ${r.releaseNote ? `<div class="pa-item-note">${escapeHtml(r.releaseNote)}</div>` : ''}
+        <div class="pa-item-actions">${actionsHtml}</div>
+      </div>`;
+  }).join('');
+
+  el.querySelectorAll('[data-act]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const item = btn.closest('.pa-item');
+      const id = item.getAttribute('data-req-id');
+      const act = btn.getAttribute('data-act');
+      if(act === 'approve'){
+        if(!confirm("Approve this promotion request? This immediately promotes it — there's no further review step.")) return;
+        btn.disabled = true; btn.textContent = 'Approving…';
+        try{
+          const result = await apiSend('POST', `/projects/${encodeURIComponent(proj.id)}/promotion-requests/${id}/approve`, {});
+          toast(`Approved — ${result.toEnvironmentLabel} is now ${result.versionLabel}`);
+          renderPendingApprovals(); renderReleasePipeline(); renderMergeHistory();
+        }catch(e){
+          toast(e.message || 'Could not approve this request.');
+          renderPendingApprovals();
+        }
+      } else if(act === 'reject'){
+        const note = window.prompt('Optional note for the requester:', '') || '';
+        btn.disabled = true;
+        try{
+          await apiSend('POST', `/projects/${encodeURIComponent(proj.id)}/promotion-requests/${id}/reject`, { note });
+          toast('Promotion request rejected.');
+          renderPendingApprovals();
+        }catch(e){
+          toast(e.message || 'Could not reject this request.');
+          renderPendingApprovals();
+        }
+      } else if(act === 'cancel'){
+        if(!confirm('Cancel this promotion request?')) return;
+        btn.disabled = true;
+        try{
+          await apiSend('POST', `/projects/${encodeURIComponent(proj.id)}/promotion-requests/${id}/cancel`, {});
+          toast('Promotion request cancelled.');
+          renderPendingApprovals();
+        }catch(e){
+          toast(e.message || 'Could not cancel this request.');
+          renderPendingApprovals();
+        }
+      }
     });
   });
 }
@@ -705,13 +978,25 @@ async function boot(){
     document.getElementById('rpProjName').textContent = 'Project not found';
     document.getElementById('rpSub').textContent = 'Open this tool from a project\u2019s Project settings.';
     document.getElementById('rpPipelineSection').innerHTML = '';
+    document.getElementById('rpApprovalsSection').style.display = 'none';
     document.getElementById('rpMergeHistory').innerHTML = '';
     return;
   }
   document.getElementById('rpProjName').textContent = proj.name;
   document.getElementById('rpSub').textContent = `Release Pipeline · ${proj.name}`;
   renderReleasePipeline();
+  renderPendingApprovals();
   renderMergeHistory();
+
+  document.getElementById('mhFilterEnv').addEventListener('change', ()=> renderMergeHistory(true));
+  document.getElementById('mhFilterAuthor').addEventListener('input', debounce(()=> renderMergeHistory(true), 350));
+  document.getElementById('mhFilterBreaking').addEventListener('change', ()=> renderMergeHistory(true));
+  document.getElementById('mhFilterClear').addEventListener('click', ()=>{
+    document.getElementById('mhFilterEnv').value = '';
+    document.getElementById('mhFilterAuthor').value = '';
+    document.getElementById('mhFilterBreaking').checked = false;
+    renderMergeHistory(true);
+  });
 }
 
 boot();

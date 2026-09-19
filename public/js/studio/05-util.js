@@ -306,3 +306,21 @@ function findEndpointForView(epId){
 // Endpoint mutation is only ever meaningful against the live draft — gate
 // every create/edit/duplicate/delete entry point on this alongside canEdit().
 function canEditHere(){ return canEdit() && isViewingDraftEnv(); }
+
+// ----------------------------------------------------------------------------
+// Release health (breaking-changes-per-release trend for the Overview page's
+// sparkline — Release Pipeline v2 item "a signal, not just something you see
+// mid-promotion"). Same lazy-fetch-and-cache shape as snapshotEntry above:
+// fetched once per project for the life of the page, re-rendered when it
+// arrives rather than blocking the Overview render on it.
+// ----------------------------------------------------------------------------
+const _releaseHealthCache = {}; // projId -> { status:'loading'|'ready'|'error', points, lastStageLabel }
+function releaseHealthEntry(projId){
+  const entry = _releaseHealthCache[projId];
+  if(entry) return entry;
+  _releaseHealthCache[projId] = { status:'loading' };
+  apiGet(`/projects/${encodeURIComponent(projId)}/release-health`)
+    .then(res=>{ _releaseHealthCache[projId] = { status:'ready', ...res }; renderAll(); })
+    .catch(()=>{ _releaseHealthCache[projId] = { status:'error' }; });
+  return _releaseHealthCache[projId];
+}

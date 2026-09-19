@@ -75,7 +75,7 @@ function envTableHtml(){
 
   const bodyHtml = list.length
     ? list.map(e=>envRowHtml(e, dragEnabled, canReveal)).join('')
-    : `<tr><td colspan="6" style="padding:0;border-bottom:none;">
+    : `<tr><td colspan="7" style="padding:0;border-bottom:none;">
         <div class="env-table-empty">
           ${isFiltered ? 'No environments match your search or filters.' : 'No environments yet — add one to get started.'}
           <br>
@@ -111,6 +111,7 @@ function envTableHtml(){
         <th data-sort="url">Endpoint ${sortArrow('url')}</th>
         <th data-sort="access">Access ${sortArrow('access')}</th>
         <th data-sort="color">Color ${sortArrow('color')}</th>
+        <th title="Whether promoting into this stage in the Release Pipeline needs a second Admin's approval">Approval</th>
         <th style="width:40px;">Actions</th>
       </tr></thead>
       <tbody id="envTableBody">${bodyHtml}</tbody>
@@ -155,6 +156,9 @@ function envRowHtml(e, dragEnabled, canReveal){
     </td>
     <td><span class="access-badge access-${e.access}">${accessMeta(e.access).label}</span></td>
     <td><span class="env-color-dot" style="background:${e.color};" title="${colorName(e.color)}"></span></td>
+    <td>${e.requiresApproval
+      ? `<span class="approval-badge" title="A second Admin must approve every promotion into ${escapeHtml(e.label)} in the Release Pipeline">🛡 2nd approval</span>`
+      : `<span class="empty-field" style="font-size:11px;">—</span>`}</td>
     <td>
       <div class="row-actions-dd${menuOpen?' open':''}" data-row-dd="${e.id}">
         <button type="button" class="icon-btn row-actions-btn" data-row-dd-btn="${e.id}" title="More actions">⋮</button>
@@ -188,6 +192,7 @@ function rowActionsPanelHtml(e, mode){
     <button type="button" class="row-actions-item" data-act="edit" data-id="${e.id}">Edit</button>
     <button type="button" class="row-actions-item" data-act="color" data-id="${e.id}">Change Color</button>
     <button type="button" class="row-actions-item" data-act="access" data-id="${e.id}">Change Access</button>
+    <button type="button" class="row-actions-item" data-act="toggle-approval" data-id="${e.id}" title="GitHub-style branch protection: require a second Admin's approval before anyone can promote into this stage in the Release Pipeline">${e.requiresApproval ? 'Remove approval requirement' : 'Require 2nd approval to promote'}</button>
     <div class="row-actions-divider"></div>
     <button type="button" class="row-actions-item" data-act="top" data-id="${e.id}">Move to Top</button>
     <button type="button" class="row-actions-item" data-act="bottom" data-id="${e.id}">Move to Bottom</button>
@@ -367,6 +372,15 @@ async function handleEnvRowAction(act, id, el){
     renderEnvSwitcher();
     renderEnvTableSection();
     toast(`Access set to ${accessMeta(access).label}`);
+    return;
+  }
+  if(act==='toggle-approval'){
+    if(!env) return;
+    const next = !env.requiresApproval;
+    updateEnvironment(id, { requiresApproval: next });
+    envRowMenu = { id:null, mode:'menu' };
+    renderEnvTableSection();
+    toast(next ? `Promoting into "${env.label}" now needs a second Admin's approval` : `Removed the approval requirement for "${env.label}"`);
     return;
   }
   if(act==='top' || act==='bottom'){

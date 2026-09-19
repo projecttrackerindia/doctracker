@@ -1356,6 +1356,11 @@ router.get('/projects/:id/versions', async (req, res) => {
           label: env.label,
           color: env.color,
           isDraftStage: idx === 0,
+          // GitHub-style branch protection: an environment flagged this way
+          // can't be promoted into directly (POST /promote refuses it) — a
+          // second Admin has to approve a promotion request instead. See
+          // POST /projects/:id/promotion-requests below.
+          requiresApproval: !!env.requiresApproval,
           version: v ? v.version : null,
           versionLabel: v ? `1.0.${v.version}` : null,
           promotedBy: v ? v.promoted_by_username : null,
@@ -1404,16 +1409,39 @@ router.get('/projects/:id/release-history', async (req, res) => {
     const allEnvs = await getOrgEnvironments(project.organisation);
     const labelById = new Map(allEnvs.map((e) => [e.id, e.label]));
 
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 300);
+    // ---- Pagination + filters (GitHub commit-log parity) ----
+    // `before` is a history row id cursor, not an offset — offset pagination
+    // over a feed that keeps getting new rows at the top would skip or
+    // repeat entries as promotions land between page loads; "give me
+    // everything with id < this" is stable regardless of what's added
+    // concurrently. One extra row is fetched past `limit` purely to know
+    // whether there's more to page to, then trimmed back off before
+    // responding.
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 30, 1), 100);
+    const before = req.query.before ? parseInt(req.query.before, 10) : null;
+    const environmentId = req.query.environmentId ? String(req.query.environmentId) : null;
+    const author = req.query.author ? String(req.query.author).trim() : null;
+    const breakingOnly = req.query.breakingOnly === 'true' || req.query.breakingOnly === '1';
+
+    const params = [req.params.id];
+    let where = 'WHERE project_id = $1';
+    if (environmentId) { params.push(environmentId); where += ` AND environment_id = $${params.length}`; }
+    if (author) { params.push(`%${author}%`); where += ` AND promoted_by_username ILIKE $${params.length}`; }
+    if (breakingOnly) { where += ` AND jsonb_array_length(breaking_changes) > 0`; }
+    if (before && Number.isFinite(before)) { params.push(before); where += ` AND id < $${params.length}`; }
+    params.push(limit + 1);
+
     const { rows: historyRows } = await pool.query(
       `SELECT id, environment_id, version, source_environment_id, action, rolled_back_from_id,
               promoted_by_username, auto_mirrored, promoted_at, release_note, breaking_changes
-       FROM project_env_version_history WHERE project_id = $1 ORDER BY promoted_at DESC, id DESC LIMIT $2`,
-      [req.params.id, limit]
+       FROM project_env_version_history ${where} ORDER BY promoted_at DESC, id DESC LIMIT $${params.length}`,
+      params
     );
+    const hasMore = historyRows.length > limit;
+    const pageRows = hasMore ? historyRows.slice(0, limit) : historyRows;
 
     res.json({
-      entries: historyRows.map((h) => ({
+      entries: pageRows.map((h) => ({
         id: h.id,
         environmentId: h.environment_id,
         environmentLabel: labelById.get(h.environment_id) || h.environment_id,
@@ -1429,12 +1457,151 @@ router.get('/projects/:id/release-history', async (req, res) => {
         releaseNote: h.release_note,
         breakingChanges: Array.isArray(h.breaking_changes) ? h.breaking_changes : [],
       })),
+      hasMore,
+      nextBefore: hasMore ? pageRows[pageRows.length - 1].id : null,
     });
   } catch (err) {
     console.error('GET release history failed:', err);
     res.status(500).json({ error: 'Could not load release history.' });
   }
 });
+
+// GET /api/workspace/projects/:id/release-health — breaking-changes-per-
+// release trend for the Overview page's sparkline (Release Pipeline v2 item
+// #5: "a signal, not just something you see mid-promotion"). One point per
+// promotion INTO the pipeline's last stage (the stage that actually reaches
+// consumers), not every intermediate SIT/UAT hop, so the sparkline reads as
+// "releases that shipped" rather than every internal promotion.
+router.get('/projects/:id/release-health', async (req, res) => {
+  try {
+    const { rows: projRows } = await pool.query(`SELECT id, organisation FROM projects WHERE id = $1`, [req.params.id]);
+    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
+      return res.status(404).json({ error: 'Project not found.' });
+    }
+    const access = await resolveAccessById(req.authUser.sub, req.params.id, req.authUser.organisation);
+    if (!access.canView) return res.status(404).json({ error: 'Project not found.' });
+
+    const allEnvs = await getOrgEnvironments(projRows[0].organisation);
+    const stages = pipelineStages(allEnvs);
+    if (stages.length < 2) return res.json({ points: [] });
+    const lastStage = stages[stages.length - 1];
+
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 50);
+    const { rows } = await pool.query(
+      `SELECT version, breaking_changes, promoted_at FROM project_env_version_history
+       WHERE project_id = $1 AND environment_id = $2 AND action = 'promote'
+       ORDER BY promoted_at DESC, id DESC LIMIT $3`,
+      [req.params.id, lastStage.id, limit]
+    );
+    const points = rows.reverse().map((r) => ({
+      versionLabel: `1.0.${r.version}`,
+      breakingChangesCount: Array.isArray(r.breaking_changes) ? r.breaking_changes.length : 0,
+      promotedAt: r.promoted_at,
+    }));
+    res.json({ lastStageLabel: lastStage.label, points });
+  } catch (err) {
+    console.error('GET release-health failed:', err);
+    res.status(500).json({ error: 'Could not load release health.' });
+  }
+});
+
+// ---- Shared promotion core (item: GitHub-style branch protection) ----
+// Everything from "encrypt the target snapshot" through the mirror insert,
+// commit, audit trail, and Admin notification is IDENTICAL whether a
+// promotion happens immediately (POST /promote, target doesn't require
+// approval) or after a second Admin approves a promotion request (target
+// DOES require approval — see project_promotion_requests below). This is
+// that shared tail end, so the two call sites can't drift out of sync on
+// what "a promotion" actually does.
+async function finalizePromotion(client, req, {
+  project, allEnvs, stages, fromIdx, targetStage, sourceData, newReleaseVersion,
+  fromEnvironmentId, releaseNote, breakingChanges, actingUser,
+}) {
+  const targetEnc = dataCrypto.encryptField(JSON.stringify(sourceData), `project-env:${project.id}:${targetStage.id}`);
+  const targetKeyVersion = dataCrypto.currentKeyVersion();
+  await client.query(
+    `INSERT INTO project_env_versions
+       (project_id, environment_id, version, data_enc, data_key_version, source_environment_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, now())
+     ON CONFLICT (project_id, environment_id) DO UPDATE SET
+       version = EXCLUDED.version, data_enc = EXCLUDED.data_enc, data_key_version = EXCLUDED.data_key_version,
+       source_environment_id = EXCLUDED.source_environment_id, promoted_by = EXCLUDED.promoted_by,
+       promoted_by_username = EXCLUDED.promoted_by_username, auto_mirrored = false, promoted_at = now()`,
+    [project.id, targetStage.id, newReleaseVersion, targetEnc, targetKeyVersion, fromEnvironmentId, actingUser.sub, actingUser.username]
+  );
+  await recordEnvVersionHistory(client, {
+    projectId: project.id, environmentId: targetStage.id, version: newReleaseVersion,
+    dataEnc: targetEnc, dataKeyVersion: targetKeyVersion, sourceEnvironmentId: fromEnvironmentId,
+    action: 'promote', promotedBy: actingUser.sub, promotedByUsername: actingUser.username, autoMirrored: false,
+    releaseNote, breakingChanges,
+  });
+
+  let mirrored = null;
+  const isLastStage = fromIdx + 1 === stages.length - 1;
+  if (isLastStage) {
+    const drEnv = allEnvs.find((e) => String(e.label || '').trim().toUpperCase() === 'DR');
+    if (drEnv) {
+      const mirrorEnc = dataCrypto.encryptField(JSON.stringify(sourceData), `project-env:${project.id}:${drEnv.id}`);
+      const mirrorKeyVersion = dataCrypto.currentKeyVersion();
+      await client.query(
+        `INSERT INTO project_env_versions
+           (project_id, environment_id, version, data_enc, data_key_version, source_environment_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, now())
+         ON CONFLICT (project_id, environment_id) DO UPDATE SET
+           version = EXCLUDED.version, data_enc = EXCLUDED.data_enc, data_key_version = EXCLUDED.data_key_version,
+           source_environment_id = EXCLUDED.source_environment_id, promoted_by = EXCLUDED.promoted_by,
+           promoted_by_username = EXCLUDED.promoted_by_username, auto_mirrored = true, promoted_at = now()`,
+        [project.id, drEnv.id, newReleaseVersion, mirrorEnc, mirrorKeyVersion, targetStage.id, actingUser.sub, actingUser.username]
+      );
+      await recordEnvVersionHistory(client, {
+        projectId: project.id, environmentId: drEnv.id, version: newReleaseVersion,
+        dataEnc: mirrorEnc, dataKeyVersion: mirrorKeyVersion, sourceEnvironmentId: targetStage.id,
+        action: 'promote', promotedBy: actingUser.sub, promotedByUsername: actingUser.username, autoMirrored: true,
+        releaseNote: `Auto-mirrored from ${targetStage.label}: ${releaseNote}`,
+      });
+      mirrored = { environmentId: drEnv.id, label: drEnv.label };
+    }
+  }
+
+  await client.query('COMMIT');
+  await cache.invalidateOrg(project.organisation);
+
+  await recordAuditEvent(actingUser, req, {
+    action: 'PROJECT_PROMOTED',
+    resourceType: 'project',
+    resourceId: project.id,
+    entityName: stages[fromIdx].label + ' → ' + targetStage.label,
+    details: `Promoted "${project.id}" from ${stages[fromIdx].label} to ${targetStage.label} — v1.0.${newReleaseVersion}.`
+      + (breakingChanges.length ? ` Included ${breakingChanges.length} acknowledged breaking change${breakingChanges.length === 1 ? '' : 's'}.` : ''),
+    severity: breakingChanges.length ? 'warning' : 'info',
+    metadata: { fromEnvironmentId, toEnvironmentId: targetStage.id, version: newReleaseVersion, breakingChangesCount: breakingChanges.length },
+  });
+  if (mirrored) {
+    await recordAuditEvent(actingUser, req, {
+      action: 'PROJECT_ENV_MIRRORED',
+      resourceType: 'project',
+      resourceId: project.id,
+      entityName: mirrored.label,
+      details: `${mirrored.label} auto-mirrored ${targetStage.label} — v1.0.${newReleaseVersion}.`,
+      severity: 'info',
+      metadata: { mirroredFrom: targetStage.id, version: newReleaseVersion },
+    });
+  }
+
+  const recipientIds = (await adminUserIds(project.organisation)).filter((id) => id !== actingUser.sub);
+  if (recipientIds.length) {
+    const hasBreaking = breakingChanges.length > 0;
+    await notifyUsers(recipientIds, {
+      organisation: project.organisation,
+      type: hasBreaking ? 'PROJECT_PROMOTED_BREAKING' : 'PROJECT_PROMOTED',
+      title: `${actingUser.username} promoted ${stages[fromIdx].label} → ${targetStage.label}${hasBreaking ? ' (breaking changes)' : ''}`,
+      body: releaseNote,
+      link: { view: 'release-pipeline', projectId: project.id },
+    });
+  }
+
+  return { toEnvironmentId: targetStage.id, toEnvironmentLabel: targetStage.label, versionLabel: `1.0.${newReleaseVersion}`, mirrored };
+}
 
 // POST /api/workspace/projects/:id/promote — { fromEnvironmentId }. Promotes
 // that stage's current content into the NEXT stage in the pipeline (server-
@@ -1479,6 +1646,19 @@ router.post('/projects/:id/promote', async (req, res) => {
       return res.status(400).json({ error: `${stages[fromIdx].label} is already the last stage in the pipeline.` });
     }
 
+    // ---- Branch-protection gate ----
+    // An environment flagged requiresApproval can never be promoted into
+    // directly, even by the Admin who started the promotion — that's the
+    // whole point of a second-approver requirement. Refuse here, before any
+    // writes, and point the caller at the request flow instead.
+    if (targetStage.requiresApproval) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        error: `${targetStage.label} requires a second Admin's approval — open a promotion request instead of promoting directly.`,
+        requiresApproval: true,
+      });
+    }
+
     let sourceData, newReleaseVersion;
     if (fromIdx === 0) {
       // Promoting out of the draft stage: cut a brand-new release.
@@ -1519,108 +1699,356 @@ router.post('/projects/:id/promote', async (req, res) => {
       return res.status(409).json({ error: tokenError, breakingChanges: liveBreakingChanges });
     }
 
-    const targetEnc = dataCrypto.encryptField(JSON.stringify(sourceData), `project-env:${project.id}:${targetStage.id}`);
-    const targetKeyVersion = dataCrypto.currentKeyVersion();
-    await client.query(
-      `INSERT INTO project_env_versions
-         (project_id, environment_id, version, data_enc, data_key_version, source_environment_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, now())
-       ON CONFLICT (project_id, environment_id) DO UPDATE SET
-         version = EXCLUDED.version, data_enc = EXCLUDED.data_enc, data_key_version = EXCLUDED.data_key_version,
-         source_environment_id = EXCLUDED.source_environment_id, promoted_by = EXCLUDED.promoted_by,
-         promoted_by_username = EXCLUDED.promoted_by_username, auto_mirrored = false, promoted_at = now()`,
-      [project.id, targetStage.id, newReleaseVersion, targetEnc, targetKeyVersion, fromEnvironmentId, req.authUser.sub, req.authUser.username]
-    );
-    await recordEnvVersionHistory(client, {
-      projectId: project.id, environmentId: targetStage.id, version: newReleaseVersion,
-      dataEnc: targetEnc, dataKeyVersion: targetKeyVersion, sourceEnvironmentId: fromEnvironmentId,
-      action: 'promote', promotedBy: req.authUser.sub, promotedByUsername: req.authUser.username, autoMirrored: false,
-      releaseNote, breakingChanges: liveBreakingChanges,
+    const result = await finalizePromotion(client, req, {
+      project, allEnvs, stages, fromIdx, targetStage, sourceData, newReleaseVersion,
+      fromEnvironmentId, releaseNote, breakingChanges: liveBreakingChanges, actingUser: req.authUser,
     });
 
-    let mirrored = null;
-    const isLastStage = fromIdx + 1 === stages.length - 1;
-    if (isLastStage) {
-      const drEnv = allEnvs.find((e) => String(e.label || '').trim().toUpperCase() === 'DR');
-      if (drEnv) {
-        const mirrorEnc = dataCrypto.encryptField(JSON.stringify(sourceData), `project-env:${project.id}:${drEnv.id}`);
-        const mirrorKeyVersion = dataCrypto.currentKeyVersion();
-        await client.query(
-          `INSERT INTO project_env_versions
-             (project_id, environment_id, version, data_enc, data_key_version, source_environment_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, now())
-           ON CONFLICT (project_id, environment_id) DO UPDATE SET
-             version = EXCLUDED.version, data_enc = EXCLUDED.data_enc, data_key_version = EXCLUDED.data_key_version,
-             source_environment_id = EXCLUDED.source_environment_id, promoted_by = EXCLUDED.promoted_by,
-             promoted_by_username = EXCLUDED.promoted_by_username, auto_mirrored = true, promoted_at = now()`,
-          [project.id, drEnv.id, newReleaseVersion, mirrorEnc, mirrorKeyVersion, targetStage.id, req.authUser.sub, req.authUser.username]
-        );
-        await recordEnvVersionHistory(client, {
-          projectId: project.id, environmentId: drEnv.id, version: newReleaseVersion,
-          dataEnc: mirrorEnc, dataKeyVersion: mirrorKeyVersion, sourceEnvironmentId: targetStage.id,
-          action: 'promote', promotedBy: req.authUser.sub, promotedByUsername: req.authUser.username, autoMirrored: true,
-          releaseNote: `Auto-mirrored from ${targetStage.label}: ${releaseNote}`,
-        });
-        mirrored = { environmentId: drEnv.id, label: drEnv.label };
-      }
-    }
-
-    await client.query('COMMIT');
-    await cache.invalidateOrg(project.organisation);
-
-    await recordAuditEvent(req.authUser, req, {
-      action: 'PROJECT_PROMOTED',
-      resourceType: 'project',
-      resourceId: project.id,
-      entityName: stages[fromIdx].label + ' → ' + targetStage.label,
-      details: `Promoted "${project.id}" from ${stages[fromIdx].label} to ${targetStage.label} — v1.0.${newReleaseVersion}.`
-        + (liveBreakingChanges.length ? ` Included ${liveBreakingChanges.length} acknowledged breaking change${liveBreakingChanges.length === 1 ? '' : 's'}.` : ''),
-      severity: liveBreakingChanges.length ? 'warning' : 'info',
-      metadata: { fromEnvironmentId, toEnvironmentId: targetStage.id, version: newReleaseVersion, breakingChangesCount: liveBreakingChanges.length },
-    });
-    if (mirrored) {
-      await recordAuditEvent(req.authUser, req, {
-        action: 'PROJECT_ENV_MIRRORED',
-        resourceType: 'project',
-        resourceId: project.id,
-        entityName: mirrored.label,
-        details: `${mirrored.label} auto-mirrored ${targetStage.label} — v1.0.${newReleaseVersion}.`,
-        severity: 'info',
-        metadata: { mirroredFrom: targetStage.id, version: newReleaseVersion },
-      });
-    }
-
-    // Every other Admin gets a notification too, not just an audit-log line
-    // only the promoter would think to go check — same "no signal" gap
-    // notifyUser already closes for doc-access and project-access grants
-    // elsewhere in this file. Breaking changes get a louder, distinct type
-    // so they can't be mistaken for a routine promotion at a glance.
-    const recipientIds = (await adminUserIds(project.organisation)).filter((id) => id !== req.authUser.sub);
-    if (recipientIds.length) {
-      const hasBreaking = liveBreakingChanges.length > 0;
-      await notifyUsers(recipientIds, {
-        organisation: project.organisation,
-        type: hasBreaking ? 'PROJECT_PROMOTED_BREAKING' : 'PROJECT_PROMOTED',
-        title: `${req.authUser.username} promoted ${stages[fromIdx].label} → ${targetStage.label}${hasBreaking ? ' (breaking changes)' : ''}`,
-        body: releaseNote,
-        link: { view: 'release-pipeline', projectId: project.id },
-      });
-    }
-
-    res.json({
-      ok: true,
-      toEnvironmentId: targetStage.id,
-      toEnvironmentLabel: targetStage.label,
-      versionLabel: `1.0.${newReleaseVersion}`,
-      mirrored,
-      breakingChangesCount: liveBreakingChanges.length,
-    });
+    res.json({ ok: true, ...result, breakingChangesCount: liveBreakingChanges.length });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('POST promote failed:', err);
     res.status(500).json({ error: 'Could not promote project.' });
   } finally {
     client.release();
+  }
+});
+
+// ============================================================================
+// Promotion requests — the "protected branch / required review" half of the
+// GitHub model. An environment flagged requiresApproval refuses direct
+// POST /promote (see the gate above); instead, an Admin opens a request
+// here, and a DIFFERENT Admin has to approve it before the promotion
+// actually happens. This mirrors "you can't approve your own pull request."
+// ============================================================================
+
+// POST /api/workspace/projects/:id/promotion-requests — { fromEnvironmentId,
+// releaseNote, ackBreakingChanges }. Validates exactly what POST /promote
+// would (release note length, adjacency, diff-viewed-recently via the
+// client's diffToken), but instead of writing the promotion, freezes the
+// diff + breaking changes it just computed onto a pending request row for
+// another Admin to review.
+router.post('/projects/:id/promotion-requests', async (req, res) => {
+  if (!isAdminUser(req)) return res.status(403).json({ error: 'Only Admins can request a promotion.' });
+  const fromEnvironmentId = req.body?.fromEnvironmentId;
+  if (!fromEnvironmentId) return res.status(400).json({ error: 'fromEnvironmentId is required.' });
+  const releaseNote = String(req.body?.releaseNote || '').trim().slice(0, 500);
+  if (!releaseNote) return res.status(400).json({ error: 'A release note is required before requesting a promotion.' });
+  if (releaseNote.length < 10) return res.status(400).json({ error: 'That release note is too short to be useful — say a bit more about what changed and why (at least 10 characters).' });
+
+  try {
+    const { rows: projRows } = await pool.query(
+      `SELECT id, organisation, data, data_enc, release_version FROM projects WHERE id = $1`,
+      [req.params.id]
+    );
+    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
+      return res.status(404).json({ error: 'Project not found.' });
+    }
+    const project = projRows[0];
+
+    const allEnvs = await getOrgEnvironments(project.organisation);
+    const stages = pipelineStages(allEnvs);
+    const fromIdx = stages.findIndex((e) => e.id === fromEnvironmentId);
+    if (fromIdx < 0) return res.status(400).json({ error: 'Unknown source environment.' });
+    const targetStage = stages[fromIdx + 1];
+    if (!targetStage) return res.status(400).json({ error: `${stages[fromIdx].label} is already the last stage in the pipeline.` });
+    if (!targetStage.requiresApproval) {
+      return res.status(400).json({ error: `${targetStage.label} doesn't require approval — promote directly instead.` });
+    }
+
+    const fromData = fromIdx === 0 ? decryptProjectData(project) : await loadStageData(project, fromEnvironmentId, fromIdx);
+    const toStageData = await loadStageData(project, targetStage.id, fromIdx + 1);
+    const liveDiff = diffEndpointLists(fromData.endpoints || [], toStageData.endpoints || []);
+    const liveBreakingChanges = detectBreakingChanges(fromData.endpoints || [], toStageData.endpoints || []);
+    const ackBreakingChanges = req.body?.ackBreakingChanges === true;
+    if (liveBreakingChanges.length && !ackBreakingChanges) {
+      const n = liveBreakingChanges.length;
+      return res.status(409).json({
+        error: `This promotion includes ${n} breaking change${n === 1 ? '' : 's'} — check "I've reviewed the breaking changes" before requesting.`,
+        breakingChanges: liveBreakingChanges,
+      });
+    }
+    const total = liveDiff.added.length + liveDiff.removed.length + liveDiff.modified.length;
+    if (!total) return res.status(400).json({ error: `${stages[fromIdx].label} and ${targetStage.label} are already in sync — nothing to promote.` });
+
+    const diffHash = hashDiff(liveDiff, liveBreakingChanges);
+    let created;
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO project_promotion_requests
+           (project_id, from_environment_id, to_environment_id, diff_hash, diff_snapshot, breaking_changes,
+            ack_breaking_changes, release_note, requested_by, requested_by_username)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         RETURNING id, created_at`,
+        [project.id, fromEnvironmentId, targetStage.id, diffHash, JSON.stringify(liveDiff), JSON.stringify(liveBreakingChanges),
+          ackBreakingChanges, releaseNote, req.authUser.sub, req.authUser.username]
+      );
+      created = rows[0];
+    } catch (err) {
+      if (err.code === '23505') { // unique_violation — a pending request already targets this stage
+        return res.status(409).json({ error: `There's already a pending promotion request into ${targetStage.label}. Cancel it before opening another.` });
+      }
+      throw err;
+    }
+
+    await recordAuditEvent(req.authUser, req, {
+      action: 'PROJECT_PROMOTION_REQUESTED',
+      resourceType: 'project',
+      resourceId: project.id,
+      entityName: stages[fromIdx].label + ' → ' + targetStage.label,
+      details: `Requested promotion of "${project.id}" from ${stages[fromIdx].label} to ${targetStage.label} — awaiting a second Admin's approval.`,
+      severity: liveBreakingChanges.length ? 'warning' : 'info',
+      metadata: { fromEnvironmentId, toEnvironmentId: targetStage.id, requestId: created.id },
+    });
+
+    const recipientIds = (await adminUserIds(project.organisation)).filter((id) => id !== req.authUser.sub);
+    if (recipientIds.length) {
+      await notifyUsers(recipientIds, {
+        organisation: project.organisation,
+        type: 'PROJECT_PROMOTION_REQUESTED',
+        title: `${req.authUser.username} requested promotion into ${targetStage.label} — needs your approval`,
+        body: releaseNote,
+        link: { view: 'release-pipeline', projectId: project.id },
+      });
+    }
+
+    res.json({ ok: true, id: created.id, toEnvironmentLabel: targetStage.label, createdAt: created.created_at });
+  } catch (err) {
+    console.error('POST promotion-requests failed:', err);
+    res.status(500).json({ error: 'Could not open a promotion request.' });
+  }
+});
+
+// GET /api/workspace/projects/:id/promotion-requests?status=pending — list
+// requests for this project. Same visibility as GET /versions.
+router.get('/projects/:id/promotion-requests', async (req, res) => {
+  try {
+    const { rows: projRows } = await pool.query(`SELECT id, organisation FROM projects WHERE id = $1`, [req.params.id]);
+    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
+      return res.status(404).json({ error: 'Project not found.' });
+    }
+    const access = await resolveAccessById(req.authUser.sub, req.params.id, req.authUser.organisation);
+    if (!access.canView) return res.status(404).json({ error: 'Project not found.' });
+
+    const status = ['pending', 'approved', 'rejected', 'cancelled'].includes(req.query.status) ? req.query.status : 'pending';
+    const allEnvs = await getOrgEnvironments(projRows[0].organisation);
+    const labelById = new Map(allEnvs.map((e) => [e.id, e.label]));
+
+    const { rows } = await pool.query(
+      `SELECT id, from_environment_id, to_environment_id, breaking_changes, ack_breaking_changes, release_note,
+              status, requested_by, requested_by_username, decided_by_username, decision_note, decided_at, created_at
+       FROM project_promotion_requests WHERE project_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT 50`,
+      [req.params.id, status]
+    );
+    res.json({
+      requests: rows.map((r) => ({
+        id: r.id,
+        fromEnvironmentId: r.from_environment_id,
+        fromEnvironmentLabel: labelById.get(r.from_environment_id) || r.from_environment_id,
+        toEnvironmentId: r.to_environment_id,
+        toEnvironmentLabel: labelById.get(r.to_environment_id) || r.to_environment_id,
+        breakingChanges: Array.isArray(r.breaking_changes) ? r.breaking_changes : [],
+        ackBreakingChanges: r.ack_breaking_changes,
+        releaseNote: r.release_note,
+        status: r.status,
+        requestedBy: r.requested_by,
+        requestedByUsername: r.requested_by_username,
+        decidedByUsername: r.decided_by_username,
+        decisionNote: r.decision_note,
+        decidedAt: r.decided_at,
+        createdAt: r.created_at,
+        // The requester can't approve their own request — the client uses
+        // this to grey out the Approve button rather than let someone click
+        // it and be refused server-side.
+        canApprove: isAdminUser(req) && r.requested_by !== req.authUser.sub,
+        canCancel: r.requested_by === req.authUser.sub,
+      })),
+    });
+  } catch (err) {
+    console.error('GET promotion-requests failed:', err);
+    res.status(500).json({ error: 'Could not load promotion requests.' });
+  }
+});
+
+// POST /api/workspace/projects/:id/promotion-requests/:reqId/approve —
+// Admin-only, and NOT the Admin who opened the request (GitHub's "you can't
+// approve your own PR"). Recomputes the live diff for the same from/to pair
+// and compares its hash against what was frozen at request time; if
+// anything's moved since (someone else promoted in the meantime, or the
+// draft changed), the approval is refused with the same "view it again"
+// framing as the direct-promote path, rather than silently approving
+// content nobody actually reviewed.
+router.post('/projects/:id/promotion-requests/:reqId/approve', async (req, res) => {
+  if (!isAdminUser(req)) return res.status(403).json({ error: 'Only Admins can approve a promotion request.' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: reqRows } = await client.query(
+      `SELECT * FROM project_promotion_requests WHERE id = $1 AND project_id = $2 FOR UPDATE`,
+      [req.params.reqId, req.params.id]
+    );
+    if (!reqRows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Promotion request not found.' }); }
+    const request = reqRows[0];
+    if (request.status !== 'pending') { await client.query('ROLLBACK'); return res.status(400).json({ error: `This request was already ${request.status}.` }); }
+    if (request.requested_by === req.authUser.sub) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: "You can't approve your own promotion request — ask another Admin to review it." });
+    }
+
+    const { rows: projRows } = await client.query(
+      `SELECT id, organisation, data, data_enc, release_version FROM projects WHERE id = $1 FOR UPDATE`,
+      [req.params.id]
+    );
+    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Project not found.' });
+    }
+    const project = projRows[0];
+    const allEnvs = await getOrgEnvironments(project.organisation);
+    const stages = pipelineStages(allEnvs);
+    const fromIdx = stages.findIndex((e) => e.id === request.from_environment_id);
+    const targetStage = stages.find((e) => e.id === request.to_environment_id);
+    if (fromIdx < 0 || !targetStage || stages[fromIdx + 1]?.id !== targetStage.id) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'The pipeline has changed since this request was opened — cancel it and open a fresh one.' });
+    }
+
+    let sourceData, newReleaseVersion;
+    if (fromIdx === 0) {
+      sourceData = decryptProjectData(project);
+    } else {
+      const { rows: srcRows } = await client.query(
+        `SELECT version, data_enc FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
+        [project.id, request.from_environment_id]
+      );
+      if (!srcRows.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: `Nothing has been promoted to ${stages[fromIdx].label} yet.` }); }
+      sourceData = JSON.parse(dataCrypto.decryptField(srcRows[0].data_enc, `project-env:${project.id}:${request.from_environment_id}`));
+    }
+    const toStageData = await loadStageData(project, targetStage.id, fromIdx + 1);
+    const liveDiff = diffEndpointLists(sourceData.endpoints || [], toStageData.endpoints || []);
+    const liveBreakingChanges = detectBreakingChanges(sourceData.endpoints || [], toStageData.endpoints || []);
+    if (hashDiff(liveDiff, liveBreakingChanges) !== request.diff_hash) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: "What's changed since this request was opened — ask the requester to cancel it and open a fresh one." });
+    }
+
+    if (fromIdx === 0) {
+      newReleaseVersion = project.release_version + 1;
+      await client.query(`UPDATE projects SET release_version = $1 WHERE id = $2`, [newReleaseVersion, project.id]);
+    } else {
+      const { rows: srcRows } = await client.query(
+        `SELECT version FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
+        [project.id, request.from_environment_id]
+      );
+      newReleaseVersion = srcRows[0].version;
+    }
+
+    const result = await finalizePromotion(client, req, {
+      project, allEnvs, stages, fromIdx, targetStage, sourceData, newReleaseVersion,
+      fromEnvironmentId: request.from_environment_id, releaseNote: request.release_note,
+      breakingChanges: liveBreakingChanges, actingUser: { sub: request.requested_by, username: request.requested_by_username },
+    });
+
+    await client.query(
+      `UPDATE project_promotion_requests SET status = 'approved', decided_by = $1, decided_by_username = $2, decided_at = now() WHERE id = $3`,
+      [req.authUser.sub, req.authUser.username, request.id]
+    );
+    await client.query('COMMIT');
+
+    await recordAuditEvent(req.authUser, req, {
+      action: 'PROJECT_PROMOTION_APPROVED',
+      resourceType: 'project',
+      resourceId: project.id,
+      entityName: stages[fromIdx].label + ' → ' + targetStage.label,
+      details: `Approved ${request.requested_by_username || 'a teammate'}'s promotion request from ${stages[fromIdx].label} to ${targetStage.label} — v1.0.${newReleaseVersion}.`,
+      severity: 'info',
+      metadata: { requestId: request.id, version: newReleaseVersion },
+    });
+    if (request.requested_by) {
+      await notifyUsers([request.requested_by], {
+        organisation: project.organisation,
+        type: 'PROJECT_PROMOTION_APPROVED',
+        title: `${req.authUser.username} approved your promotion into ${targetStage.label}`,
+        body: `${result.versionLabel} is now live in ${targetStage.label}.`,
+        link: { view: 'release-pipeline', projectId: project.id },
+      });
+    }
+
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('POST promotion-requests/approve failed:', err);
+    res.status(500).json({ error: 'Could not approve this promotion request.' });
+  } finally {
+    client.release();
+  }
+});
+
+// POST /api/workspace/projects/:id/promotion-requests/:reqId/reject — any
+// Admin other than the requester can reject, with an optional note (shown
+// to the requester, same as GitHub's "changes requested" review comment).
+router.post('/projects/:id/promotion-requests/:reqId/reject', async (req, res) => {
+  if (!isAdminUser(req)) return res.status(403).json({ error: 'Only Admins can reject a promotion request.' });
+  try {
+    const { rows } = await pool.query(
+      `SELECT pr.*, p.organisation FROM project_promotion_requests pr JOIN projects p ON p.id = pr.project_id
+       WHERE pr.id = $1 AND pr.project_id = $2`,
+      [req.params.reqId, req.params.id]
+    );
+    if (!rows.length || rows[0].organisation !== req.authUser.organisation) return res.status(404).json({ error: 'Promotion request not found.' });
+    const request = rows[0];
+    if (request.status !== 'pending') return res.status(400).json({ error: `This request was already ${request.status}.` });
+    if (request.requested_by === req.authUser.sub) return res.status(403).json({ error: "You can't reject your own promotion request — cancel it instead." });
+
+    const decisionNote = String(req.body?.note || '').trim().slice(0, 500) || null;
+    await pool.query(
+      `UPDATE project_promotion_requests SET status = 'rejected', decided_by = $1, decided_by_username = $2, decision_note = $3, decided_at = now() WHERE id = $4`,
+      [req.authUser.sub, req.authUser.username, decisionNote, request.id]
+    );
+    await recordAuditEvent(req.authUser, req, {
+      action: 'PROJECT_PROMOTION_REJECTED',
+      resourceType: 'project',
+      resourceId: request.project_id,
+      entityName: request.to_environment_id,
+      details: `Rejected ${request.requested_by_username || 'a teammate'}'s promotion request into ${request.to_environment_id}.` + (decisionNote ? ` Note: ${decisionNote}` : ''),
+      severity: 'warning',
+      metadata: { requestId: request.id },
+    });
+    if (request.requested_by) {
+      await notifyUsers([request.requested_by], {
+        organisation: request.organisation,
+        type: 'PROJECT_PROMOTION_REJECTED',
+        title: `${req.authUser.username} rejected your promotion request`,
+        body: decisionNote || 'No reason given.',
+        link: { view: 'release-pipeline', projectId: request.project_id },
+      });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('POST promotion-requests/reject failed:', err);
+    res.status(500).json({ error: 'Could not reject this promotion request.' });
+  }
+});
+
+// POST /api/workspace/projects/:id/promotion-requests/:reqId/cancel — the
+// original requester withdraws their own still-pending request.
+router.post('/projects/:id/promotion-requests/:reqId/cancel', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT pr.*, p.organisation FROM project_promotion_requests pr JOIN projects p ON p.id = pr.project_id
+       WHERE pr.id = $1 AND pr.project_id = $2`,
+      [req.params.reqId, req.params.id]
+    );
+    if (!rows.length || rows[0].organisation !== req.authUser.organisation) return res.status(404).json({ error: 'Promotion request not found.' });
+    const request = rows[0];
+    if (request.status !== 'pending') return res.status(400).json({ error: `This request was already ${request.status}.` });
+    if (request.requested_by !== req.authUser.sub) return res.status(403).json({ error: 'Only the person who opened this request can cancel it.' });
+    await pool.query(`UPDATE project_promotion_requests SET status = 'cancelled', decided_at = now() WHERE id = $1`, [request.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('POST promotion-requests/cancel failed:', err);
+    res.status(500).json({ error: 'Could not cancel this promotion request.' });
   }
 });
 
@@ -2006,7 +2434,7 @@ router.get('/projects/:id/diff', async (req, res) => {
 
     res.json({
       from: { environmentId: fromKey, label: stageById.get(fromKey).label },
-      to: { environmentId: toKey, label: stageById.get(toKey).label },
+      to: { environmentId: toKey, label: stageById.get(toKey).label, requiresApproval: !!stageById.get(toKey).requiresApproval },
       canMerge,
       // Only minted for an adjacent pair (the only pair POST /promote will
       // ever accept) — see the diff-viewed gate above. A non-adjacent,
