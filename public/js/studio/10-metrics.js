@@ -101,6 +101,43 @@ const RF_ICONS = {
   custom: `<rect x="-7" y="-9" width="14" height="18" rx="2.5"></rect><line x1="-7" y1="-3" x2="7" y2="-3"></line><line x1="-3.5" y1="3" x2="3.5" y2="3"></line>`,
 };
 
+// Label on a connector (stage.next / stage.back). Long text is cut with an
+// ellipsis so it stays inside the gap; the full text stays in a <title> tooltip.
+function rfHopLabel(text, cx, y, kind, pdf){
+  if(!text) return '';
+  const t = text.length > 24 ? text.slice(0,23) + '…' : text;
+  const attrs = pdf
+    ? `font-size="10px" font-weight="700" fill="${kind==='ret' ? '#8890a3' : '#4b5468'}"`
+    : `class="rf-hop${kind==='ret' ? ' ret' : ''}"`;
+  return `<text x="${cx}" y="${y}" text-anchor="middle" ${attrs}>${escapeHtml(t)}${text.length > 24 ? `<title>${escapeHtml(text)}</title>` : ''}</text>`;
+}
+
+// Whole "Request flow(s)" section body for the Overview page: title, one
+// diagram per flow (each with its name + "when it runs" line when the project
+// defines several), and the legend. Projects without requestFlows resolve to a
+// single legacy/default flow and look exactly as before.
+function requestFlowSectionInnerHtml(proj, env){
+  const res = resolveRequestFlows(proj, env);
+  const multi = res.flows.length > 1;
+  const anyTwoWay = res.flows.some(f => f.pattern === '2-way');
+  const sub = res.custom
+    ? `${res.flows.length} flow${multi ? 's' : ''}, set from Edit settings`
+    : `${res.flows[0].caption}, set from Edit settings`;
+  const blocks = res.flows.map((f,i)=>{
+    const showHead = res.custom && (multi || f.name || f.when);
+    const head = showHead
+      ? `<div class="rf-flow-head">${multi ? `<span class="rf-flow-num">${i+1}</span>` : ''}<span class="rf-flow-name">${escapeHtml(f.name || `Flow ${i+1}`)}</span>${f.when ? `<span class="rf-flow-when">${escapeHtml(f.when)}</span>` : ''}</div>`
+      : '';
+    return `<div class="rf-flow-block">${head}${requestFlowSvg(f.stages, f.pattern)}</div>`;
+  }).join('');
+  return `<div class="section-title">Request flow${multi ? 's' : ''} <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— ${escapeHtml(sub)}</span></div>
+      ${blocks}
+      <div class="rf-legend">
+        <span><span class="sw"></span>Request</span>
+        ${anyTwoWay ? '<span><span class="sw ret"></span>Response</span>' : ''}
+      </div>`;
+}
+
 function requestFlowSvg(stages, direction){
   // stages: [{k, systems:[...], icon, mid}, ...] left-to-right. `systems` is
   // ALWAYS an array now — a stage with more than one entry (e.g. two source
@@ -110,7 +147,10 @@ function requestFlowSvg(stages, direction){
   // chain regardless of how many systems sit at any one stage.
   // direction: '1-way' (forward arrows only) or '2-way' (forward + return arrows).
   const n = stages.length;
-  const boxW = 152, gap = 68, padX = 22;
+  // Arrow labels (stage.next / stage.back) need room to sit above/below the
+  // connector, so the gap between boxes widens when any hop is labelled.
+  const hasHops = stages.slice(0,-1).some(s => s.next || (direction==='2-way' && s.back));
+  const boxW = 152, gap = hasHops ? 150 : 68, padX = 22;
   const iconR = 16, topPad = 8;
   const iconCy = topPad + iconR;
   const boxY = iconCy + iconR + 12;
@@ -162,13 +202,13 @@ function requestFlowSvg(stages, direction){
       <polygon points="${x2-9},${fwdY-4} ${x2-9},${fwdY+4} ${x2},${fwdY}" class="rf-arrowhead"></polygon>
       <circle r="3" class="rf-flow-dot">
         <animateMotion dur="2s" begin="${delay}s" repeatCount="indefinite" path="M${x1},${fwdY} L${x2-9},${fwdY}"></animateMotion>
-      </circle>`;
+      </circle>` + rfHopLabel(s.next, (x1+x2)/2, fwdY-7, 'fwd', false);
     if(direction==='2-way'){
       out += `<line x1="${x2-9}" y1="${retY}" x2="${x1}" y2="${retY}" class="rf-line rf-line-return"></line>
       <polygon points="${x1+9},${retY-4} ${x1+9},${retY+4} ${x1},${retY}" class="rf-arrowhead-return"></polygon>
       <circle r="2.6" class="rf-flow-dot-ret">
         <animateMotion dur="2.2s" begin="${delay}s" repeatCount="indefinite" path="M${x2-9},${retY} L${x1+9},${retY}"></animateMotion>
-      </circle>`;
+      </circle>` + rfHopLabel(s.back, (x1+x2)/2, retY+15, 'ret', false);
     }
     return out;
   }).join('');
@@ -269,9 +309,33 @@ function pdfLifecycleWheelSvg(currentStage){
     </div>`;
 }
 
+// PDF counterpart of requestFlowSectionInnerHtml (print-safe colors).
+function pdfRequestFlowSectionInnerHtml(proj, env){
+  const res = resolveRequestFlows(proj, env);
+  const multi = res.flows.length > 1;
+  const anyTwoWay = res.flows.some(f => f.pattern === '2-way');
+  const sub = res.custom ? `${res.flows.length} flow${multi ? 's' : ''}` : res.flows[0].caption;
+  const blocks = res.flows.map((f,i)=>{
+    const showHead = res.custom && (multi || f.name || f.when);
+    const head = showHead
+      ? `<div class="pdf-rf-flow-head">${multi ? `<span class="pdf-rf-flow-num">${i+1}</span>` : ''}<span class="pdf-rf-flow-name">${escapeHtml(f.name || `Flow ${i+1}`)}</span>${f.when ? `<span class="pdf-rf-flow-when">${escapeHtml(f.when)}</span>` : ''}</div>`
+      : '';
+    return `${head}${pdfRequestFlowSvg(f.stages, f.pattern)}`;
+  }).join('');
+  return `<div class="pdf-section-title">Request flow${multi ? 's' : ''} <span style="text-transform:none; letter-spacing:0; font-weight:500; color:#8890a3;">— ${escapeHtml(sub)}</span></div>
+      ${blocks}
+      <div class="pdf-rf-legend">
+        <span><span class="sw"></span>Request</span>
+        ${anyTwoWay ? '<span><span class="sw ret"></span>Response</span>' : ''}
+      </div>`;
+}
+
 function pdfRequestFlowSvg(stages, direction){
   const n = stages.length;
-  const boxW = 152, gap = 68, padX = 22;
+  // Arrow labels (stage.next / stage.back) need room to sit above/below the
+  // connector, so the gap between boxes widens when any hop is labelled.
+  const hasHops = stages.slice(0,-1).some(s => s.next || (direction==='2-way' && s.back));
+  const boxW = 152, gap = hasHops ? 150 : 68, padX = 22;
   const iconR = 16, topPad = 8;
   const iconCy = topPad + iconR;
   const boxY = iconCy + iconR + 12;
@@ -315,16 +379,16 @@ function pdfRequestFlowSvg(stages, direction){
     const fwdY = direction==='2-way' ? midY - 9 : midY;
     const retY = midY + 11;
     let out = `<line x1="${x1}" y1="${fwdY}" x2="${x2-9}" y2="${fwdY}" stroke="${accent}" stroke-width="1.5" opacity="0.6"></line>
-      <polygon points="${x2-9},${fwdY-4} ${x2-9},${fwdY+4} ${x2},${fwdY}" fill="${accent}" opacity="0.8"></polygon>`;
+      <polygon points="${x2-9},${fwdY-4} ${x2-9},${fwdY+4} ${x2},${fwdY}" fill="${accent}" opacity="0.8"></polygon>` + rfHopLabel(s.next, (x1+x2)/2, fwdY-7, 'fwd', true);
     if(direction==='2-way'){
       out += `<line x1="${x2-9}" y1="${retY}" x2="${x1}" y2="${retY}" stroke="#8890a3" stroke-dasharray="3 3" stroke-width="1.5" opacity="0.7"></line>
-      <polygon points="${x1+9},${retY-4} ${x1+9},${retY+4} ${x1},${retY}" fill="#8890a3" opacity="0.8"></polygon>`;
+      <polygon points="${x1+9},${retY-4} ${x1+9},${retY+4} ${x1},${retY}" fill="#8890a3" opacity="0.8"></polygon>` + rfHopLabel(s.back, (x1+x2)/2, retY+15, 'ret', true);
     }
     return out;
   }).join('');
 
   return `<div class="pdf-rf-svg-wrap">
-    <svg viewBox="0 0 ${totalW} ${totalH}" class="pdf-rf-svg" preserveAspectRatio="xMinYMid meet" role="img" aria-label="Request flow diagram, ${direction === '2-way' ? 'two-way' : 'one-way'}">
+    <svg viewBox="0 0 ${totalW} ${totalH}" class="pdf-rf-svg" style="width:${Math.min(100, (totalW/856)*100).toFixed(1)}%" preserveAspectRatio="xMinYMid meet" role="img" aria-label="Request flow diagram, ${direction === '2-way' ? 'two-way' : 'one-way'}">
       ${connectors}
       ${boxes}
     </svg>

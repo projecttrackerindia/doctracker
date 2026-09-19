@@ -262,6 +262,21 @@ html{ scroll-behavior:smooth; }
 .fsr-icon-btn:disabled{ opacity:.35; cursor:not-allowed; }
 .fsr-icon-btn.danger{ color:var(--danger); }
 .fsr-icon-btn.danger:hover{ background:var(--danger-soft); border-color:var(--danger); }
+.flow-stage-row .fsr-fields .fsr-hops{ flex-basis:100%; display:flex; gap:8px; }
+.flow-stage-row .fsr-fields .fsr-hops .field{ flex:1; }
+.fe-sub{ text-transform:none; font-weight:500; }
+.fe-flow{ border:1px solid var(--border-strong); border-radius:12px; padding:12px; margin-bottom:12px; background:var(--surface); }
+.fe-flow-head{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.fe-flow-num{ flex-shrink:0; width:22px; height:22px; border-radius:50%; background:var(--accent); color:var(--accent-ink); font-size:11px; font-weight:800; display:flex; align-items:center; justify-content:center; }
+.fe-flow-head .field{ margin:0; }
+.fe-flow-head .fe-name-wrap{ flex:1; min-width:0; }
+.fe-flow-head .fe-name-wrap input{ font-weight:700; }
+.fe-flow-head .fe-dir-wrap{ flex-shrink:0; }
+.fe-when-wrap{ margin:0 0 10px; }
+.fe-when-wrap input{ font-size:12px; }
+.fe-btn{ background:none; border:1px dashed var(--border-strong); color:var(--text-dim); border-radius:7px; padding:6px 12px; font-size:12px; }
+.fe-btn:hover{ border-color:var(--accent); color:var(--accent); }
+.fe-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; }
 
 /* Add-block control — floating, same treatment as the studio's "+ New endpoint" FAB */
 .add-block{ position:fixed; right:24px; bottom:92px; z-index:45; }
@@ -455,25 +470,9 @@ html{ scroll-behavior:smooth; }
         <input type="text" id="fLicenseUrl" placeholder="https://example.com/license">
       </div>
       <div class="field span2">
-        <label>Request flow direction <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— how the Request flow diagram on the overview page renders</span></label>
-        <div class="field-grid">
-          <div class="field">
-            <select id="fFlowPattern">
-              <option value="1-way">One-way (forward only)</option>
-              <option value="2-way">Two-way (forward + return)</option>
-            </select>
-          </div>
-          <div class="field">
-            <input type="text" id="fFlowLabel" placeholder="e.g. Two-way — request and response (Client ⇄ Gateway ⇄ Flow ⇄ Downstream)">
-          </div>
-        </div>
-        <div class="hint" style="margin-top:4px;">This is just the small caption shown next to "Request flow" — it doesn't change the diagram itself. Edit the actual boxes below.</div>
-      </div>
-      <div class="field span2">
-        <label>Request flow stages <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— the actual boxes in the diagram, left to right</span></label>
-        <div id="fFlowStagesList"></div>
-        <button type="button" class="add-row-btn" id="fFlowStageAdd">+ Add stage</button>
-        <div class="hint" style="margin-top:6px;">Each stage can list more than one system — e.g. a "Source" stage with two upstream systems, or a "Target" stage with two downstream ones. Leave every stage empty to use the default Client → Gateway → Flow → Downstream template.</div>
+        <label>Request flows <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— the diagrams shown on the overview page</span></label>
+        <div id="fFlowsRoot"></div>
+        <div class="hint" style="margin-top:6px;">A flow is one left-to-right chain of systems. If your integration isn't one continuous chain — e.g. a token call that runs every 30 minutes, then a business request on every call — add one flow per exchange and describe when each runs. Label the arrows to show what travels between systems. Leave it empty to use the default Client → Gateway → Flow → Downstream diagram.</div>
       </div>
     </div>
   </div>
@@ -698,6 +697,7 @@ html{ scroll-behavior:smooth; }
 .ai-not-configured-icon{ flex-shrink:0; font-size:16px; margin-top:1px; }
 </style>
 
+<script nonce="__CSP_NONCE__" src="/js/flow-editor.js"></script>
 <script nonce="__CSP_NONCE__">
 /* ==================== Injected from server (see server.js) ==================== */
 const AUTH_USER = __AUTH_USER_JSON__;
@@ -912,79 +912,14 @@ const LIFECYCLE_STAGES = ['DRAFT','DESIGN','DEVELOPMENT','SIT','UAT','PRE-PROD',
 // resolveFlowDirection() in public/js/studio/03-notifications.js for the
 // read side (including backward-compat with the old preset-picker model).
 //
-// Request flow stages: the actual boxes drawn in the diagram, stored on the
-// project as requestFlowStages = [{ k, systems[], icon, mid }]. An empty array
-// falls back to the default Client/Gateway/Flow/Downstream template — see
-// resolveFlowStages() in public/js/studio/03-notifications.js. Same shape and
-// behaviour as the modal editor in public/js/studio/17-modals.js.
-const FLOW_STAGE_ICONS = [
-  { id:'client', label:'Client' },
-  { id:'gateway', label:'Gateway' },
-  { id:'flow', label:'Flow / API' },
-  { id:'downstream', label:'Downstream' },
-  { id:'custom', label:'System (generic)' },
-];
-let flowStagesEditorState = [];
-
-function renderFlowStagesEditor(){
-  const list = document.getElementById('fFlowStagesList');
-  if(!list) return;
-  if(!flowStagesEditorState.length){
-    list.innerHTML = `<div class="empty-field">Not customized — the diagram is showing the default Client → Gateway → Flow → Downstream template. Add a stage to start customizing.</div>`;
-    return;
-  }
-  list.innerHTML = flowStagesEditorState.map((s, i)=>`
-    <div class="flow-stage-row" data-idx="${i}">
-      <div class="fsr-fields">
-        <div class="field">
-          <label>Role label</label>
-          <input type="text" data-fsr="k" value="${escapeHtml(s.k || '')}" placeholder="e.g. Source">
-        </div>
-        <div class="field" style="flex:2;">
-          <label>System(s) <span style="text-transform:none;font-weight:500;">— comma-separated</span></label>
-          <input type="text" data-fsr="systems" value="${escapeHtml((s.systems||[]).join(', '))}" placeholder="e.g. Employee Portal, WhatsApp Payment Endpoint">
-        </div>
-        <div class="field">
-          <label>Icon</label>
-          <select data-fsr="icon">${FLOW_STAGE_ICONS.map(o=>`<option value="${o.id}" ${((s.icon||'custom')===o.id)?'selected':''}>${o.label}</option>`).join('')}</select>
-        </div>
-      </div>
-      <div class="fsr-side">
-        <label class="fsr-mid-label" title="Highlights this stage in the diagram — use it for your own system, e.g. the gateway or API"><input type="radio" name="fsrMid" data-fsr="mid" ${s.mid?'checked':''}> Highlight</label>
-        <div class="fsr-move-btns">
-          <button type="button" class="fsr-icon-btn" data-fsr-act="up" title="Move left" ${i===0?'disabled':''}>◂</button>
-          <button type="button" class="fsr-icon-btn" data-fsr-act="down" title="Move right" ${i===flowStagesEditorState.length-1?'disabled':''}>▸</button>
-          <button type="button" class="fsr-icon-btn danger" data-fsr-act="remove" title="Remove stage">✕</button>
-        </div>
-      </div>
-    </div>`).join('');
-
-  list.querySelectorAll('.flow-stage-row').forEach(row=>{
-    const idx = parseInt(row.getAttribute('data-idx'), 10);
-    row.querySelectorAll('[data-fsr="k"]').forEach(el=> el.addEventListener('input', ()=>{ flowStagesEditorState[idx].k = el.value; }));
-    row.querySelectorAll('[data-fsr="icon"]').forEach(el=> el.addEventListener('change', ()=>{ flowStagesEditorState[idx].icon = el.value; }));
-    row.querySelectorAll('[data-fsr="systems"]').forEach(el=> el.addEventListener('input', ()=>{
-      flowStagesEditorState[idx].systems = el.value.split(',').map(v=>v.trim()).filter(Boolean);
-    }));
-    row.querySelectorAll('[data-fsr="mid"]').forEach(el=> el.addEventListener('change', ()=>{
-      flowStagesEditorState.forEach((s,j)=> s.mid = (j===idx));
-    }));
-    row.querySelectorAll('[data-fsr-act]').forEach(btn=>{
-      btn.addEventListener('click', ()=>{
-        const act = btn.getAttribute('data-fsr-act');
-        if(act==='remove') flowStagesEditorState.splice(idx,1);
-        else if(act==='up' && idx>0) [flowStagesEditorState[idx-1], flowStagesEditorState[idx]] = [flowStagesEditorState[idx], flowStagesEditorState[idx-1]];
-        else if(act==='down' && idx<flowStagesEditorState.length-1) [flowStagesEditorState[idx+1], flowStagesEditorState[idx]] = [flowStagesEditorState[idx], flowStagesEditorState[idx+1]];
-        renderFlowStagesEditor();
-      });
-    });
-  });
-}
-
-document.getElementById('fFlowStageAdd').addEventListener('click', ()=>{
-  flowStagesEditorState.push({ k:'', systems:[], icon:'custom', mid:false });
-  renderFlowStagesEditor();
-});
+// Request flows: proj.requestFlows = [{ name, when, direction, stages[] }] — one
+// entry per exchange (e.g. "get token", "business request", "third-party
+// token"), each drawn as its own diagram on the Overview page. The builder UI
+// lives in public/js/flow-editor.js, shared with the studio modal so the two
+// editors can't drift apart. Read side: resolveRequestFlows() in
+// public/js/studio/03-notifications.js (falls back to the legacy single chain,
+// then to the default Client/Gateway/Flow/Downstream template).
+const flowEditor = FlowEditor.create({ root: document.getElementById('fFlowsRoot') });
 
 function exampleValueFor(type, example){
   if(example !== undefined && example !== '' && example !== null) return coerceByType(type, example);
@@ -1105,12 +1040,7 @@ function hydrateProjectFields(proj){
   document.getElementById('fContactEmail').value = (proj.contact && proj.contact.email) || '';
   document.getElementById('fLicenseName').value = (proj.license && proj.license.name) || '';
   document.getElementById('fLicenseUrl').value = (proj.license && proj.license.url) || '';
-  document.getElementById('fFlowPattern').value = proj.requestFlowDirection === '2-way' ? '2-way' : '1-way';
-  document.getElementById('fFlowLabel').value = proj.requestFlowLabel || '';
-  flowStagesEditorState = Array.isArray(proj.requestFlowStages)
-    ? proj.requestFlowStages.map(s=>({ k: s.k || '', systems: Array.isArray(s.systems) ? s.systems.slice() : [], icon: s.icon || 'custom', mid: !!s.mid }))
-    : [];
-  renderFlowStagesEditor();
+  flowEditor.load(proj);
   // Version is a project-wide value now (see performSave) — prefilled here so
   // typing an existing project's name for a new endpoint picks up its current
   // version instead of leaving the field blank/stale.
@@ -1144,10 +1074,7 @@ function clearProjectFields(){
   document.getElementById('fAuthMethod').value = 'POST';
   document.getElementById('fAuthIncludeDocs').checked = false;
   document.getElementById('fAuthIncludeSwagger').checked = false;
-  document.getElementById('fFlowPattern').value = '1-way';
-  document.getElementById('fFlowLabel').value = '';
-  flowStagesEditorState = [];
-  renderFlowStagesEditor();
+  flowEditor.load({});
   authRows.req = [];
   authRows.resp = [];
   renderAuthRows('req');
@@ -2058,7 +1985,7 @@ function gatherEndpointFromForm(){
 function blankProjectStub(name){
   return {
     id: uid(), name, description:'', visibility:'private', environments:{}, auth:{ type:'', headerName:'', description:'' },
-    notes:'', lifecycle:'DEVELOPMENT', owner:'', team:'', requestFlowDirection:'1-way', requestFlowLabel:'', requestFlowStages:[], version:'',
+    notes:'', lifecycle:'DEVELOPMENT', owner:'', team:'', requestFlowDirection:'1-way', requestFlowLabel:'', requestFlowStages:[], requestFlows:[], version:'',
     termsOfService:'', contact:{name:'',email:''}, license:{name:'',url:''},
     createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), endpoints:[], attachments:[], _open:true,
   };
@@ -2114,13 +2041,7 @@ async function performSave(force){
       name: document.getElementById('fLicenseName').value.trim(),
       url: document.getElementById('fLicenseUrl').value.trim(),
     };
-    proj.requestFlowDirection = document.getElementById('fFlowPattern').value === '2-way' ? '2-way' : '1-way';
-    proj.requestFlowLabel = document.getElementById('fFlowLabel').value.trim();
-    // Drop fully-empty stages so a stray "+ Add stage" click doesn't save a blank box;
-    // an empty result falls back to the default diagram template.
-    proj.requestFlowStages = flowStagesEditorState
-      .filter(s => (s.k || '').trim() || (s.systems || []).length)
-      .map(s => ({ k: (s.k || '').trim(), systems: (s.systems || []).slice(), icon: s.icon || 'custom', mid: !!s.mid }));
+    FlowEditor.applyToProject(proj, flowEditor.collect());
     // Version reads as a per-endpoint field in the Basics tab, but it's really
     // one value per project — every endpoint should show the same version, so
     // saving here writes it onto the project (source of truth for Overview/PDF

@@ -557,10 +557,6 @@ function renderProjectOverview(main, projectId){
   const envsConfigured = environments().filter(e=>proj.environments[e.id]).length;
   const tagCount = new Set(epsForView.map(e=>e.tag || 'General')).size;
 
-  const flowPreset = resolveFlowDirection(proj);
-  const direction = flowPreset.pattern;
-  const flowStages = resolveFlowStages(proj, env);
-
   const docs = (proj.attachments || []).slice().sort((a,b)=> new Date(b.uploadedAt) - new Date(a.uploadedAt));
   const docsHtml = docs.length
     ? `<div class="doc-grid">${docs.map(d=>{
@@ -708,12 +704,7 @@ function renderProjectOverview(main, projectId){
     ${releaseHealthSectionHtml(proj.id)}
 
     <div class="section">
-      <div class="section-title">Request flow <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— ${escapeHtml(flowPreset.label)}, set from Edit settings</span></div>
-      ${requestFlowSvg(flowStages, direction)}
-      <div class="rf-legend">
-        <span><span class="sw"></span>Request</span>
-        ${direction==='2-way' ? '<span><span class="sw ret"></span>Response</span>' : ''}
-      </div>
+      ${requestFlowSectionInnerHtml(proj, env)}
     </div>
 
     <div class="section">

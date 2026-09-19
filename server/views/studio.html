@@ -845,6 +845,10 @@ kbd{
 /* ---------- PDF export: Request flow diagram (print-safe colors) ---------- */
 .pdf-print-root .pdf-rf-svg-wrap{ width:100%; overflow:hidden; padding:6px 0 2px; }
 .pdf-print-root .pdf-rf-svg{ width:100%; height:auto; display:block; }
+.pdf-print-root .pdf-rf-flow-head{ display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin:10px 0 0; }
+.pdf-print-root .pdf-rf-flow-num{ display:inline-block; min-width:16px; height:16px; line-height:16px; text-align:center; border-radius:50%; background:#5c7cfa; color:#fff; font-size:9px; font-weight:800; }
+.pdf-print-root .pdf-rf-flow-name{ font-size:11.5px; font-weight:800; color:#0f1420; }
+.pdf-print-root .pdf-rf-flow-when{ font-size:10px; color:#8890a3; }
 .pdf-print-root .pdf-rf-legend{ display:flex; gap:16px; margin-top:10px; font-size:10.5px; color:#8890a3; }
 .pdf-print-root .pdf-rf-legend span{ display:inline-flex; align-items:center; gap:6px; }
 .pdf-print-root .pdf-rf-legend .sw{ width:16px; height:0; border-top:2px solid #5c7cfa; opacity:.7; display:inline-block; }
@@ -1317,6 +1321,29 @@ pre.code-block{
 .fsr-icon-btn:disabled{ opacity:.35; cursor:not-allowed; }
 .fsr-icon-btn.danger{ color:var(--danger); }
 .fsr-icon-btn.danger:hover{ background:var(--danger-soft); border-color:var(--danger); }
+.flow-stage-row .fsr-fields .fsr-hops{ flex-basis:100%; display:flex; gap:8px; margin-top:0; }
+.flow-stage-row .fsr-fields .fsr-hops .field{ flex:1; }
+.fe-sub{ text-transform:none; font-weight:500; }
+.fe-flow{ border:1px solid var(--border-strong); border-radius:12px; padding:12px; margin-bottom:12px; background:var(--surface); }
+.fe-flow-head{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.fe-flow-num{ flex-shrink:0; width:22px; height:22px; border-radius:50%; background:var(--accent); color:var(--accent-ink, #fff); font-size:11px; font-weight:800; display:flex; align-items:center; justify-content:center; }
+.fe-flow-head .field{ margin:0; }
+.fe-flow-head .fe-name-wrap{ flex:1; min-width:0; }
+.fe-flow-head .fe-name-wrap input{ font-weight:700; }
+.fe-flow-head .fe-dir-wrap{ flex-shrink:0; }
+.fe-when-wrap{ margin:0 0 10px; }
+.fe-when-wrap input{ font-size:12px; }
+.fe-btn{ background:none; border:1px dashed var(--border-strong); color:var(--text-dim); border-radius:7px; padding:6px 12px; font-size:11.5px; font-weight:600; text-transform:none; letter-spacing:0; }
+.fe-btn:hover{ border-color:var(--accent); color:var(--accent); }
+.fe-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; }
+/* ---- Request flow diagram: per-flow header + hop labels (Overview / PDF) ---- */
+.rf-flow-block{ margin-bottom:6px; }
+.rf-flow-head{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 0 2px; }
+.rf-flow-num{ width:20px; height:20px; border-radius:50%; background:var(--env-accent, var(--accent)); color:var(--accent-ink, #fff); font-size:10.5px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+.rf-flow-name{ font-size:13px; font-weight:750; color:var(--text); }
+.rf-flow-when{ font-size:11.5px; color:var(--text-faint); }
+.rf-hop{ font-size:10px; font-weight:650; fill:var(--text-dim); }
+.rf-hop.ret{ fill:var(--text-faint); }
 .rf-icon-glow{ fill:var(--surface-2); opacity:.9; }
 .rf-icon-glow.mid-glow{ fill:var(--env-accent-bg, var(--surface-2)); }
 .rf-icon-ring{ fill:var(--bg-elevated); stroke:var(--border-strong); stroke-width:1.2; }
@@ -3167,25 +3194,9 @@ pre.json-raw{ max-height:360px; margin:0; }
           </div>
         </div>
         <div class="field">
-          <label>Request flow direction <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— how the Request flow diagram on the overview page renders</span></label>
-          <div class="field-row">
-            <div class="field" style="flex:1;">
-              <select id="mFlowPattern">
-                <option value="1-way">One-way (forward only)</option>
-                <option value="2-way">Two-way (forward + return)</option>
-              </select>
-            </div>
-            <div class="field" style="flex:2;">
-              <input type="text" id="mFlowLabel" placeholder="e.g. Two-way — request and response (Client ⇄ Gateway ⇄ Flow ⇄ Downstream)">
-            </div>
-          </div>
-          <div class="hint" style="margin-top:4px;">This is just the small caption shown next to "Request flow" — it doesn't change the diagram itself. Edit the actual boxes below.</div>
-        </div>
-        <div class="field">
-          <label>Request flow stages <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— the actual boxes in the diagram, left to right</span></label>
-          <div id="mFlowStagesList"></div>
-          <button type="button" class="ghost" id="mFlowStageAdd" style="margin-top:8px;text-transform:none;letter-spacing:0;font-weight:600;font-size:11.5px;padding:6px 12px;">+ Add stage</button>
-          <div class="hint" style="margin-top:6px;">Each stage can list more than one system — e.g. a "Source" stage with two upstream systems, or a "Target" stage with two downstream ones. Leave every stage empty to use the default Client → Gateway → Flow → Downstream template.</div>
+          <label>Request flows <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— the diagrams shown on the overview page</span></label>
+          <div id="mFlowsRoot"></div>
+          <div class="hint" style="margin-top:6px;">A flow is one left-to-right chain of systems. If your integration isn't one continuous chain — e.g. a token call that runs every 30 minutes, then a business request on every call — add one flow per exchange and describe when each runs. Label the arrows to show what travels between systems. Leave it empty to use the default Client → Gateway → Flow → Downstream diagram.</div>
         </div>
       </div>
     </div>
@@ -3929,6 +3940,7 @@ const ORG_TOKEN = '__ORG_TOKEN__';
      block did) — do not reorder these tags. AUTH_USER/ORG_TOKEN above stay
      inline because they need per-request templating from server.js;
      everything else here is static and does not. -->
+<script nonce="__CSP_NONCE__" src="/js/flow-editor.js"></script>
 <script nonce="__CSP_NONCE__" src="/js/studio/01-constants.js"></script>
 <script nonce="__CSP_NONCE__" src="/js/studio/02-workspace-api.js"></script>
 <script nonce="__CSP_NONCE__" src="/js/studio/03-notifications.js"></script>

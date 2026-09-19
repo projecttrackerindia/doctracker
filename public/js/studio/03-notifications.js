@@ -725,6 +725,49 @@ function resolveFlowStages(proj, env){
 }
 
 
+// ---------- Request FLOWS (one or more diagrams) ----------
+// A project can describe several separate exchanges instead of one continuous
+// chain — e.g. "get token" (about every 30 min), "business request" (every
+// call), "get third-party token" (only when its cache is empty). Each is a
+// flow: proj.requestFlows = [{ name, when, direction, stages:[{ k, systems,
+// icon, mid, next, back }] }] — `next` / `back` label the arrows leaving a
+// stage toward the following one (forward / return). Edited through the shared
+// builder in public/js/flow-editor.js.
+//
+// Returns { custom, flows:[{ name, when, pattern, caption, stages }] }.
+// `custom` is false when the project has no requestFlows: it then resolves to
+// ONE flow built from the legacy requestFlowStages / requestFlowDirection /
+// requestFlowLabel (or the default four-box template), so projects saved
+// before multi-flow existed render exactly as they did.
+function resolveRequestFlows(proj, env){
+  const raw = Array.isArray(proj && proj.requestFlows) ? proj.requestFlows : [];
+  const flows = raw.map(f => {
+    const stages = (Array.isArray(f && f.stages) ? f.stages : [])
+      .filter(s => s && (s.k || (s.systems || []).length))
+      .map(s => ({
+        k: s.k || 'Stage',
+        systems: (Array.isArray(s.systems) && s.systems.length) ? s.systems : ['—'],
+        icon: s.icon || 'custom',
+        mid: !!s.mid,
+        next: typeof s.next === 'string' ? s.next.trim() : '',
+        back: typeof s.back === 'string' ? s.back.trim() : '',
+      }));
+    return {
+      name: typeof f.name === 'string' ? f.name.trim() : '',
+      when: typeof f.when === 'string' ? f.when.trim() : '',
+      pattern: f.direction === '2-way' ? '2-way' : '1-way',
+      caption: '',
+      stages,
+    };
+  }).filter(f => f.stages.length);
+  if(flows.length) return { custom: true, flows };
+  const preset = resolveFlowDirection(proj);
+  return {
+    custom: false,
+    flows: [{ name: '', when: '', pattern: preset.pattern, caption: preset.label, stages: resolveFlowStages(proj, env) }],
+  };
+}
+
 // Roles are a local UI preference (this tool has no login/backend), but they still
 // gate what the interface offers: which environments show up in the switcher, and
 // whether create/edit/delete affordances render at all.

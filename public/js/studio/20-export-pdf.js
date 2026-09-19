@@ -474,10 +474,6 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
   const env = envMeta(state.env);
   const envLabel = env.label;
 
-  const flowPreset = resolveFlowDirection(proj);
-  const direction = flowPreset.pattern;
-  const flowStages = resolveFlowStages(proj, env);
-
   const lifecycleHtml = proj.lifecycle ? `
     <div class="pdf-atom">
     <section>
@@ -496,12 +492,7 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
   const requestFlowHtml = `
     <div class="pdf-atom">
     <section>
-      <div class="pdf-section-title">Request flow <span style="text-transform:none; letter-spacing:0; font-weight:500; color:#8890a3;">— ${escapeHtml(flowPreset.label)}</span></div>
-      ${pdfRequestFlowSvg(flowStages, direction)}
-      <div class="pdf-rf-legend">
-        <span><span class="sw"></span>Request</span>
-        ${direction==='2-way' ? '<span><span class="sw ret"></span>Response</span>' : ''}
-      </div>
+      ${pdfRequestFlowSectionInnerHtml(proj, env)}
     </section>
     </div>`;
 

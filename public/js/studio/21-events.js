@@ -138,11 +138,11 @@ document.getElementById('btnOpenReleasePipelineSettings').addEventListener('clic
   if(editingProjectId && state.projects[editingProjectId]) openReleasePipelineTab(state.projects[editingProjectId]);
 });
 
-/* Request flow direction is a plain pattern <select> + free-text label input
-   now (mFlowPattern / mFlowLabel) — both just live fields on the endpoint
-   modal's "Project details" section, populated by hydrateEndpointProjectFields
-   / clearEndpointProjectFields and read directly in saveManualEndpoint, so no
-   extra wiring is needed here. */
+/* Request flows (one or more diagrams per project) are edited by the shared
+   FlowEditor (public/js/flow-editor.js) mounted on #mFlowsRoot in the endpoint
+   modal's "Project details" section — populated by hydrateEndpointProjectFields
+   / clearEndpointProjectFields and read in saveManualEndpoint, so no extra
+   wiring is needed here. */
 
 /* Environments tab (live status + copy-to-clipboard) was removed along with
    Project settings ▸ Environments — see the note near renderEnvSettingsCards'
