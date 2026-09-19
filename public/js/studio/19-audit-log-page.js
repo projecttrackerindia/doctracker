@@ -382,6 +382,34 @@ async function openInSwaggerEditor(projectId){
 // for the project overview page (the full icon library only lives in
 // architecture-studio.html — this is just boxes, labels and connector lines,
 // enough to recognise the shape of the diagram before opening the real editor).
+// Greedily wraps `text` into lines that fit `maxWidth` px at roughly `fontSize`px
+// (using a monospace-ish average-character-width estimate — good enough for a
+// preview, not a real text-metrics measurement), capped at `maxLines` with an
+// ellipsis on the last line if it overflows. Mirrors the editor's own text
+// nodes wrapping to fit their box instead of this preview's old single
+// truncated line, which is what made long connector notes unreadable here.
+function wrapPreviewText(text, maxWidth, fontSize, maxLines){
+  const avgCharW = fontSize * 0.56;
+  const perLine = Math.max(4, Math.floor(maxWidth / avgCharW));
+  const words = String(text||'').split(/\s+/).filter(Boolean);
+  const lines = [];
+  let cur = '';
+  for(const w of words){
+    const next = cur ? cur + ' ' + w : w;
+    if(next.length > perLine && cur){ lines.push(cur); cur = w; }
+    else cur = next;
+    if(lines.length === maxLines) break;
+  }
+  if(lines.length < maxLines && cur) lines.push(cur);
+  if(lines.length === maxLines){
+    const last = lines[maxLines-1];
+    if(words.join(' ').length > lines.join(' ').length || last.length > perLine){
+      lines[maxLines-1] = last.length > perLine - 1 ? last.slice(0, perLine-1).trimEnd() + '…' : last + '…';
+    }
+  }
+  return lines;
+}
+
 function architectureDiagramPreviewSvg(diagram){
   const nodes = (diagram && diagram.nodes) || [];
   const edges = (diagram && diagram.edges) || [];
@@ -419,7 +447,12 @@ function architectureDiagramPreviewSvg(diagram){
       return `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="10" class="ad-prev-frame"></rect>`;
     }
     if(n.kind === 'text'){
-      return `<text x="${n.x+6}" y="${n.y+16}" class="ad-prev-text">${escapeHtml((n.label||'').slice(0,44))}</text>`;
+      const fontSize = 11.5;
+      const lineH = fontSize * 1.35;
+      const lines = wrapPreviewText(n.label, n.w, fontSize, 4);
+      const startY = n.y + n.h/2 - ((lines.length-1) * lineH)/2 + fontSize*0.36;
+      const tspans = lines.map((line,i)=>`<tspan x="${n.x+n.w/2}" y="${startY + i*lineH}">${escapeHtml(line)}</tspan>`).join('');
+      return `<text text-anchor="middle" class="ad-prev-text" style="font-size:${fontSize}px;">${tspans}</text>`;
     }
     // Icon nodes carry a rendered badge (iconSvg/iconColor) snapshotted at
     // publish time — use it so this preview matches the editor's colors and
