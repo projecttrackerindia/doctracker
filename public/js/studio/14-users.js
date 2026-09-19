@@ -704,10 +704,6 @@ function renderProjectOverview(main, projectId){
     ${releaseHealthSectionHtml(proj.id)}
 
     <div class="section">
-      ${requestFlowSectionInnerHtml(proj, env)}
-    </div>
-
-    <div class="section">
       <div class="section-title">
         <span style="flex:1;">Architecture diagram <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— drag-and-drop system diagram for ${escapeHtml(proj.name)}</span></span>
       </div>
