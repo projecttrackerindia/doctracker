@@ -1451,6 +1451,7 @@ router.post('/projects/:id/promote', async (req, res) => {
   // of version bumps.
   const releaseNote = String(req.body?.releaseNote || '').trim().slice(0, 500);
   if (!releaseNote) return res.status(400).json({ error: 'A release note is required before promoting.' });
+  if (releaseNote.length < 10) return res.status(400).json({ error: 'That release note is too short to be useful — say a bit more about what changed and why (at least 10 characters).' });
 
   const client = await pool.connect();
   try {

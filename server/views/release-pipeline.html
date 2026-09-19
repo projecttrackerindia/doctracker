@@ -561,7 +561,7 @@ function renderReleaseDiffPanel(panel, diff, previewMode){
     <div class="rp-note-field">
       <label for="rpNoteInput" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-faint);display:block;margin-bottom:5px;">Release note (required)</label>
       <textarea id="rpNoteInput" placeholder="What's in this release, and why? e.g. &quot;Adds pagination to /payments/status; fixes the digitide callback signature check.&quot;"></textarea>
-      <div class="rp-note-hint">Shown in the merge history below — this is the record of "why," not "what."</div>
+      <div class="rp-note-hint">At least 10 characters. Shown in the merge history below — this is the record of "why," not "what."</div>
     </div>` : '';
 
   panel.innerHTML = `
@@ -597,6 +597,11 @@ function renderReleaseDiffPanel(panel, diff, previewMode){
       const releaseNote = (noteInput && noteInput.value || '').trim();
       if(!releaseNote){
         toast('A release note is required before merging.');
+        if(noteInput) noteInput.focus();
+        return;
+      }
+      if(releaseNote.length < 10){
+        toast('Say a bit more in the release note — at least 10 characters.');
         if(noteInput) noteInput.focus();
         return;
       }

@@ -632,6 +632,12 @@ function renderProjectOverview(main, projectId){
                   <span>Open Architecture Studio</span>
                 </span>
               </button>
+              <button type="button" class="ep-actions-item proj-actions-item" id="btnOpenReleasePipelineMenu" role="menuitem">
+                <span class="item-label">
+                  <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg></span>
+                  <span>Open Release Pipeline</span>
+                </span>
+              </button>
               <div class="ep-actions-divider"></div>
               <button type="button" class="ep-actions-item proj-actions-item" id="btnExportPdf" role="menuitem">
                 <span class="item-label">
@@ -752,6 +758,10 @@ function renderProjectOverview(main, projectId){
   document.getElementById('btnOpenArchStudioMenu').addEventListener('click', ()=>{
     document.getElementById('projActionsDD').classList.remove('open');
     openArchitectureStudioTab(proj);
+  });
+  document.getElementById('btnOpenReleasePipelineMenu').addEventListener('click', ()=>{
+    document.getElementById('projActionsDD').classList.remove('open');
+    openReleasePipelineTab(proj);
   });
   document.getElementById('btnOpenSwaggerEditor').addEventListener('click', ()=>{
     document.getElementById('projActionsDD').classList.remove('open');
