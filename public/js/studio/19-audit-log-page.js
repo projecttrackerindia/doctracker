@@ -410,6 +410,73 @@ function wrapPreviewText(text, maxWidth, fontSize, maxLines){
   return lines;
 }
 
+// ---- Edge path routing, ported from architecture-studio.html so the
+// preview draws the same right-angle elbow / curved / straight connectors
+// (with rounded corners and arrowheads) as the actual editor, instead of a
+// plain diagonal line between box centers — that mismatch was the biggest
+// reason this preview looked rougher than the diagram it's previewing.
+function pvSideIsHoriz(side){ return side==='left' || side==='right'; }
+function pvPointTowards(from, to, dist){
+  const dx=to.x-from.x, dy=to.y-from.y; const len=Math.hypot(dx,dy)||1;
+  return { x: from.x + dx/len*dist, y: from.y + dy/len*dist };
+}
+function pvRoundedPolylinePath(pts, r){
+  pts = pts.filter((p,i)=> i===0 || Math.hypot(p.x-pts[i-1].x, p.y-pts[i-1].y) > 0.5);
+  if(pts.length < 2) return '';
+  let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)} `;
+  for(let i=1;i<pts.length-1;i++){
+    const prev=pts[i-1], cur=pts[i], next=pts[i+1];
+    const d1 = Math.hypot(cur.x-prev.x, cur.y-prev.y);
+    const d2 = Math.hypot(next.x-cur.x, next.y-cur.y);
+    const rr = Math.min(r, d1/2, d2/2);
+    const p1 = pvPointTowards(cur, prev, rr);
+    const p2 = pvPointTowards(cur, next, rr);
+    d += `L ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} Q ${cur.x.toFixed(1)} ${cur.y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)} `;
+  }
+  const last = pts[pts.length-1];
+  d += `L ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
+  return d;
+}
+function pvElbowPath(p1, side1, p2, side2, wp){
+  let midX = (p1.x+p2.x)/2, midY = (p1.y+p2.y)/2;
+  const h1 = pvSideIsHoriz(side1), h2 = pvSideIsHoriz(side2);
+  if(wp){
+    if(wp.axis === 'x' && h1 && h2) midX = wp.value;
+    else if(wp.axis === 'y' && !h1 && !h2) midY = wp.value;
+  }
+  let pts;
+  if(h1 && h2) pts = [p1, {x:midX,y:p1.y}, {x:midX,y:p2.y}, p2];
+  else if(!h1 && !h2) pts = [p1, {x:p1.x,y:midY}, {x:p2.x,y:midY}, p2];
+  else if(h1 && !h2) pts = [p1, {x:p2.x,y:p1.y}, p2];
+  else pts = [p1, {x:p1.x,y:p2.y}, p2];
+  return pvRoundedPolylinePath(pts, 12);
+}
+function pvStraightPath(p1, p2){
+  return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} L ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+}
+const PV_SIDE_DIR = { top:{x:0,y:-1}, bottom:{x:0,y:1}, left:{x:-1,y:0}, right:{x:1,y:0} };
+function pvCurvedPath(p1, side1, p2, side2){
+  const pull = Math.max(40, Math.hypot(p2.x-p1.x, p2.y-p1.y) * 0.45);
+  const d1 = PV_SIDE_DIR[side1] || PV_SIDE_DIR.right, d2 = PV_SIDE_DIR[side2] || PV_SIDE_DIR.left;
+  const c1 = { x: p1.x + d1.x*pull, y: p1.y + d1.y*pull };
+  const c2 = { x: p2.x + d2.x*pull, y: p2.y + d2.y*pull };
+  return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} C ${c1.x.toFixed(1)} ${c1.y.toFixed(1)} ${c2.x.toFixed(1)} ${c2.y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+}
+function pvEdgePathFor(edge, p1, side1, p2, side2){
+  if(edge.shape === 'straight') return pvStraightPath(p1, p2);
+  if(edge.shape === 'curved') return pvCurvedPath(p1, side1, p2, side2);
+  const wp = (edge.waypoint != null && edge.waypointAxis) ? { axis: edge.waypointAxis, value: edge.waypoint } : null;
+  return pvElbowPath(p1, side1, p2, side2, wp);
+}
+function pvPathMidpoint(edge, p1, side1, p2, side2){
+  if(edge.shape === 'straight' || edge.shape === 'curved') return { x:(p1.x+p2.x)/2, y:(p1.y+p2.y)/2 };
+  const h1 = pvSideIsHoriz(side1), h2 = pvSideIsHoriz(side2);
+  if(h1 && h2) return { x:(p1.x+p2.x)/2, y:(p1.y+p2.y)/2 };
+  if(!h1 && !h2) return { x:(p1.x+p2.x)/2, y:(p1.y+p2.y)/2 };
+  if(h1 && !h2) return { x:p2.x, y:p1.y };
+  return { x:p1.x, y:p2.y };
+}
+
 function architectureDiagramPreviewSvg(diagram){
   const nodes = (diagram && diagram.nodes) || [];
   const edges = (diagram && diagram.edges) || [];
@@ -426,21 +493,51 @@ function architectureDiagramPreviewSvg(diagram){
       default: return { x:n.x+n.w, y:n.y+n.h/2 };
     }
   };
+  // Custom-colored arrowheads need their own <marker>, one per color, built
+  // on demand and collected into <defs> — mirrors ensureArrowMarker() in
+  // the editor (minus the alternate arrow shapes, which this preview
+  // doesn't otherwise support).
+  const markerDefs = {};
+  const markerIdFor = (color)=>{
+    const id = 'ad-prev-arrow-' + color.replace(/[^a-zA-Z0-9]/g, '');
+    if(!markerDefs[id]) markerDefs[id] = `<marker id="${id}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="${color}"></path></marker>`;
+    return id;
+  };
   const edgesSvg = edges.map(e=>{
     const a = byId[e.from], b = byId[e.to];
     if(!a || !b) return '';
-    const p1 = anchor(a, e.fromSide||'right'), p2 = anchor(b, e.toSide||'left');
+    const fromSide = e.fromSide || 'right', toSide = e.toSide || 'left';
+    const p1 = anchor(a, fromSide), p2 = anchor(b, toSide);
+    const d = pvEdgePathFor(e, p1, fromSide, p2, toSide);
     // Match the editor's own logic (architecture-studio.html buildEdgeAttrs):
     // `lineStyle` replaces the old `dashed` boolean, and edges animate by
-    // default (`animated !== false`) with the same 5-5 dash used there —
-    // this preview used to only understand the legacy `dashed` flag and
-    // never animated at all, so a published diagram's flow direction was
-    // invisible here even though it played in the editor.
+    // default (`animated !== false`) with the same dash pattern used there.
     const lineStyle = e.lineStyle || (e.dashed ? 'dashed' : 'solid');
     const isAnimated = e.animated !== false;
-    const dashArray = lineStyle === 'dotted' ? '2 4' : lineStyle === 'dashed' ? '6 5' : (isAnimated ? '5 5' : 'none');
+    const dashArray = lineStyle === 'dotted' ? '2 5' : lineStyle === 'dashed' ? '9 6' : (isAnimated ? '5 5' : 'none');
     const flowClass = isAnimated && lineStyle === 'solid' ? ' flow' : '';
-    return `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" class="ad-prev-line${flowClass}"${dashArray!=='none' ? ` stroke-dasharray="${dashArray}"` : ''}></line>`;
+    const showEndArrow = e.arrowEnd !== false;
+    const showStartArrow = !!e.arrowStart;
+    let markerAttrs = '', styleStr = '';
+    if(e.color){
+      const markerId = markerIdFor(e.color);
+      styleStr = ` style="stroke:${e.color};"`;
+      if(showEndArrow) markerAttrs += ` marker-end="url(#${markerId})"`;
+      if(showStartArrow) markerAttrs += ` marker-start="url(#${markerId})"`;
+    } else {
+      if(showEndArrow) markerAttrs += ` marker-end="url(#ad-prev-arrowhead)"`;
+      if(showStartArrow) markerAttrs += ` marker-start="url(#ad-prev-arrowhead)"`;
+    }
+    const pathSvg = `<path d="${d}" class="ad-prev-line${flowClass}"${dashArray!=='none' ? ` stroke-dasharray="${dashArray}"` : ''}${styleStr}${markerAttrs} fill="none"></path>`;
+    // Edge's own short label (e.g. "HTTPS") — a small pill at the route's
+    // midpoint, same treatment as the editor's .edge-label / .edge-label-bg.
+    let labelSvg = '';
+    if(e.label){
+      const mid = pvPathMidpoint(e, p1, fromSide, p2, toSide);
+      const w = Math.max(30, e.label.length*6.4 + 14);
+      labelSvg = `<g><rect x="${mid.x-w/2}" y="${mid.y-10}" width="${w}" height="20" rx="6" class="ad-prev-edge-label-bg"></rect><text x="${mid.x}" y="${mid.y+4}" text-anchor="middle" class="ad-prev-edge-label">${escapeHtml(e.label)}</text></g>`;
+    }
+    return pathSvg + labelSvg;
   }).join('');
   const nodesSvg = nodes.map(n=>{
     if(n.kind === 'frame'){
@@ -461,8 +558,13 @@ function architectureDiagramPreviewSvg(diagram){
     // fallback path below.
     if(n.kind === 'icon' && n.iconSvg){
       const badgeSize = Math.min(n.w, n.h) * 0.42;
+      // A node's own explicit color override (set via the inspector) always
+      // wins over the icon's default brand tint — matches the editor, where
+      // node.color is an intentional highlight (e.g. a red-bordered gateway)
+      // and shouldn't be masked by whatever color the icon normally is.
+      const borderColor = n.color || n.iconColor || 'var(--border-strong)';
       return `<g>
-        <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="12" class="ad-prev-card" stroke="${n.iconColor || 'var(--border-strong)'}"></rect>
+        <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="12" class="ad-prev-card" stroke="${borderColor}"></rect>
         <foreignObject x="${n.x + n.w/2 - badgeSize/2}" y="${n.y + n.h*0.16}" width="${badgeSize}" height="${badgeSize}">
           <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;">${n.iconSvg}</div>
         </foreignObject>
@@ -474,7 +576,7 @@ function architectureDiagramPreviewSvg(diagram){
       <text x="${n.x+n.w/2}" y="${n.y+n.h/2+4}" text-anchor="middle" class="ad-prev-label">${escapeHtml((n.label||'').slice(0,22))}</text>
     </g>`;
   }).join('');
-  return `<svg viewBox="${minX} ${minY} ${maxX-minX} ${maxY-minY}" class="ad-preview-svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Architecture diagram preview">${edgesSvg}${nodesSvg}</svg>`;
+  return `<svg viewBox="${minX} ${minY} ${maxX-minX} ${maxY-minY}" class="ad-preview-svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Architecture diagram preview"><defs><marker id="ad-prev-arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ad-prev-arrow"></path></marker>${Object.values(markerDefs).join('')}</defs>${edgesSvg}${nodesSvg}</svg>`;
 }
 // Both the editor tab and the architecture studio tab broadcast on save so
 // this tab can pick up the change without a manual refresh.
