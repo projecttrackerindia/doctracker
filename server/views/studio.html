@@ -3717,8 +3717,9 @@ pre.json-raw{ max-height:360px; margin:0; }
       <div class="modal-tab" data-mtab="architecture">Architecture</div>
     </div>
     <div class="modal-pane active" data-mpane="release">
-      <div class="hint" style="margin-top:0;">Pick a From and To stage to see exactly what changed, then merge — like a diff before a promote. Changes move forward one stage at a time; each stage keeps its own frozen, versioned copy until it's promoted again.</div>
-      <div id="releasePipelineBody">Loading…</div>
+      <div class="hint" style="margin-top:0;">Promote between environments, review breaking changes, and see the full merge history — a dedicated tool that opens in its own tab, same as Architecture Studio.</div>
+      <div class="ad-modal-status" id="projReleaseStatus" style="margin:14px 0; font-size:12px; color:var(--text-dim);">Loading…</div>
+      <button type="button" class="primary" id="btnOpenReleasePipelineSettings">Open Release Pipeline →</button>
     </div>
     <div class="modal-pane" data-mpane="environments">
       <div class="hint" style="margin-top:0;">The base URL this project actually points to in each environment — used for "Try it", the OpenAPI export's server list, and the API Control Center's endpoint-coverage metrics. This doesn't affect what's promoted through the release pipeline, just where requests are sent.</div>

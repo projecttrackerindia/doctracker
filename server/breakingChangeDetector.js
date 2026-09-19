@@ -49,6 +49,31 @@ function paramType(p) {
   return (p && p.type) || 'string';
 }
 
+// Severity tiers for the release pipeline's breaking-change callout — lets a
+// reviewer triage a long list at a glance instead of treating every rule as
+// equally urgent. "critical" = an existing, well-formed request from before
+// this change will now fail outright (404/405, or a response shape it never
+// expected). "high" = an existing request can still reach the endpoint but
+// may now fail validation (a newly-required field/header it doesn't send,
+// or a value it sends in a now-wrong shape). Deliberately just two tiers —
+// this is meant to help a human skim a diff quickly, not to encode a
+// precise incident-severity taxonomy.
+const SEVERITY_BY_RULE = {
+  'endpoint-removed': 'critical',
+  'method-changed': 'critical',
+  'path-changed': 'critical',
+  'path-param-removed': 'critical',
+  'success-response-removed': 'critical',
+  'required-param-added': 'high',
+  'param-now-required': 'high',
+  'param-type-changed': 'high',
+  'header-now-required': 'high',
+  'required-header-added': 'high',
+};
+function severityForRule(rule) {
+  return SEVERITY_BY_RULE[rule] || 'high';
+}
+
 // One endpoint's before (`fe`) vs after (`te`) — both non-null, same id.
 function diffOneEndpoint(fe, te) {
   const issues = [];
@@ -160,7 +185,13 @@ function detectBreakingChanges(fromEndpoints, toEndpoints) {
     const te = tm.get(id);
     if (te) issues.push(...diffOneEndpoint(fe, te));
   }
-  return issues;
+  // Tag severity, then surface the more urgent issues first so a reviewer
+  // skimming a long list sees the "this will 404" items before the
+  // "this will fail validation" ones.
+  const withSeverity = issues.map((i) => ({ ...i, severity: severityForRule(i.rule) }));
+  const rank = { critical: 0, high: 1 };
+  withSeverity.sort((a, b) => (rank[a.severity] ?? 2) - (rank[b.severity] ?? 2));
+  return withSeverity;
 }
 
 module.exports = { detectBreakingChanges };

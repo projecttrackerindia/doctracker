@@ -211,6 +211,7 @@ const studioTemplate = fs.readFileSync(path.join(__dirname, 'views', 'studio.htm
 const auditLogTemplate = fs.readFileSync(path.join(__dirname, 'views', 'auditlog.html'), 'utf8');
 const editorTemplate = fs.readFileSync(path.join(__dirname, 'views', 'editor.html'), 'utf8');
 const architectureStudioTemplate = fs.readFileSync(path.join(__dirname, 'views', 'architecture-studio.html'), 'utf8');
+const releasePipelineTemplate = fs.readFileSync(path.join(__dirname, 'views', 'release-pipeline.html'), 'utf8');
 
 // The organisation name never appears in a URL in the clear — every tenant-
 // scoped page is addressed as /<encrypted-org-token>/whatever instead of
@@ -348,6 +349,41 @@ app.get('/:orgToken/:projectSlug/architecture.studio', requireAuth, (req, res) =
     return res.redirect(`/${tokenForUser(req.user)}/${req.params.projectSlug}/architecture.studio`);
   }
   renderArchitectureStudio(req, res, { projectSlug: req.params.projectSlug });
+});
+
+// Release Pipeline v2 (server/views/release-pipeline.html) — the full-page,
+// GitHub-style promote/merge-history tool. Opens in its own tab from a
+// project's Project Settings, same session-cookie auth and same
+// never-decode-the-slug-server-side pattern as architecture.studio above:
+// the project is re-resolved client-side against GET /api/workspace, and
+// every actual read/write (versions, diff, promote, rollback, history) goes
+// through the existing Admin-gated /api/workspace/projects/:id/* routes —
+// this route only serves the shell.
+function renderReleasePipelinePage(req, res, { projectSlug = '' } = {}) {
+  const authUser = {
+    id: req.user.sub,
+    username: req.user.username,
+    organisation: req.user.organisation,
+    role: req.user.role,
+    accessSchedule: req.user.accessSchedule || null,
+    scheduleLocked: !!req.user.scheduleLocked,
+    ...(req.user.role === 'custom' ? { customPermissions: req.user.customPermissions || null } : {}),
+  };
+  const html = releasePipelineTemplate
+    .replace(/__CSP_NONCE__/g, res.locals.cspNonce)
+    .replace('__AUTH_USER_JSON__', JSON.stringify(authUser))
+    .replace(/__ORG_TOKEN__/g, tokenForUser(req.user))
+    .replace('__PROJECT_SLUG__', JSON.stringify(projectSlug));
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+}
+
+app.get('/:orgToken/:projectSlug/release.pipeline', requireAuth, (req, res) => {
+  const org = dataCrypto.decryptOrgToken(req.params.orgToken);
+  if (org !== req.user.organisation) {
+    return res.redirect(`/${tokenForUser(req.user)}/${req.params.projectSlug}/release.pipeline`);
+  }
+  renderReleasePipelinePage(req, res, { projectSlug: req.params.projectSlug });
 });
 
 // Brand new endpoint, brand new project: /{orgToken}/edit.studio

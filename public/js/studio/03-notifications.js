@@ -42,6 +42,9 @@ function navigateToNotifLink(link){
   } else if(link.view === 'project' && link.projectId){
     state.selected = { type:'project', id: link.projectId };
     renderMain();
+  } else if(link.view === 'release-pipeline' && link.projectId){
+    const p = state.projects[link.projectId];
+    if(p) openReleasePipelineTab(p); else toast('That project could not be found.');
   } else if(link.view === 'tryit'){
     // Live Mode access changed — nothing more specific to jump to than the
     // home view; the person can open Try It on whichever endpoint they need.

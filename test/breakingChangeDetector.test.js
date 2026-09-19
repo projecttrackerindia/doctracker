@@ -174,6 +174,6 @@ test('handles empty/missing inputs without throwing', () => {
   assert.deepEqual(detectBreakingChanges(null, null), []);
   assert.deepEqual(detectBreakingChanges(undefined, [ep()]), []);
   assert.deepEqual(detectBreakingChanges([ep()], undefined), [
-    { rule: 'endpoint-removed', endpointId: 'ep1', method: 'GET', path: '/widgets/{id}', message: 'GET /widgets/{id} was removed. Existing callers will get a 404.' },
+    { rule: 'endpoint-removed', endpointId: 'ep1', method: 'GET', path: '/widgets/{id}', message: 'GET /widgets/{id} was removed. Existing callers will get a 404.', severity: 'critical' },
   ]);
 });

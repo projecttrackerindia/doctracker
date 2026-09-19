@@ -134,6 +134,9 @@ document.getElementById('pgCancel').addEventListener('click', closeProjectModal)
 document.getElementById('btnOpenArchStudioSettings').addEventListener('click', ()=>{
   if(editingProjectId && state.projects[editingProjectId]) openArchitectureStudioTab(state.projects[editingProjectId]);
 });
+document.getElementById('btnOpenReleasePipelineSettings').addEventListener('click', ()=>{
+  if(editingProjectId && state.projects[editingProjectId]) openReleasePipelineTab(state.projects[editingProjectId]);
+});
 
 /* Request flow direction is a plain pattern <select> + free-text label input
    now (mFlowPattern / mFlowLabel) — both just live fields on the endpoint

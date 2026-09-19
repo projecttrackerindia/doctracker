@@ -703,309 +703,27 @@ function insertAtCursor(textarea, text){
    editable from this modal. */
 
 /* ---------- Release Pipeline (Project settings ▸ Release Pipeline) ----------
-   Server-authoritative: the pipeline order and the "DR mirrors the last
-   stage" behavior are computed on the server from this org's own environment
-   list (see GET/POST /api/workspace/projects/:id/versions|promote in
-   server/routes/workspace.js) — the client only renders what it's told and
-   never invents a target stage to promote into. Promotion is Admin-only;
-   this whole modal is already gated to Admins via openProjectModal(), so no
-   extra role check is needed here. */
-async function renderReleasePipeline(proj){
-  const body = document.getElementById('releasePipelineBody');
-  body.innerHTML = `<div class="al-loading" style="padding:30px 0;text-align:center;color:var(--text-faint);font-size:13px;">Loading pipeline status…</div>`;
+   The actual promote/diff/merge-history/rollback UI moved to its own
+   full-page tab (server/views/release-pipeline.html, opened via
+   openReleasePipelineTab() — same pattern as Architecture Studio). All
+   this modal shows now is a one-line status so it's obvious at a glance
+   whether anything needs attention before opening that tab. */
+async function renderReleaseStatus(proj){
+  const el = document.getElementById('projReleaseStatus');
+  if(!el) return;
+  el.textContent = 'Loading…';
   let data;
   try{ data = await apiGet(`/projects/${encodeURIComponent(proj.id)}/versions`); }
   catch(e){
-    body.innerHTML = `<div class="al-loading" style="padding:30px 0;text-align:center;color:var(--text-faint);font-size:13px;">Could not load release pipeline status.</div>`;
+    el.textContent = 'Could not load release pipeline status.';
     return;
   }
-
-  const stages = data.stages;
-
-  // Slim read-only strip across the top, purely for orientation — the from/to
-  // diff panel below is where promotion actually happens now.
-  const stripHtml = stages.map((s, idx)=>{
-    const isDraft = s.isDraftStage;
-    const versionLabel = isDraft ? data.draftLabel : (s.versionLabel || 'Nothing promoted');
-    return `
-      <div class="rp-strip-chip" style="--rp-accent:${escapeHtml(s.color || 'var(--accent)')};">
-        <span class="rp-strip-chip-label">${escapeHtml(s.label)}${isDraft ? ' <span class="rp-draft-pill">draft</span>' : ''}</span>
-        <span class="rp-strip-chip-version mono${(!isDraft && !s.versionLabel) ? ' empty' : ''}">${escapeHtml(versionLabel)}</span>
-        ${!isDraft ? `<button type="button" class="rp-history-toggle" data-history-env="${escapeHtml(s.environmentId)}" data-history-label="${escapeHtml(s.label)}" title="Version history / rollback">History</button>` : ''}
-      </div>
-      ${idx < stages.length - 1 ? `<span class="rp-strip-arrow"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg></span>` : ''}
-    `;
-  }).join('');
-  const mirrorHtml = data.mirrors.map(m=>
-    `<span class="rp-mirror-inline">${escapeHtml(m.label)} auto-mirrors the last stage: <b>${escapeHtml(m.versionLabel || 'not mirrored yet')}</b></span>`
-  ).join('');
-
-  const optionLabel = (s)=> `${s.label} — ${s.isDraftStage ? data.draftLabel : (s.versionLabel || 'nothing promoted yet')}`;
-  const optHtml = (selectedId)=> stages.map(s=>
-    `<option value="${escapeHtml(s.environmentId)}" ${s.environmentId === selectedId ? 'selected' : ''}>${escapeHtml(optionLabel(s))}</option>`
-  ).join('');
-
-  // Default From/To: the furthest-along stage that already has content,
-  // promoting into whatever comes right after it — i.e. "what's next to ship".
-  let defaultFromIdx = 0;
-  for(let i = stages.length - 2; i >= 0; i--){
-    if(stages[i].isDraftStage || stages[i].version != null){ defaultFromIdx = i; break; }
-  }
-  const fromId = stages[defaultFromIdx].environmentId;
-  const toId = stages[Math.min(defaultFromIdx + 1, stages.length - 1)].environmentId;
-
-  body.innerHTML = `
-    <div class="rp-strip">${stripHtml}${mirrorHtml}</div>
-    <div id="rpHistoryPanel"></div>
-    <div class="rp-diffbar">
-      <div class="field">
-        <label>From</label>
-        <select id="rpFromSelect">${optHtml(fromId)}</select>
-      </div>
-      <button type="button" class="rp-diffbar-swap" id="rpSwapBtn" title="Swap From and To">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg>
-      </button>
-      <div class="field">
-        <label>To</label>
-        <select id="rpToSelect">${optHtml(toId)}</select>
-      </div>
-    </div>
-    <div id="rpDiffPanel"><div class="al-loading" style="padding:30px 0;text-align:center;color:var(--text-faint);font-size:13px;">Loading diff…</div></div>
-  `;
-
-  // ---- Version history / rollback (item #6) ----
-  // "Keep the last N project_env_versions rows queryable for one-click
-  // rollback instead of only forward promotion." One toggle-able panel,
-  // reused for whichever stage's "History" chip was last clicked.
-  body.querySelectorAll('[data-history-env]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const envId = btn.getAttribute('data-history-env');
-      const label = btn.getAttribute('data-history-label');
-      const panel = document.getElementById('rpHistoryPanel');
-      if(panel.getAttribute('data-open-env') === envId){
-        panel.innerHTML = ''; panel.removeAttribute('data-open-env');
-        return;
-      }
-      panel.setAttribute('data-open-env', envId);
-      panel.innerHTML = `<div class="al-loading" style="padding:16px 0;text-align:center;color:var(--text-faint);font-size:12.5px;">Loading history for ${escapeHtml(label)}…</div>`;
-      let history;
-      try{
-        ({ history } = await apiGet(`/projects/${encodeURIComponent(proj.id)}/versions/${encodeURIComponent(envId)}/history`));
-      }catch(e){
-        panel.innerHTML = `<div class="rp-diff-nochanges">Could not load history for ${escapeHtml(label)}.</div>`;
-        return;
-      }
-      if(!history.length){
-        panel.innerHTML = `<div class="rp-history-list"><div class="rp-history-empty">Nothing has been promoted into ${escapeHtml(label)} yet.</div></div>`;
-        return;
-      }
-      const rowsHtml = history.map((h, idx)=>{
-        const isCurrent = idx === 0;
-        const when = new Date(h.promoted_at).toLocaleString();
-        const actionLabel = h.action === 'rollback' ? 'Rolled back' : (h.auto_mirrored ? 'Auto-mirrored' : 'Promoted');
-        return `
-          <div class="rp-history-row${isCurrent ? ' current' : ''}">
-            <div class="rp-history-row-main">
-              <span class="mono">v1.0.${h.version}</span>
-              <span class="hint" style="margin:0;">${actionLabel}${h.source_environment_id ? ' from ' + escapeHtml(h.source_environment_id) : ''} by ${escapeHtml(h.promoted_by_username || 'unknown')} · ${escapeHtml(when)}</span>
-            </div>
-            ${isCurrent
-              ? `<span class="hint" style="margin:0;">Currently live</span>`
-              : (isAdmin() ? `<button type="button" class="ghost" data-rollback-history-id="${h.id}">Roll back to this</button>` : '')}
-          </div>`;
-      }).join('');
-      panel.innerHTML = `<div class="rp-history-list"><div class="rp-history-title">Version history — ${escapeHtml(label)}</div>${rowsHtml}</div>`;
-      panel.querySelectorAll('[data-rollback-history-id]').forEach(rbBtn=>{
-        rbBtn.addEventListener('click', async ()=>{
-          const historyId = rbBtn.getAttribute('data-rollback-history-id');
-          const ok = await openConfirmModal({
-            title: `Roll back ${label}?`,
-            message: `This replaces what's currently live in ${label} with this earlier version. It's recorded as a new history entry — nothing is deleted, and you can roll forward again afterward.`,
-            confirmLabel: 'Roll back',
-          });
-          if(!ok) return;
-          rbBtn.disabled = true; rbBtn.textContent = 'Rolling back…';
-          try{
-            const result = await apiSend('POST', `/projects/${encodeURIComponent(proj.id)}/rollback`, { environmentId: envId, historyId });
-            invalidateSnapshotCache(proj.id);
-            toast(`${label} rolled back to ${result.versionLabel}`);
-            logAudit('updated', 'project', proj.name, `Rolled ${label} back to ${result.versionLabel}`);
-            renderReleasePipeline(proj);
-          }catch(e){
-            toast(e.message || 'Could not roll back.');
-            rbBtn.disabled = false; rbBtn.textContent = 'Roll back to this';
-          }
-        });
-      });
-    });
-  });
-
-  const fromSel = document.getElementById('rpFromSelect');
-  const toSel = document.getElementById('rpToSelect');
-
-  async function loadDiff(){
-    const from = fromSel.value, to = toSel.value;
-    const panel = document.getElementById('rpDiffPanel');
-    if(from === to){
-      panel.innerHTML = `<div class="rp-diff-nochanges">Pick two different stages to compare.</div>`;
-      return;
-    }
-    panel.innerHTML = `<div class="al-loading" style="padding:30px 0;text-align:center;color:var(--text-faint);font-size:13px;">Comparing…</div>`;
-    let diff;
-    try{
-      diff = await apiGet(`/projects/${encodeURIComponent(proj.id)}/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
-    }catch(e){
-      panel.innerHTML = `<div class="rp-diff-nochanges">Could not load diff.</div>`;
-      return;
-    }
-    renderReleaseDiffPanel(panel, proj, diff);
-  }
-
-  fromSel.addEventListener('change', loadDiff);
-  toSel.addEventListener('change', loadDiff);
-  document.getElementById('rpSwapBtn').addEventListener('click', ()=>{
-    const f = fromSel.value, t = toSel.value;
-    fromSel.value = t; toSel.value = f;
-    loadDiff();
-  });
-
-  loadDiff();
+  const stages = data.stages || [];
+  const summary = stages.map(s=> s.isDraftStage ? data.draftLabel : (s.versionLabel || 'nothing promoted')).join(' → ');
+  const lastPromoted = stages.slice().reverse().find(s=>!s.isDraftStage && s.promotedAt);
+  el.textContent = summary + (lastPromoted ? ` · last promotion: ${lastPromoted.label} by ${lastPromoted.promotedBy || 'unknown'}` : '');
 }
 
-// Renders the git-diff-style body of the release pipeline's from/to panel:
-// a summary count, then one row per added/removed/modified endpoint —
-// modified rows expand to show the exact field-level before/after — and the
-// Merge button, gated on the pair being an adjacent pipeline stage (the same
-// adjacency POST /promote enforces server-side).
-function renderReleaseDiffPanel(panel, proj, diff){
-  const total = diff.summary.added + diff.summary.removed + diff.summary.modified;
-  const summaryHtml = `
-    <div class="rp-diff-summary">
-      <span class="rp-diff-count added"><span class="swatch"></span>${diff.summary.added} added</span>
-      <span class="rp-diff-count removed"><span class="swatch"></span>${diff.summary.removed} removed</span>
-      <span class="rp-diff-count modified"><span class="swatch"></span>${diff.summary.modified} modified</span>
-    </div>`;
-
-  const breakingChanges = Array.isArray(diff.breakingChanges) ? diff.breakingChanges : [];
-  const hasBreaking = breakingChanges.length > 0;
-  // Deliberately its own callout above the endpoint-by-endpoint list, not
-  // folded into the per-endpoint rows — these are specifically the subset
-  // of changes that would break an existing caller of the API (see
-  // server/breakingChangeDetector.js), which is a different question from
-  // "what changed" and deserves to be seen before scrolling the full diff.
-  const breakingHtml = hasBreaking ? `
-    <div class="rp-breaking-callout">
-      <div class="rp-breaking-head">
-        <span class="rp-breaking-icon">⚠</span>
-        ${breakingChanges.length} breaking change${breakingChanges.length === 1 ? '' : 's'} in this promotion
-      </div>
-      <ul class="rp-breaking-list">
-        ${breakingChanges.map(b => `<li>${escapeHtml(b.message)}</li>`).join('')}
-      </ul>
-      <label class="rp-breaking-ack">
-        <input type="checkbox" id="rpAckBreaking" />
-        I've reviewed these breaking changes and want to proceed anyway.
-      </label>
-    </div>` : '';
-
-  const epRow = (kind, ep, marker)=>{
-    const changeCount = kind === 'modified' ? ep.changes.length : 0;
-    return `
-      <div class="rp-diff-ep ${kind}" data-ep-id="${escapeHtml(ep.id)}">
-        <div class="rp-diff-ep-head">
-          <span class="rp-diff-marker">${marker}</span>
-          <span class="rp-diff-ep-method">${escapeHtml(ep.method || '')}</span>
-          <span class="rp-diff-ep-path mono">${escapeHtml(ep.path || '(no path)')}</span>
-          <span class="rp-diff-ep-summary">${escapeHtml(ep.summary || '')}</span>
-          ${changeCount ? `<span class="rp-diff-ep-count">${changeCount} field${changeCount === 1 ? '' : 's'} changed</span>` : ''}
-          ${kind === 'modified' ? `<span class="rp-diff-ep-caret">▸</span>` : ''}
-        </div>
-        ${kind === 'modified' ? `<div class="rp-diff-ep-body">${ep.changes.map(renderReleaseDiffField).join('')}</div>` : ''}
-      </div>`;
-  };
-
-  const rows = [
-    ...diff.added.map(ep => epRow('added', ep, '+')),
-    ...diff.removed.map(ep => epRow('removed', ep, '−')),
-    ...diff.modified.map(ep => epRow('modified', ep, '~')),
-  ];
-
-  panel.innerHTML = `
-    ${summaryHtml}
-    ${breakingHtml}
-    ${total
-      ? `<div class="rp-diff-list">${rows.join('')}</div>`
-      : `<div class="rp-diff-nochanges">No differences between ${escapeHtml(diff.from.label)} and ${escapeHtml(diff.to.label)} — they're already in sync.</div>`}
-    <div class="rp-mergebar">
-      <div class="rp-mergebar-note">${diff.canMerge
-        ? `Merging freezes ${escapeHtml(diff.from.label)}'s current content and makes it live in ${escapeHtml(diff.to.label)}.`
-        : `${escapeHtml(diff.to.label)} isn't the next stage after ${escapeHtml(diff.from.label)} — promote through each stage in order.`}</div>
-      <button type="button" class="rp-merge-btn" id="rpMergeBtn" ${(diff.canMerge && total) ? '' : 'disabled'}>Merge into ${escapeHtml(diff.to.label)}</button>
-    </div>
-  `;
-
-  panel.querySelectorAll('.rp-diff-ep.modified .rp-diff-ep-head').forEach(head=>{
-    head.addEventListener('click', ()=> head.closest('.rp-diff-ep').classList.toggle('open'));
-  });
-
-  const mergeBtn = document.getElementById('rpMergeBtn');
-  const ackBox = document.getElementById('rpAckBreaking');
-  // Capture whether merging is fundamentally possible (adjacent stages +
-  // actual changes) BEFORE the breaking-change gate below mutates
-  // mergeBtn.disabled — otherwise the disabled state gets checked again a
-  // few lines down to decide whether to attach the click listener at all,
-  // and since we just set it to true, the listener would never get
-  // attached whenever there are breaking changes (which is exactly when
-  // the button also needs to work once the ack box is checked).
-  const mergeFundamentallyAllowed = mergeBtn && !mergeBtn.disabled;
-  // Merge stays disabled until a required breaking-change ack is checked —
-  // the server enforces this too (POST /promote 409s without it), this is
-  // just so the person doesn't click Merge, wait for a round-trip, and get
-  // told to go check a box they hadn't seen yet.
-  if(mergeFundamentallyAllowed && hasBreaking){
-    mergeBtn.disabled = true;
-    ackBox.addEventListener('change', ()=>{ mergeBtn.disabled = !ackBox.checked; });
-  }
-  if(mergeFundamentallyAllowed){
-    mergeBtn.addEventListener('click', async ()=>{
-      const ok = await openConfirmModal({
-        title: `Merge into ${diff.to.label}?`,
-        message: hasBreaking
-          ? `This freezes ${diff.from.label}'s current content and makes it live in ${diff.to.label}, including ${breakingChanges.length} breaking change${breakingChanges.length === 1 ? '' : 's'} you've acknowledged. Anyone viewing ${diff.to.label} will see this exact version until it's promoted again.`
-          : `This freezes ${diff.from.label}'s current content and makes it live in ${diff.to.label}. Anyone viewing ${diff.to.label} will see this exact version until it's promoted again.`,
-        confirmLabel: 'Merge',
-      });
-      if(!ok) return;
-      mergeBtn.disabled = true; mergeBtn.textContent = 'Merging…';
-      try{
-        const result = await apiSend('POST', `/projects/${encodeURIComponent(proj.id)}/promote`, {
-          fromEnvironmentId: diff.from.environmentId,
-          diffToken: diff.diffToken,
-          ackBreakingChanges: hasBreaking ? !!(ackBox && ackBox.checked) : undefined,
-        });
-        invalidateSnapshotCache(proj.id);
-        toast(`Merged into ${result.toEnvironmentLabel} — ${result.versionLabel}`
-          + (result.mirrored ? ` · ${result.mirrored.label} auto-mirrored` : '')
-          + (result.breakingChangesCount ? ` · ${result.breakingChangesCount} breaking change${result.breakingChangesCount === 1 ? '' : 's'} included` : ''));
-        logAudit('updated', 'project', proj.name, `Promoted to ${result.toEnvironmentLabel} (${result.versionLabel})`);
-        renderReleasePipeline(proj);
-        renderRail();
-      }catch(e){
-        toast(e.message || 'Could not merge.');
-        renderReleasePipeline(proj);
-      }
-    });
-  }
-}
-
-function renderReleaseDiffField(c){
-  const fmt = (v)=> (v === null || v === undefined) ? '(empty)' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
-  let lines;
-  if(c.kind === 'added') lines = `<div class="rp-diff-line add">${escapeHtml(fmt(c.after))}</div>`;
-  else if(c.kind === 'removed') lines = `<div class="rp-diff-line rm">${escapeHtml(fmt(c.before))}</div>`;
-  else lines = `<div class="rp-diff-line rm">${escapeHtml(fmt(c.before))}</div><div class="rp-diff-line add">${escapeHtml(fmt(c.after))}</div>`;
-  return `<div class="rp-diff-field"><div class="rp-diff-field-path mono">${escapeHtml(c.path || '(root)')}</div>${lines}</div>`;
-}
 
 /* ---------- Auth tab: request/response parameters (table view only) ---------- */
 // Auth's request/response parameter tables are edited from two surfaces now
@@ -1122,7 +840,7 @@ function openProjectModal(projectId, initialTab){
   document.getElementById('projSubtitle').textContent = proj.name;
 
   renderProjectDocsList(proj);
-  renderReleasePipeline(proj);
+  renderReleaseStatus(proj);
   renderProjectEnvUrls(proj);
 
   const archStatusEl = document.getElementById('projArchStatus');

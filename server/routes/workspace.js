@@ -7,7 +7,7 @@ const dataCrypto = require('../crypto');
 const storage = require('../storage');
 const cache = require('../cache');
 const { resolveAccessById, environmentAllowed } = require('../projectAccess');
-const { notifyUser } = require('../notifications');
+const { notifyUser, notifyUsers, adminUserIds } = require('../notifications');
 const { detectBreakingChanges } = require('../breakingChangeDetector');
 const piiMasking = require('../piiMasking');
 const { validateOutboundUrlSync } = require('../urlSafety');
@@ -1381,6 +1381,61 @@ router.get('/projects/:id/versions', async (req, res) => {
   }
 });
 
+// GET /api/workspace/projects/:id/release-history — Release Pipeline v2's
+// GitHub-style unified merge history: every promotion/rollback across EVERY
+// environment for this project, newest first, in one feed instead of having
+// to open each stage's own history panel separately. Same access rule as
+// GET /versions above (owner, an explicit grant, or a public project) since
+// it's the same class of metadata, just the full timeline instead of only
+// "what's live right now."
+router.get('/projects/:id/release-history', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, owner_id, organisation, visibility, has_public_endpoint FROM projects WHERE id = $1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Project not found.' });
+    const project = rows[0];
+    if (project.organisation !== req.authUser.organisation) return res.status(404).json({ error: 'Project not found.' });
+
+    const access = await resolveAccessById(req.authUser.sub, req.params.id, req.authUser.organisation);
+    if (!access.canView) return res.status(404).json({ error: 'Project not found.' });
+
+    const allEnvs = await getOrgEnvironments(project.organisation);
+    const labelById = new Map(allEnvs.map((e) => [e.id, e.label]));
+
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 300);
+    const { rows: historyRows } = await pool.query(
+      `SELECT id, environment_id, version, source_environment_id, action, rolled_back_from_id,
+              promoted_by_username, auto_mirrored, promoted_at, release_note, breaking_changes
+       FROM project_env_version_history WHERE project_id = $1 ORDER BY promoted_at DESC, id DESC LIMIT $2`,
+      [req.params.id, limit]
+    );
+
+    res.json({
+      entries: historyRows.map((h) => ({
+        id: h.id,
+        environmentId: h.environment_id,
+        environmentLabel: labelById.get(h.environment_id) || h.environment_id,
+        version: h.version,
+        versionLabel: `1.0.${h.version}`,
+        sourceEnvironmentId: h.source_environment_id,
+        sourceEnvironmentLabel: h.source_environment_id ? (labelById.get(h.source_environment_id) || h.source_environment_id) : null,
+        action: h.action,
+        rolledBackFromId: h.rolled_back_from_id,
+        promotedByUsername: h.promoted_by_username,
+        autoMirrored: h.auto_mirrored,
+        promotedAt: h.promoted_at,
+        releaseNote: h.release_note,
+        breakingChanges: Array.isArray(h.breaking_changes) ? h.breaking_changes : [],
+      })),
+    });
+  } catch (err) {
+    console.error('GET release history failed:', err);
+    res.status(500).json({ error: 'Could not load release history.' });
+  }
+});
+
 // POST /api/workspace/projects/:id/promote — { fromEnvironmentId }. Promotes
 // that stage's current content into the NEXT stage in the pipeline (server-
 // derived from the org's environment list — the client can't specify an
@@ -1389,6 +1444,13 @@ router.post('/projects/:id/promote', async (req, res) => {
   if (!isAdminUser(req)) return res.status(403).json({ error: 'Only Admins can promote a project between environments.' });
   const fromEnvironmentId = req.body?.fromEnvironmentId;
   if (!fromEnvironmentId) return res.status(400).json({ error: 'fromEnvironmentId is required.' });
+  // Release Pipeline v2: a release note is required on every promotion — the
+  // diff already shows *what* changed, this is the one place "why" gets
+  // captured, and it's what makes the merge-history timeline (GET
+  // /release-history) read like an actual changelog instead of a bare list
+  // of version bumps.
+  const releaseNote = String(req.body?.releaseNote || '').trim().slice(0, 500);
+  if (!releaseNote) return res.status(400).json({ error: 'A release note is required before promoting.' });
 
   const client = await pool.connect();
   try {
@@ -1472,6 +1534,7 @@ router.post('/projects/:id/promote', async (req, res) => {
       projectId: project.id, environmentId: targetStage.id, version: newReleaseVersion,
       dataEnc: targetEnc, dataKeyVersion: targetKeyVersion, sourceEnvironmentId: fromEnvironmentId,
       action: 'promote', promotedBy: req.authUser.sub, promotedByUsername: req.authUser.username, autoMirrored: false,
+      releaseNote, breakingChanges: liveBreakingChanges,
     });
 
     let mirrored = null;
@@ -1495,6 +1558,7 @@ router.post('/projects/:id/promote', async (req, res) => {
           projectId: project.id, environmentId: drEnv.id, version: newReleaseVersion,
           dataEnc: mirrorEnc, dataKeyVersion: mirrorKeyVersion, sourceEnvironmentId: targetStage.id,
           action: 'promote', promotedBy: req.authUser.sub, promotedByUsername: req.authUser.username, autoMirrored: true,
+          releaseNote: `Auto-mirrored from ${targetStage.label}: ${releaseNote}`,
         });
         mirrored = { environmentId: drEnv.id, label: drEnv.label };
       }
@@ -1522,6 +1586,23 @@ router.post('/projects/:id/promote', async (req, res) => {
         details: `${mirrored.label} auto-mirrored ${targetStage.label} — v1.0.${newReleaseVersion}.`,
         severity: 'info',
         metadata: { mirroredFrom: targetStage.id, version: newReleaseVersion },
+      });
+    }
+
+    // Every other Admin gets a notification too, not just an audit-log line
+    // only the promoter would think to go check — same "no signal" gap
+    // notifyUser already closes for doc-access and project-access grants
+    // elsewhere in this file. Breaking changes get a louder, distinct type
+    // so they can't be mistaken for a routine promotion at a glance.
+    const recipientIds = (await adminUserIds(project.organisation)).filter((id) => id !== req.authUser.sub);
+    if (recipientIds.length) {
+      const hasBreaking = liveBreakingChanges.length > 0;
+      await notifyUsers(recipientIds, {
+        organisation: project.organisation,
+        type: hasBreaking ? 'PROJECT_PROMOTED_BREAKING' : 'PROJECT_PROMOTED',
+        title: `${req.authUser.username} promoted ${stages[fromIdx].label} → ${targetStage.label}${hasBreaking ? ' (breaking changes)' : ''}`,
+        body: releaseNote,
+        link: { view: 'release-pipeline', projectId: project.id },
       });
     }
 
@@ -1707,14 +1788,17 @@ function checkDiffToken(token, { projectId, from, to, diff, breakingChanges, ack
 async function recordEnvVersionHistory(client, {
   projectId, environmentId, version, dataEnc, dataKeyVersion, sourceEnvironmentId,
   action = 'promote', rolledBackFromId = null, promotedBy, promotedByUsername, autoMirrored = false,
+  releaseNote = null, breakingChanges = [],
 }) {
   const { rows } = await client.query(
     `INSERT INTO project_env_version_history
        (project_id, environment_id, version, data_enc, data_key_version, source_environment_id,
-        action, rolled_back_from_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+        action, rolled_back_from_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at,
+        release_note, breaking_changes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), $12, $13)
      RETURNING id`,
-    [projectId, environmentId, version, dataEnc, dataKeyVersion, sourceEnvironmentId, action, rolledBackFromId, promotedBy, promotedByUsername, autoMirrored]
+    [projectId, environmentId, version, dataEnc, dataKeyVersion, sourceEnvironmentId, action, rolledBackFromId, promotedBy, promotedByUsername, autoMirrored,
+      releaseNote, JSON.stringify(breakingChanges || [])]
   );
   return rows[0].id;
 }
@@ -2076,6 +2160,7 @@ router.post('/projects/:id/rollback', async (req, res) => {
       dataEnc: target.data_enc, dataKeyVersion: target.data_key_version, sourceEnvironmentId: target.source_environment_id,
       action: 'rollback', rolledBackFromId: currentRows[0]?.id || null,
       promotedBy: req.authUser.sub, promotedByUsername: req.authUser.username, autoMirrored: false,
+      releaseNote: String(req.body?.note || '').trim().slice(0, 500) || `Rolled back to v1.0.${target.version}`,
     });
 
     await client.query('COMMIT');

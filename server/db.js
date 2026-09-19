@@ -481,6 +481,19 @@ async function initDb() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_env_version_history_lookup ON project_env_version_history (project_id, environment_id, promoted_at DESC);`);
+  // Release Pipeline v2 (see server/views/release-pipeline.html): a short,
+  // required note captured at promote/rollback time ("why", not "what" —
+  // the "what" is already derivable from the diff), plus a frozen snapshot
+  // of the breaking changes that were reviewed and acknowledged for THIS
+  // specific promotion. Both are denormalized onto the history row rather
+  // than recomputed later — recomputing would mean re-diffing against
+  // whatever the adjacent stage's content happens to be *now*, which drifts
+  // over time as further promotions land; the whole point of a commit-style
+  // history is that each entry stays an honest record of what was true at
+  // that moment.
+  await pool.query(`ALTER TABLE project_env_version_history ADD COLUMN IF NOT EXISTS release_note TEXT;`);
+  await pool.query(`ALTER TABLE project_env_version_history ADD COLUMN IF NOT EXISTS breaking_changes JSONB NOT NULL DEFAULT '[]';`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_env_version_history_project_feed ON project_env_version_history (project_id, promoted_at DESC);`);
 
   // ---- Org-wide AI configuration (AI Studio) ----
   // One row per organisation. `api_key_enc` is the org's own LLM API key,
