@@ -123,6 +123,15 @@ function requestFlowSectionInnerHtml(proj, env, ep){
   const sub = res.custom
     ? `${res.flows.length} flow${multi ? 's' : ''}, set from Edit settings`
     : `${res.flows[0].caption}, set from Edit settings`;
+  // Only meaningful when called for a specific endpoint (ep passed) — makes
+  // it obvious at a glance whether what's shown is this endpoint's own flow
+  // or the project's shared one it's inheriting, instead of leaving that
+  // ambiguous now that either is possible.
+  const sourceBadge = ep
+    ? (res.source === 'endpoint'
+      ? `<span class="rf-source-badge rf-source-endpoint">Custom for this endpoint</span>`
+      : `<span class="rf-source-badge rf-source-project">Using project default</span>`)
+    : '';
   const blocks = res.flows.map((f,i)=>{
     const showHead = res.custom && (multi || f.name || f.when);
     const head = showHead
@@ -130,7 +139,7 @@ function requestFlowSectionInnerHtml(proj, env, ep){
       : '';
     return `<div class="rf-flow-block">${head}${requestFlowSvg(f.stages, f.pattern)}</div>`;
   }).join('');
-  return `<div class="section-title">Request flow${multi ? 's' : ''} <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— ${escapeHtml(sub)}</span></div>
+  return `<div class="section-title"><span style="flex:1;">Request flow${multi ? 's' : ''} <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— ${escapeHtml(sub)}</span></span>${sourceBadge}</div>
       ${blocks}
       <div class="rf-legend">
         <span><span class="sw"></span>Request</span>

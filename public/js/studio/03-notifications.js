@@ -777,12 +777,13 @@ function normalizeRawFlows(raw){
 // falls straight back to the project's, same as before.
 function resolveRequestFlows(proj, env, ep){
   const epFlows = normalizeRawFlows(ep && ep.requestFlows);
-  if(epFlows.length) return { custom: true, flows: epFlows };
+  if(epFlows.length) return { custom: true, source: 'endpoint', flows: epFlows };
   const flows = normalizeRawFlows(proj && proj.requestFlows);
-  if(flows.length) return { custom: true, flows };
+  if(flows.length) return { custom: true, source: 'project', flows };
   const preset = resolveFlowDirection(proj);
   return {
     custom: false,
+    source: 'project',
     flows: [{ name: '', when: '', pattern: preset.pattern, caption: preset.label, stages: resolveFlowStages(proj, env) }],
   };
 }

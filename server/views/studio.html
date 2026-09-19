@@ -1071,6 +1071,7 @@ pre.code-block{
 .ad-prev-edge-label{ fill:var(--text-dim); font-family:var(--mono); font-size:10px; }
 .ad-prev-label{ fill:var(--text-dim); font-family:var(--sans); font-size:10px; font-weight:600; }
 .ad-prev-text{ fill:var(--text-faint); font-family:var(--sans); font-size:11.5px; }
+.ad-prev-text-bg{ fill:var(--canvas-bg, var(--surface)); opacity:.82; }
 .ad-preview-meta{
   display:flex; align-items:center; gap:10px; padding:10px 14px; border-top:1px solid var(--border);
   font-size:11px; color:var(--text-faint);
@@ -1342,6 +1343,7 @@ pre.code-block{
 .fe-when-wrap input{ font-size:12px; }
 .fe-btn{ background:none; border:1px dashed var(--border-strong); color:var(--text-dim); border-radius:7px; padding:6px 12px; font-size:11.5px; font-weight:600; text-transform:none; letter-spacing:0; }
 .fe-btn:hover{ border-color:var(--accent); color:var(--accent); }
+.fe-btn.danger:hover{ border-color:var(--delete); color:var(--delete); }
 .fe-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; }
 /* ---- Request flow diagram: per-flow header + hop labels (Overview / PDF) ---- */
 .rf-flow-block{ margin-bottom:6px; }
@@ -1369,6 +1371,9 @@ pre.code-block{
 .rf-legend span{ display:inline-flex; align-items:center; gap:6px; }
 .rf-legend .sw{ width:16px; height:0; border-top:2px solid var(--accent); opacity:.7; display:inline-block; }
 .rf-legend .sw.ret{ border-top:2px dashed var(--env-accent, var(--accent)); }
+.rf-source-badge{ font-size:10px; font-weight:700; letter-spacing:.3px; text-transform:uppercase; padding:3px 9px; border-radius:20px; white-space:nowrap; }
+.rf-source-endpoint{ color:var(--accent); background:var(--accent-soft, rgba(92,124,250,.14)); border:1px solid var(--accent); }
+.rf-source-project{ color:var(--text-faint); background:var(--surface-2); border:1px solid var(--border); }
 
 .env-table{ width:100%; border-collapse:collapse; }
 .env-table tr{ border-bottom:1px solid var(--border); }

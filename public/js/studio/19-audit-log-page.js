@@ -547,9 +547,19 @@ function architectureDiagramPreviewSvg(diagram){
       const fontSize = 11.5;
       const lineH = fontSize * 1.35;
       const lines = wrapPreviewText(n.label, n.w, fontSize, 4);
+      const blockH = lines.length * lineH;
       const startY = n.y + n.h/2 - ((lines.length-1) * lineH)/2 + fontSize*0.36;
       const tspans = lines.map((line,i)=>`<tspan x="${n.x+n.w/2}" y="${startY + i*lineH}">${escapeHtml(line)}</tspan>`).join('');
-      return `<text text-anchor="middle" class="ad-prev-text" style="font-size:${fontSize}px;">${tspans}</text>`;
+      // A translucent backing chip behind the text — without it, a note that
+      // happens to sit over a connector line or another box (routing is
+      // user-placed, so this isn't rare) becomes unreadable; the editor
+      // itself avoids this by leaving canvas empty behind text, but this
+      // preview can't guarantee that same empty space around every note.
+      const chipPad = 6;
+      const chipY = n.y + n.h/2 - blockH/2 - chipPad;
+      const chipH = blockH + chipPad*2;
+      const bg = `<rect x="${n.x - chipPad}" y="${chipY}" width="${n.w + chipPad*2}" height="${chipH}" rx="6" class="ad-prev-text-bg"></rect>`;
+      return `<g>${bg}<text text-anchor="middle" class="ad-prev-text" style="font-size:${fontSize}px;">${tspans}</text></g>`;
     }
     // Icon nodes carry a rendered badge (iconSvg/iconColor) snapshotted at
     // publish time — use it so this preview matches the editor's colors and

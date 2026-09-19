@@ -431,7 +431,12 @@ const endpointFlowEditor = FlowEditor.create({ root: document.getElementById('mF
 // Per-endpoint flow diagram — separate instance/mount from the project-wide
 // one above. Backed by ep.requestFlows (not proj.requestFlows). Empty means
 // "use the project's flows", handled by resolveRequestFlows's ep fallback.
-const epFlowEditor = FlowEditor.create({ root: document.getElementById('mEpFlowsRoot') });
+const epFlowEditor = FlowEditor.create({
+  root: document.getElementById('mEpFlowsRoot'),
+  emptyMessage: 'Not customized — this endpoint falls back to the project\'s Request flows (below). Add a flow to give this endpoint its own diagram.',
+  clearLabel: 'Clear — use the project\'s flow instead',
+  clearConfirm: 'Clear this endpoint\'s flow? It will go back to showing the project\'s Request flows instead.',
+});
 
 function hydrateEndpointProjectFields(proj){
   currentEndpointProject = proj;

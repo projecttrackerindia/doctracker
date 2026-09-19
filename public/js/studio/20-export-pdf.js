@@ -501,13 +501,6 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
     </section>
     </div>` : '';
 
-  const requestFlowHtml = `
-    <div class="pdf-atom">
-    <section>
-      ${pdfRequestFlowSectionInnerHtml(proj, env)}
-    </section>
-    </div>`;
-
   const endpointsHistoryHtml = endpoints.length ? `
     <div class="pdf-atom">
     <section>
@@ -604,7 +597,6 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
     ${coverBlankHtml}
     ${overviewHtml}
     ${lifecycleHtml}
-    ${requestFlowHtml}
     ${endpointsHistoryHtml}
     <div class="pdf-atom">
     <section class="pdf-toc">

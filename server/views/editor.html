@@ -280,6 +280,7 @@ html{ scroll-behavior:smooth; }
 .fe-when-wrap input{ font-size:12px; }
 .fe-btn{ background:none; border:1px dashed var(--border-strong); color:var(--text-dim); border-radius:7px; padding:6px 12px; font-size:12px; }
 .fe-btn:hover{ border-color:var(--accent); color:var(--accent); }
+.fe-btn.danger:hover{ border-color:var(--delete); color:var(--delete); }
 .fe-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; }
 
 /* Add-block control — floating, same treatment as the studio's "+ New endpoint" FAB */
@@ -939,7 +940,12 @@ const flowEditor = FlowEditor.create({ root: document.getElementById('fFlowsRoot
 // This endpoint's own flow diagram — separate instance/mount, backed by
 // ep.requestFlows (not proj.requestFlows). Empty means "use the project's
 // flows", handled by resolveRequestFlows's ep fallback.
-const epFlowEditor = FlowEditor.create({ root: document.getElementById('fEpFlowsRoot') });
+const epFlowEditor = FlowEditor.create({
+  root: document.getElementById('fEpFlowsRoot'),
+  emptyMessage: 'Not customized — this endpoint falls back to the project\'s Request flows (below). Add a flow to give this endpoint its own diagram.',
+  clearLabel: 'Clear — use the project\'s flow instead',
+  clearConfirm: 'Clear this endpoint\'s flow? It will go back to showing the project\'s Request flows instead.',
+});
 
 function exampleValueFor(type, example){
   if(example !== undefined && example !== '' && example !== null) return coerceByType(type, example);

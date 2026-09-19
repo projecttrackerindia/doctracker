@@ -174,6 +174,12 @@
     var root = opts.root;
     var flows = [];
     var radioGroup = 'fsrMid_' + Math.random().toString(36).slice(2, 7);
+    // Endpoint-level instances pass their own copy + a "reset" affordance,
+    // since an empty endpoint-level editor falls back to the project's
+    // flows (not literally the default template) — see resolveRequestFlows.
+    var emptyMessage = opts.emptyMessage || 'Not customized — the Overview shows the default Client → Gateway → Flow → Downstream diagram. Add a flow to describe your own.';
+    var clearLabel = opts.clearLabel || null; // e.g. "Clear — use the project's flow instead"
+    var clearConfirm = opts.clearConfirm || 'Clear this flow and fall back instead?';
 
     function stageRow(f, fi, s, si) {
       var last = si === f.stages.length - 1;
@@ -253,11 +259,12 @@
     function render() {
       var body = flows.length
         ? flows.map(flowCard).join('')
-        : '<div class="empty-field">Not customized — the Overview shows the default Client → Gateway → Flow → Downstream diagram. Add a flow to describe your own.</div>';
+        : '<div class="empty-field">' + emptyMessage + '</div>';
       root.innerHTML = body +
         '<div class="fe-actions">' +
           '<button type="button" class="fe-btn" data-act="flow-add">+ Add flow</button>' +
           (flows.length ? '' : '<button type="button" class="fe-btn" data-act="example" title="Token → business request → third-party token">Insert example (3 flows)</button>') +
+          (flows.length && clearLabel ? '<button type="button" class="fe-btn danger" data-act="clear">' + clearLabel + '</button>' : '') +
         '</div>';
     }
 
@@ -319,6 +326,10 @@
         flows[flows.length - 1].stages[1].icon = 'downstream';
       }
       else if (act === 'example') flows = clone(EXAMPLE).map(normFlow);
+      else if (act === 'clear') {
+        if (!window.confirm(clearConfirm)) return;
+        flows = [];
+      }
       else if (act === 'flow-up') move(flows, p.fi, -1);
       else if (act === 'flow-down') move(flows, p.fi, 1);
       else if (act === 'flow-remove') flows.splice(p.fi, 1);
