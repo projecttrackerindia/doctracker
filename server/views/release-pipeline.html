@@ -333,7 +333,7 @@ async function renderReleasePipeline(){
   let data;
   try{ data = await apiGet(`/projects/${encodeURIComponent(proj.id)}/versions`); }
   catch(e){
-    section.innerHTML = `<div class="rp-loading">Could not load release pipeline status.</div>`;
+    section.innerHTML = `<div class="rp-loading">${escapeHtml(e.message || 'Could not load release pipeline status.')}</div>`;
     return;
   }
   const stages = data.stages;
@@ -461,7 +461,7 @@ async function renderReleasePipeline(){
     try{
       diff = await apiGet(`/projects/${encodeURIComponent(proj.id)}/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
     }catch(e){
-      panel.innerHTML = `<div class="rp-diff-nochanges">Could not load diff.</div>`;
+      panel.innerHTML = `<div class="rp-diff-nochanges">${escapeHtml(e.message || 'Could not load diff.')}</div>`;
       return;
     }
     renderReleaseDiffPanel(panel, diff, previewMode);
@@ -649,7 +649,7 @@ async function renderMergeHistory(){
   let data;
   try{ data = await apiGet(`/projects/${encodeURIComponent(proj.id)}/release-history?limit=100`); }
   catch(e){
-    el.innerHTML = `<div class="rp-empty">Could not load merge history.</div>`;
+    el.innerHTML = `<div class="rp-empty">${escapeHtml(e.message || 'Could not load merge history.')}</div>`;
     return;
   }
   const entries = data.entries || [];
