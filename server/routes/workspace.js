@@ -268,9 +268,15 @@ async function reencryptOrganisation(organisation) {
 // organisation => caller never sees the row at all (filtered out in SQL).
 function projectForViewer(row, viewerId, data, grant) {
   data = data || {};
+  // Server-authoritative save version, stamped fresh on every write (see the
+  // ON CONFLICT ... updated_at = now() in PUT /projects below) and always
+  // recomputed here regardless of whatever a client last echoed back in its
+  // own payload — see the PUT handler's conflict check for what this guards
+  // against (two tabs/edits racing on the same project).
+  const rev = row.updated_at ? new Date(row.updated_at).toISOString() : null;
   const isOwner = row.owner_id === viewerId;
   if (isOwner) {
-    return { ...data, id: row.id, visibility: row.visibility, _owned: true };
+    return { ...data, id: row.id, visibility: row.visibility, _owned: true, _rev: rev };
   }
   if (grant) {
     const envs = Array.isArray(grant.environments) ? grant.environments : [];
@@ -281,6 +287,7 @@ function projectForViewer(row, viewerId, data, grant) {
       _owned: false,
       _readonly: grant.permission !== 'edit',
       _grantedEnvironments: envs.includes('*') ? 'all' : envs,
+      _rev: rev,
     };
   }
   const endpoints = Array.isArray(data.endpoints)
@@ -402,7 +409,7 @@ router.get('/', async (req, res) => {
     // the WHERE) AND carries the grant's environments/permission along for
     // projectForViewer to apply — one query instead of an N+1 per project.
     const { rows } = await pool.query(
-      `SELECT p.id, p.owner_id, p.organisation, p.visibility, p.name, p.data, p.data_enc,
+      `SELECT p.id, p.owner_id, p.organisation, p.visibility, p.name, p.data, p.data_enc, p.updated_at,
               pa.environments AS grant_environments, pa.permission AS grant_permission
        FROM projects p
        LEFT JOIN project_access pa ON pa.project_id = p.id AND pa.user_id = $1
@@ -491,10 +498,12 @@ router.put('/projects', async (req, res) => {
   const client = await pool.connect();
   const saved = [];
   const skipped = [];
+  const conflicts = [];
   try {
     await client.query('BEGIN');
-    const existing = await client.query('SELECT id, owner_id FROM projects WHERE id = ANY($1)', [ids]);
+    const existing = await client.query('SELECT id, owner_id, updated_at FROM projects WHERE id = ANY($1)', [ids]);
     const ownerById = new Map(existing.rows.map((r) => [r.id, r.owner_id]));
+    const updatedAtById = new Map(existing.rows.map((r) => [r.id, r.updated_at]));
 
     for (const id of ids) {
       if (ownerById.has(id) && ownerById.get(id) !== userId) {
@@ -502,9 +511,31 @@ router.put('/projects', async (req, res) => {
         continue;
       }
       const proj = incoming[id] || {};
+
+      // Optimistic-locking guard: `_rev` is the `_rev` this client last read
+      // via GET /api/workspace (see projectForViewer), i.e. the project's
+      // updated_at as of when it loaded. If the row has since been saved by
+      // anyone else — another tab, another user with edit access — its
+      // updated_at has moved on, and blindly writing this client's payload
+      // would silently discard whatever that other save changed (this is
+      // exactly what happened with the Architecture Studio diagram getting
+      // clobbered by a stale tab). A client that omits `_rev` entirely (an
+      // older cached page, or a brand-new project) is never blocked by this —
+      // only a client that HAS a rev is held to it.
+      const existingUpdatedAt = updatedAtById.get(id);
+      if (existingUpdatedAt && typeof proj._rev === 'string') {
+        const knownRev = new Date(proj._rev).getTime();
+        const actualRev = new Date(existingUpdatedAt).getTime();
+        if (Number.isFinite(knownRev) && knownRev !== actualRev) {
+          conflicts.push(id);
+          continue;
+        }
+      }
+
       const visibility = proj.visibility === 'public' ? 'public' : 'private';
       const name = typeof proj.name === 'string' && proj.name.trim() ? proj.name.trim() : 'Untitled API';
       const dataToStore = { ...proj, id };
+      delete dataToStore._rev; // server-computed on read — never trust a stored copy
 
       const sizeError = attachmentSizeError(dataToStore);
       if (sizeError) {
@@ -543,7 +574,18 @@ router.put('/projects', async (req, res) => {
     }
     await client.query('COMMIT');
     await cache.invalidateOrg(org);
-    res.json({ ok: true, saved, skipped });
+    // Hand back each saved project's new rev so the client can update its
+    // local copy in place (see saveState() in 06-spec-parse.js) instead of
+    // re-fetching the whole workspace just to learn its own save's timestamp.
+    let revs = {};
+    if (saved.length) {
+      const { rows: revRows } = await pool.query(
+        'SELECT id, updated_at FROM projects WHERE id = ANY($1)',
+        [saved]
+      );
+      revs = Object.fromEntries(revRows.map((r) => [r.id, new Date(r.updated_at).toISOString()]));
+    }
+    res.json({ ok: true, saved, skipped, conflicts, revs });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('PUT /api/workspace/projects failed:', err);

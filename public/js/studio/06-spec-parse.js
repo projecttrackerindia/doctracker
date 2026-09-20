@@ -110,9 +110,34 @@ let _saveStateTimer = null;
 function saveState(){
   clearTimeout(_saveStateTimer);
   _saveStateTimer = setTimeout(()=>{
-    apiSend('PUT', '/projects', { projects: state.projects }).then(res=>{
+    apiSend('PUT', '/projects', { projects: state.projects }).then(async res=>{
       if(res && res.skipped && res.skipped.length){
         toast("Some changes couldn't be saved — you're not the owner of that project.");
+      }
+      // Keep each saved project's `_rev` current so the NEXT save's conflict
+      // check compares against what the server actually has now, not what
+      // was loaded at page-open — otherwise every save after the first would
+      // spuriously conflict with itself.
+      if(res && res.revs){
+        Object.entries(res.revs).forEach(([id, rev])=>{
+          if(state.projects[id]) state.projects[id]._rev = rev;
+        });
+      }
+      // A conflict means someone else (or another tab) saved this project
+      // after we loaded our copy — our edit was NOT written, to avoid
+      // silently discarding theirs (see the server-side comment in
+      // PUT /projects). Pull the current server copy back in so this tab
+      // stops re-offering a save that will just conflict again, and tell
+      // the user their most recent change here didn't go through.
+      if(res && res.conflicts && res.conflicts.length){
+        try{
+          const fresh = await apiGet('');
+          res.conflicts.forEach(id=>{
+            if(fresh.projects && fresh.projects[id]) state.projects[id] = ensureProjectDefaults(fresh.projects[id]);
+          });
+          renderAll();
+        }catch(e){ console.error('Could not reload conflicted project', e); }
+        toast('Someone else just updated ' + (res.conflicts.length===1 ? 'a project' : res.conflicts.length + ' projects') + " you had open — your last change there wasn't saved. Reloaded the latest version.");
       }
     }).catch(e=>{
       console.error('Save failed', e);
