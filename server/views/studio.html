@@ -6,7 +6,7 @@
 <title>DocTracker — Developer Portal</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/css/doc-meta.css">
-<script src="/js/idle-session.js"></script>
+<script src="/js/idle-session.js?v=__ASSET_VERSION__"></script>
 <script nonce="__CSP_NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
 <script nonce="__CSP_NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script nonce="__CSP_NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -3962,6 +3962,13 @@ function renderScheduleState(){
 // server.js) — used to link to other tenant-scoped pages (the audit log)
 // without ever putting the organisation name itself in a URL.
 const ORG_TOKEN = '__ORG_TOKEN__';
+// Deep link into a specific project/endpoint's doc page — see the
+// :projectSlug/:endpointSlug dashboard.html routes in server.js and their
+// handling in 22-init.js's boot(). Slugs are for readability/bookmarking
+// only, same as edit.studio's; resolved client-side against the workspace
+// this session already has access to, never trusted server-side.
+const INITIAL_PROJECT_SLUG = __PROJECT_SLUG__;
+const INITIAL_ENDPOINT_SLUG = __ENDPOINT_SLUG__;
 
 </script>
 <!-- The rest of the app (previously ~10,500 more lines in one inline
@@ -3972,29 +3979,29 @@ const ORG_TOKEN = '__ORG_TOKEN__';
      block did) — do not reorder these tags. AUTH_USER/ORG_TOKEN above stay
      inline because they need per-request templating from server.js;
      everything else here is static and does not. -->
-<script nonce="__CSP_NONCE__" src="/js/flow-editor.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/doc-meta.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/01-constants.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/02-workspace-api.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/03-notifications.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/04-state.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/05-util.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/06-spec-parse.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/07-codesamples.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/08-render-chrome.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/09-render-sidebar.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/10-metrics.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/11-render-main.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/12-security-center.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/13-endpoint-table.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/14-users.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/15-render-rail.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/16-palette.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/17-modals.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/18-renderview.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/19-audit-log-page.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/20-export-pdf.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/21-events.js"></script>
-<script nonce="__CSP_NONCE__" src="/js/studio/22-init.js"></script>
+<script nonce="__CSP_NONCE__" src="/js/flow-editor.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/doc-meta.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/01-constants.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/02-workspace-api.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/03-notifications.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/04-state.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/05-util.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/06-spec-parse.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/07-codesamples.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/08-render-chrome.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/09-render-sidebar.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/10-metrics.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/11-render-main.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/12-security-center.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/13-endpoint-table.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/14-users.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/15-render-rail.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/16-palette.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/17-modals.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/18-renderview.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/19-audit-log-page.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/20-export-pdf.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/21-events.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/22-init.js?v=__ASSET_VERSION__"></script>
 </body>
 </html>

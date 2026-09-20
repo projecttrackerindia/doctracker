@@ -2,6 +2,23 @@
 (async function boot(){
   await loadState();
   renderAuthorLabel();
+
+  // Landed here via a /:orgToken/:projectSlug[/:endpointSlug]/dashboard.html
+  // deep link (see server.js) — jump straight to that project's Overview, or
+  // that endpoint's doc page, instead of the default view. slugify/
+  // endpointSlugFor are the same functions buildEditorUrl uses (19-audit-log-page.js),
+  // so a slug built anywhere in the app resolves the same way everywhere.
+  // A stale/renamed/deleted slug just falls through to the default view
+  // rather than erroring.
+  if(INITIAL_PROJECT_SLUG){
+    const proj = allProjects().find(p => slugify(p.name) === INITIAL_PROJECT_SLUG);
+    if(proj){
+      const ep = INITIAL_ENDPOINT_SLUG
+        ? (proj.endpoints||[]).find(e => endpointSlugFor(e) === INITIAL_ENDPOINT_SLUG)
+        : null;
+      state.selected = ep ? { type:'endpoint', id: ep.id } : { type:'overview', projectId: proj.id };
+    }
+  }
   // A non-Admin still needs to reach Security if they own at least one
   // project (see requireAdminOrProjectOwner server-side) — otherwise they'd
   // have no way to act on a documentation-access request for their own

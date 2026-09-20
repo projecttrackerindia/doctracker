@@ -213,6 +213,17 @@ const editorTemplate = fs.readFileSync(path.join(__dirname, 'views', 'editor.htm
 const architectureStudioTemplate = fs.readFileSync(path.join(__dirname, 'views', 'architecture-studio.html'), 'utf8');
 const releasePipelineTemplate = fs.readFileSync(path.join(__dirname, 'views', 'release-pipeline.html'), 'utf8');
 
+// Cache-busting for every /js/... <script> tag in the templates above (see
+// __ASSET_VERSION__ in each view). None of those tags carried a version
+// query string before this, so a browser could keep serving a stale cached
+// copy of e.g. public/js/studio/10-metrics.js indefinitely after a deploy —
+// no explicit Cache-Control header was set, so it fell to each browser's own
+// caching heuristics rather than anything actually invalidating on change.
+// Process boot time is enough: Railway restarts the process on every deploy,
+// so this value - and therefore every script URL - changes on every deploy
+// without needing a git hash or build step.
+const ASSET_VERSION = String(Date.now());
+
 // The organisation name never appears in a URL in the clear — every tenant-
 // scoped page is addressed as /<encrypted-org-token>/whatever instead of
 // /whatever. The token is produced by dataCrypto.encryptOrgToken() (AES-256-GCM,
@@ -241,7 +252,12 @@ function escapeHtml(str) {
 // per-request (not served as a static file) so we can inject the signed-in
 // user's identity and a fresh CSP nonce — that's also what keeps it gated by
 // requireAuth instead of being publicly reachable like the rest of /public.
-function renderDashboard(req, res) {
+// projectSlug/endpointSlug: same "readability/bookmarking only, resolved
+// client-side" pattern edit.studio already uses (see renderEditor below) —
+// deep-links a project's Overview or one endpoint's doc page instead of
+// always landing on the default view. Never trusted for access; the
+// session cookie is what actually gates what loads.
+function renderDashboard(req, res, { projectSlug = '', endpointSlug = '' } = {}) {
   const authUser = {
     id: req.user.sub,
     username: req.user.username,
@@ -253,11 +269,14 @@ function renderDashboard(req, res) {
   };
   const html = studioTemplate
     .replace(/__CSP_NONCE__/g, res.locals.cspNonce)
+    .replace(/__ASSET_VERSION__/g, ASSET_VERSION)
     .replace('__AUTH_USER_JSON__', JSON.stringify(authUser))
     .replace(/__ORG_TOKEN__/g, tokenForUser(req.user))
     // Topbar brand lockup shows the signed-in user's own organisation name
     // instead of the static "DocTracker" — see server/views/studio.html.
-    .replace(/__ORG_NAME__/g, escapeHtml(req.user.organisation));
+    .replace(/__ORG_NAME__/g, escapeHtml(req.user.organisation))
+    .replace('__PROJECT_SLUG__', JSON.stringify(projectSlug))
+    .replace('__ENDPOINT_SLUG__', JSON.stringify(endpointSlug));
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
 }
@@ -272,6 +291,22 @@ app.get('/:orgToken/dashboard.html', requireAuth, (req, res) => {
   renderDashboard(req, res);
 });
 
+app.get('/:orgToken/:projectSlug/dashboard.html', requireAuth, (req, res) => {
+  const org = dataCrypto.decryptOrgToken(req.params.orgToken);
+  if (org !== req.user.organisation) {
+    return res.redirect(`/${tokenForUser(req.user)}/${req.params.projectSlug}/dashboard.html`);
+  }
+  renderDashboard(req, res, { projectSlug: req.params.projectSlug });
+});
+
+app.get('/:orgToken/:projectSlug/:endpointSlug/dashboard.html', requireAuth, (req, res) => {
+  const org = dataCrypto.decryptOrgToken(req.params.orgToken);
+  if (org !== req.user.organisation) {
+    return res.redirect(`/${tokenForUser(req.user)}/${req.params.projectSlug}/${req.params.endpointSlug}/dashboard.html`);
+  }
+  renderDashboard(req, res, { projectSlug: req.params.projectSlug, endpointSlug: req.params.endpointSlug });
+});
+
 // Back-compat for old bookmarks/links to the un-tokenized URL.
 app.get('/dashboard.html', requireAuth, (req, res) => {
   res.redirect(`/${tokenForUser(req.user)}/dashboard.html`);
@@ -282,7 +317,9 @@ app.get('/:orgToken/auditlog', requireAuth, (req, res) => {
   if (org !== req.user.organisation) {
     return res.redirect(`/${tokenForUser(req.user)}/auditlog`);
   }
-  const html = auditLogTemplate.replace(/__CSP_NONCE__/g, res.locals.cspNonce);
+  const html = auditLogTemplate
+    .replace(/__CSP_NONCE__/g, res.locals.cspNonce)
+    .replace(/__ASSET_VERSION__/g, ASSET_VERSION);
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
 });
@@ -308,6 +345,7 @@ function renderEditor(req, res, { projectSlug = '', endpointSlug = '' } = {}) {
   };
   const html = editorTemplate
     .replace(/__CSP_NONCE__/g, res.locals.cspNonce)
+    .replace(/__ASSET_VERSION__/g, ASSET_VERSION)
     .replace('__AUTH_USER_JSON__', JSON.stringify(authUser))
     .replace(/__ORG_TOKEN__/g, tokenForUser(req.user))
     .replace('__PROJECT_SLUG__', JSON.stringify(projectSlug))
@@ -336,6 +374,7 @@ function renderArchitectureStudio(req, res, { projectSlug = '' } = {}) {
   };
   const html = architectureStudioTemplate
     .replace(/__CSP_NONCE__/g, res.locals.cspNonce)
+    .replace(/__ASSET_VERSION__/g, ASSET_VERSION)
     .replace('__AUTH_USER_JSON__', JSON.stringify(authUser))
     .replace(/__ORG_TOKEN__/g, tokenForUser(req.user))
     .replace('__PROJECT_SLUG__', JSON.stringify(projectSlug));
@@ -371,6 +410,7 @@ function renderReleasePipelinePage(req, res, { projectSlug = '' } = {}) {
   };
   const html = releasePipelineTemplate
     .replace(/__CSP_NONCE__/g, res.locals.cspNonce)
+    .replace(/__ASSET_VERSION__/g, ASSET_VERSION)
     .replace('__AUTH_USER_JSON__', JSON.stringify(authUser))
     .replace(/__ORG_TOKEN__/g, tokenForUser(req.user))
     .replace('__PROJECT_SLUG__', JSON.stringify(projectSlug));
