@@ -721,6 +721,10 @@ function parsePipeTable(text) {
 // Maps parsed table rows (Name | Type | Required | Example | Description)
 // into the exact row shape the editor's parameters/headers/fields blocks
 // expect.
+// Column 5 ("Encrypted") is optional — older prompts/tables that don't
+// include it just leave c[5] undefined, which reads as false, so this stays
+// backward compatible with any in-flight generation that hasn't picked up
+// the new column yet.
 function rowsToParamObjects(cellRows) {
   return cellRows
     .filter(c => c[0])
@@ -730,6 +734,7 @@ function rowsToParamObjects(cellRows) {
       required: /^(y|yes|true)$/i.test((c[2] || '').trim()),
       example: c[3] || '',
       description: c[4] || '',
+      encrypted: /^(y|yes|true)$/i.test((c[5] || '').trim()),
     }));
 }
 
@@ -771,12 +776,13 @@ async function generateRowsSection(settings, { section, audienceLine, contextLin
 Table to write: ${section.title}
 What it should cover: ${section.hint || '(use your judgement based on the raw notes below)'}
 ${contextLine}
-Respond with ONLY a markdown table — no prose or headings before or after it. Use exactly these columns, in this order: Name | Type | Required | Example | Description
+Respond with ONLY a markdown table — no prose or headings before or after it. Use exactly these columns, in this order: Name | Type | Required | Example | Description | Encrypted
 - One row per ${noun} the notes call for.
 - "Required" must be exactly "Yes" or "No".
 - "Type" is a short data type (String, Integer, Boolean, UUID, Enum, etc.).
 - Leave "Example" blank only if no concrete example value is discoverable in the notes.
-- "Description" is one short clause.`;
+- "Description" is one short clause.
+- "Encrypted" must be exactly "Yes" or "No" — say "Yes" for a field whose value is itself an opaque/encrypted token rather than plain data (a JWT, an API key, a ciphertext blob, a signed hash, a client secret). This never affects "Example": still give one if the notes have it, just don't invent a fake-looking real secret — a placeholder like <JWT_TOKEN> is fine here even though it wouldn't be valid JSON on its own, because this table's cells are never parsed as JSON.`;
   const raw = await callLlm(settings, systemPrompt, rawText, { maxTokens: 2000 });
   const rows = rowsToParamObjects(parsePipeTable(raw));
   if (rows.length === 0) throw new Error('AI_EMPTY: model returned no rows for this table');
@@ -797,7 +803,7 @@ ${withSummary ? '===SUMMARY===\n<one short sentence: what this response means>\n
 <a single fenced \`\`\`json code block containing ONE realistic, complete sample payload>
 
 ===FIELDS===
-<a markdown table, columns exactly: Name | Type | Required | Example | Description — one row per field that appears in the sample>
+<a markdown table, columns exactly: Name | Type | Required | Example | Description | Encrypted — one row per field that appears in the sample. "Encrypted" is "Yes" or "No": "Yes" for a field whose value is itself an opaque/encrypted token (JWT, API key, ciphertext, signed hash) rather than plain data — mark these "Yes" instead of guessing a Type for them.>
 Real quotes and real line breaks are fine everywhere here — none of this needs JSON escaping.`;
   const raw = await callLlm(settings, systemPrompt, rawText, { maxTokens: 3000 });
   const parts = splitMarkerSections(raw, withSummary ? ['SUMMARY', 'EXAMPLE', 'FIELDS'] : ['EXAMPLE', 'FIELDS']);

@@ -1462,7 +1462,7 @@ function buildRenderSheetHtml(proj, ep){
   const cardHtml = p=>`
     <div class="param-card${p.in==='header'?' is-header':''}">
       <div class="pc-top">
-        <span class="pc-name">${escapeHtml(p.name)}${p.required?'<span class="pc-req">*</span>':''}</span>
+        <span class="pc-name">${escapeHtml(p.name)}${p.required?'<span class="pc-req">*</span>':''}${p.encrypted?`<span class="pc-encrypted" title="${escapeHtml(p.encryptionNote||'Value is encrypted/opaque - treat as an opaque string, not literal data.')}">&#128274;</span>`:''}</span>
         <span class="param-chip in-${p.in}">${p.in}</span>
       </div>
       <div class="pc-type">${escapeHtml(p.type||'string')}</div>
@@ -1537,7 +1537,7 @@ function wireRenderSheet(proj, ep){
   const cardHtml = p=>`
     <div class="param-card${p.in==='header'?' is-header':''}">
       <div class="pc-top">
-        <span class="pc-name">${escapeHtml(p.name)}${p.required?'<span class="pc-req">*</span>':''}</span>
+        <span class="pc-name">${escapeHtml(p.name)}${p.required?'<span class="pc-req">*</span>':''}${p.encrypted?`<span class="pc-encrypted" title="${escapeHtml(p.encryptionNote||'Value is encrypted/opaque - treat as an opaque string, not literal data.')}">&#128274;</span>`:''}</span>
         <span class="param-chip in-${p.in}">${p.in}</span>
       </div>
       <div class="pc-type">${escapeHtml(p.type||'string')}</div>

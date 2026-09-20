@@ -778,6 +778,25 @@ const syncChannel = ('BroadcastChannel' in window) ? new BroadcastChannel('doctr
 
 /* ==================== Type inference from pasted JSON ==================== */
 const PARAM_TYPES = ['String','Integer','Number','Boolean','Object','Array'];
+
+// Methods that conventionally carry no request body. Not a hard block —
+// some real APIs do accept a GET body — just enough to warn instead of
+// silently letting a body get documented on a method where a reader (or an
+// API gateway) wouldn't expect one, and to steer new Parameters rows away
+// from "Payload (JSON)" by default.
+const BODYLESS_METHODS = new Set(['GET','HEAD']);
+function currentMethodIsBodyless(){
+  return BODYLESS_METHODS.has(document.getElementById('fMethod').value);
+}
+// Non-destructive: only ever shown alongside the Request body block, never
+// removes or blocks saving it. Method mismatches happen for real (a GET
+// that takes a filter payload, a legacy DELETE with a body) — the point is
+// to make sure that's on purpose, not to forbid it.
+function bodylessWarningHtml(){
+  if(!currentMethodIsBodyless()) return '';
+  const method = document.getElementById('fMethod').value;
+  return `<div class="hint" style="color:#b45309; margin-bottom:8px;">⚠ ${escapeHtml(method)} requests don't conventionally carry a body — double-check this is intentional before publishing.</div>`;
+}
 function inferType(value){
   if(value === null || value === undefined) return 'String';
   if(Array.isArray(value)) return 'Array';
@@ -790,6 +809,17 @@ function exampleFor(value){
   if(value === null || value === undefined) return '';
   if(typeof value === 'object') return JSON.stringify(value);
   return String(value);
+}
+// Heuristic only, never authoritative: pre-checks the 🔒 Encrypted box when
+// a pasted value looks like a JWT (three dot-separated base64url segments)
+// or when the key name itself is a common token/credential name. Always
+// reviewable/overridable by the person right after inferring — this just
+// saves the click for the common case instead of silently assuming.
+const ENCRYPTED_NAME_HINT = /(token|jwt|secret|signature|ciphertext|encrypted|apikey|api_key|password|passwd|credential)/i;
+const JWT_SHAPE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+function looksEncrypted(name, value){
+  if(typeof value === 'string' && JWT_SHAPE.test(value.trim())) return true;
+  return ENCRYPTED_NAME_HINT.test(String(name||'').split(/[.\[]/).pop() || '');
 }
 // Recursively flattens pasted JSON into one row per actual key/value pair —
 // nested objects walk into dotted paths (e.g. "response.responseInfo.status")
@@ -821,7 +851,7 @@ function inferFieldsFromJson(obj){
       keys.forEach(k=> walk(value[k], path ? `${path}.${k}` : k));
       return;
     }
-    rows.push({ id:uid(), name:path, type: inferType(value), required:true, example: exampleFor(value), description:'' });
+    rows.push({ id:uid(), name:path, type: inferType(value), required:true, example: exampleFor(value), description:'', encrypted: looksEncrypted(path, value), encryptionNote:'' });
   }
   if(!obj || typeof obj !== 'object') return rows;
   Object.keys(obj).forEach(key=> walk(obj[key], key));
@@ -947,7 +977,14 @@ const epFlowEditor = FlowEditor.create({
   clearConfirm: 'Clear this endpoint\'s flow? It will go back to showing the project\'s Request flows instead.',
 });
 
-function exampleValueFor(type, example){
+// `encrypted` overrides `type` entirely: a JWT, ciphertext blob, or signed
+// hash isn't really an Integer/Boolean/Object no matter what type a person
+// (or the AI) picked for it, and coercing it as one is exactly how a bare
+// placeholder like <JWT_TOKEN> used to end up unquoted in generated JSON.
+// An encrypted field's example is always returned as a plain string, so
+// JSON.stringify() always quotes it correctly.
+function exampleValueFor(type, example, encrypted){
+  if(encrypted) return (example !== undefined && example !== null && example !== '') ? String(example) : '<encrypted>';
   if(example !== undefined && example !== '' && example !== null) return coerceByType(type, example);
   switch((type||'String').toLowerCase()){
     case 'integer': return 0;
@@ -970,7 +1007,7 @@ function coerceByType(type, val){
 }
 function buildJsonFromRows(rows){
   const obj = {};
-  rows.filter(r=>r.name.trim()).forEach(r=>{ obj[r.name.trim()] = exampleValueFor(r.type, r.example); });
+  rows.filter(r=>r.name.trim()).forEach(r=>{ obj[r.name.trim()] = exampleValueFor(r.type, r.example, r.encrypted); });
   return obj;
 }
 
@@ -1299,19 +1336,23 @@ function fillFormFromEndpoint(proj, ep){
   (ep.customSections || []).forEach(sec=>{
     addBlock('custom', { title: sec.title || '', content: sec.content || '' });
   });
+  // ep.parameters only ever holds path/query rows (payload rows were folded
+  // into ep.requestBody.fields at save time — see gatherEndpointFromForm),
+  // so every row reopened here is safely Query param (path rows show their
+  // fixed "Path" label instead, decided live from {name} in the path input).
   if((ep.parameters||[]).length){
-    addBlock('parameters', { rows: ep.parameters.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'', sendAs:'query' })) });
+    addBlock('parameters', { rows: ep.parameters.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'', sendAs:'query', encrypted:!!p.encrypted, encryptionNote:p.encryptionNote||'' })) });
   }
   if((ep.headers||[]).length){
-    addBlock('headers', { rows: ep.headers.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'' })) });
+    addBlock('headers', { rows: ep.headers.map(p=>({ id:uid(), name:p.name||'', type:p.type||'String', required:!!p.required, example:p.example||'', description:p.description||'', encrypted:!!p.encrypted, encryptionNote:p.encryptionNote||'' })) });
   }
   if(ep.requestBody && (ep.requestBody.example || (ep.requestBody.fields||[]).length || (ep.requestBody.examples||[]).length)){
     addBlock('requestBody', {
       example: ep.requestBody.example || '',
-      fields: (ep.requestBody.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+      fields: (ep.requestBody.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'', encrypted:!!f.encrypted, encryptionNote:f.encryptionNote||'' })),
       examples: (ep.requestBody.examples||[]).map(ex=>({
         id:uid(), name:ex.name||'', description:ex.description||'', value:ex.value||'',
-        fields: (ex.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+        fields: (ex.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'', encrypted:!!f.encrypted, encryptionNote:f.encryptionNote||'' })),
       })),
     });
   }
@@ -1319,10 +1360,10 @@ function fillFormFromEndpoint(proj, ep){
   responses.forEach(r=>{
     addBlock('response', {
       code: r.code || 200, description: r.description || '', example: r.example || '',
-      fields: (r.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+      fields: (r.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'', encrypted:!!f.encrypted, encryptionNote:f.encryptionNote||'' })),
       examples: (r.examples||[]).map(ex=>({
         id:uid(), name:ex.name||'', statusCode:ex.statusCode||'', description:ex.description||'', value:ex.value||'',
-        fields: (ex.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'' })),
+        fields: (ex.fields||[]).map(f=>({ id:uid(), name:f.name||'', type:f.type||'String', required:!!f.required, example:f.example||'', description:f.description||'', encrypted:!!f.encrypted, encryptionNote:f.encryptionNote||'' })),
       })),
     });
   });
@@ -1400,13 +1441,16 @@ function livePathParamNames(){
 function rowsTableHtml(block, isHeaderStyle, showSendAs){
   const rows = block.rows;
   const pathNames = showSendAs ? livePathParamNames() : null;
+  const bodyless = showSendAs && currentMethodIsBodyless();
   return `
     <div class="rows-table-wrap">
     <table class="rows-table">
       <thead><tr>
-        <th style="width:18%;">Name</th><th style="width:12%;">Type</th><th style="width:7%;">Req.</th>
-        ${showSendAs ? `<th style="width:15%;">Sends as</th>` : ''}
-        <th style="width:20%;">Example</th><th style="width:auto;">Description</th><th style="width:28px;"></th>
+        <th style="width:16%;">Name</th><th style="width:10%;">Type</th><th style="width:6%;">Req.</th>
+        ${showSendAs ? `<th style="width:14%;">Sends as</th>` : ''}
+        <th style="width:6%;" title="Value is encrypted or opaque (JWT, ciphertext, hash, signed token) — not plain data">🔒</th>
+        <th style="width:14%;">Encryption</th>
+        <th style="width:16%;">Example</th><th style="width:auto;">Description</th><th style="width:28px;"></th>
       </tr></thead>
       <tbody>
         ${rows.map(r=>{
@@ -1415,7 +1459,7 @@ function rowsTableHtml(block, isHeaderStyle, showSendAs){
             ? `<td><span class="mono" style="font-size:11px; color:var(--text-faint);" title="Detected automatically from {${escapeHtml((r.name||'').trim())}} in the path above">Path</span></td>`
             : `<td><select data-f="sendAs">
                  <option value="query" ${r.sendAs!=='payload'?'selected':''}>Query param</option>
-                 <option value="payload" ${r.sendAs==='payload'?'selected':''}>Payload (JSON)</option>
+                 <option value="payload" ${r.sendAs==='payload'?'selected':''} ${bodyless?'disabled':''} ${bodyless?`title="${document.getElementById('fMethod').value} conventionally has no body — switch the method above to enable this"`:''}>Payload (JSON)</option>
                </select></td>`;
           return `
           <tr data-row="${r.id}">
@@ -1423,6 +1467,8 @@ function rowsTableHtml(block, isHeaderStyle, showSendAs){
             <td><select data-f="type">${PARAM_TYPES.map(t=>`<option ${t===r.type?'selected':''}>${t}</option>`).join('')}</select></td>
             <td style="text-align:center;"><input type="checkbox" data-f="required" ${r.required?'checked':''}></td>
             ${sendAsCell}
+            <td style="text-align:center;"><input type="checkbox" data-f="encrypted" ${r.encrypted?'checked':''} title="Value is encrypted/opaque (JWT, ciphertext, hash, signed token, etc.) rather than plain data — its example is always treated as an opaque string, never type-coerced."></td>
+            <td><input type="text" data-f="encryptionNote" value="${escapeHtml(r.encryptionNote||'')}" placeholder="e.g. AES-256, JWT, opaque token"></td>
             <td><input type="text" data-f="example" value="${escapeHtml(r.example)}" placeholder="e.g. 12345"></td>
             <td><input type="text" data-f="description" value="${escapeHtml(r.description)}" placeholder="What this is for"></td>
             <td><button type="button" class="row-del" data-del-row="${r.id}" title="Remove row">✕</button></td>
@@ -1432,6 +1478,7 @@ function rowsTableHtml(block, isHeaderStyle, showSendAs){
     </div>
     <button type="button" class="add-row-btn" data-add-row="${block.id}">+ Add row</button>
     ${showSendAs ? `<div class="hint" style="margin-top:8px;">Path parameters are detected automatically from <span class="mono">{like-this}</span> in the path above. For everything else, choose whether it's sent as a query string parameter or folded into the JSON request payload — payload rows show up under Request body once saved.</div>` : ''}
+    <div class="hint" style="margin-top:4px;">🔒 marks a field whose value is itself encrypted/opaque (a JWT, a ciphertext blob, a signed hash) rather than plain data — its documented example is always kept as a quoted string, so a placeholder like &lt;JWT_TOKEN&gt; can never break the generated JSON.</div>
   `;
 }
 
@@ -1545,6 +1592,7 @@ function renderBlockHtml(block){
   if(block.type==='requestBody'){
     return `<div class="card accent-request" data-block="${block.id}">
       <div class="card-head">${reorderControlsHtml(block)}<div class="card-title">Request body (JSON)</div><button type="button" class="card-kill" data-kill="${block.id}" title="Remove block">✕</button></div>
+      ${bodylessWarningHtml()}
       ${jsonPasteHtml(block, 'requestBody')}
       ${block.fields.length ? rowsTableHtml({ id:block.id, rows:block.fields }, false) : `<div class="hint">No fields yet — paste JSON above, or add rows once inferred.</div>`}
       ${namedExamplesHtml(block)}
@@ -1627,7 +1675,7 @@ function bindBlockEvents(container){
     btn.addEventListener('click', ()=>{
       const rows = findRowsArrayById(btn.getAttribute('data-add-row'));
       if(!rows) return;
-      rows.push({ id:uid(), name:'', type:'String', required:false, example:'', description:'', sendAs:'query' });
+      rows.push({ id:uid(), name:'', type:'String', required:false, example:'', description:'', sendAs: currentMethodIsBodyless() ? 'query' : 'payload', encrypted:false, encryptionNote:'' });
       renderBlocks();
     });
   });
@@ -1653,6 +1701,7 @@ function bindBlockEvents(container){
       block.rows.push({
         id: uid(), name: headerName, type: 'String', required: true,
         example, description: auth.description || `${auth.type} — see the Authentication section for how to obtain this.`,
+        encrypted: true, encryptionNote: auth.type || 'Credential — treat as opaque',
       });
       renderBlocks();
       highlightBlock(block.id);
@@ -1913,7 +1962,7 @@ document.addEventListener('click', (e)=>{
 
 /* ==================== Save / publish ==================== */
 function gatherEndpointFromForm(){
-  const cleanRows = rows => (rows||[]).filter(r=>r.name.trim()).map(r=>({ name:r.name.trim(), type:r.type, required:!!r.required, example:r.example||'', description:r.description||'' }));
+  const cleanRows = rows => (rows||[]).filter(r=>r.name.trim()).map(r=>({ name:r.name.trim(), type:r.type, required:!!r.required, example:r.example||'', description:r.description||'', encrypted:!!r.encrypted, encryptionNote:(r.encryptionNote||'').trim() }));
   const cleanExamples = (examples, isResponse) => (examples||[]).filter(ex=>ex.name.trim() && ex.value.trim()).map(ex=>({
     name: ex.name.trim(),
     description: ex.description||'',
@@ -1944,7 +1993,7 @@ function gatherEndpointFromForm(){
     else if(r.sendAs === 'payload') payloadRows.push(r);
     else queryRows.push(r);
   });
-  const cleanParam = r => ({ name:r.name.trim(), type:r.type, required:!!r.required, example:r.example||'', description:r.description||'' });
+  const cleanParam = r => ({ name:r.name.trim(), type:r.type, required:!!r.required, example:r.example||'', description:r.description||'', encrypted:!!r.encrypted, encryptionNote:(r.encryptionNote||'').trim() });
 
   const hasExplicitBody = !!(bodyBlock && (bodyBlock.example.trim() || (bodyBlock.fields||[]).length || (bodyBlock.examples||[]).some(ex=>ex.name.trim() || ex.value.trim())));
   let requestBody = null;
@@ -1967,7 +2016,7 @@ function gatherEndpointFromForm(){
       const base = exampleObj || {};
       payloadRows.forEach(r=>{
         const name = r.name.trim();
-        if(!(name in base)) base[name] = exampleValueFor(r.type, r.example);
+        if(!(name in base)) base[name] = exampleValueFor(r.type, r.example, r.encrypted);
       });
       // Only rewrite the example text when we actually had (or now have) a
       // JSON object to merge into — an existing non-JSON/non-object example
@@ -2238,7 +2287,10 @@ function checkDuplicateEndpoint(){
     && (e.method||'').toUpperCase()===method.toUpperCase() && (e.path||'').trim()===path);
   if(dupEp) showDuplicateWarning(proj, dupEp); else hideDuplicateWarning();
 }
-document.getElementById('fMethod').addEventListener('change', checkDuplicateEndpoint);
+document.getElementById('fMethod').addEventListener('change', () => {
+  checkDuplicateEndpoint();
+  renderBlocks(); // re-derive the bodyless warning + disabled "Payload" option for the new method
+});
 document.getElementById('fPath').addEventListener('input', checkDuplicateEndpoint);
 
 /* ==================== Theme ====================
@@ -2662,6 +2714,7 @@ function aiRowsToBlockRows(rows, extra){
   return (rows||[]).filter(r=>r && r.name).map(r=>Object.assign({
     id: uid(), name: r.name||'', type: r.type||'String', required: !!r.required,
     example: r.example||'', description: r.description||'',
+    encrypted: !!r.encrypted, encryptionNote: r.encryptionNote||'',
   }, extra||{}));
 }
 
