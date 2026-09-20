@@ -605,7 +605,7 @@ function renderProjectOverview(main, projectId){
     </div>` : ''}
 
     <div class="overview-hero">
-      <div class="overview-hero-badge"><span class="dot"></span>DocTracker · ${escapeHtml(env.label)} environment</div>
+      <div class="overview-hero-badge"><span class="dot"></span>DocTracker · ${escapeHtml(env.label)} environment${proj.version ? ` · v${escapeHtml(proj.version)}` : ''}</div>
       <h1>${escapeHtml(proj.name)}</h1>
       ${proj._readonly
         ? `<div class="empty-field" style="margin:8px 0 0;">Shared publicly by someone else in your organisation — view only.</div>`
@@ -722,7 +722,7 @@ function renderProjectOverview(main, projectId){
       <div class="section-title">Endpoints <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— added &amp; last-modified history</span></div>
       ${epsForView.length ? `
       <table class="data-table">
-        <thead><tr><th>Endpoint</th><th>Added</th><th>Last modified</th></tr></thead>
+        <thead><tr><th>Endpoint</th><th>Added</th><th>Last modified</th><th title="Google SecOps review sign-off">SecOps</th><th title="VAPT review sign-off">VAPT</th></tr></thead>
         <tbody>
           ${epsForView.map(ep=>`
             <tr class="ep-history-row" data-open-ep="${ep.id}" style="cursor:pointer;">
@@ -738,6 +738,8 @@ function renderProjectOverview(main, projectId){
                 <div>${ep.updatedAt ? escapeHtml(formatDateTime(ep.updatedAt)) : '<span class="empty-field">Unknown</span>'}</div>
                 <div style="color:var(--text-faint); font-size:11.5px;">${ep.updatedBy ? 'by ' + escapeHtml(ep.updatedBy) : 'by Unknown'}</div>
               </td>
+              <td style="text-align:center;">${ep.secOpsReviewed ? '<span title="Google SecOps reviewed" style="color:var(--get);">&#9989;</span>' : '<span title="Not yet reviewed" style="color:var(--text-faint);">&#8212;</span>'}</td>
+              <td style="text-align:center;">${ep.vaptReviewed ? '<span title="VAPT reviewed" style="color:var(--get);">&#9989;</span>' : '<span title="Not yet reviewed" style="color:var(--text-faint);">&#8212;</span>'}</td>
             </tr>`).join('')}
         </tbody>
       </table>` : `<div class="empty-field">${viewingDraft ? 'No endpoints in this project yet.' : `Nothing promoted to ${escapeHtml(env.label)} yet.`}</div>`}

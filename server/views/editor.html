@@ -415,6 +415,25 @@ html{ scroll-behavior:smooth; }
     </div>
   </div>
 
+  <!-- Security review sign-off — per-endpoint, not per-project. These are
+       compliance flags only (who verified what, and when) — they don't gate
+       saving or publishing; an endpoint can be published unreviewed like
+       before. Surfaced read-only in the project overview's endpoint history
+       table (see 14-users.js renderProjectOverview) so a reviewer can see
+       coverage across a project at a glance. -->
+  <div class="card section-anchor" id="cardSecurityReview">
+    <div class="card-head"><div class="card-title">Security review</div></div>
+    <div class="hint" style="margin-bottom:10px;">Sign-off tracking only — ticking these doesn't block saving or publishing this endpoint.</div>
+    <div class="field-grid">
+      <div class="field">
+        <label class="checkbox-row"><input type="checkbox" id="fSecOpsReviewed"> Google SecOps reviewed</label>
+      </div>
+      <div class="field">
+        <label class="checkbox-row"><input type="checkbox" id="fVaptReviewed"> VAPT reviewed</label>
+      </div>
+    </div>
+  </div>
+
   <!-- This endpoint's own flow diagram — separate from the project-wide
        Request flows below (Project details), which every endpoint falls
        back to when this is left empty. Shown on this endpoint's doc page
@@ -1329,6 +1348,8 @@ function fillFormFromEndpoint(proj, ep){
   document.getElementById('fVersion').value = proj.version || ep.version || '';
   document.getElementById('fContentType').value = ep.contentType || 'application/json';
   document.getElementById('fVisibility').value = ep.visibility === 'public' ? 'public' : 'private';
+  document.getElementById('fSecOpsReviewed').checked = !!ep.secOpsReviewed;
+  document.getElementById('fVaptReviewed').checked = !!ep.vaptReviewed;
 
   if(ep.summary || ep.description){
     addBlock('summary', { summary: ep.summary || '', description: ep.description || '' });
@@ -2031,6 +2052,8 @@ function gatherEndpointFromForm(){
     method: document.getElementById('fMethod').value,
     path,
     visibility: document.getElementById('fVisibility').value === 'public' ? 'public' : 'private',
+    secOpsReviewed: document.getElementById('fSecOpsReviewed').checked,
+    vaptReviewed: document.getElementById('fVaptReviewed').checked,
     tag: document.getElementById('fTag').value.trim() || 'General',
     version: document.getElementById('fVersion').value.trim(),
     contentType: document.getElementById('fContentType').value.trim() || 'application/json',
@@ -2832,6 +2855,8 @@ function resetEndpointFieldsForNewEndpoint(){
   document.getElementById('fVersion').value = (currentProjectForFields && currentProjectForFields.version) || '';
   document.getElementById('fContentType').value = 'application/json';
   document.getElementById('fVisibility').value = 'private';
+  document.getElementById('fSecOpsReviewed').checked = false;
+  document.getElementById('fVaptReviewed').checked = false;
   blocks.length = 0;
   addBlock('response', { code:200, description:'', example:'', fields:[] });
   updateTopBar({ name: document.getElementById('fProject').value.trim() || 'this project' }, null);
