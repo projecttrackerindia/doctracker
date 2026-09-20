@@ -401,6 +401,10 @@ html{ scroll-behavior:smooth; }
         <input type="text" id="fProject" list="projectNames" placeholder="e.g. Razor Pay">
         <datalist id="projectNames"></datalist>
       </div>
+      <div class="field span2">
+        <label>Endpoint name <span class="lbl-note">— shown in the sidebar instead of the raw path</span></label>
+        <input type="text" id="fName" placeholder="e.g. Loan Lien Linking">
+      </div>
       <div class="field">
         <label>Method</label>
         <select id="fMethod">
@@ -1506,6 +1510,7 @@ function updateTopBar(proj, ep){
 function fillFormFromEndpoint(proj, ep){
   document.getElementById('fMethod').value = ep.method || 'GET';
   document.getElementById('fPath').value = ep.path || '';
+  document.getElementById('fName').value = ep.name || '';
   document.getElementById('fTag').value = ep.tag || '';
   document.getElementById('fSourceSystem').value = ep.sourceSystem || '';
   document.getElementById('fTargetSystem').value = ep.targetSystem || '';
@@ -2225,6 +2230,7 @@ function gatherEndpointFromForm(){
     vaptStatus: reviewState.vapt,
     secOpsReviewed: reviewState.secOps === 'approved',
     vaptReviewed: reviewState.vapt === 'approved',
+    name: document.getElementById('fName').value.trim(),
     tag: document.getElementById('fTag').value.trim() || 'General',
     sourceSystem: document.getElementById('fSourceSystem').value.trim(),
     targetSystem: document.getElementById('fTargetSystem').value.trim(),
@@ -3053,6 +3059,7 @@ function resetEndpointFieldsForNewEndpoint(){
   loadedUpdatedAt = null;
   document.getElementById('fMethod').value = 'GET';
   document.getElementById('fPath').value = '';
+  document.getElementById('fName').value = '';
   document.getElementById('fTag').value = '';
   document.getElementById('fSourceSystem').value = '';
   document.getElementById('fTargetSystem').value = '';

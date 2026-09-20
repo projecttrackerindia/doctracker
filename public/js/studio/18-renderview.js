@@ -1489,6 +1489,7 @@ function buildRenderSheetHtml(proj, ep){
           <span class="render-method-pill">${ep.method}</span>
           <span class="render-env-pill">${envMeta(state.env).label}</span>
         </div>
+        ${ep.name ? `<div class="render-summary" style="font-weight:700;">${escapeHtml(ep.name)}</div>` : ''}
         <div class="render-path">${escapeHtml(ep.path)}</div>
         ${ep.summary ? `<div class="render-summary">${escapeHtml(ep.summary)}</div>` : ''}
         ${ep.description ? `<div class="render-desc">${renderMarkdown(ep.description)}</div>` : ''}
