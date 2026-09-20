@@ -419,6 +419,14 @@ html{ scroll-behavior:smooth; }
         <label>Tag / category</label>
         <input type="text" id="fTag" placeholder="e.g. PAYMENT">
       </div>
+      <div class="field">
+        <label>Source system</label>
+        <input type="text" id="fSourceSystem" placeholder="e.g. Salesforce">
+      </div>
+      <div class="field">
+        <label>Target system</label>
+        <input type="text" id="fTargetSystem" placeholder="e.g. Oracle DB">
+      </div>
       <div class="field span2">
         <label>Version <span class="lbl-note">— goes up automatically every time you save</span></label>
         <div class="ver-panel">
@@ -1499,6 +1507,8 @@ function fillFormFromEndpoint(proj, ep){
   document.getElementById('fMethod').value = ep.method || 'GET';
   document.getElementById('fPath').value = ep.path || '';
   document.getElementById('fTag').value = ep.tag || '';
+  document.getElementById('fSourceSystem').value = ep.sourceSystem || '';
+  document.getElementById('fTargetSystem').value = ep.targetSystem || '';
   verState.ep = DocMeta.currentVersion(ep, proj);
   verState.epIsNew = false;
   renderVersionPanel();
@@ -2216,6 +2226,8 @@ function gatherEndpointFromForm(){
     secOpsReviewed: reviewState.secOps === 'approved',
     vaptReviewed: reviewState.vapt === 'approved',
     tag: document.getElementById('fTag').value.trim() || 'General',
+    sourceSystem: document.getElementById('fSourceSystem').value.trim(),
+    targetSystem: document.getElementById('fTargetSystem').value.trim(),
     // `version` is deliberately not read from the form — performSave assigns it.
     contentType: document.getElementById('fContentType').value.trim() || 'application/json',
     summary: (summaryBlock && summaryBlock.summary || '').trim(),
@@ -3042,6 +3054,8 @@ function resetEndpointFieldsForNewEndpoint(){
   document.getElementById('fMethod').value = 'GET';
   document.getElementById('fPath').value = '';
   document.getElementById('fTag').value = '';
+  document.getElementById('fSourceSystem').value = '';
+  document.getElementById('fTargetSystem').value = '';
   // The next endpoint starts at 1.0.0 on its first save; verState.proj is
   // left alone — it already holds the project's current version (updated by
   // the save that just happened).

@@ -215,6 +215,12 @@ function buildOperation(ep, schemas, componentParams) {
       operationId: opId,
       summary: ep.summary || '',
       description: ep.description || undefined,
+      // Standard OpenAPI vendor-extension mechanism (x- prefix) — carries the
+      // integration flow through to SwaggerHub/Swagger UI without breaking
+      // spec validity. Omitted entirely when neither is set, rather than
+      // exporting empty x- fields on every operation.
+      ...(ep.sourceSystem ? { 'x-source-system': ep.sourceSystem } : {}),
+      ...(ep.targetSystem ? { 'x-target-system': ep.targetSystem } : {}),
       parameters: [...headerParamRefs, ...inlineParams],
       ...(requestBodySpec ? { requestBody: requestBodySpec } : {}),
       responses,
