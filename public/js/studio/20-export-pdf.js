@@ -315,6 +315,18 @@ async function generateProjectPdf(){
     for(let idx = 0; idx < atoms.length; idx++){
       setStage(`Rendering section ${idx + 1} of ${atoms.length}…`);
       const atomEl = atoms[idx];
+
+      // Each endpoint's header atom carries this — guarantees an endpoint
+      // always starts at the top of a fresh page instead of sometimes being
+      // squeezed onto whatever little space is left at the bottom of the
+      // previous page (which also meant its own later sections routinely
+      // split awkwardly onto the page after that, with a big dead gap left
+      // behind on the page where it started).
+      if(atomEl.hasAttribute('data-pdf-force-page-break-before') && !firstAtom && cursorY > marginTop){
+        pdf.addPage();
+        cursorY = marginTop;
+      }
+
       const canvas = await html2canvas(atomEl, { scale:2, backgroundColor:'#ffffff', useCORS:true, ignoreElements: ignoreForCanvas });
       const imgWidth = contentWidth;
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
@@ -373,7 +385,6 @@ async function generateProjectPdf(){
         cursorY = marginTop;
       }
     }
-
     // Every atom is placed now, and the page count is final — stamp the letterhead,
     // border, and page-numbered footer onto every page in one pass. See the "Native
     // per-page letterhead, footer, and border" comment above for why this happens
@@ -429,7 +440,7 @@ function buildExportPdfEndpointSection(proj, ep, index, env){
 
   return `
   <section class="pdf-endpoint" id="ep-${escapeHtml(ep.id)}">
-    <div class="pdf-atom pdf-atom-header">
+    <div class="pdf-atom pdf-atom-header" data-pdf-force-page-break-before>
       <div class="pdf-ep-banner grad-${mClass}">
         <span class="pdf-ep-index">${String(index+1).padStart(2,'0')}</span>
         <span class="badge-lg ${mClass}">${escapeHtml(ep.method)}</span>
@@ -539,7 +550,16 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
   // meta block, vertically centered as a group — the badge + project title have moved
   // to the top of page 2, right above "Overview". data-pdf-force-page-break-after still
   // guarantees page 1 stands alone even though its content no longer fills the page.
-  const coverBlankHeightPx = Math.floor(0.90 * (PDF_PAGE_CONTENT_HEIGHT_MM / PDF_CONTENT_WIDTH_MM) * 860);
+  //
+  // Kept well under a full page (0.72, not the ~0.90 this used to be) — real logo
+  // aspect ratios and font-metric variance can push the *actual* rendered height
+  // a little past whatever this formula predicts, and if that happens the atom
+  // silently falls into the "crop into page-sized slices" fallback further up,
+  // which produces a nearly-empty second page (all the real content fit in the
+  // first slice; the fallback still emits a second one for the sliver left over).
+  // More slack here costs nothing but a bit of extra whitespace on an
+  // intentionally spare page, and removes that failure mode entirely.
+  const coverBlankHeightPx = Math.floor(0.72 * (PDF_PAGE_CONTENT_HEIGHT_MM / PDF_CONTENT_WIDTH_MM) * 860);
   const coverBlankHtml = opts.includeOverview ? `
     <div class="pdf-atom" data-pdf-force-page-break-after>
     <section class="pdf-cover-blank" style="min-height:${coverBlankHeightPx}px;">

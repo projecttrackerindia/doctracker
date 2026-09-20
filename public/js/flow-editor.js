@@ -236,7 +236,7 @@
       return '<div class="fe-flow" data-fi="' + fi + '">' +
         '<div class="fe-flow-head">' +
           '<span class="fe-flow-num">' + (fi + 1) + '</span>' +
-          '<div class="field fe-name-wrap"><input type="text" data-f="name" value="' + esc(f.name) + '" placeholder="Flow name, e.g. Get token A"></div>' +
+          '<div class="field fe-name-wrap"><input type="text" data-f="name" value="' + esc(f.name) + '" placeholder="Short name, e.g. Get token A — not the whole route" maxlength="60"></div>' +
           '<div class="field fe-dir-wrap"><select data-f="direction" title="One-way draws forward arrows only; two-way also draws a return arrow">' +
             '<option value="1-way"' + (f.direction === '1-way' ? ' selected' : '') + '>One-way</option>' +
             '<option value="2-way"' + (f.direction === '2-way' ? ' selected' : '') + '>Two-way</option>' +

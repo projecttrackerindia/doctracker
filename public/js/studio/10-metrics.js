@@ -116,6 +116,17 @@ function rfHopLabel(text, cx, y, kind, pdf){
 // diagram per flow (each with its name + "when it runs" line when the project
 // defines several), and the legend. Projects without requestFlows resolve to a
 // single legacy/default flow and look exactly as before.
+// Flow name/when are meant to be a short label ("Get token A") and a short
+// context note ("~every 30 min"), not a full description of the route — but
+// nothing stops someone typing the whole path into the name field (e.g.
+// "Source ⇄ Token ⇄ Gateway ⇄ Downstream ⇄ Portal"), which then overruns the
+// header and reads as broken rather than long. Truncate defensively so a
+// too-long entry degrades gracefully instead of overflowing.
+function rfTruncateLabel(s, max){
+  s = String(s || '');
+  return s.length > max ? s.slice(0, max - 1).trimEnd() + '…' : s;
+}
+
 function requestFlowSectionInnerHtml(proj, env, ep){
   const res = resolveRequestFlows(proj, env, ep);
   const multi = res.flows.length > 1;
@@ -135,7 +146,7 @@ function requestFlowSectionInnerHtml(proj, env, ep){
   const blocks = res.flows.map((f,i)=>{
     const showHead = res.custom && (multi || f.name || f.when);
     const head = showHead
-      ? `<div class="rf-flow-head">${multi ? `<span class="rf-flow-num">${i+1}</span>` : ''}<span class="rf-flow-name">${escapeHtml(f.name || `Flow ${i+1}`)}</span>${f.when ? `<span class="rf-flow-when">${escapeHtml(f.when)}</span>` : ''}</div>`
+      ? `<div class="rf-flow-head">${multi ? `<span class="rf-flow-num">${i+1}</span>` : ''}<span class="rf-flow-name">${escapeHtml(rfTruncateLabel(f.name, 60) || `Flow ${i+1}`)}</span>${f.when ? `<span class="rf-flow-when">${escapeHtml(rfTruncateLabel(f.when, 60))}</span>` : ''}</div>`
       : '';
     return `<div class="rf-flow-block">${head}${requestFlowSvg(f.stages, f.pattern)}</div>`;
   }).join('');
@@ -374,7 +385,7 @@ function pdfRequestFlowSectionInnerHtml(proj, env, ep){
   const blocks = res.flows.map((f,i)=>{
     const showHead = res.custom && (multi || f.name || f.when);
     const head = showHead
-      ? `<div class="pdf-rf-flow-head">${multi ? `<span class="pdf-rf-flow-num">${i+1}</span>` : ''}<span class="pdf-rf-flow-name">${escapeHtml(f.name || `Flow ${i+1}`)}</span>${f.when ? `<span class="pdf-rf-flow-when">${escapeHtml(f.when)}</span>` : ''}</div>`
+      ? `<div class="pdf-rf-flow-head">${multi ? `<span class="pdf-rf-flow-num">${i+1}</span>` : ''}<span class="pdf-rf-flow-name">${escapeHtml(rfTruncateLabel(f.name, 60) || `Flow ${i+1}`)}</span>${f.when ? `<span class="pdf-rf-flow-when">${escapeHtml(rfTruncateLabel(f.when, 60))}</span>` : ''}</div>`
       : '';
     return `${head}${pdfRequestFlowSvg(f.stages, f.pattern)}`;
   }).join('');

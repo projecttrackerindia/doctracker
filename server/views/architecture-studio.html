@@ -577,6 +577,11 @@ svg{ display:block; }
       </button>
     </div>
     <div class="ft-sep"></div>
+    <input type="file" id="diagramImportInput" accept="application/json,.json" hidden>
+    <button type="button" class="tb-btn" id="btnImportDiagram" title="Import a diagram from a JSON file — replaces what's on the canvas">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="M7 10l5-5 5 5"></path><path d="M4 20h16"></path></svg>
+      Import
+    </button>
     <button type="button" class="tb-btn" id="btnExport" title="Export diagram">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"></path><path d="M7 10l5 5 5-5"></path><path d="M4 20h16"></path></svg>
       Export
@@ -2928,10 +2933,26 @@ function exportMarkdown(){
   if(!md){ toast('Nothing to document yet.'); return; }
   downloadBlob(new Blob([md], {type:'text/markdown'}), `${slugify(proj?proj.name:'architecture')}-documentation.md`);
 }
+// Exports the RAW editable diagram (nodes with their `icon` id reference,
+// not the icon-badge-baked snapshot performPublish() writes to
+// proj.architectureDiagram) so re-importing it — here or in another
+// project — resolves each icon fresh from whatever icon library that studio
+// has, instead of carrying a frozen copy of this one's icon markup along.
+function exportDiagramJson(){
+  if(!state.nodes.length){ toast('Nothing on the canvas to export yet.'); return; }
+  const payload = {
+    doctrackerDiagram: 1, // lets importDiagramFromFile recognize its own format vs. an unrelated JSON file
+    exportedAt: new Date().toISOString(),
+    sourceProject: proj ? proj.name : undefined,
+    nodes: state.nodes,
+    edges: state.edges,
+  };
+  downloadBlob(new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'}), `${slugify(proj?proj.name:'architecture')}-diagram.json`);
+}
 document.getElementById('btnExport').addEventListener('click', (e)=>{
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
-  menu.innerHTML = `<button class="ctx-item" id="expSvg">Export as SVG</button><button class="ctx-item" id="expPng">Export as PNG</button><button class="ctx-item" id="expPdf">Export as PDF</button><button class="ctx-item" id="expMd">Export documentation (Markdown)</button>`;
+  menu.innerHTML = `<button class="ctx-item" id="expSvg">Export as SVG</button><button class="ctx-item" id="expPng">Export as PNG</button><button class="ctx-item" id="expPdf">Export as PDF</button><button class="ctx-item" id="expMd">Export documentation (Markdown)</button><button class="ctx-item" id="expJson">Export diagram data (JSON)</button>`;
   document.body.appendChild(menu);
   const rect = e.target.closest('button').getBoundingClientRect();
   menu.style.left = rect.left + 'px'; menu.style.top = (rect.bottom+6) + 'px';
@@ -2941,6 +2962,45 @@ document.getElementById('btnExport').addEventListener('click', (e)=>{
   menu.querySelector('#expPdf').addEventListener('click', exportPdf);
   menu.querySelector('#expMd').addEventListener('click', exportMarkdown);
   menu.querySelector('#expPng').addEventListener('click', exportPng);
+  menu.querySelector('#expJson').addEventListener('click', exportDiagramJson);
+});
+
+// Imports a diagram previously downloaded via "Export diagram data (JSON)" —
+// either back into this same project or into a completely different one, so
+// a diagram built once can be reused as a starting point elsewhere instead
+// of being redrawn by hand. Replaces whatever's currently on the canvas
+// (after confirming, since that's destructive to unpublished edits); the
+// person still has to hit Publish afterward, same as any other change here.
+function importDiagramFromFile(file){
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    let data;
+    try{ data = JSON.parse(reader.result); }
+    catch(e){ toast('That file isn\'t valid JSON.'); return; }
+    const nodes = Array.isArray(data.nodes) ? data.nodes : null;
+    const edges = Array.isArray(data.edges) ? data.edges : null;
+    if(!nodes){ toast('That doesn\'t look like a diagram export — no nodes found.'); return; }
+    const proceed = ()=>{
+      loadDiagramIntoState({ nodes, edges: edges || [] });
+      fitToScreen();
+      markDirty();
+      toast(`Imported ${nodes.length} node${nodes.length===1?'':'s'} — Publish to save it.`);
+    };
+    if(state.nodes.length){
+      if(!window.confirm(`Replace the ${state.nodes.length} node${state.nodes.length===1?'':'s'} currently on the canvas with the ${nodes.length} from this file? This can't be undone once you publish.`)) return;
+    }
+    proceed();
+  };
+  reader.onerror = ()=> toast('Could not read that file.');
+  reader.readAsText(file);
+}
+document.getElementById('btnImportDiagram').addEventListener('click', ()=>{
+  document.getElementById('diagramImportInput').click();
+});
+document.getElementById('diagramImportInput').addEventListener('change', (e)=>{
+  const file = e.target.files && e.target.files[0];
+  e.target.value = ''; // allow re-selecting the same file name next time
+  if(file) importDiagramFromFile(file);
 });
 
 /* ==================== Boot / load / publish ==================== */
