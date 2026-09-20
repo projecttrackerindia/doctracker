@@ -1,5 +1,28 @@
 /* ==================== SECTION:RENDER-MAIN ==================== */
+// Keeps the address bar matching whatever's on screen — so copying the URL
+// from a normal browsing session (not just a link someone constructs by
+// hand) reaches the same project/endpoint. Mirrors the :projectSlug/
+// :endpointSlug dashboard.html routes in server.js and INITIAL_PROJECT_SLUG/
+// INITIAL_ENDPOINT_SLUG's handling in boot() (22-init.js) — same slugify/
+// endpointSlugFor functions, so a URL built here resolves the same way a
+// hand-typed one does. replaceState (not pushState): this runs on every
+// render, and pushState here would flood browser history with an entry per
+// click instead of per actual navigation.
+function syncUrlToSelection(){
+  if(state.standaloneTryIt) return; // the standalone Try It tab manages its own URL — see boot()
+  let path = `/${ORG_TOKEN}/dashboard.html`;
+  if(state.selected && state.selected.type === 'overview'){
+    const proj = state.projects[state.selected.projectId];
+    if(proj) path = `/${ORG_TOKEN}/${slugify(proj.name)}/dashboard.html`;
+  } else if(state.selected && state.selected.type === 'endpoint' && !state.selected.tryIt){
+    const found = findEndpointForView(state.selected.id);
+    if(found) path = `/${ORG_TOKEN}/${slugify(found.proj.name)}/${endpointSlugFor(found.ep)}/dashboard.html`;
+  }
+  if(location.pathname !== path) history.replaceState(null, '', path + location.search);
+}
+
 function renderMain(){
+  syncUrlToSelection();
   const main = document.getElementById('main');
   const authorBtn = document.getElementById('btnAuthor');
   if(authorBtn) authorBtn.classList.toggle('active', !!state.selected && state.selected.type === 'profile');
