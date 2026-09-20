@@ -1,0 +1,65 @@
+/* Shared by the Studio (server/views/studio.html) and the endpoint editor
+   (server/views/editor.html): review-status chips (SecOps / VAPT), version
+   pills, and the segmented control used by the editor. Both pages define
+   the neutral tokens used here (--surface, --surface-2, --surface-hover,
+   --border, --border-strong, --text, --text-dim, --text-faint, --accent);
+   the semantic status colours are defined below rather than borrowed from
+   either page, because the two pages don't agree on what --get / --post
+   mean (Studio's --get is blue, the editor's is green in dark mode only). */
+
+:root{
+  --dm-ok:#35c491;   --dm-ok-bg:rgba(53,196,145,.14);  --dm-ok-bd:rgba(53,196,145,.34);
+  --dm-warn:#e0a83e; --dm-warn-bg:rgba(224,168,62,.14); --dm-warn-bd:rgba(224,168,62,.34);
+  --dm-bad:#ef5c6e;  --dm-bad-bg:rgba(239,92,110,.14);  --dm-bad-bd:rgba(239,92,110,.34);
+}
+[data-theme="light"]{
+  --dm-ok:#1c8f66;   --dm-ok-bg:rgba(28,143,102,.10);  --dm-ok-bd:rgba(28,143,102,.30);
+  --dm-warn:#a06f10; --dm-warn-bg:rgba(160,111,16,.10); --dm-warn-bd:rgba(160,111,16,.30);
+  --dm-bad:#d13750;  --dm-bad-bg:rgba(209,55,80,.10);   --dm-bad-bd:rgba(209,55,80,.30);
+}
+
+/* ---------- status dot (also used inside the segmented control) ---------- */
+.dm-dot{ width:7px; height:7px; border-radius:50%; flex-shrink:0; background:currentColor; }
+.dm-dot.dm-t-ok{ background:var(--dm-ok); }
+.dm-dot.dm-t-warn{ background:var(--dm-warn); }
+.dm-dot.dm-t-bad{ background:var(--dm-bad); }
+.dm-dot.dm-t-none{ background:transparent; box-shadow:inset 0 0 0 1.5px var(--text-faint); }
+
+/* ---------- status chip (read-only, used in tables) ---------- */
+.dm-chip{
+  display:inline-flex; align-items:center; gap:6px; padding:3px 10px 3px 8px;
+  border-radius:999px; border:1px solid transparent; font-size:11.5px; font-weight:600;
+  line-height:1.45; white-space:nowrap; letter-spacing:.1px;
+}
+.dm-chip.dm-t-none{ color:var(--text-faint); border-color:var(--border-strong); background:transparent; font-weight:500; }
+.dm-chip.dm-t-none .dm-dot{ background:transparent; box-shadow:inset 0 0 0 1.5px var(--text-faint); }
+.dm-chip.dm-t-ok{ color:var(--dm-ok); background:var(--dm-ok-bg); border-color:var(--dm-ok-bd); }
+.dm-chip.dm-t-warn{ color:var(--dm-warn); background:var(--dm-warn-bg); border-color:var(--dm-warn-bd); }
+.dm-chip.dm-t-bad{ color:var(--dm-bad); background:var(--dm-bad-bg); border-color:var(--dm-bad-bd); }
+.dm-chip .dm-dot.dm-t-ok, .dm-chip .dm-dot.dm-t-warn, .dm-chip .dm-dot.dm-t-bad{ background:currentColor; }
+
+/* ---------- version pill ---------- */
+.dm-ver{
+  display:inline-flex; align-items:center; font-family:var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size:11.5px; font-weight:700; padding:2px 8px; border-radius:6px;
+  color:var(--accent); background:var(--accent-soft); border:1px solid var(--accent-soft-strong);
+}
+.dm-ver.dm-ver-muted{ color:var(--text-faint); background:transparent; border-color:var(--border-strong); font-weight:500; }
+
+/* ---------- segmented control ---------- */
+.dm-seg{
+  display:inline-flex; flex-wrap:wrap; gap:2px; padding:3px; border-radius:10px;
+  background:var(--surface-2); border:1px solid var(--border);
+}
+.dm-seg-btn{
+  appearance:none; border:0; background:transparent; color:var(--text-dim); font:inherit;
+  font-size:12px; font-weight:600; padding:6px 12px; border-radius:7px; cursor:pointer;
+  display:inline-flex; align-items:center; gap:7px; transition:background .12s ease, color .12s ease;
+}
+.dm-seg-btn:hover{ color:var(--text); background:var(--surface-hover); }
+.dm-seg-btn:focus-visible{ outline:2px solid var(--accent); outline-offset:1px; }
+.dm-seg-btn[aria-checked="true"]{
+  color:var(--text); background:var(--surface);
+  box-shadow:0 0 0 1px var(--border-strong), 0 1px 2px rgba(0,0,0,.18);
+}
+.dm-seg.is-disabled{ opacity:.5; pointer-events:none; }

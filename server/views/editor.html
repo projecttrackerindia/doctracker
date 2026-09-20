@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Endpoint Editor · DocTracker</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/css/doc-meta.css">
 <script src="/js/idle-session.js"></script>
 <script nonce="__CSP_NONCE__">
 // Apply the theme before first paint (same localStorage key the main Studio
@@ -174,6 +175,26 @@ html{ scroll-behavior:smooth; }
 /* Project details / Authentication — shared project-level sections */
 .checkbox-row{ display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text-dim); }
 .checkbox-row input{ width:auto; }
+
+/* Version panel (Basic info) — read-only current values, live "next save"
+   preview, and the Patch/Minor/Major picker. See performSave / renderVersionPanel. */
+.field label .lbl-note{ text-transform:none; letter-spacing:0; font-weight:500; color:var(--text-faint); }
+.ver-panel{ display:flex; flex-wrap:wrap; align-items:stretch; gap:10px 12px; }
+.ver-cell{ display:flex; flex-direction:column; gap:3px; min-width:160px; padding:9px 14px; border-radius:9px; background:var(--surface-2); border:1px solid var(--border); }
+.ver-k{ font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint); font-weight:700; }
+.ver-now{ font-family:var(--mono); font-size:16px; font-weight:800; color:var(--text); }
+.ver-next{ font-size:11px; color:var(--text-faint); min-height:14px; }
+.ver-next b{ color:var(--accent); font-family:var(--mono); font-weight:700; }
+.ver-bump{ display:flex; flex-direction:column; gap:5px; justify-content:center; padding:2px 4px; }
+
+/* Security review rows — one status picker per review (replaces the old checkboxes). */
+.rv-rows{ display:flex; flex-direction:column; gap:10px; }
+.rv-row{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px 16px; padding:11px 14px; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); }
+.rv-row .dm-seg{ background:var(--surface); }
+.rv-row .dm-seg-btn[aria-checked="true"]{ background:var(--surface-2); }
+.rv-row-title{ font-weight:700; font-size:12.5px; }
+.rv-row-meta{ font-size:11px; color:var(--text-faint); margin-top:2px; min-height:14px; }
+.rv-row-meta.pending{ color:var(--accent); }
 .flow-custom-builder{ margin-top:10px; padding:12px; background:var(--surface-2); border:1px dashed var(--border-strong); border-radius:8px; }
 .subsection{ margin-top:16px; }
 .subsection-head{ display:flex; align-items:center; gap:10px; margin-bottom:8px; }
@@ -354,6 +375,7 @@ html{ scroll-behavior:smooth; }
 <div class="attrib" id="attribStrip"></div>
 <nav class="section-nav" id="sectionNav">
   <a href="#cardBasics" data-section="cardBasics">Basics</a>
+  <a href="#cardFlow" data-section="cardFlow">Flow diagram</a>
   <a href="#cardDescription" data-section="cardDescription">Description</a>
   <a href="#cardBlocks" data-section="cardBlocks">Request &amp; Response</a>
   <a href="#cardProjectDetails" data-section="cardProjectDetails">Project details</a>
@@ -397,9 +419,25 @@ html{ scroll-behavior:smooth; }
         <label>Tag / category</label>
         <input type="text" id="fTag" placeholder="e.g. PAYMENT">
       </div>
-      <div class="field">
-        <label>Version</label>
-        <input type="text" id="fVersion" placeholder="e.g. v1">
+      <div class="field span2">
+        <label>Version <span class="lbl-note">— goes up automatically every time you save</span></label>
+        <div class="ver-panel">
+          <div class="ver-cell">
+            <span class="ver-k">Endpoint</span>
+            <span class="ver-now" id="verEpNow">—</span>
+            <span class="ver-next" id="verEpNext"></span>
+          </div>
+          <div class="ver-cell">
+            <span class="ver-k">Project</span>
+            <span class="ver-now" id="verProjNow">—</span>
+            <span class="ver-next" id="verProjNext"></span>
+          </div>
+          <div class="ver-bump">
+            <span class="ver-k">Next save is a</span>
+            <div id="verBump"></div>
+          </div>
+        </div>
+        <div class="hint">Patch for edits and fixes, Minor for backward-compatible additions, Major for breaking changes. Resets to Patch after each save. Saving a new endpoint starts it at 1.0.0.</div>
       </div>
       <div class="field">
         <label>Content type</label>
@@ -423,25 +461,45 @@ html{ scroll-behavior:smooth; }
        coverage across a project at a glance. -->
   <div class="card section-anchor" id="cardSecurityReview">
     <div class="card-head"><div class="card-title">Security review</div></div>
-    <div class="hint" style="margin-bottom:10px;">Sign-off tracking only — ticking these doesn't block saving or publishing this endpoint.</div>
-    <div class="field-grid">
-      <div class="field">
-        <label class="checkbox-row"><input type="checkbox" id="fSecOpsReviewed"> Google SecOps reviewed</label>
+    <div class="hint" style="margin-bottom:12px;">Sign-off tracking only — the status you pick doesn't block saving or publishing this endpoint. It's shown in the project Overview's endpoint table.</div>
+    <div class="rv-rows">
+      <div class="rv-row">
+        <div class="rv-row-main">
+          <div class="rv-row-title">Google SecOps</div>
+          <div class="rv-row-meta" id="rvMetaSecOps"></div>
+        </div>
+        <div id="rvSegSecOps"></div>
       </div>
-      <div class="field">
-        <label class="checkbox-row"><input type="checkbox" id="fVaptReviewed"> VAPT reviewed</label>
+      <div class="rv-row">
+        <div class="rv-row-main">
+          <div class="rv-row-title">VAPT</div>
+          <div class="rv-row-meta" id="rvMetaVapt"></div>
+        </div>
+        <div id="rvSegVapt"></div>
       </div>
     </div>
   </div>
 
-  <!-- This endpoint's own flow diagram — separate from the project-wide
-       Request flows below (Project details), which every endpoint falls
-       back to when this is left empty. Shown on this endpoint's doc page
-       and in its own section of the PDF export. -->
-  <div class="card section-anchor" id="cardEpFlow">
-    <div class="card-head"><div class="card-title">This endpoint's flow diagram</div></div>
-    <div class="hint" style="margin-bottom:10px;">Optional — describes this endpoint's own request flow, shown on this endpoint's page and in its own PDF section. Leave empty to fall back to the project-wide Request flows below.</div>
-    <div class="field" style="margin-bottom:0;">
+  <!-- Request flow diagram — ONE card, two scopes. The project-wide flows
+       (proj.requestFlows: shown on the project Overview and used by every
+       endpoint that has none of its own) and this endpoint's own flows
+       (ep.requestFlows: shown on this endpoint's page and its own PDF
+       section) are different data, but they used to be two full copies of
+       the same builder on one page, which read as a duplicate. Only one is
+       visible at a time now; the switch decides which one this endpoint
+       uses. See setFlowScope() / performSave(). -->
+  <div class="card section-anchor" id="cardFlow">
+    <div class="card-head"><div class="card-title">Request flow diagram</div></div>
+    <div class="hint" style="margin-bottom:10px;">Which diagram does this endpoint show on its page and in its PDF section?</div>
+    <div id="flowScopeSeg" style="margin-bottom:12px;"></div>
+
+    <div id="flowPaneProject">
+      <div class="hint" style="margin-bottom:8px;">Shown on the project Overview and on every endpoint that doesn't have its own diagram — editing it here changes it for all of them. A flow is one left-to-right chain of systems. If your integration isn't one continuous chain — e.g. a token call that runs every 30 minutes, then a business request on every call — add one flow per exchange and describe when each runs. Label the arrows to show what travels between systems. Leave it empty to use the default Client → Gateway → Flow → Downstream diagram.</div>
+      <div id="fFlowsRoot"></div>
+    </div>
+
+    <div id="flowPaneEndpoint" class="hidden">
+      <div class="hint" style="margin-bottom:8px;">Only this endpoint shows this diagram. The project Overview and the other endpoints are not affected. Until you add a flow, this endpoint shows the shared project diagram.</div>
       <div id="fEpFlowsRoot"></div>
     </div>
   </div>
@@ -504,11 +562,6 @@ html{ scroll-behavior:smooth; }
       <div class="field">
         <label>License URL</label>
         <input type="text" id="fLicenseUrl" placeholder="https://example.com/license">
-      </div>
-      <div class="field span2">
-        <label>Request flows <span style="text-transform:none;font-weight:500;color:var(--text-faint);">— the diagrams shown on the overview page</span></label>
-        <div id="fFlowsRoot"></div>
-        <div class="hint" style="margin-top:6px;">A flow is one left-to-right chain of systems. If your integration isn't one continuous chain — e.g. a token call that runs every 30 minutes, then a business request on every call — add one flow per exchange and describe when each runs. Label the arrows to show what travels between systems. Leave it empty to use the default Client → Gateway → Flow → Downstream diagram.</div>
       </div>
     </div>
   </div>
@@ -734,6 +787,7 @@ html{ scroll-behavior:smooth; }
 </style>
 
 <script nonce="__CSP_NONCE__" src="/js/flow-editor.js"></script>
+<script nonce="__CSP_NONCE__" src="/js/doc-meta.js"></script>
 <script nonce="__CSP_NONCE__">
 /* ==================== Injected from server (see server.js) ==================== */
 const AUTH_USER = __AUTH_USER_JSON__;
@@ -991,9 +1045,100 @@ const flowEditor = FlowEditor.create({ root: document.getElementById('fFlowsRoot
 // flows", handled by resolveRequestFlows's ep fallback.
 const epFlowEditor = FlowEditor.create({
   root: document.getElementById('fEpFlowsRoot'),
-  emptyMessage: 'Not customized — this endpoint falls back to the project\'s Request flows (below). Add a flow to give this endpoint its own diagram.',
-  clearLabel: 'Clear — use the project\'s flow instead',
-  clearConfirm: 'Clear this endpoint\'s flow? It will go back to showing the project\'s Request flows instead.',
+  emptyMessage: 'No flow yet — until you add one, this endpoint shows the shared project diagram. Add a flow to give this endpoint its own.',
+});
+
+/* ==================== Request flow scope ====================
+   One card, two scopes (see #cardFlow): the shared project diagram
+   (proj.requestFlows, edited through flowEditor) or this endpoint's own
+   (ep.requestFlows, edited through epFlowEditor). The scope IS what gets
+   saved: 'endpoint' stores epFlowEditor's flows on the endpoint, 'project'
+   stores none there so the endpoint falls back to the shared diagram
+   (resolveRequestFlows in 03-notifications.js). The project builder is
+   always collected on save, visible or not, so flipping the switch never
+   loses what's in it. */
+let flowScope = 'project';
+function setFlowScope(scope){
+  flowScope = scope === 'endpoint' ? 'endpoint' : 'project';
+  flowScopeSeg.set(flowScope);
+  document.getElementById('flowPaneProject').classList.toggle('hidden', flowScope !== 'project');
+  document.getElementById('flowPaneEndpoint').classList.toggle('hidden', flowScope !== 'endpoint');
+}
+const flowScopeSeg = DocMeta.mountSegmented(document.getElementById('flowScopeSeg'), {
+  options: [
+    { id:'project',  label:'Shared project diagram', title:'The same diagram as the project Overview' },
+    { id:'endpoint', label:'This endpoint only',     title:'A diagram just for this endpoint' },
+  ],
+  value: 'project',
+  onChange: (id)=>{
+    if(id === 'project' && epFlowEditor.collect().length){
+      if(!window.confirm('Use the shared project diagram for this endpoint? This endpoint\'s own diagram will be removed when you save.')) return false;
+    }
+    setFlowScope(id);
+    return true;
+  },
+});
+
+/* ==================== Version panel ====================
+   Versions are read-only here: every save bumps them (see performSave), so
+   this panel only shows what's stored now and what the next save will
+   produce. verState mirrors the stored values; nothing is ever typed. */
+const verState = { ep:'', proj:'', epIsNew:true, projIsNew:true, level:'patch' };
+const verBumpSeg = DocMeta.mountSegmented(document.getElementById('verBump'), {
+  options: DocMeta.BUMP_LEVELS,
+  value: 'patch',
+  onChange: (id)=>{ verState.level = id; renderVersionPanel(); },
+});
+function renderVersionPanel(){
+  const lvl = verState.level;
+  const paint = (nowId, nextId, current, isNew)=>{
+    document.getElementById(nowId).textContent = isNew ? '—' : current;
+    document.getElementById(nextId).innerHTML = isNew
+      ? `Starts at <b>${DocMeta.INITIAL_VERSION}</b> on first save`
+      : `Next save → <b>${escapeHtml(DocMeta.bumpVersion(current, lvl))}</b>`;
+  };
+  paint('verEpNow',   'verEpNext',   verState.ep,   verState.epIsNew);
+  paint('verProjNow', 'verProjNext', verState.proj, verState.projIsNew);
+  verBumpSeg.setDisabled(verState.epIsNew && verState.projIsNew);
+}
+renderVersionPanel();
+
+/* ==================== Security review status ====================
+   Replaces the old SecOps / VAPT tick-boxes. reviewState is what's picked
+   now; reviewLoaded is what was stored when the page loaded (or last saved),
+   so the row can say "change pending" and performSave knows when to stamp
+   a new who/when. */
+const REVIEW_ROOTS = { secOps:'rvSegSecOps', vapt:'rvSegVapt' };
+const REVIEW_META  = { secOps:'rvMetaSecOps', vapt:'rvMetaVapt' };
+const reviewState  = { secOps:'none', vapt:'none' };
+const reviewLoaded = { secOps:'none', vapt:'none' };
+const reviewStamp  = { secOps:{ by:'', at:'' }, vapt:{ by:'', at:'' } };
+const reviewSegs   = {};
+function renderReviewMeta(kind){
+  const el = document.getElementById(REVIEW_META[kind]);
+  const changed = reviewState[kind] !== reviewLoaded[kind];
+  el.classList.toggle('pending', changed);
+  if(changed){ el.textContent = 'Change pending — recorded under your name when you save'; return; }
+  const st = reviewStamp[kind];
+  if(reviewState[kind] === 'none') el.textContent = 'No review recorded yet';
+  else if(st.by || st.at) el.textContent = `Set by ${st.by || 'Unknown'}${st.at ? ' · ' + formatDateTime(st.at) : ''}`;
+  else el.textContent = 'No reviewer or date on record';
+}
+// asLoaded: this is the stored value (page load / after save / new-endpoint
+// reset), not something the person just picked.
+function setReviewStatus(kind, status, asLoaded, stamp){
+  reviewState[kind] = status;
+  if(asLoaded){ reviewLoaded[kind] = status; reviewStamp[kind] = { by:(stamp && stamp.by) || '', at:(stamp && stamp.at) || '' }; }
+  reviewSegs[kind].set(status);
+  renderReviewMeta(kind);
+}
+Object.keys(REVIEW_ROOTS).forEach(kind=>{
+  reviewSegs[kind] = DocMeta.mountSegmented(document.getElementById(REVIEW_ROOTS[kind]), {
+    options: DocMeta.REVIEW_STATUSES.map(st=>({ id:st.id, label:st.label, tone:st.tone, title:st.title })),
+    value: 'none',
+    onChange: (id)=>{ reviewState[kind] = id; renderReviewMeta(kind); },
+  });
+  renderReviewMeta(kind);
 });
 
 // `encrypted` overrides `type` entirely: a JWT, ciphertext blob, or signed
@@ -1123,10 +1268,11 @@ function hydrateProjectFields(proj){
   document.getElementById('fLicenseName').value = (proj.license && proj.license.name) || '';
   document.getElementById('fLicenseUrl').value = (proj.license && proj.license.url) || '';
   flowEditor.load(proj);
-  // Version is a project-wide value now (see performSave) — prefilled here so
-  // typing an existing project's name for a new endpoint picks up its current
-  // version instead of leaving the field blank/stale.
-  document.getElementById('fVersion').value = proj.version || '';
+  // Typing an existing project's name for a new endpoint picks up that
+  // project's current version, so the panel shows what the next save bumps.
+  verState.proj = DocMeta.currentVersion(null, proj);
+  verState.projIsNew = false;
+  renderVersionPanel();
 
   document.getElementById('fAuthType').value = (proj.auth && proj.auth.type) || '';
   document.getElementById('fAuthMethod').value = (proj.auth && proj.auth.method) || 'POST';
@@ -1148,6 +1294,9 @@ function hydrateProjectFields(proj){
 // Blank-slate version for "New endpoint" when no matching project exists yet.
 function clearProjectFields(){
   currentProjectForFields = null;
+  verState.proj = '';
+  verState.projIsNew = true;
+  renderVersionPanel();
   document.getElementById('fApiDesc').value = '';
   document.getElementById('fLifecycle').innerHTML = LIFECYCLE_STAGES.map(s=>`<option value="${s}">${s}</option>`).join('');
   document.getElementById('fLifecycle').value = 'PRODUCTION';
@@ -1241,12 +1390,14 @@ async function boot(){
     loadedUpdatedAt = ep.updatedAt || null;
     fillFormFromEndpoint(proj, ep);
     epFlowEditor.load(ep);
+    setFlowScope(epFlowEditor.collect().length ? 'endpoint' : 'project');
     applyTryItPrefillIfAny(ep.id);
   } else {
     // Brand new endpoint — start from one empty response block, same default
     // shape the rest of the app expects an endpoint to have.
     addBlock('response', { code:200, description:'', example:'', fields:[] });
     epFlowEditor.load({});
+    setFlowScope('project');
   }
 
   renderAttribution(proj, ep);
@@ -1315,6 +1466,9 @@ function renderAttribution(proj, ep){
   if(ep && ep.updatedAt){
     chips.push(`<span class="chip"><span class="dot"></span>Last modified by <b>${escapeHtml(ep.updatedBy||'Unknown')}</b> · ${escapeHtml(formatDateTime(ep.updatedAt))}</span>`);
   }
+  if(ep){
+    chips.push(`<span class="chip"><span class="dot"></span>Endpoint <b>v${escapeHtml(DocMeta.currentVersion(ep, proj))}</b>${proj ? ` · Project <b>v${escapeHtml(DocMeta.currentVersion(null, proj))}</b>` : ''}</span>`);
+  }
   if(proj && !ep){
     chips.push(`<span class="chip"><span class="dot"></span>Adding to existing project <b>${escapeHtml(proj.name)}</b></span>`);
   }
@@ -1345,11 +1499,14 @@ function fillFormFromEndpoint(proj, ep){
   document.getElementById('fMethod').value = ep.method || 'GET';
   document.getElementById('fPath').value = ep.path || '';
   document.getElementById('fTag').value = ep.tag || '';
-  document.getElementById('fVersion').value = proj.version || ep.version || '';
+  verState.ep = DocMeta.currentVersion(ep, proj);
+  verState.epIsNew = false;
+  renderVersionPanel();
   document.getElementById('fContentType').value = ep.contentType || 'application/json';
   document.getElementById('fVisibility').value = ep.visibility === 'public' ? 'public' : 'private';
-  document.getElementById('fSecOpsReviewed').checked = !!ep.secOpsReviewed;
-  document.getElementById('fVaptReviewed').checked = !!ep.vaptReviewed;
+  ['secOps','vapt'].forEach(kind=>{
+    setReviewStatus(kind, DocMeta.reviewStatusOf(ep, kind), true, { by: ep[kind+'StatusBy'], at: ep[kind+'StatusAt'] });
+  });
 
   if(ep.summary || ep.description){
     addBlock('summary', { summary: ep.summary || '', description: ep.description || '' });
@@ -2052,10 +2209,14 @@ function gatherEndpointFromForm(){
     method: document.getElementById('fMethod').value,
     path,
     visibility: document.getElementById('fVisibility').value === 'public' ? 'public' : 'private',
-    secOpsReviewed: document.getElementById('fSecOpsReviewed').checked,
-    vaptReviewed: document.getElementById('fVaptReviewed').checked,
+    // Status is the source of truth; the old boolean is still written (true
+    // only when approved) so an older build reading this record keeps working.
+    secOpsStatus: reviewState.secOps,
+    vaptStatus: reviewState.vapt,
+    secOpsReviewed: reviewState.secOps === 'approved',
+    vaptReviewed: reviewState.vapt === 'approved',
     tag: document.getElementById('fTag').value.trim() || 'General',
-    version: document.getElementById('fVersion').value.trim(),
+    // `version` is deliberately not read from the form — performSave assigns it.
     contentType: document.getElementById('fContentType').value.trim() || 'application/json',
     summary: (summaryBlock && summaryBlock.summary || '').trim(),
     description: (summaryBlock && summaryBlock.description || '').trim(),
@@ -2116,6 +2277,7 @@ async function performSave(force){
       }
     }
 
+    const projWasNew = !proj;
     if(!proj){ proj = blankProjectStub(projectName); }
     if(proj._readonly){ toast("You can only view this project — it's public content from someone else in your organisation."); saving=false; document.getElementById('btnSave').disabled=false; return; }
 
@@ -2142,12 +2304,8 @@ async function performSave(force){
       url: document.getElementById('fLicenseUrl').value.trim(),
     };
     FlowEditor.applyToProject(proj, flowEditor.collect());
-    // Version reads as a per-endpoint field in the Basics tab, but it's really
-    // one value per project — every endpoint should show the same version, so
-    // saving here writes it onto the project (source of truth for Overview/PDF
-    // display) as well as onto this endpoint (via gatherEndpointFromForm below,
-    // kept for backward compatibility with existing per-endpoint data).
-    proj.version = document.getElementById('fVersion').value.trim();
+    // Versions are bumped further down, once we know whether this save
+    // creates the endpoint or updates it (see "Versions" below).
     const cleanAuthRows = (list)=> list.filter(r=>r.name.trim()).map(r=>(
       { name:r.name.trim(), type:r.type, required:!!r.required, example:r.example.trim(), description:r.description.trim() }
     ));
@@ -2170,7 +2328,9 @@ async function performSave(force){
     // This endpoint's own flow diagram (separate from the project-wide one
     // applied to `proj` above) — empty collect() result means "none set",
     // so resolveRequestFlows falls back to the project's flows for display.
-    fields.requestFlows = epFlowEditor.collect();
+    // 'project' scope stores nothing on the endpoint, so it falls back to the
+    // shared diagram; see setFlowScope().
+    fields.requestFlows = flowScope === 'endpoint' ? epFlowEditor.collect() : [];
     const actor = AUTH_USER.username || 'Unknown';
     let savedEpId = endpointId;
 
@@ -2192,16 +2352,38 @@ async function performSave(force){
     }
 
     const existingIdx = endpointId ? (proj.endpoints||[]).findIndex(e=>e.id===endpointId) : -1;
-    if(existingIdx >= 0){
-      const prevEp = proj.endpoints[existingIdx];
+    const prevEp = existingIdx >= 0 ? proj.endpoints[existingIdx] : null;
+
+    // Versions. Every save bumps: the endpoint's own version (a brand-new
+    // endpoint starts at 1.0.0 instead) and the project's (a brand-new
+    // project starts at 1.0.0). Both use the level picked in the panel.
+    // Bumping from the freshly re-fetched record — not the panel — means two
+    // tabs saving in turn can't both produce the same number.
+    const bumpLevel = verState.level;
+    const epVersionBefore = prevEp ? DocMeta.currentVersion(prevEp, proj) : '';
+    fields.version = prevEp ? DocMeta.bumpVersion(epVersionBefore, bumpLevel) : DocMeta.INITIAL_VERSION;
+    proj.version = projWasNew ? DocMeta.INITIAL_VERSION : DocMeta.bumpVersion(DocMeta.currentVersion(null, proj), bumpLevel);
+
+    // Review sign-off: stamp who/when only when a status actually changed;
+    // an untouched one keeps its earlier stamp (it's carried by ...prevEp below).
+    ['secOps','vapt'].forEach(kind=>{
+      const before = prevEp ? DocMeta.reviewStatusOf(prevEp, kind) : 'none';
+      const after = fields[kind+'Status'];
+      if(after !== before){
+        fields[kind+'StatusBy'] = after === 'none' ? '' : actor;
+        fields[kind+'StatusAt'] = after === 'none' ? '' : now;
+      }
+    });
+
+    if(prevEp){
       proj.endpoints[existingIdx] = { ...prevEp, ...fields, id: prevEp.id, createdAt: prevEp.createdAt, createdBy: prevEp.createdBy, updatedAt: now, updatedBy: actor };
-      postAuditEvent({ action:'updated', entityType:'endpoint', entityName:`${fields.method} ${fields.path}`, projectName: proj.name, details:`Edited endpoint ${fields.method} ${fields.path} via editor tab` });
+      postAuditEvent({ action:'updated', entityType:'endpoint', entityName:`${fields.method} ${fields.path}`, projectName: proj.name, details:`Edited endpoint ${fields.method} ${fields.path} via editor tab (v${epVersionBefore} → v${fields.version})` });
     } else {
       const newEp = { id: uid(), ...fields, createdAt: now, createdBy: actor, updatedAt: now, updatedBy: actor };
       proj.endpoints = proj.endpoints || [];
       proj.endpoints.push(newEp);
       savedEpId = newEp.id;
-      postAuditEvent({ action:'created', entityType:'endpoint', entityName:`${fields.method} ${fields.path}`, projectName: proj.name, details:`Added endpoint ${fields.method} ${fields.path} via editor tab` });
+      postAuditEvent({ action:'created', entityType:'endpoint', entityName:`${fields.method} ${fields.path}`, projectName: proj.name, details:`Added endpoint ${fields.method} ${fields.path} via editor tab (v${fields.version})` });
     }
     proj.updatedAt = now;
 
@@ -2218,11 +2400,22 @@ async function performSave(force){
 
     hideConflict();
     const savedEp = proj.endpoints.find(e=>e.id===savedEpId);
+
+    // The panels now reflect what was just stored; the bump level goes back
+    // to Patch so a Major/Minor choice never silently repeats.
+    verState.ep = savedEp.version;      verState.epIsNew = false;
+    verState.proj = proj.version;       verState.projIsNew = false;
+    verState.level = 'patch';           verBumpSeg.set('patch');
+    renderVersionPanel();
+    ['secOps','vapt'].forEach(kind=>{
+      setReviewStatus(kind, DocMeta.reviewStatusOf(savedEp, kind), true, { by: savedEp[kind+'StatusBy'], at: savedEp[kind+'StatusAt'] });
+    });
+
     renderAttribution(proj, savedEp);
     renderStateBanner(proj, savedEp);
     updateTopBar(proj, savedEp);
-    showSavedBanner(fields.visibility);
-    toast(fields.visibility === 'public' ? 'Published' : 'Saved as private');
+    showSavedBanner(fields.visibility, savedEp.version);
+    toast(`${fields.visibility === 'public' ? 'Published' : 'Saved as private'} · v${savedEp.version}`);
   }catch(e){
     console.error(e);
     // apiSend() now throws the server's actual { error } message when there
@@ -2246,11 +2439,11 @@ function hideConflict(){ document.getElementById('conflictBanner').classList.add
 document.getElementById('conflictReload').addEventListener('click', ()=>window.location.reload());
 document.getElementById('conflictForce').addEventListener('click', ()=>performSave(true));
 
-function showSavedBanner(visibility){
+function showSavedBanner(visibility, version){
   const banner = document.getElementById('savedBanner');
-  document.getElementById('savedMsg').textContent = visibility === 'public'
+  document.getElementById('savedMsg').textContent = (visibility === 'public'
     ? 'Published — visible to your organisation on this endpoint\u2019s page.'
-    : 'Saved as private — only visible to you.';
+    : 'Saved as private — only visible to you.') + (version ? ` Endpoint is now v${version}.` : '');
   banner.classList.remove('hidden');
   clearTimeout(banner._timer);
   banner._timer = setTimeout(()=>banner.classList.add('hidden'), 5000);
@@ -2849,14 +3042,20 @@ function resetEndpointFieldsForNewEndpoint(){
   document.getElementById('fMethod').value = 'GET';
   document.getElementById('fPath').value = '';
   document.getElementById('fTag').value = '';
-  // Version now lives at the project level (see performSave) — carry the
-  // current project's version forward instead of blanking it, since the next
-  // endpoint belongs to the same project and should show the same version.
-  document.getElementById('fVersion').value = (currentProjectForFields && currentProjectForFields.version) || '';
+  // The next endpoint starts at 1.0.0 on its first save; verState.proj is
+  // left alone — it already holds the project's current version (updated by
+  // the save that just happened).
+  verState.ep = '';
+  verState.epIsNew = true;
+  verState.level = 'patch';
+  verBumpSeg.set('patch');
+  renderVersionPanel();
   document.getElementById('fContentType').value = 'application/json';
   document.getElementById('fVisibility').value = 'private';
-  document.getElementById('fSecOpsReviewed').checked = false;
-  document.getElementById('fVaptReviewed').checked = false;
+  setReviewStatus('secOps', 'none', true);
+  setReviewStatus('vapt', 'none', true);
+  epFlowEditor.load({});
+  setFlowScope('project');
   blocks.length = 0;
   addBlock('response', { code:200, description:'', example:'', fields:[] });
   updateTopBar({ name: document.getElementById('fProject').value.trim() || 'this project' }, null);

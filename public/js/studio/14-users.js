@@ -616,6 +616,7 @@ function renderProjectOverview(main, projectId){
         <div class="overview-stat"><div class="n" style="color:var(--get);">${envsConfigured}/${environments().length}</div><div class="l">Environments</div></div>
         <div class="overview-stat"><div class="n" style="color:var(--patch);">${proj.auth && proj.auth.type ? escapeHtml(proj.auth.type) : 'None'}</div><div class="l">Auth</div></div>
         <div class="overview-stat"><div class="n" style="color:var(--put);">${tagCount}</div><div class="l">Tags</div></div>
+        <div class="overview-stat" title="Goes up automatically each time anything in this project is saved from the editor"><div class="n" style="color:var(--accent);">${proj.version ? 'v' + escapeHtml(String(proj.version).replace(/^v/i, '')) : '—'}</div><div class="l">Version</div></div>
       </div>
     </div>
 
@@ -722,7 +723,7 @@ function renderProjectOverview(main, projectId){
       <div class="section-title">Endpoints <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— added &amp; last-modified history</span></div>
       ${epsForView.length ? `
       <table class="data-table">
-        <thead><tr><th>Endpoint</th><th>Added</th><th>Last modified</th><th title="Google SecOps review sign-off">SecOps</th><th title="VAPT review sign-off">VAPT</th></tr></thead>
+        <thead><tr><th>Endpoint</th><th title="Goes up automatically each time this endpoint is saved">Version</th><th>Added</th><th>Last modified</th><th title="Google SecOps review status">SecOps</th><th title="VAPT review status">VAPT</th></tr></thead>
         <tbody>
           ${epsForView.map(ep=>`
             <tr class="ep-history-row" data-open-ep="${ep.id}" style="cursor:pointer;">
@@ -730,6 +731,7 @@ function renderProjectOverview(main, projectId){
                 <span class="badge ${methodClass(ep.method)}" style="margin-right:8px;">${escapeHtml(ep.method)}</span>
                 <span class="mono" style="font-size:12px;">${escapeHtml(ep.path)}</span>
               </td>
+              <td>${DocMeta.versionPillHtml(DocMeta.currentVersion(ep, proj))}</td>
               <td>
                 <div>${ep.createdAt ? escapeHtml(formatDateTime(ep.createdAt)) : '<span class="empty-field">Unknown</span>'}</div>
                 <div style="color:var(--text-faint); font-size:11.5px;">${ep.createdBy ? 'by ' + escapeHtml(ep.createdBy) : 'by Unknown'}</div>
@@ -738,8 +740,8 @@ function renderProjectOverview(main, projectId){
                 <div>${ep.updatedAt ? escapeHtml(formatDateTime(ep.updatedAt)) : '<span class="empty-field">Unknown</span>'}</div>
                 <div style="color:var(--text-faint); font-size:11.5px;">${ep.updatedBy ? 'by ' + escapeHtml(ep.updatedBy) : 'by Unknown'}</div>
               </td>
-              <td style="text-align:center;">${ep.secOpsReviewed ? '<span title="Google SecOps reviewed" style="color:var(--get);">&#9989;</span>' : '<span title="Not yet reviewed" style="color:var(--text-faint);">&#8212;</span>'}</td>
-              <td style="text-align:center;">${ep.vaptReviewed ? '<span title="VAPT reviewed" style="color:var(--get);">&#9989;</span>' : '<span title="Not yet reviewed" style="color:var(--text-faint);">&#8212;</span>'}</td>
+              <td>${DocMeta.reviewChipHtml(ep, 'secOps')}</td>
+              <td>${DocMeta.reviewChipHtml(ep, 'vapt')}</td>
             </tr>`).join('')}
         </tbody>
       </table>` : `<div class="empty-field">${viewingDraft ? 'No endpoints in this project yet.' : `Nothing promoted to ${escapeHtml(env.label)} yet.`}</div>`}
@@ -1173,7 +1175,8 @@ function renderEndpointDoc(main, proj, ep){
   const metaChipsHtml = `
     <div class="endpoint-meta-chips">
       <span class="meta-chip"><span class="meta-chip-dot" style="background:${ep.visibility==='public' ? 'var(--get)' : 'var(--text-faint)'};"></span><span class="k">Visibility</span><span class="v">${ep.visibility==='public' ? 'Public' : 'Private'}</span></span>
-      <span class="meta-chip"><span class="meta-chip-dot" style="background:var(--accent);"></span><span class="k">Version</span><span class="v">${(proj.version||ep.version) ? escapeHtml(proj.version||ep.version) : '—'}</span></span>
+      <span class="meta-chip"><span class="meta-chip-dot" style="background:var(--accent);"></span><span class="k">Version</span><span class="v">${escapeHtml(DocMeta.currentVersion(ep, proj))}</span></span>
+      <span class="meta-chip"><span class="meta-chip-dot" style="background:var(--text-faint);"></span><span class="k">Project version</span><span class="v">${escapeHtml(DocMeta.currentVersion(null, proj))}</span></span>
       <span class="meta-chip"><span class="meta-chip-dot" style="background:var(--patch);"></span><span class="k">Content type</span><span class="v">${escapeHtml(ep.contentType||'application/json')}</span></span>
       <span class="meta-chip"><span class="meta-chip-dot" style="background:var(--post);"></span><span class="k">Added</span><span class="v">${ep.createdAt ? escapeHtml(formatDateTime(ep.createdAt)) : 'Unknown'}${ep.createdBy ? ' · ' + escapeHtml(ep.createdBy) : ''}</span></span>
       <span class="meta-chip"><span class="meta-chip-dot" style="background:var(--put);"></span><span class="k">Modified</span><span class="v">${ep.updatedAt ? escapeHtml(formatDateTime(ep.updatedAt)) : 'Unknown'}${ep.updatedBy ? ' · ' + escapeHtml(ep.updatedBy) : ''}</span></span>

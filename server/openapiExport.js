@@ -293,7 +293,7 @@ function buildProjectOpenApiSpecYaml(proj, envList) {
     info: {
       title: proj.name || 'Untitled API',
       description: proj.description || undefined,
-      version: '1.0.0',
+      version: (typeof proj.version === 'string' && proj.version.trim()) || '1.0.0',
       ...(proj.termsOfService ? { termsOfService: proj.termsOfService } : {}),
       ...((proj.contact && (proj.contact.name || proj.contact.email)) ? {
         contact: {

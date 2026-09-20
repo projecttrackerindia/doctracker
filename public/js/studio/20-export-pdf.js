@@ -445,7 +445,7 @@ function buildExportPdfEndpointSection(proj, ep, index, env){
         <span class="pdf-ep-index">${String(index+1).padStart(2,'0')}</span>
         <span class="badge-lg ${mClass}">${escapeHtml(ep.method)}</span>
         <span class="pdf-ep-path">${escapeHtml(ep.path)}</span>
-        ${(proj.version || ep.version) ? `<span class="pdf-ep-version">v${escapeHtml(proj.version || ep.version)}</span>` : ''}
+        ${(ep.version || proj.version) ? `<span class="pdf-ep-version">v${escapeHtml(String(ep.version || proj.version).replace(/^v/i, ''))}</span>` : ''}
       </div>
       ${ep.summary ? `<div class="pdf-ep-summary">${escapeHtml(ep.summary)}</div>` : ''}
       ${ep.description ? `<div class="pdf-ep-desc">${renderMarkdown(ep.description)}</div>` : ''}
