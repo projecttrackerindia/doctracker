@@ -489,6 +489,13 @@ html{ scroll-behavior:smooth; }
         </div>
         <div id="rvSegVapt"></div>
       </div>
+      <div class="rv-row">
+        <div class="rv-row-main">
+          <div class="rv-row-title">Common Log Management</div>
+          <div class="rv-row-meta" id="rvMetaLogMgmt"></div>
+        </div>
+        <div id="rvSegLogMgmt"></div>
+      </div>
     </div>
   </div>
 
@@ -1120,11 +1127,11 @@ renderVersionPanel();
    now; reviewLoaded is what was stored when the page loaded (or last saved),
    so the row can say "change pending" and performSave knows when to stamp
    a new who/when. */
-const REVIEW_ROOTS = { secOps:'rvSegSecOps', vapt:'rvSegVapt' };
-const REVIEW_META  = { secOps:'rvMetaSecOps', vapt:'rvMetaVapt' };
-const reviewState  = { secOps:'none', vapt:'none' };
-const reviewLoaded = { secOps:'none', vapt:'none' };
-const reviewStamp  = { secOps:{ by:'', at:'' }, vapt:{ by:'', at:'' } };
+const REVIEW_ROOTS = { secOps:'rvSegSecOps', vapt:'rvSegVapt', logMgmt:'rvSegLogMgmt' };
+const REVIEW_META  = { secOps:'rvMetaSecOps', vapt:'rvMetaVapt', logMgmt:'rvMetaLogMgmt' };
+const reviewState  = { secOps:'none', vapt:'none', logMgmt:'none' };
+const reviewLoaded = { secOps:'none', vapt:'none', logMgmt:'none' };
+const reviewStamp  = { secOps:{ by:'', at:'' }, vapt:{ by:'', at:'' }, logMgmt:{ by:'', at:'' } };
 const reviewSegs   = {};
 function renderReviewMeta(kind){
   const el = document.getElementById(REVIEW_META[kind]);
@@ -1519,7 +1526,7 @@ function fillFormFromEndpoint(proj, ep){
   renderVersionPanel();
   document.getElementById('fContentType').value = ep.contentType || 'application/json';
   document.getElementById('fVisibility').value = ep.visibility === 'public' ? 'public' : 'private';
-  ['secOps','vapt'].forEach(kind=>{
+  ['secOps','vapt','logMgmt'].forEach(kind=>{
     setReviewStatus(kind, DocMeta.reviewStatusOf(ep, kind), true, { by: ep[kind+'StatusBy'], at: ep[kind+'StatusAt'] });
   });
 
@@ -2228,8 +2235,10 @@ function gatherEndpointFromForm(){
     // only when approved) so an older build reading this record keeps working.
     secOpsStatus: reviewState.secOps,
     vaptStatus: reviewState.vapt,
+    logMgmtStatus: reviewState.logMgmt,
     secOpsReviewed: reviewState.secOps === 'approved',
     vaptReviewed: reviewState.vapt === 'approved',
+    logMgmtReviewed: reviewState.logMgmt === 'approved',
     name: document.getElementById('fName').value.trim(),
     tag: document.getElementById('fTag').value.trim() || 'General',
     sourceSystem: document.getElementById('fSourceSystem').value.trim(),
@@ -2384,7 +2393,7 @@ async function performSave(force){
 
     // Review sign-off: stamp who/when only when a status actually changed;
     // an untouched one keeps its earlier stamp (it's carried by ...prevEp below).
-    ['secOps','vapt'].forEach(kind=>{
+    ['secOps','vapt','logMgmt'].forEach(kind=>{
       const before = prevEp ? DocMeta.reviewStatusOf(prevEp, kind) : 'none';
       const after = fields[kind+'Status'];
       if(after !== before){
@@ -2425,7 +2434,7 @@ async function performSave(force){
     verState.proj = proj.version;       verState.projIsNew = false;
     verState.level = 'patch';           verBumpSeg.set('patch');
     renderVersionPanel();
-    ['secOps','vapt'].forEach(kind=>{
+    ['secOps','vapt','logMgmt'].forEach(kind=>{
       setReviewStatus(kind, DocMeta.reviewStatusOf(savedEp, kind), true, { by: savedEp[kind+'StatusBy'], at: savedEp[kind+'StatusAt'] });
     });
 
@@ -3075,6 +3084,7 @@ function resetEndpointFieldsForNewEndpoint(){
   document.getElementById('fVisibility').value = 'private';
   setReviewStatus('secOps', 'none', true);
   setReviewStatus('vapt', 'none', true);
+  setReviewStatus('logMgmt', 'none', true);
   epFlowEditor.load({});
   setFlowScope('project');
   blocks.length = 0;

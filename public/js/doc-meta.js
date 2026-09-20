@@ -12,14 +12,17 @@
      Legacy data stored one project-wide value (and copied it onto the
      endpoint), so currentVersion() falls back ep -> project -> 1.0.0.
 
-   Security-review sign-off (Google SecOps / VAPT)
+   Security-review sign-off (Google SecOps / VAPT / Common Log Management)
      Used to be a boolean (ep.secOpsReviewed / ep.vaptReviewed). Now a
-     status — none | in_review | approved | findings — stored as
-     ep.secOpsStatus / ep.vaptStatus, plus who/when it last changed
-     (ep.secOpsStatusBy / ep.secOpsStatusAt, same for vapt). The old boolean
-     is still written (true only when approved) so an older build reading
-     the same record keeps working, and reviewStatusOf() reads it when the
-     new field is absent, so existing "ticked" endpoints show as Approved.
+     status — none | in_review | approved | findings — stored per kind as
+     ep.<kind>Status, plus who/when it last changed (ep.<kind>StatusBy /
+     ep.<kind>StatusAt). The old boolean is still written (true only when
+     approved) so an older build reading the same record keeps working, and
+     reviewStatusOf() reads it when the new field is absent, so existing
+     "ticked" endpoints show as Approved. Add a new kind by adding one entry
+     to REVIEW_KINDS below — editor.html's review rows are driven generically
+     off Object.keys(REVIEW_ROOTS)/['secOps','vapt','logMgmt'], not hardcoded
+     per kind.
 */
 (function (global) {
   'use strict';
@@ -73,8 +76,9 @@
   var REVIEW_BY_ID = {};
   REVIEW_STATUSES.forEach(function (s) { REVIEW_BY_ID[s.id] = s; });
   var REVIEW_KINDS = {
-    secOps: { label: 'Google SecOps', full: 'Google SecOps review' },
-    vapt:   { label: 'VAPT',          full: 'VAPT review' }
+    secOps:  { label: 'Google SecOps', full: 'Google SecOps review' },
+    vapt:    { label: 'VAPT',          full: 'VAPT review' },
+    logMgmt: { label: 'Log Mgmt',      full: 'Common Log Management review' }
   };
 
   function reviewStatusOf(ep, kind) {

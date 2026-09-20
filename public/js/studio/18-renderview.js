@@ -1488,12 +1488,12 @@ function buildRenderSheetHtml(proj, ep){
         <div class="render-kicker">
           <span class="render-method-pill">${ep.method}</span>
           <span class="render-env-pill">${envMeta(state.env).label}</span>
+          ${(ep.sourceSystem || ep.targetSystem) ? `<span class="render-flow-pill" title="Source system → target system">${escapeHtml(ep.sourceSystem||'?')} <span class="render-flow-arrow">→</span> ${escapeHtml(ep.targetSystem||'?')}</span>` : ''}
         </div>
         ${ep.name ? `<div class="render-summary" style="font-weight:700;">${escapeHtml(ep.name)}</div>` : ''}
         <div class="render-path">${escapeHtml(ep.path)}</div>
         ${ep.summary ? `<div class="render-summary">${escapeHtml(ep.summary)}</div>` : ''}
         ${ep.description ? `<div class="render-desc">${renderMarkdown(ep.description)}</div>` : ''}
-        ${(ep.sourceSystem || ep.targetSystem) ? `<div class="render-crumb">${escapeHtml(ep.sourceSystem||'?')} → ${escapeHtml(ep.targetSystem||'?')}</div>` : ''}
         <div class="render-crumb">${escapeHtml(proj.name||'Untitled API')} · ${escapeHtml(ep.tag||'General')}${(ep.version||proj.version)?` · v${escapeHtml(String(ep.version||proj.version).replace(/^v/i,''))}`:''} · ${escapeHtml(ep.contentType||'application/json')}</div>
       </div>
     </div>
