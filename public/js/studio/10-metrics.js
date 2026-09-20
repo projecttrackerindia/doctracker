@@ -164,7 +164,13 @@ function requestFlowSectionInnerHtml(proj, env, ep){
 // separate flow of its own. `pdf` picks print-safe inline styling instead of
 // the themed CSS classes used on-screen.
 function rfTokenBranchSvg(cx, token, topPad, mainBoxTopY, pdf){
-  const boxW = 132, boxH = 48, iconR = 12;
+  // boxH was 48 - with the icon ring, the k-label, and the value line all
+  // stacked inside that, the label and value line landed only 2px apart
+  // (boxY+40 vs boxY+42), guaranteed to visually collide regardless of font
+  // size. 64 gives each line ~16px of its own room. Keep in sync with
+  // requestFlowSvg's own `tokenBoxH` below, which reserves the vertical
+  // space above the main row for this box.
+  const boxW = 132, boxH = 64, iconR = 12;
   const boxY = topPad;
   const iconCy = boxY + iconR + 7;
   const systems = Array.isArray(token.systems) ? token.systems : [];
@@ -184,8 +190,8 @@ function rfTokenBranchSvg(cx, token, topPad, mainBoxTopY, pdf){
     : `<text x="${cx}" y="${iconCy+iconR+9}" text-anchor="middle" class="rf-token-k">${escapeHtml(String(token.k||'TOKEN').toUpperCase())}</text>`;
   const valueLine = systems.length
     ? (pdf
-      ? `<text x="${cx}" y="${boxY+boxH-6}" text-anchor="middle" font-size="10px" font-weight="700" fill="#0f1420">${escapeHtml(systems[0])}</text>`
-      : `<text x="${cx}" y="${boxY+boxH-6}" text-anchor="middle" class="rf-box-v" style="font-size:10px;">${escapeHtml(systems[0])}</text>`)
+      ? `<text x="${cx}" y="${boxY+boxH-8}" text-anchor="middle" font-size="10px" font-weight="700" fill="#0f1420">${escapeHtml(systems[0])}</text>`
+      : `<text x="${cx}" y="${boxY+boxH-8}" text-anchor="middle" class="rf-box-v" style="font-size:10px;">${escapeHtml(systems[0])}</text>`)
     : '';
   const line = pdf
     ? `<line x1="${connX}" y1="${connY1}" x2="${connX}" y2="${connY2-8}" stroke="#5c7cfa" stroke-width="1.4" opacity="0.55"></line>`
@@ -215,7 +221,7 @@ function requestFlowSvg(stages, direction){
   const boxW = 152, gap = hasHops ? 150 : 68, padX = 22;
   const iconR = 16;
   const hasTokens = stages.some(s => s.token);
-  const tokenBoxH = 48, tokenConnLen = 20, tokenTopPad = 8;
+  const tokenBoxH = 64, tokenConnLen = 20, tokenTopPad = 8; // must match rfTokenBranchSvg's own boxH
   const topPad = hasTokens ? (tokenTopPad + tokenBoxH + tokenConnLen) : 8;
   const iconCy = topPad + iconR;
   const boxY = iconCy + iconR + 12;
@@ -405,7 +411,7 @@ function pdfRequestFlowSvg(stages, direction){
   const boxW = 152, gap = hasHops ? 150 : 68, padX = 22;
   const iconR = 16;
   const hasTokens = stages.some(s => s.token);
-  const tokenBoxH = 48, tokenConnLen = 20, tokenTopPad = 8;
+  const tokenBoxH = 64, tokenConnLen = 20, tokenTopPad = 8; // must match rfTokenBranchSvg's own boxH
   const topPad = hasTokens ? (tokenTopPad + tokenBoxH + tokenConnLen) : 8;
   const iconCy = topPad + iconR;
   const boxY = iconCy + iconR + 12;
