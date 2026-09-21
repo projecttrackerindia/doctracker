@@ -114,11 +114,11 @@ const HTTP_STATUS_TEXT = {
   503: 'Service Unavailable', 504: 'Gateway Timeout',
 };
 
-// Builds one OpenAPI `operation` object (+ any schemas/parameters it needs
-// registered in components) for a single endpoint. Always masks sensitive
-// header examples — there's no "revealed" branch here, unlike the client
-// version, because this spec can leave the building.
-function buildOperation(ep, schemas, componentParams) {
+// Builds one OpenAPI `operation` object (+ any schemas it needs registered
+// in components) for a single endpoint. Always masks sensitive header
+// examples — there's no "revealed" branch here, unlike the client version,
+// because this spec can leave the building.
+function buildOperation(ep, schemas) {
   const methodLower = (ep.method || 'get').toLowerCase();
   const opId = toOperationId(ep.method, ep.path);
   const opTitle = opId.charAt(0).toUpperCase() + opId.slice(1);
@@ -143,16 +143,23 @@ function buildOperation(ep, schemas, componentParams) {
   const pathParams = (ep.parameters || []).filter((p) => p.in === 'path');
   const queryParams = (ep.parameters || []).filter((p) => !p.in || p.in === 'query');
 
+  // Inlined directly on the operation rather than as a shared
+  // #/components/parameters/... $ref — SwaggerHub's "Explore" test client
+  // doesn't resolve parameter-level $refs when populating its request
+  // panel (confirmed: the same spec's headers render correctly in Swagger
+  // UI/the Studio editor's own preview, just not in Explore), so a ref
+  // silently dropped these from every request someone tried to send from
+  // there. Every consumer understands an inline parameter; not every
+  // consumer resolves a $ref for one, so inline is the safe default for a
+  // spec that's generated (cheap to duplicate) rather than hand-maintained.
   const headerParamRefs = normalHeaders.map((h) => {
-    const compName = toPascalCase(h.name) + 'Header';
     const maskThis = h.example && (isSensitiveHeaderName(h.name) || isAuthHeaderName(h.name));
-    componentParams[compName] = {
+    return {
       name: h.name, in: 'header', required: !!h.required,
       description: h.description || undefined,
       schema: { type: jsonTypeToSchema(h.type) },
       example: maskThis ? maskSecretValue(h.example) : (h.example || undefined),
     };
-    return { $ref: `#/components/parameters/${compName}` };
   });
 
   const inlineParams = [
@@ -236,14 +243,13 @@ function buildOperation(ep, schemas, componentParams) {
 function buildProjectOpenApiSpecYaml(proj, envList) {
   const endpoints = Array.isArray(proj.endpoints) ? proj.endpoints : [];
   const schemas = {};
-  const componentParams = {};
   const paths = {};
   const tagNames = new Set();
   let anyAuthHeader = false;
 
   for (const ep of endpoints) {
     if (!ep || !ep.path) continue;
-    const { operation, methodLower, hasAuthHeader } = buildOperation(ep, schemas, componentParams);
+    const { operation, methodLower, hasAuthHeader } = buildOperation(ep, schemas);
     if (hasAuthHeader) anyAuthHeader = true;
     tagNames.add(ep.tag || 'General');
     if (!paths[ep.path]) paths[ep.path] = {};
@@ -318,7 +324,6 @@ function buildProjectOpenApiSpecYaml(proj, envList) {
     tags: Array.from(tagNames).map((t) => ({ name: t, description: `Operations related to ${t}.` })),
     paths,
     components: {
-      ...(Object.keys(componentParams).length ? { parameters: componentParams } : {}),
       ...(Object.keys(schemas).length ? { schemas } : {}),
       ...(securityScheme ? { securitySchemes: { [schemeName]: securityScheme } } : {}),
     },
