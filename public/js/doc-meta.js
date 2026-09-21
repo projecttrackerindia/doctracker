@@ -109,6 +109,54 @@
       '<span class="dm-dot dm-t-' + st.tone + '"></span>' + esc(st.label) + '</span>';
   }
 
+  /* ---------------- endpoint lifecycle status ---------------- */
+  // Separate from review status above (that's "has this been security-
+  // reviewed"; this is "is this endpoint's own build finished"). Stored as
+  // ep.status — a plain string so a value this list doesn't know about
+  // (an older/newer build, hand-edited data) still renders instead of
+  // throwing, just as a neutral "Other" chip carrying its own raw text.
+  var ENDPOINT_STATUSES = [
+    { id: 'active',          label: 'Active',             tone: 'ok',   title: 'Live and ready to use' },
+    { id: 'in_development',  label: 'Under development',  tone: 'info', title: 'Still being built — shape may still change' },
+    { id: 'in_review',       label: 'Under review',       tone: 'warn', title: 'Built, awaiting sign-off before general use' },
+    { id: 'deprecated',      label: 'Deprecated',         tone: 'bad',  title: 'Still present but should not be used for new integrations' }
+  ];
+  var ENDPOINT_STATUS_BY_ID = {};
+  ENDPOINT_STATUSES.forEach(function (s) { ENDPOINT_STATUS_BY_ID[s.id] = s; });
+  var DEFAULT_ENDPOINT_STATUS = 'active';
+
+  // Endpoints saved before this field existed have no ep.status at all —
+  // treat that the same as "Active" rather than showing a blank/unknown chip.
+  function endpointStatusOf(ep) {
+    var s = ep && ep.status;
+    return s && ENDPOINT_STATUS_BY_ID[s] ? s : (s ? s : DEFAULT_ENDPOINT_STATUS);
+  }
+  function endpointStatusMeta(ep) {
+    var id = endpointStatusOf(ep);
+    return ENDPOINT_STATUS_BY_ID[id] || { id: id, label: id, tone: 'none', title: '' };
+  }
+  function endpointStatusChipHtml(ep) {
+    var st = endpointStatusMeta(ep);
+    return '<span class="dm-chip dm-t-' + st.tone + '"' + (st.title ? ' title="' + esc(st.title) + '"' : '') + '>' +
+      '<span class="dm-dot dm-t-' + st.tone + '"></span>' + esc(st.label) + '</span>';
+  }
+
+  /* ---------------- source/target system pill ---------------- */
+  // A single "Salesforce → Oracle DB" pill, used everywhere an endpoint's
+  // integration direction needs to show at a glance (render view, overview
+  // table). Omits itself entirely when neither side is set instead of
+  // rendering an empty arrow.
+  function systemFlowHtml(ep) {
+    var src = ep && ep.sourceSystem ? String(ep.sourceSystem).trim() : '';
+    var tgt = ep && ep.targetSystem ? String(ep.targetSystem).trim() : '';
+    if (!src && !tgt) return '';
+    return '<span class="dm-flow" title="Source → Target system">' +
+      (src ? esc(src) : '<span class="dm-flow-empty">?</span>') +
+      '<span class="dm-flow-arrow">→</span>' +
+      (tgt ? esc(tgt) : '<span class="dm-flow-empty">?</span>') +
+      '</span>';
+  }
+
   /* ---------------- segmented control ---------------- */
   // opts: { options:[{id,label,tone?,title?}], value, onChange(id, prev) }
   // onChange may return false to veto the change (the control stays put).
@@ -171,6 +219,12 @@
     reviewStatusOf: reviewStatusOf,
     reviewTooltip: reviewTooltip,
     reviewChipHtml: reviewChipHtml,
-    mountSegmented: mountSegmented
+    mountSegmented: mountSegmented,
+    ENDPOINT_STATUSES: ENDPOINT_STATUSES,
+    DEFAULT_ENDPOINT_STATUS: DEFAULT_ENDPOINT_STATUS,
+    endpointStatusOf: endpointStatusOf,
+    endpointStatusMeta: endpointStatusMeta,
+    endpointStatusChipHtml: endpointStatusChipHtml,
+    systemFlowHtml: systemFlowHtml
   };
 })(window);

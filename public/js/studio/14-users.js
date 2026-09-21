@@ -732,7 +732,7 @@ function renderProjectOverview(main, projectId){
       <div class="section-title">Endpoints <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— added &amp; last-modified history</span></div>
       ${epsForView.length ? `
       <table class="data-table">
-        <thead><tr><th>Endpoint</th><th title="Goes up automatically each time this endpoint is saved">Version</th><th>Added</th><th>Last modified</th><th title="Google SecOps review status">SecOps</th><th title="VAPT review status">VAPT</th><th title="Common Log Management review status">Log Mgmt</th></tr></thead>
+        <thead><tr><th>Endpoint</th><th title="Goes up automatically each time this endpoint is saved">Version</th><th>Source → Target</th><th>Status</th><th>Added</th><th>Last modified</th><th title="Google SecOps review status">SecOps</th><th title="VAPT review status">VAPT</th><th title="Common Log Management review status">Log Mgmt</th></tr></thead>
         <tbody>
           ${epsForView.map(ep=>`
             <tr class="ep-history-row" data-open-ep="${ep.id}" style="cursor:pointer;">
@@ -741,6 +741,8 @@ function renderProjectOverview(main, projectId){
                 <span class="mono" style="font-size:12px;">${escapeHtml(ep.path)}</span>
               </td>
               <td>${DocMeta.versionPillHtml(DocMeta.currentVersion(ep, proj))}</td>
+              <td>${DocMeta.systemFlowHtml(ep) || '<span class="empty-field">—</span>'}</td>
+              <td>${DocMeta.endpointStatusChipHtml(ep)}</td>
               <td>
                 <div>${ep.createdAt ? escapeHtml(formatDateTime(ep.createdAt)) : '<span class="empty-field">Unknown</span>'}</div>
                 <div style="color:var(--text-faint); font-size:11.5px;">${ep.createdBy ? 'by ' + escapeHtml(ep.createdBy) : 'by Unknown'}</div>

@@ -1488,7 +1488,8 @@ function buildRenderSheetHtml(proj, ep){
         <div class="render-kicker">
           <span class="render-method-pill">${ep.method}</span>
           <span class="render-env-pill">${envMeta(state.env).label}</span>
-          ${(ep.sourceSystem || ep.targetSystem) ? `<span class="render-flow-pill" title="Source system → target system">${escapeHtml(ep.sourceSystem||'?')} <span class="render-flow-arrow">→</span> ${escapeHtml(ep.targetSystem||'?')}</span>` : ''}
+          ${DocMeta.systemFlowHtml(ep)}
+          ${DocMeta.endpointStatusChipHtml(ep)}
         </div>
         ${ep.name ? `<div class="render-summary" style="font-weight:700;">${escapeHtml(ep.name)}</div>` : ''}
         <div class="render-path">${escapeHtml(ep.path)}</div>
