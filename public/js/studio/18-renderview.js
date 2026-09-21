@@ -1182,6 +1182,17 @@ async function sendTryItLive(proj, ep, typedBody){
     state._liveModeConfirmedOnce = true;
   }
 
+  if(!state._liveModeDeprecatedConfirmed) state._liveModeDeprecatedConfirmed = new Set();
+  if(DocMeta.endpointStatusOf(ep) === 'deprecated' && !state._liveModeDeprecatedConfirmed.has(ep.id)){
+    const ok = await openConfirmModal({
+      title: 'This endpoint is deprecated',
+      message: `${ep.method} ${ep.path} is marked Deprecated. It may still work, but shouldn't be used for new integrations — send anyway?`,
+      confirmLabel: 'Send anyway',
+    });
+    if(!ok) return;
+    state._liveModeDeprecatedConfirmed.add(ep.id);
+  }
+
   sendBtn.disabled = true;
   sendBtn.classList.add('loading');
   document.getElementById('tryItSendLabel').textContent = 'Sending…';
@@ -1209,7 +1220,7 @@ async function sendTryItLive(proj, ep, typedBody){
   try{
     const res = await fetch('/api/live-mode/send', {
       method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ projectId: proj.id, endpointId: ep.id, environmentId: state.env, pathParams, queryParams, headers: headersObj, body: typedBody }),
+      body: JSON.stringify({ projectId: proj.id, endpointId: ep.id, environmentId: state.env, pathParams, queryParams, headers: headersObj, body: typedBody, confirmDeprecated: DocMeta.endpointStatusOf(ep) === 'deprecated' }),
     });
     const data = await res.json().catch(()=>({}));
     tryItResetRespTabs();
@@ -1499,6 +1510,11 @@ function buildRenderSheetHtml(proj, ep){
       </div>
     </div>
     <div class="render-body">
+      ${DocMeta.endpointStatusOf(ep) === 'deprecated' ? `
+      <div class="render-deprecated-banner">
+        <span class="render-deprecated-ic">⚠</span>
+        <span>This endpoint is <b>deprecated</b>. It may still work, but should not be used for new integrations — check with the project owner for a replacement before building against it.</span>
+      </div>` : ''}
       ${headerCards.length ? `
       <div class="render-section">
         <div class="render-section-head"><span class="render-section-ic">▥</span><span class="render-section-title">Headers</span></div>

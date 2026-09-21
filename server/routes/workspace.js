@@ -948,6 +948,7 @@ router.put('/environments', async (req, res) => {
   if (!Array.isArray(req.body?.environments)) return res.status(400).json({ error: 'Expected { environments: [] }.' });
   try {
     await upsertEncryptedOrgWorkspace(req.authUser.organisation, 'environments', req.body.environments);
+    await cache.invalidateOrg(req.authUser.organisation);
     res.json({ ok: true });
   } catch (err) {
     console.error('PUT environments failed:', err);
@@ -959,6 +960,7 @@ router.put('/request-history', async (req, res) => {
   if (!isPlainObject(req.body?.requestHistory)) return res.status(400).json({ error: 'Expected { requestHistory: {} }.' });
   try {
     await upsertEncryptedOrgWorkspace(req.authUser.organisation, 'request_history', req.body.requestHistory);
+    await cache.invalidateOrg(req.authUser.organisation);
     res.json({ ok: true });
   } catch (err) {
     console.error('PUT request-history failed:', err);
@@ -970,6 +972,7 @@ router.put('/custom-flow-directions', async (req, res) => {
   if (!Array.isArray(req.body?.customFlowDirections)) return res.status(400).json({ error: 'Expected { customFlowDirections: [] }.' });
   try {
     await upsertOrgWorkspace(req.authUser.organisation, 'custom_flow_directions', req.body.customFlowDirections);
+    await cache.invalidateOrg(req.authUser.organisation);
     res.json({ ok: true });
   } catch (err) {
     console.error('PUT custom-flow-directions failed:', err);
@@ -1731,6 +1734,12 @@ router.post('/projects/:id/promote', async (req, res) => {
       newReleaseVersion = srcRows[0].version;
     }
 
+    const readinessError = checkReleaseReadiness(stages, targetStage, sourceData);
+    if (readinessError) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: readinessError, notReleaseReady: true });
+    }
+
     // ---- Diff-viewed gate (see checkDiffToken above) ----
     // Recompute the exact same diff a caller would see for this from/to
     // pair right now, and require a token proving they actually pulled up
@@ -1811,6 +1820,10 @@ router.post('/projects/:id/promotion-requests', async (req, res) => {
     }
 
     const fromData = fromIdx === 0 ? decryptProjectData(project) : await loadStageData(project, fromEnvironmentId, fromIdx);
+
+    const readinessError = checkReleaseReadiness(stages, targetStage, fromData);
+    if (readinessError) return res.status(409).json({ error: readinessError, notReleaseReady: true });
+
     const toStageData = await loadStageData(project, targetStage.id, fromIdx + 1);
     const liveDiff = diffEndpointLists(fromData.endpoints || [], toStageData.endpoints || []);
     const liveBreakingChanges = detectBreakingChanges(toStageData.endpoints || [], fromData.endpoints || []);
@@ -2181,6 +2194,41 @@ function epSummary(ep) {
 // (Swapping these reads as a plain chronological from-old/to-new diff, which
 // is backwards here — promoting overwrites `to` with `from`, it doesn't
 // turn `from` into `to`.)
+// ---- Release readiness gate (item #7) ----
+// A promotion into the pipeline's LAST stage (Production, by convention —
+// DR isn't a manual stage, it inherits Production's readiness for free) is
+// refused unless every endpoint being promoted is status:active and has
+// SecOps/VAPT/Log Mgmt all approved. Without this, the review columns in
+// the Overview table are just a display — nothing stops an endpoint nobody
+// signed off on from reaching Production anyway.
+const RELEASE_REVIEW_KINDS = ['secOps', 'vapt', 'logMgmt'];
+function checkReleaseReadiness(stages, targetStage, sourceData) {
+  if (!stages.length || targetStage.id !== stages[stages.length - 1].id) return null;
+  const endpoints = (sourceData && sourceData.endpoints) || [];
+  const problems = [];
+  for (const ep of endpoints) {
+    if (!ep || !ep.id) continue;
+    const label = `${(ep.method || '').toUpperCase()} ${ep.path || ''}`;
+    const status = ep.status || 'active';
+    if (status !== 'active') {
+      problems.push(`${label} is marked "${status.replace(/_/g, ' ')}", not Active`);
+      continue; // one reason per endpoint keeps the message skimmable
+    }
+    for (const kind of RELEASE_REVIEW_KINDS) {
+      const st = ep[kind + 'Status'] || (ep[kind + 'Reviewed'] ? 'approved' : 'none');
+      if (st !== 'approved') {
+        problems.push(`${label} — ${kind} review is "${st.replace(/_/g, ' ')}", not approved`);
+        break;
+      }
+    }
+  }
+  if (!problems.length) return null;
+  const shown = problems.slice(0, 5);
+  const more = problems.length - shown.length;
+  return `${problems.length} endpoint${problems.length === 1 ? '' : 's'} aren't release-ready for ${targetStage.label}: ` +
+    shown.join('; ') + (more > 0 ? `; and ${more} more` : '') + '.';
+}
+
 function diffEndpointLists(fromEps, toEps) {
   const fm = new Map((fromEps || []).map((e) => [e.id, e]));
   const tm = new Map((toEps || []).map((e) => [e.id, e]));

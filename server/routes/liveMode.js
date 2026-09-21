@@ -198,6 +198,17 @@ router.post('/send', liveCallLimiter, async (req, res) => {
     const ep = (project.endpoints || []).find((e) => e.id === endpointId);
     if (!ep) return res.status(404).json({ error: 'Endpoint not found.' });
 
+    // A deprecated endpoint can still be called (it may well still work in
+    // the real environment) — this just stops a live call from going out
+    // silently. Same pattern as the breaking-changes ack on promotion:
+    // refuse once with a flag the caller has to set on purpose to proceed.
+    if (ep.status === 'deprecated' && req.body?.confirmDeprecated !== true) {
+      return res.status(409).json({
+        error: `${(ep.method || '').toUpperCase()} ${ep.path || ''} is marked Deprecated. Confirm you still want to send this request.`,
+        deprecated: true,
+      });
+    }
+
     const baseUrl = project.environments && project.environments[environmentId];
     if (!baseUrl) return res.status(400).json({ error: `No base URL configured for ${environmentId} on this project.` });
     // Path comes from the endpoint's own declared template with path-param
