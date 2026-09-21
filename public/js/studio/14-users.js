@@ -561,7 +561,16 @@ function renderProjectOverview(main, projectId){
   const docsHtml = docs.length
     ? `<div class="doc-grid">${docs.map(d=>{
         const meta = docTypeMeta(d.name);
-        return `<a class="doc-card" style="--doc-accent:var(${meta.accent});--doc-accent-bg:var(${meta.bg});" href="${d.dataUrl}" download="${escapeHtml(d.name)}" title="Download ${escapeHtml(d.name)}">
+        // `d.dataUrl` only exists for an attachment that hasn't been
+        // offloaded to object storage yet (see offloadAttachments() in
+        // server/routes/workspace.js) — once storage is configured, every
+        // attachment gets its inline dataUrl stripped on save and a
+        // storageKey recorded instead, so linking straight to `d.dataUrl`
+        // silently becomes `href="undefined"` for any attachment saved
+        // after storage was turned on. The streaming route below handles
+        // both cases (storageKey or a still-inline dataUrl) correctly.
+        const href = d.dataUrl || `/api/workspace/projects/${encodeURIComponent(proj.id)}/attachments/${encodeURIComponent(d.id)}`;
+        return `<a class="doc-card" style="--doc-accent:var(${meta.accent});--doc-accent-bg:var(${meta.bg});" href="${href}" download="${escapeHtml(d.name)}" title="Download ${escapeHtml(d.name)}">
           <div class="doc-card-ic">${meta.label}</div>
           <div class="doc-card-main">
             <div class="doc-card-name">${escapeHtml(d.name)}</div>
