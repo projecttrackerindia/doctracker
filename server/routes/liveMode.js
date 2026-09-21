@@ -4,7 +4,10 @@ const { authenticate, requireAdmin, blockIfScheduleLocked } = require('../middle
 const { recordAuditEvent } = require('../auditService');
 const { notifyUser } = require('../notifications');
 const { createRateLimiter } = require('../rateLimitStore');
-const { decryptProjectData, getOrgEnvironments } = require('./workspace');
+const {
+  decryptProjectData, getOrgEnvironments,
+  getDocAccessMap, applyDocLock, userHasFullDocAccess,
+} = require('./workspace');
 const { validateOutboundUrlAsync } = require('../urlSafety');
 
 const router = express.Router();
@@ -194,9 +197,46 @@ router.post('/send', liveCallLimiter, async (req, res) => {
       [projectId, userId, org]
     );
     if (!projRows.length) return res.status(404).json({ error: 'Project not found.' });
-    const project = decryptProjectData(projRows[0]);
-    const ep = (project.endpoints || []).find((e) => e.id === endpointId);
+    const projRow = projRows[0];
+    const project = decryptProjectData(projRow);
+    const isOwner = projRow.owner_id === userId;
+    let grant = null;
+    if (!isOwner) {
+      const { rows: grantRows } = await pool.query(
+        `SELECT environments, permission FROM project_access WHERE project_id = $1 AND user_id = $2`,
+        [projectId, userId]
+      );
+      if (grantRows.length) grant = grantRows[0];
+    }
+    if (grant) {
+      const envs = Array.isArray(grant.environments) ? grant.environments : [];
+      if (!envs.includes('*') && !envs.includes(environmentId)) {
+        return res.status(403).json({ error: 'You do not have access to this environment for this project.' });
+      }
+    }
+    let ep = (project.endpoints || []).find((e) => e.id === endpointId);
     if (!ep) return res.status(404).json({ error: 'Endpoint not found.' });
+    // SECURITY: a Live Mode grant says "this environment is within your
+    // blast radius" — it says nothing about which endpoints you're allowed
+    // to even know the shape of. Without this, a Live Mode grant let anyone
+    // fire a real request at an endpoint whose full documentation (params,
+    // headers, body) they can't see at all — a private endpoint in an
+    // otherwise-partially-public project, or one still pending/denied a
+    // doc-access request — as long as they knew its id from the locked
+    // catalog stub. Apply the exact same visibility + doc-lock rule used
+    // everywhere docs are read (projectForViewer / applyDocLock) before
+    // this endpoint is allowed to actually fire.
+    if (!isOwner && !grant) {
+      if (ep.visibility !== 'public') return res.status(404).json({ error: 'Endpoint not found.' });
+      if (!userHasFullDocAccess(req.authUser)) {
+        const accessMap = await getDocAccessMap(org, userId, projectId, [ep.id], environmentId);
+        const locked = applyDocLock(ep, accessMap.get(ep.id));
+        if (locked._docLocked) {
+          return res.status(403).json({ error: 'You need approved documentation access to this endpoint before you can send a live request to it.' });
+        }
+        ep = locked;
+      }
+    }
 
     // A deprecated endpoint can still be called (it may well still work in
     // the real environment) — this just stops a live call from going out
