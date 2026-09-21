@@ -1740,7 +1740,10 @@ router.post('/projects/:id/promote', async (req, res) => {
     const toStageIdx = fromIdx + 1;
     const toStageData = await loadStageData(project, targetStage.id, toStageIdx);
     const liveDiff = diffEndpointLists(sourceData.endpoints || [], toStageData.endpoints || []);
-    const liveBreakingChanges = detectBreakingChanges(sourceData.endpoints || [], toStageData.endpoints || []);
+    // detectBreakingChanges(fromEndpoints, toEndpoints) expects from=live-today,
+    // to=about-to-become-live — i.e. (current target content, promoted source
+    // content), the reverse of diffEndpointLists' (source, target) order above.
+    const liveBreakingChanges = detectBreakingChanges(toStageData.endpoints || [], sourceData.endpoints || []);
     const tokenError = checkDiffToken(req.body?.diffToken, {
       projectId: project.id, from: fromEnvironmentId, to: targetStage.id,
       diff: liveDiff, breakingChanges: liveBreakingChanges, ackBreakingChanges: req.body?.ackBreakingChanges === true,
@@ -1810,7 +1813,7 @@ router.post('/projects/:id/promotion-requests', async (req, res) => {
     const fromData = fromIdx === 0 ? decryptProjectData(project) : await loadStageData(project, fromEnvironmentId, fromIdx);
     const toStageData = await loadStageData(project, targetStage.id, fromIdx + 1);
     const liveDiff = diffEndpointLists(fromData.endpoints || [], toStageData.endpoints || []);
-    const liveBreakingChanges = detectBreakingChanges(fromData.endpoints || [], toStageData.endpoints || []);
+    const liveBreakingChanges = detectBreakingChanges(toStageData.endpoints || [], fromData.endpoints || []);
     const ackBreakingChanges = req.body?.ackBreakingChanges === true;
     if (liveBreakingChanges.length && !ackBreakingChanges) {
       const n = liveBreakingChanges.length;
@@ -1978,7 +1981,7 @@ router.post('/projects/:id/promotion-requests/:reqId/approve', async (req, res) 
     }
     const toStageData = await loadStageData(project, targetStage.id, fromIdx + 1);
     const liveDiff = diffEndpointLists(sourceData.endpoints || [], toStageData.endpoints || []);
-    const liveBreakingChanges = detectBreakingChanges(sourceData.endpoints || [], toStageData.endpoints || []);
+    const liveBreakingChanges = detectBreakingChanges(toStageData.endpoints || [], sourceData.endpoints || []);
     if (hashDiff(liveDiff, liveBreakingChanges) !== request.diff_hash) {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: "What's changed since this request was opened — ask the requester to cancel it and open a fresh one." });
@@ -2169,14 +2172,23 @@ function epSummary(ep) {
   return { id: ep.id, method: ep.method || '', path: ep.path || '', summary: ep.summary || '' };
 }
 
+// `from` is the stage being promoted (its content is what the target stage
+// is ABOUT TO BECOME); `to` is the target stage's CURRENT content, which
+// gets overwritten by `from`'s content the moment promotion happens. So
+// "added" has to mean "present in `from`, missing from `to`" — that's what
+// the target stage gains once promoted — and "removed" is the reverse: only
+// in `to` today, and about to disappear because `from` doesn't have it.
+// (Swapping these reads as a plain chronological from-old/to-new diff, which
+// is backwards here — promoting overwrites `to` with `from`, it doesn't
+// turn `from` into `to`.)
 function diffEndpointLists(fromEps, toEps) {
   const fm = new Map((fromEps || []).map((e) => [e.id, e]));
   const tm = new Map((toEps || []).map((e) => [e.id, e]));
   const added = [], removed = [], modified = [];
   for (const id of new Set([...fm.keys(), ...tm.keys()])) {
     const fe = fm.get(id), te = tm.get(id);
-    if (!fe) { added.push(epSummary(te)); continue; }
-    if (!te) { removed.push(epSummary(fe)); continue; }
+    if (!fe) { removed.push(epSummary(te)); continue; }
+    if (!te) { added.push(epSummary(fe)); continue; }
     const changes = [];
     diffValue(fe, te, '', changes);
     if (changes.length) modified.push({ ...epSummary(te), changes });
@@ -2479,7 +2491,7 @@ router.get('/projects/:id/diff', async (req, res) => {
     toEndpoints = toEndpoints.map((ep) => piiMasking.maskEndpoint(ep, orgRules));
 
     const diff = diffEndpointLists(fromEndpoints, toEndpoints);
-    const breakingChanges = detectBreakingChanges(fromEndpoints, toEndpoints);
+    const breakingChanges = detectBreakingChanges(toEndpoints, fromEndpoints);
     const fromIdx = stageById.get(fromKey).idx, toIdx = stageById.get(toKey).idx;
     const canMerge = toIdx === fromIdx + 1;
 
