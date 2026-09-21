@@ -56,7 +56,7 @@ function renderSidebar(){
           ${eps.map(ep=>`
             <div class="ep ${state.selected && state.selected.type==='endpoint' && state.selected.id===ep.id ? 'active':''}" data-ep="${ep.id}">
               <span class="badge ${methodClass(ep.method)}">${ep.method}</span>
-              ${(!ep._docLocked && DocMeta.endpointStatusOf(ep) !== 'active') ? `<span class="dm-dot dm-t-${DocMeta.endpointStatusMeta(ep).tone}" style="flex-shrink:0;" title="${escapeHtml(DocMeta.endpointStatusMeta(ep).label)}"></span>` : ''}
+              ${!ep._docLocked ? `<span class="dm-dot dm-t-${DocMeta.endpointStatusMeta(ep).tone}" style="flex-shrink:0;" title="${escapeHtml(DocMeta.endpointStatusMeta(ep).label)}"></span>` : ''}
               <span class="ep-path" title="${escapeHtml(ep.name ? `${ep.name} — ${ep.path}` : ep.path)}">${escapeHtml(ep.name || ep.path)}</span>
               ${ep._docLocked ? `<span class="icon-btn" title="Documentation access required" style="margin-left:auto;flex-shrink:0;color:var(--text-faint);pointer-events:none;">${ICON_LOCK}</span>` : ''}
               ${canDeleteHere ? `<span class="icon-btn ep-del" data-ep-del="${ep.id}" title="Delete endpoint" role="button" tabindex="0"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg></span>` : ''}
