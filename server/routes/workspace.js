@@ -232,7 +232,8 @@ async function reencryptOrganisation(organisation) {
   }
 
   const { rows: wsRows } = await pool.query(
-    `SELECT environments, environments_enc, request_history, request_history_enc, environments_key_version, request_history_key_version
+    `SELECT environments, environments_enc, request_history, request_history_enc,
+            tryit_collections_enc, environments_key_version, request_history_key_version, tryit_collections_key_version
      FROM org_workspace WHERE organisation = $1`,
     [organisation]
   );
@@ -240,16 +241,21 @@ async function reencryptOrganisation(organisation) {
     const ws = wsRows[0];
     const envPlain = decryptOrgBlob(ws.environments_enc, ws.environments, organisation, 'environments', []);
     const histPlain = decryptOrgBlob(ws.request_history_enc, ws.request_history, organisation, 'request_history', {});
+    const tryitPlain = decryptOrgBlob(ws.tryit_collections_enc, null, organisation, 'tryit_collections', { variables: [], saved: [] });
     const envEnc = encryptOrgBlob(envPlain, organisation, 'environments');
     const histEnc = encryptOrgBlob(histPlain, organisation, 'request_history');
+    const tryitEnc = encryptOrgBlob(tryitPlain, organisation, 'tryit_collections');
     await pool.query(
       `UPDATE org_workspace SET
          environments = '[]'::jsonb, environments_enc = $1, environments_key_version = $2,
-         request_history = '{}'::jsonb, request_history_enc = $3, request_history_key_version = $4
-       WHERE organisation = $5
-         AND environments_key_version IS NOT DISTINCT FROM $6
-         AND request_history_key_version IS NOT DISTINCT FROM $7`,
-      [envEnc.enc, envEnc.version, histEnc.enc, histEnc.version, organisation, ws.environments_key_version, ws.request_history_key_version]
+         request_history = '{}'::jsonb, request_history_enc = $3, request_history_key_version = $4,
+         tryit_collections_enc = $5, tryit_collections_key_version = $6
+       WHERE organisation = $7
+         AND environments_key_version IS NOT DISTINCT FROM $8
+         AND request_history_key_version IS NOT DISTINCT FROM $9
+         AND tryit_collections_key_version IS NOT DISTINCT FROM $10`,
+      [envEnc.enc, envEnc.version, histEnc.enc, histEnc.version, tryitEnc.enc, tryitEnc.version,
+        organisation, ws.environments_key_version, ws.request_history_key_version, ws.tryit_collections_key_version]
     );
   }
   return { projects: projectsTouched, orgWorkspace: true };
@@ -463,7 +469,7 @@ router.get('/', async (req, res) => {
     }
 
     const wsResult = await pool.query(
-      `SELECT environments, environments_enc, request_history, request_history_enc, custom_flow_directions, custom_icons, branding
+      `SELECT environments, environments_enc, request_history, request_history_enc, tryit_collections_enc, custom_flow_directions, custom_icons, branding
        FROM org_workspace WHERE organisation = $1`,
       [org]
     );
@@ -476,6 +482,7 @@ router.get('/', async (req, res) => {
       projects,
       environments: decryptOrgBlob(ws.environments_enc, ws.environments, org, 'environments', []),
       requestHistory: decryptOrgBlob(ws.request_history_enc, ws.request_history, org, 'request_history', {}),
+      tryitCollections: decryptOrgBlob(ws.tryit_collections_enc, null, org, 'tryit_collections', { variables: [], saved: [] }),
       customFlowDirections: ws.custom_flow_directions || [],
       customIcons: ws.custom_icons || [],
       branding: ws.branding || {},
@@ -928,11 +935,27 @@ async function upsertOrgWorkspace(org, column, value) {
   );
 }
 
-// environments/request_history can carry real hosts, tokens, and captured
-// request/response bodies, so — unlike custom_flow_directions (pure UI
-// preference) — they're encrypted before they reach Postgres.
+// environments/request_history/tryit_collections can carry real hosts,
+// tokens, and captured request/response bodies, so — unlike
+// custom_flow_directions (pure UI preference) — they're encrypted before
+// they reach Postgres. tryit_collections has no legacy plain-JSONB column
+// (it was born encrypted-only), so it always writes '{}' into that slot.
 async function upsertEncryptedOrgWorkspace(org, purpose, value) {
-  const column = purpose === 'environments' ? 'environments' : 'request_history';
+  const column = purpose === 'environments' ? 'environments'
+    : purpose === 'tryit_collections' ? 'tryit_collections' : 'request_history';
+  const legacyPlaceholder = column === 'environments' ? '[]' : '{}';
+  if (column === 'tryit_collections') {
+    const { enc, version } = encryptOrgBlob(value, org, purpose);
+    await pool.query(
+      `INSERT INTO org_workspace (organisation, tryit_collections_enc, tryit_collections_key_version, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (organisation) DO UPDATE SET
+         tryit_collections_enc = EXCLUDED.tryit_collections_enc,
+         tryit_collections_key_version = EXCLUDED.tryit_collections_key_version, updated_at = now()`,
+      [org, enc, version]
+    );
+    return;
+  }
   const { enc, version } = encryptOrgBlob(value, org, purpose);
   await pool.query(
     `INSERT INTO org_workspace (organisation, ${column}, ${column}_enc, ${column}_key_version, updated_at)
@@ -940,7 +963,7 @@ async function upsertEncryptedOrgWorkspace(org, purpose, value) {
      ON CONFLICT (organisation) DO UPDATE SET
        ${column} = EXCLUDED.${column}, ${column}_enc = EXCLUDED.${column}_enc,
        ${column}_key_version = EXCLUDED.${column}_key_version, updated_at = now()`,
-    [org, column === 'environments' ? '[]' : '{}', enc, version]
+    [org, legacyPlaceholder, enc, version]
   );
 }
 
@@ -965,6 +988,24 @@ router.put('/request-history', async (req, res) => {
   } catch (err) {
     console.error('PUT request-history failed:', err);
     res.status(500).json({ error: 'Could not save request history.' });
+  }
+});
+
+// Try It collection variables + saved requests (Postman-style). Same
+// org-shared, encrypted-at-rest treatment as /request-history — a variable
+// value can be a real bearer token, and a saved request can embed one.
+router.put('/tryit-collections', async (req, res) => {
+  const body = req.body?.tryitCollections;
+  if (!isPlainObject(body) || !Array.isArray(body.variables) || !Array.isArray(body.saved)) {
+    return res.status(400).json({ error: 'Expected { tryitCollections: { variables: [], saved: [] } }.' });
+  }
+  try {
+    await upsertEncryptedOrgWorkspace(req.authUser.organisation, 'tryit_collections', body);
+    await cache.invalidateOrg(req.authUser.organisation);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('PUT tryit-collections failed:', err);
+    res.status(500).json({ error: 'Could not save Try It collections.' });
   }
 });
 

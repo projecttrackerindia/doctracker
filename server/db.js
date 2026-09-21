@@ -278,6 +278,11 @@ async function initDb() {
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS environments_key_version INTEGER;`);
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS request_history_enc TEXT;`);
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS request_history_key_version INTEGER;`);
+  // Try It collection variables + saved requests (Postman-style) — same
+  // sensitivity class as request_history (can hold a real bearer token in a
+  // variable value), so encrypted at rest the same way, org-shared.
+  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS tryit_collections_enc TEXT;`);
+  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS tryit_collections_key_version INTEGER;`);
 
   // ---- Environment release pipeline ----
   // `release_version` is the project-wide "cut number" (displayed as 1.0.N) —

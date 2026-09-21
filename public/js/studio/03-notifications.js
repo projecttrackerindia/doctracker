@@ -862,6 +862,7 @@ function roleAllowsEnv(envId){ return roleAllowedEnvs(state.authorRole).some(e=>
 const LANGS = [
   { id:'curl',    label:'cURL' },
   { id:'swagger', label:'Swagger (.yaml)' },
+  { id:'postman', label:'Postman (.json)' },
 ];
 
 const LIFECYCLE_STAGES = ['DRAFT','DESIGN','DEVELOPMENT','SIT','UAT','PRE-PROD','PRODUCTION','DEPRECATED','RETIRED'];

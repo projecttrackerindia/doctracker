@@ -432,8 +432,145 @@ function swaggerSample(proj, ep){
   }
 }
 
+/* ---------- Postman Collection v2.1 export ----------
+   A materially different schema from the OpenAPI generator above (folders
+   instead of tags, url.raw/host/path instead of paths, no JSON-Schema
+   typing) — genuinely new code, but reuses the same data-access helpers
+   (headerList, pathWithParams, maskedJsonString, tryItRequestScenarios) so
+   masking/behaviour can never drift from curl/Swagger export. Real hosts
+   are only ever written into the file when sensitiveRevealed() is true —
+   same "never leak a real host to a non-Admin" rule as everywhere else;
+   otherwise the collection-level variable is left blank for the importer
+   to fill in themselves. */
+function postmanAuthBlock(proj){
+  if(!proj.auth || !proj.auth.headerName) return undefined;
+  const t = ((proj.auth.type)||'').toLowerCase();
+  if(t.includes('basic')){
+    return { type:'basic', basic:[{key:'username', value:'', type:'string'}, {key:'password', value:'', type:'string'}] };
+  }
+  if(t.includes('bearer') || t.includes('jwt') || t.includes('oauth')){
+    return { type:'bearer', bearer:[{key:'token', value:'{{AUTH_TOKEN}}', type:'string'}] };
+  }
+  return { type:'apikey', apikey:[
+    { key:'key', value: proj.auth.headerName, type:'string' },
+    { key:'value', value:'{{API_KEY}}', type:'string' },
+    { key:'in', value:'header', type:'string' },
+  ] };
+}
+
+// Converts our {param} path templates into Postman's :param path-variable
+// syntax (and a matching request.url.variable[] entry) so an imported
+// collection is actually fireable in real Postman, not just readable.
+function postmanUrlObject(proj, ep){
+  const hostToken = envVarToken(state.env);
+  const rawPath = pathWithParams(ep);
+  const pathParams = (ep.parameters||[]).filter(p=>p.in==='path');
+  const queryParams = (ep.parameters||[]).filter(p=>!p.in || p.in==='query');
+  const postmanPath = rawPath.replace(/\{([^}]+)\}/g, ':$1');
+  const segments = postmanPath.split('/').filter(Boolean);
+  const reveal = sensitiveRevealed();
+  const query = queryParams.map(p=>{
+    let val = p.example || '';
+    const rule = p.example ? piiRuleFor(p.name, p.example) : null;
+    if(rule && !reveal) val = maskByStrategy(p.example, rule);
+    return { key:p.name, value:String(val), description: p.description || undefined };
+  });
+  const rawQuery = query.length ? '?' + query.map(q=>`${q.key}=${encodeURIComponent(q.value)}`).join('&') : '';
+  return {
+    raw: `${hostToken}${postmanPath}${rawQuery}`,
+    host: [hostToken],
+    path: segments,
+    ...(query.length ? { query } : {}),
+    ...(pathParams.length ? { variable: pathParams.map(p=>({ key:p.name, value:String(p.example||''), description:p.description||undefined })) } : {}),
+  };
+}
+
+// One Postman item per named request scenario (Default + any alternates),
+// same as how Try It's own scenario picker (tryItRequestScenarios) already
+// models "one endpoint, several documented request bodies" — mirrored here
+// instead of collapsed into one item, so each is independently fireable and
+// editable in Postman. Documented responses become response[] examples on
+// the "Default" item (Postman's own saved-example mechanism).
+function postmanItemsForEndpoint(proj, ep){
+  const hdrs = headerList(proj, ep).map(([k,v,desc,required])=>({ key:k, value:v, description: desc || undefined, disabled: false }));
+  const baseRequest = {
+    method: (ep.method || 'GET').toUpperCase(),
+    header: hdrs,
+    url: postmanUrlObject(proj, ep),
+    description: ep.description || ep.summary || undefined,
+  };
+  const scenarios = tryItRequestScenarios(ep);
+  const bodyAllowed = !['GET','HEAD'].includes(baseRequest.method);
+  const respScenarios = tryItResponseScenarios(ep);
+
+  const items = (scenarios.length ? scenarios : [null]).map(s=>{
+    const request = { ...baseRequest };
+    if(bodyAllowed && s && s.value){
+      request.body = { mode:'raw', raw: maskedJsonString(s.value), options:{ raw:{ language:'json' } } };
+    } else if(bodyAllowed && ep.requestBody && ep.requestBody.example && !s){
+      request.body = { mode:'raw', raw: maskedJsonString(ep.requestBody.example), options:{ raw:{ language:'json' } } };
+    }
+    const matchedResp = s ? respScenarios.find(rs=>rs.name.trim().toLowerCase() === s.name.trim().toLowerCase()) : respScenarios.find(rs=>rs.name === 'Default');
+    const response = [];
+    if(matchedResp && matchedResp.value){
+      response.push({
+        name: matchedResp.description || `${matchedResp.code} ${HTTP_STATUS_TEXT[Number(matchedResp.code)] || ''}`.trim(),
+        originalRequest: request,
+        status: HTTP_STATUS_TEXT[Number(matchedResp.code)] || '',
+        code: matchedResp.code,
+        _postman_previewlanguage: 'json',
+        header: [{ key:'Content-Type', value:'application/json' }],
+        body: maskedJsonString(matchedResp.value),
+      });
+    }
+    return {
+      name: (s && s.name !== 'Default') ? `${ep.summary || ep.method + ' ' + ep.path} — ${s.name}` : (ep.summary || `${ep.method} ${ep.path}`),
+      request,
+      response,
+    };
+  });
+  return items;
+}
+
+function buildPostmanCollection(proj, endpoints){
+  const groups = groupByTag(endpoints);
+  const item = Object.keys(groups).sort().map(tag=>({
+    name: tag,
+    item: groups[tag].flatMap(ep=>postmanItemsForEndpoint(proj, ep)),
+  }));
+  const reveal = sensitiveRevealed();
+  const variable = environments()
+    .filter(e=>proj.environments && proj.environments[e.id])
+    .map(e=>({
+      key: `${e.id}-DNS`,
+      value: reveal ? proj.environments[e.id].replace(/\/$/,'') : '',
+      type: 'string',
+      description: `${e.label} environment base URL${reveal ? '' : ' — left blank in this export; fill in your own before sending'}`,
+    }));
+  const auth = postmanAuthBlock(proj);
+  return {
+    info: {
+      name: proj.name || 'Untitled API',
+      description: proj.description || undefined,
+      schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+    },
+    item,
+    ...(auth ? { auth } : {}),
+    variable,
+  };
+}
+
+// Used by the per-endpoint code-sample rail (LANGS 'postman' entry, see
+// 03-notifications.js) — a single-endpoint collection, same convention as
+// the 'swagger' lang tab showing a single-endpoint mini-spec rather than
+// the whole project.
+function postmanSample(proj, ep){
+  return JSON.stringify(buildPostmanCollection(proj, [ep]), null, 2);
+}
+
 function codeSample(lang, proj, ep){
   if(lang === 'curl') return curlSample(proj, ep);
   if(lang === 'swagger') return swaggerSample(proj, ep);
+  if(lang === 'postman') return postmanSample(proj, ep);
   return '';
 }

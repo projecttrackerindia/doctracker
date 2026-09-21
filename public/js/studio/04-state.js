@@ -7,6 +7,7 @@ let state = {
   railTab: 'code',                 // 'code' | 'try'
   projects: {},
   requestHistory: {},               // { [endpointId]: [ {method,url,status,statusText,timeMs,sizeBytes,timestamp,error} ] }
+  tryitCollections: { variables: [], saved: [] }, // Postman-style Try It collection vars + saved requests — org-shared, see loadState()
   authorName: '',                   // display name used to attribute added/modified endpoints — from AUTH_USER when signed in
   organisation: '',                 // from AUTH_USER when signed in
   sidebarCollapsed: false,          // desktop sidebar collapse (persisted) — separate from the mobile drawer's .show class

@@ -58,6 +58,7 @@ function activateTryItTab(name){
   document.getElementById('tryItParamsPanel').classList.toggle('active', name === 'params');
   document.getElementById('tryItAuthPanel').classList.toggle('active', name === 'auth');
   document.getElementById('tryItHeadersPanel').classList.toggle('active', name === 'headers');
+  document.getElementById('tryItVariablesPanel').classList.toggle('active', name === 'variables');
   document.getElementById('tryItBodyPanel').classList.toggle('active', name === 'body');
   document.getElementById('tryItScriptsPanel').classList.toggle('active', name === 'scripts');
   document.getElementById('tryItSettingsPanel').classList.toggle('active', name === 'settings');
@@ -275,6 +276,7 @@ let tryItSidebarCollapsed = new Set();
 function renderTryItSidebar(filterText){
   const listEl = document.getElementById('tryItSidebarList');
   if(!listEl) return;
+  renderTryItSidebarSaved();
   const q = (filterText||'').trim().toLowerCase();
   const activeEpId = tryItContext ? tryItContext.ep.id : null;
 
@@ -325,8 +327,13 @@ document.getElementById('tryItSidebarList').addEventListener('click', (e)=>{
   }
 });
 
-function openTryItModal(proj, ep){
+// restoreFromSaved (optional): a state.tryitCollections.saved[] entry —
+// loads a previously-saved request's edited params/headers/body/scenario
+// on top of the endpoint's normal freshly-documented seeding below, instead
+// of the plain documented defaults. See loadSavedTryItRequest().
+function openTryItModal(proj, ep, restoreFromSaved){
   tryItContext = { proj, ep, generatedToken: null, pathRows: [], queryRows: [], headerRows: [] };
+  tryItLastResponseJson = null;
   resetTryItFlow();
   renderTryItAuthPanel(proj, ep);
 
@@ -422,6 +429,7 @@ function openTryItModal(proj, ep){
   liveToggle.checked = false; // always opens back to simulated — never remembers "live" as a default
   tryItContext.headerRows = buildInitialHeaderRows(proj, ep);
   renderTryItHeadersTable();
+  renderTryItVariablesTable();
   closeTryItHistoryPanel();
   renderTryItHistoryBadge();
   liveToggle.onchange = () => {
@@ -437,6 +445,42 @@ function openTryItModal(proj, ep){
   };
 
   document.getElementById('tryItModal').classList.add('show');
+
+  // Overlay a saved request's edits on top of the fresh documented seeding
+  // above — same tables, same render functions, just different starting
+  // values. Deliberately applied last so it always wins over whatever the
+  // endpoint's own docs would have pre-filled.
+  if(restoreFromSaved){
+    if(Array.isArray(restoreFromSaved.pathRows)){
+      tryItContext.pathRows.forEach(r=>{
+        const saved = restoreFromSaved.pathRows.find(s=>s.key === r.key);
+        if(saved) r.value = saved.value;
+      });
+    }
+    if(Array.isArray(restoreFromSaved.queryRows)){
+      tryItContext.queryRows = restoreFromSaved.queryRows.map(r=>({ ...r, ghost:false })).filter(r=>r.key);
+      tryItContext.queryRows.push(makeEmptyParamRow());
+    }
+    if(Array.isArray(restoreFromSaved.headerRows)){
+      tryItContext.headerRows = restoreFromSaved.headerRows.map(r=>({
+        ...r, ghost:false,
+        isSecret: !!(proj.auth && proj.auth.headerName && r.key === proj.auth.headerName),
+        value: (proj.auth && proj.auth.headerName && r.key === proj.auth.headerName) ? '' : r.value, // never restore a real credential
+      })).filter(r=>r.key);
+      tryItContext.headerRows.push(makeEmptyHeaderRow());
+    }
+    renderTryItParamsPanel();
+    renderTryItHeadersTable();
+    if(typeof restoreFromSaved.bodyText === 'string' && document.getElementById('tryItTabBtnBody').style.display !== 'none'){
+      document.getElementById('tryItBodyInput').value = restoreFromSaved.bodyText;
+      tryItUpdateBodyGutter();
+      if(restoreFromSaved.scenarioName){
+        const pill = document.querySelector(`#tryItScenarioPicker [data-scenario-name="${CSS.escape(restoreFromSaved.scenarioName)}"]`);
+        if(pill){ document.querySelectorAll('#tryItScenarioPicker .resp-pill').forEach(p=>p.classList.remove('active')); pill.classList.add('active'); }
+      }
+    }
+    toast(`Loaded saved request "${restoreFromSaved.name}"`);
+  }
 }
 
 /* ---------- Headers tab: a single Postman-style editable table ----------
@@ -502,12 +546,16 @@ function renderTryItHeadersTable(){
 }
 
 // Collects the headers Try It will actually send: every non-ghost, enabled
-// row with a key, in table order. Used by both the simulated preview and
-// the live-mode send, so there is exactly one place that decides "what
-// headers go out", not three copies of the same filter.
+// row with a key, in table order, with any {{variable}} in the value
+// resolved. Used by both the simulated preview and the live-mode send, so
+// there is exactly one place that decides "what headers go out", not three
+// copies of the same filter. Returns copies (not the live rows) so
+// resolution never mutates what's shown in the editable table itself.
 function collectTryItHeaders(){
   if(!tryItContext) return [];
-  return tryItContext.headerRows.filter(r=>!r.ghost && r.enabled && r.key.trim());
+  const vars = tryitCollectionVariables();
+  return tryItContext.headerRows.filter(r=>!r.ghost && r.enabled && r.key.trim())
+    .map(r=>({ ...r, value: resolveVariables(r.value, vars) }));
 }
 
 // Event delegation on the Headers table container: plain edits update state
@@ -559,6 +607,108 @@ function tableRowInput(containerId, idx, field){
   const row = document.querySelector(`#${containerId} [data-row-idx="${idx}"]`);
   return row ? row.querySelector(`[data-hdr-field="${field}"], [data-param-field="${field}"]`) : null;
 }
+
+/* ---------- Variables tab: Postman-style collection variables ----------
+   state.tryitCollections.variables is shared across every endpoint/project
+   (org-wide, persisted via saveState() -> PUT /tryit-collections — see
+   06-spec-parse.js) — this is deliberately NOT part of tryItContext, which
+   resets every time a different endpoint is opened. A {{key}} typed into
+   any Params/Headers/Body value is resolved against this list at the exact
+   point collectTryItParams()/collectTryItHeaders() (and the body parse in
+   sendTryIt()) read the row values, so simulated preview and live send can
+   never disagree about what a variable resolved to. */
+function tryitCollectionVariables(){
+  return (state.tryitCollections && Array.isArray(state.tryitCollections.variables)) ? state.tryitCollections.variables : [];
+}
+
+// Replaces every {{key}} in str with the matching variable's value.
+// Unknown tokens are left untouched (not stripped, not errored) — same
+// forgiving behavior Postman itself has, so a typo doesn't silently blank
+// out part of a URL or header.
+function resolveVariables(str, vars){
+  if(!str || typeof str !== 'string' || str.indexOf('{{') === -1) return str;
+  const list = vars || tryitCollectionVariables();
+  return str.replace(/\{\{\s*([^}\s]+)\s*\}\}/g, (whole, key)=>{
+    const v = list.find(x=>x.key === key);
+    return v ? v.value : whole;
+  });
+}
+
+function makeEmptyVariableRow(){ return { id: uid(), key:'', value:'', secret:false, ghost:true }; }
+
+function renderTryItVariablesTable(){
+  const tableEl = document.getElementById('tryItVariablesTable');
+  if(!tableEl) return;
+  const rows = tryitCollectionVariables();
+  const withGhost = [...rows, makeEmptyVariableRow()];
+  const realCount = rows.filter(r=>r.key).length;
+  const countBadge = document.getElementById('tryItVariablesCount');
+  if(countBadge){ countBadge.textContent = String(realCount); countBadge.style.display = realCount ? '' : 'none'; }
+
+  tableEl.innerHTML = `
+    <div class="tryit-headers-table">
+      <div class="tryit-headers-thead" style="grid-template-columns:24px 1fr 1.4fr 22px;"><span></span><span>Key</span><span>Value</span><span></span></div>
+      ${withGhost.map((r,i)=>{
+        const isGhost = !!r.ghost;
+        // A native password input, not a custom mask string — same value is
+        // editable in place, the browser just renders dots; simpler and
+        // more correct than trying to distinguish "typing over the mask"
+        // from "typing the real value" ourselves.
+        const valType = (!isGhost && r.secret) ? 'password' : 'text';
+        return `<div class="tryit-headers-trow${isGhost?' ghost':''}" style="grid-template-columns:24px 1fr 1.4fr 22px;" data-var-idx="${i}">
+          ${isGhost ? '<span></span>' : `<input type="checkbox" class="tryit-headers-check" data-var-field="secret" title="Mask this value" ${r.secret?'checked':''}>`}
+          <input type="text" class="tryit-table-input mono" data-var-field="key" placeholder="${isGhost?'key':''}" value="${escapeHtml(r.key)}">
+          <input type="${valType}" class="tryit-table-input mono" data-var-field="value" placeholder="${isGhost?'value':''}" value="${escapeHtml(r.value)}">
+          ${isGhost ? '<span></span>' : '<button type="button" class="tryit-row-delete" data-var-del title="Delete variable">✕</button>'}
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+function tryitSaveVariables(rows){
+  if(!state.tryitCollections) state.tryitCollections = { variables:[], saved:[] };
+  state.tryitCollections.variables = rows;
+  saveState();
+}
+
+document.getElementById('tryItVariablesTable').addEventListener('input', (e)=>{
+  const input = e.target.closest('[data-var-field]');
+  if(!input) return;
+  const idx = Number(input.closest('[data-var-idx]').getAttribute('data-var-idx'));
+  const field = input.getAttribute('data-var-field');
+  const rows = tryitCollectionVariables().slice();
+  const isGhostRow = idx === rows.length; // the trailing row rendered from makeEmptyVariableRow(), not yet in the array
+  // Same rule as the Headers table: a ghost row only promotes to a real row
+  // once its KEY gets a value — typing into value/secret on an empty ghost
+  // row is a no-op, same as it is there.
+  if(isGhostRow && (field !== 'key' || !input.value.trim())) return;
+  if(isGhostRow) rows.push({ id: uid(), key:'', value:'', secret:false });
+  const row = rows[idx];
+  if(!row) return;
+  row[field] = input.value;
+  tryitSaveVariables(rows);
+  if(isGhostRow){
+    renderTryItVariablesTable();
+    const fresh = tableRowInput('tryItVariablesTable', idx, 'key');
+    if(fresh){ fresh.focus(); fresh.setSelectionRange(fresh.value.length, fresh.value.length); }
+  }
+});
+document.getElementById('tryItVariablesTable').addEventListener('change', (e)=>{
+  const cb = e.target.closest('[data-var-field="secret"]');
+  if(!cb) return;
+  const idx = Number(cb.closest('[data-var-idx]').getAttribute('data-var-idx'));
+  const rows = tryitCollectionVariables().slice();
+  if(rows[idx]){ rows[idx].secret = cb.checked; tryitSaveVariables(rows); renderTryItVariablesTable(); }
+});
+document.getElementById('tryItVariablesTable').addEventListener('click', (e)=>{
+  const del = e.target.closest('[data-var-del]');
+  if(!del) return;
+  const idx = Number(del.closest('[data-var-idx]').getAttribute('data-var-idx'));
+  const rows = tryitCollectionVariables().slice();
+  rows.splice(idx, 1);
+  tryitSaveVariables(rows);
+  renderTryItVariablesTable();
+});
 
 /* ---------- Params tab: Path Variables + Query Params, Postman-style ----------
    Two tables, matching how Postman itself splits these: Path Variables are
@@ -616,11 +766,16 @@ function renderTryItParamsPanel(){
 
 // Collects what Try It will actually resolve into the URL: path
 // substitutions plus enabled, non-empty query params, in table order.
+// Every value passes through resolveVariables() here — the ONE place path/
+// query values are read for both the preview and the real send, so a
+// {{variable}} typed into a param can never go out unresolved in one path
+// but not the other.
 function collectTryItParams(){
   if(!tryItContext) return { pathParams:{}, queryParams:[] };
+  const vars = tryitCollectionVariables();
   const pathParams = {};
-  (tryItContext.pathRows||[]).forEach(r=>{ pathParams[r.key] = r.value; });
-  const queryParams = (tryItContext.queryRows||[]).filter(r=>!r.ghost && r.enabled && r.key.trim()).map(r=>[r.key, r.value]);
+  (tryItContext.pathRows||[]).forEach(r=>{ pathParams[r.key] = resolveVariables(r.value, vars); });
+  const queryParams = (tryItContext.queryRows||[]).filter(r=>!r.ghost && r.enabled && r.key.trim()).map(r=>[r.key, resolveVariables(r.value, vars)]);
   return { pathParams, queryParams };
 }
 
@@ -714,6 +869,194 @@ function closeTryItModal(){
   document.getElementById('tryItModal').classList.remove('show');
   tryItContext = null;
 }
+
+/* ---------- Save Request (Postman-style collections) ----------
+   Snapshots the CURRENT hand-edited Try It state (not the endpoint's own
+   docs — those are always available by just opening the endpoint) into
+   state.tryitCollections.saved, organized by a freeform folder name. Never
+   captures a real credential: the auth/secret header's value is stripped
+   the same way it already is every time Live mode is toggled on. */
+function tryitSavedRequests(){
+  return (state.tryitCollections && Array.isArray(state.tryitCollections.saved)) ? state.tryitCollections.saved : [];
+}
+
+document.getElementById('tryItSaveReq').addEventListener('click', ()=>{
+  if(!tryItContext) return;
+  const { ep } = tryItContext;
+  document.getElementById('tryItSaveReqName').value = `${ep.method} ${ep.name || ep.path}`;
+  document.getElementById('tryItSaveReqFolder').value = ep.tag || 'General';
+  const folders = [...new Set(tryitSavedRequests().map(r=>r.folder).filter(Boolean))];
+  document.getElementById('tryItSaveReqFolderList').innerHTML = folders.map(f=>`<option value="${escapeHtml(f)}">`).join('');
+  document.getElementById('tryItSaveReqModal').classList.add('show');
+  document.getElementById('tryItSaveReqName').focus();
+});
+document.getElementById('tryItSaveReqCancel').addEventListener('click', ()=> document.getElementById('tryItSaveReqModal').classList.remove('show'));
+document.getElementById('tryItSaveReqModal').addEventListener('click', (e)=>{ if(e.target.id === 'tryItSaveReqModal') document.getElementById('tryItSaveReqModal').classList.remove('show'); });
+document.getElementById('tryItSaveReqOk').addEventListener('click', ()=>{
+  if(!tryItContext) return;
+  const name = document.getElementById('tryItSaveReqName').value.trim();
+  if(!name){ toast('Name is required.'); return; }
+  const folder = document.getElementById('tryItSaveReqFolder').value.trim() || 'General';
+  const { proj, ep } = tryItContext;
+  const entry = {
+    id: uid(),
+    name, folder,
+    projectId: proj.id, endpointId: ep.id, method: ep.method, path: ep.path,
+    pathRows: (tryItContext.pathRows||[]).map(r=>({ key:r.key, value:r.value })),
+    queryRows: (tryItContext.queryRows||[]).filter(r=>!r.ghost && r.key).map(r=>({ ...r })),
+    // Never save the real value of a secret/auth header — same "this app
+    // never stores a real credential" rule Live mode already follows.
+    headerRows: (tryItContext.headerRows||[]).filter(r=>!r.ghost && r.key).map(r=>({ ...r, value: r.isSecret ? '' : r.value })),
+    bodyText: document.getElementById('tryItTabBtnBody').style.display !== 'none' ? document.getElementById('tryItBodyInput').value : '',
+    scenarioName: tryItSelectedScenarioName() || null,
+    createdAt: new Date().toISOString(), createdBy: state.authorName || '',
+  };
+  if(!state.tryitCollections) state.tryitCollections = { variables:[], saved:[] };
+  state.tryitCollections.saved = [...tryitSavedRequests(), entry];
+  saveState();
+  document.getElementById('tryItSaveReqModal').classList.remove('show');
+  toast(`Saved "${name}"`);
+  renderTryItSidebar(document.getElementById('tryItSidebarSearch') ? document.getElementById('tryItSidebarSearch').value : '');
+});
+
+// Loads a saved request back into Try It — the endpoint it was saved
+// against must still exist (a saved request references it by id, not a
+// standalone copy of its docs) since it's replayed against that endpoint's
+// current live documentation, params, and Live-mode eligibility.
+function loadSavedTryItRequest(entry){
+  const proj = state.projects[entry.projectId];
+  const ep = proj && (proj.endpoints||[]).find(e=>e.id === entry.endpointId);
+  if(!proj || !ep){ toast('The endpoint this request was saved against no longer exists.'); return; }
+  state.selected = { type:'endpoint', id: ep.id, tryIt:false };
+  history.replaceState(null, '', buildTryItUrl(ep));
+  openTryItModal(proj, ep, entry);
+  document.getElementById('tryItModal').scrollTop = 0;
+}
+
+let tryItSavedFolderCollapsed = new Set();
+
+function renderTryItSidebarSaved(){
+  const listEl = document.getElementById('tryItSidebarSaved');
+  if(!listEl) return;
+  const saved = tryitSavedRequests();
+  if(!saved.length){
+    listEl.innerHTML = `<div class="tryit-sidebar-empty">Nothing saved yet — hit "Save" on a request to keep it here.</div>`;
+    return;
+  }
+  const byFolder = {};
+  saved.forEach(r=>{ (byFolder[r.folder || 'General'] = byFolder[r.folder || 'General'] || []).push(r); });
+  const activeId = tryItContext ? tryItContext.ep.id : null;
+  listEl.innerHTML = Object.keys(byFolder).sort().map(folder=>{
+    const collapsed = tryItSavedFolderCollapsed.has(folder);
+    return `<div class="tryit-sidebar-saved-folder">
+      <div class="tryit-sidebar-saved-folder-head" data-toggle-saved-folder="${escapeHtml(folder)}">
+        <span class="tryit-sidebar-proj-caret" style="transform:rotate(${collapsed?'-90deg':'0'});">▾</span><span>${escapeHtml(folder)}</span>
+      </div>
+      ${collapsed ? '' : byFolder[folder].map(r=>`
+        <div class="tryit-sidebar-saved-row${r.endpointId===activeId?' active':''}" data-saved-id="${escapeHtml(r.id)}">
+          <span class="tryit-sidebar-ep-method" style="color:var(--${methodClass(r.method)});">${escapeHtml((r.method||'').toUpperCase())}</span>
+          <span class="tryit-sidebar-saved-row-name">${escapeHtml(r.name)}</span>
+          <button type="button" class="tryit-sidebar-saved-del" data-saved-del="${escapeHtml(r.id)}" title="Delete saved request">✕</button>
+        </div>`).join('')}
+    </div>`;
+  }).join('');
+}
+
+document.getElementById('tryItSavedToggle').addEventListener('click', ()=>{
+  const listEl = document.getElementById('tryItSidebarSaved');
+  const btn = document.getElementById('tryItSavedToggle');
+  const collapsed = listEl.style.display === 'none';
+  listEl.style.display = collapsed ? '' : 'none';
+  btn.textContent = collapsed ? '▾' : '▸';
+});
+
+document.getElementById('tryItSidebarSaved').addEventListener('click', (e)=>{
+  const del = e.target.closest('[data-saved-del]');
+  if(del){
+    e.stopPropagation();
+    const id = del.getAttribute('data-saved-del');
+    state.tryitCollections.saved = tryitSavedRequests().filter(r=>r.id !== id);
+    saveState();
+    renderTryItSidebarSaved();
+    return;
+  }
+  const toggleHead = e.target.closest('[data-toggle-saved-folder]');
+  if(toggleHead){
+    const folder = toggleHead.getAttribute('data-toggle-saved-folder');
+    if(tryItSavedFolderCollapsed.has(folder)) tryItSavedFolderCollapsed.delete(folder); else tryItSavedFolderCollapsed.add(folder);
+    renderTryItSidebarSaved();
+    return;
+  }
+  const row = e.target.closest('[data-saved-id]');
+  if(row){
+    const entry = tryitSavedRequests().find(r=>r.id === row.getAttribute('data-saved-id'));
+    if(entry) loadSavedTryItRequest(entry);
+  }
+});
+
+/* ---------- Save response field as variable (chaining, no scripting) ----------
+   Covers Postman's #1 real-world scripting use case — take a value out of
+   this response (e.g. a login's access_token) and reuse it in the next
+   request — without running arbitrary JS. Works off whatever JSON the
+   response card is currently showing (tryItLastResponseJson, set at the end
+   of both sendTryIt's matched branch and sendTryItLive). */
+let tryItLastResponseJson = null;
+
+// Flattens a JSON value into dot-path leaf fields for the picker — e.g.
+// {data:{token:"x"}} -> [{path:'data.token', value:'x'}]. Arrays are
+// indexed (items.0.id) rather than skipped, since ids/tokens can live
+// inside a list response just as often as an object one.
+function flattenJsonForVarPicker(value, prefix){
+  const out = [];
+  if(value === null || typeof value !== 'object'){
+    out.push({ path: prefix || '(root)', value });
+    return out;
+  }
+  Object.entries(value).forEach(([k,v])=>{
+    const path = prefix ? `${prefix}.${k}` : k;
+    if(v !== null && typeof v === 'object') out.push(...flattenJsonForVarPicker(v, path));
+    else out.push({ path, value: v });
+  });
+  return out;
+}
+
+document.getElementById('tryItSaveRespVar').addEventListener('click', ()=>{
+  if(tryItLastResponseJson === null || tryItLastResponseJson === undefined){
+    toast('Send a request first — only a real JSON response can be saved as a variable.');
+    return;
+  }
+  const fields = flattenJsonForVarPicker(tryItLastResponseJson, '');
+  if(!fields.length){ toast('This response has no fields to save.'); return; }
+  const sel = document.getElementById('tryItSaveVarField');
+  sel.innerHTML = fields.map((f,i)=>`<option value="${i}">${escapeHtml(f.path)} = ${escapeHtml(String(f.value).slice(0,40))}</option>`).join('');
+  sel.dataset.fields = JSON.stringify(fields);
+  document.getElementById('tryItSaveVarName').value = fields[0].path.split('.').pop();
+  document.getElementById('tryItSaveVarSecret').checked = /token|secret|password|key/i.test(fields[0].path);
+  sel.onchange = ()=>{
+    const f = fields[Number(sel.value)];
+    document.getElementById('tryItSaveVarName').value = f.path.split('.').pop();
+    document.getElementById('tryItSaveVarSecret').checked = /token|secret|password|key/i.test(f.path);
+  };
+  document.getElementById('tryItSaveVarModal').classList.add('show');
+});
+document.getElementById('tryItSaveVarCancel').addEventListener('click', ()=> document.getElementById('tryItSaveVarModal').classList.remove('show'));
+document.getElementById('tryItSaveVarModal').addEventListener('click', (e)=>{ if(e.target.id === 'tryItSaveVarModal') document.getElementById('tryItSaveVarModal').classList.remove('show'); });
+document.getElementById('tryItSaveVarOk').addEventListener('click', ()=>{
+  const sel = document.getElementById('tryItSaveVarField');
+  const fields = JSON.parse(sel.dataset.fields || '[]');
+  const field = fields[Number(sel.value)];
+  const name = document.getElementById('tryItSaveVarName').value.trim();
+  if(!field || !name){ toast('Variable name is required.'); return; }
+  const secret = document.getElementById('tryItSaveVarSecret').checked;
+  const rows = tryitCollectionVariables().slice();
+  const existing = rows.find(r=>r.key === name);
+  if(existing){ existing.value = String(field.value); existing.secret = secret; }
+  else rows.push({ id: uid(), key: name, value: String(field.value), secret });
+  tryitSaveVariables(rows);
+  renderTryItVariablesTable();
+  document.getElementById('tryItSaveVarModal').classList.remove('show');
+  toast(`Saved {{${name}}}`);
+});
 
 /* Deep-equality on parsed JSON — order-independent for object keys, so
    scenario matching isn't thrown off by re-ordering fields while editing. */
@@ -950,7 +1293,7 @@ function sendTryIt(){
   const requestScenarios = tryItRequestScenarios(ep);
   let typedBody = null;
   if(requestScenarios.length){
-    const raw = document.getElementById('tryItBodyInput').value;
+    const raw = resolveVariables(document.getElementById('tryItBodyInput').value);
     if(raw.trim()){
       const parsed = tryParseJson(raw);
       if(!parsed.ok){
@@ -1078,6 +1421,7 @@ function sendTryIt(){
       resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(matched.code)})`);
       const parsed = matched.value ? tryParseJson(matched.value) : { ok:false };
       bodyEl.textContent = parsed.ok ? JSON.stringify(parsed.value, null, 2) : (matched.value || 'No example body documented for this response.');
+      tryItLastResponseJson = parsed.ok ? parsed.value : null;
       tryItSetRespSize(bodyEl.textContent);
       tryItResetRespTabs();
       // The only response header this app can honestly claim without a real
@@ -1114,6 +1458,7 @@ function sendTryIt(){
       // all (never a guess), just a clear empty state and a way to fix it.
       resultCardEl.style.display = 'none';
       notDocCardEl.style.display = '';
+      tryItLastResponseJson = null;
       setTryItFlowNode('response', 'error');
       if(requestScenarios.length === 0){
         notDocBodyEl.textContent = `This endpoint doesn't have a documented response yet.`;
@@ -1229,17 +1574,24 @@ async function sendTryItLive(proj, ep, typedBody){
       codeEl.className = 'code-pill ' + respClass(res.status);
       resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(res.status)})`);
       bodyEl.textContent = data.error || 'The live request failed.';
+      tryItLastResponseJson = null;
       latencyEl.textContent = '';
       tryItSetRespSize(bodyEl.textContent);
       renderTryItResponseHeaders(data.headers || {});
       renderTryItTestResults([
         { name: 'Status code is 2xx', pass: false, detail: `Actually received ${res.status}.` },
       ]);
+      pushTryItHistory(ep, {
+        method: ep.method, path: ep.path, status: res.status, timeMs: null,
+        note: `${ep.path} — 🔴 live, failed`, bodyText: bodyEl.textContent,
+        requestPreview: document.getElementById('tryItRequestPreview').textContent, timestamp: Date.now(),
+      });
     } else {
       codeEl.textContent = String(data.status);
       codeEl.className = 'code-pill ' + respClass(data.status);
       resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(data.status)})`);
       bodyEl.textContent = typeof data.body === 'string' ? data.body : JSON.stringify(data.body, null, 2);
+      tryItLastResponseJson = (data.body !== null && typeof data.body === 'object') ? data.body : null;
       tryItSetRespSize(bodyEl.textContent);
       latencyEl.textContent = `🔴 Live response from ${envMeta(state.env).label} · ${data.latencyMs} ms — not simulated`;
       renderTryItResponseHeaders(data.headers || {});
@@ -1248,6 +1600,11 @@ async function sendTryItLive(proj, ep, typedBody){
         { name: 'Response time is below 1000ms', pass: data.latencyMs < 1000, detail: `Actual: ${data.latencyMs} ms.` },
         { name: 'Response has a body', pass: !!(bodyEl.textContent && bodyEl.textContent.trim()), detail: null },
       ]);
+      pushTryItHistory(ep, {
+        method: ep.method, path: ep.path, status: data.status, timeMs: data.latencyMs,
+        note: `${ep.path} — 🔴 live`, bodyText: bodyEl.textContent,
+        requestPreview: document.getElementById('tryItRequestPreview').textContent, timestamp: Date.now(),
+      });
     }
     resultEl.style.display = '';
     document.getElementById('tryItEmptyState').style.display = 'none';

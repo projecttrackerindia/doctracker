@@ -1827,7 +1827,17 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-editor-pre.tryit-nowrap{ white-space:pre; overflow-x:auto; }
 
 /* Response toolbar: size + copy/wrap icon buttons, Postman-style. */
-.tryit-resp-actions{ margin-left:auto; display:flex; gap:4px; }
+.tryit-resp-actions{ margin-left:auto; display:flex; align-items:center; gap:8px; }
+.tryit-resp-use-var-btn{
+  border:1px solid var(--border); background:var(--surface); color:var(--text-dim); border-radius:6px;
+  padding:4px 9px; font-size:11px; font-weight:600; cursor:pointer;
+}
+.tryit-resp-use-var-btn:hover{ border-color:var(--accent); color:var(--accent); }
+.tryit-save-req-btn{
+  border:1px solid var(--border); background:var(--surface); color:var(--text-dim); border-radius:8px;
+  padding:0 14px; font-size:12.5px; font-weight:700; cursor:pointer; height:34px; flex-shrink:0;
+}
+.tryit-save-req-btn:hover{ border-color:var(--accent); color:var(--accent); }
 .tryit-icon-btn{
   border:1px solid var(--border); background:var(--surface); color:var(--text-faint); border-radius:6px;
   width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; font-size:12px;
@@ -1935,6 +1945,33 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-sidebar-ep-method{ font-size:9.5px; font-weight:800; text-transform:uppercase; width:34px; flex-shrink:0; }
 .tryit-sidebar-ep-name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tryit-sidebar-empty{ padding:16px; font-size:11.5px; color:var(--text-faint); text-align:center; }
+.tryit-sidebar-section-head{
+  display:flex; align-items:center; justify-content:space-between; padding:10px 12px 4px;
+  font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint);
+}
+.tryit-sidebar-section-toggle{
+  background:none; border:none; color:var(--text-faint); cursor:pointer; font-size:10px; padding:2px 4px;
+}
+#tryItSidebarSaved{ max-height:220px; }
+.tryit-sidebar-saved-folder{ margin-bottom:2px; }
+.tryit-sidebar-saved-folder-head{
+  display:flex; align-items:center; gap:6px; padding:6px 8px; border-radius:6px; cursor:pointer;
+  font-size:11px; font-weight:700; color:var(--text-dim);
+}
+.tryit-sidebar-saved-folder-head:hover{ background:var(--surface); }
+.tryit-sidebar-saved-row{
+  display:flex; align-items:center; gap:8px; padding:6px 8px 6px 22px; border-radius:6px; cursor:pointer;
+  font-size:12px; color:var(--text-dim);
+}
+.tryit-sidebar-saved-row:hover{ background:var(--surface); color:var(--text); }
+.tryit-sidebar-saved-row.active{ background:var(--accent-soft); color:var(--accent); }
+.tryit-sidebar-saved-row-name{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tryit-sidebar-saved-del{
+  opacity:0; width:18px; height:18px; border-radius:5px; border:none; background:transparent;
+  color:var(--text-faint); cursor:pointer; font-size:11px; flex-shrink:0;
+}
+.tryit-sidebar-saved-row:hover .tryit-sidebar-saved-del{ opacity:1; }
+.tryit-sidebar-saved-del:hover{ background:var(--danger-bg,rgba(224,62,62,.12)); color:var(--danger,#e03e3e); }
 .tryit-headers-row{ display:flex; align-items:baseline; gap:10px; padding:7px 0; border-bottom:1px solid var(--border); font-size:12px; }
 .tryit-headers-row:last-child{ border-bottom:none; }
 .tryit-headers-key{ flex:0 0 38%; font-family:var(--mono); font-weight:700; color:var(--text); word-break:break-all; }
@@ -3591,6 +3628,12 @@ pre.json-raw{ max-height:360px; margin:0; }
 
 
 <div id="tryItSidebar">
+  <div class="tryit-sidebar-section-head">
+    <span>Saved requests</span>
+    <button type="button" class="tryit-sidebar-section-toggle" id="tryItSavedToggle" title="Collapse/expand">▾</button>
+  </div>
+  <div class="tryit-sidebar-list" id="tryItSidebarSaved"></div>
+  <div class="tryit-sidebar-section-head" style="margin-top:8px;"><span>Documented endpoints</span></div>
   <div class="tryit-sidebar-search">
     <input type="text" id="tryItSidebarSearch" placeholder="Search endpoints">
   </div>
@@ -3602,6 +3645,7 @@ pre.json-raw{ max-height:360px; margin:0; }
     <div class="tryit-urlbar">
       <span class="badge badge-lg" id="tryItMethodBadge"></span>
       <span class="tryit-urlbar-url" id="tryItPath"></span>
+      <button type="button" class="tryit-save-req-btn" id="tryItSaveReq" title="Save this request into a collection folder for reuse">Save</button>
       <button class="primary tryit-send-btn" id="tryItSend"><span class="tryit-send-spinner"></span><span id="tryItSendLabel">Send</span></button>
     </div>
     <div class="modal-sub" id="tryItUrlPreview" style="font-family:var(--mono); font-size:11.5px; word-break:break-all; margin-top:6px;"></div>
@@ -3634,6 +3678,7 @@ pre.json-raw{ max-height:360px; margin:0; }
         <div class="lang-tab active" data-trytab="params" id="tryItTabBtnParams">Params<span class="trytab-count" id="tryItParamsCount" style="display:none;">0</span></div>
         <div class="lang-tab" data-trytab="auth" id="tryItTabBtnAuth" style="display:none;">Authorization</div>
         <div class="lang-tab" data-trytab="headers" id="tryItTabBtnHeaders">Headers<span class="trytab-count" id="tryItHeadersCount" style="display:none;">0</span></div>
+        <div class="lang-tab" data-trytab="variables" id="tryItTabBtnVariables">Variables<span class="trytab-count" id="tryItVariablesCount" style="display:none;">0</span></div>
         <div class="lang-tab" data-trytab="body" id="tryItTabBtnBody" style="display:none;">Body</div>
         <div class="lang-tab" data-trytab="scripts" id="tryItTabBtnScripts">Scripts</div>
         <div class="lang-tab" data-trytab="settings" id="tryItTabBtnSettings">Settings</div>
@@ -3650,6 +3695,16 @@ pre.json-raw{ max-height:360px; margin:0; }
 
     <div class="tryit-tabpanel" id="tryItHeadersPanel">
       <div id="tryItHeadersReadonly"></div>
+    </div>
+
+    <!-- Postman-style collection variables: {{key}} anywhere in Params/
+         Headers/Body, resolved at send time (see resolveVariables in
+         18-renderview.js). Shared across every endpoint/project — not
+         reset when Try It is reopened on a different endpoint, since the
+         whole point is reusing a value (e.g. a token) across requests. -->
+    <div class="tryit-tabpanel" id="tryItVariablesPanel">
+      <div class="hint" style="margin:0 0 8px;">Use <span class="mono">{{key}}</span> anywhere in Params, Headers or Body — resolved right before the request is built, for both Simulated and Live sends. Shared across every endpoint.</div>
+      <div id="tryItVariablesTable"></div>
     </div>
 
     <div class="tryit-tabpanel" id="tryItBodyPanel">
@@ -3727,6 +3782,7 @@ pre.json-raw{ max-height:360px; margin:0; }
           <span class="hint" id="tryItRespSize" style="margin:0;"></span>
           <span class="hint tryit-match-note" id="tryItMatchNote" style="margin:0;"></span>
           <div class="tryit-resp-actions">
+            <button type="button" class="tryit-resp-use-var-btn" id="tryItSaveRespVar" title="Save a field from this response into a variable">Use in variable →</button>
             <button type="button" class="tryit-icon-btn" id="tryItRespCopy" title="Copy response">⧉</button>
             <button type="button" class="tryit-icon-btn" id="tryItRespWrap" title="Toggle line wrap">↔</button>
           </div>
@@ -3771,6 +3827,54 @@ pre.json-raw{ max-height:360px; margin:0; }
       <div></div>
       <div class="right">
         <button id="tryItClose">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="tryItSaveReqModal">
+  <div class="modal" style="width:420px;">
+    <h2>Save request</h2>
+    <div class="modal-sub" style="margin-bottom:16px;">Saves the current params, headers, body and selected scenario as a reusable entry in your Collections sidebar.</div>
+    <div class="field">
+      <label for="tryItSaveReqName">Name</label>
+      <input type="text" id="tryItSaveReqName" placeholder="e.g. Create order — happy path">
+    </div>
+    <div class="field">
+      <label for="tryItSaveReqFolder">Folder</label>
+      <input type="text" id="tryItSaveReqFolder" placeholder="e.g. Payments" list="tryItSaveReqFolderList">
+      <datalist id="tryItSaveReqFolderList"></datalist>
+    </div>
+    <div class="modal-actions" style="margin-top:20px;">
+      <div></div>
+      <div class="right">
+        <button type="button" id="tryItSaveReqCancel">Cancel</button>
+        <button type="button" class="primary" id="tryItSaveReqOk">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="tryItSaveVarModal">
+  <div class="modal" style="width:420px;">
+    <h2>Save response field as variable</h2>
+    <div class="modal-sub" style="margin-bottom:16px;">Pick a field from the last response, then name the variable it should be stored in — use it anywhere with <span class="mono">{{name}}</span>.</div>
+    <div class="field">
+      <label for="tryItSaveVarField">Field</label>
+      <select id="tryItSaveVarField"></select>
+    </div>
+    <div class="field">
+      <label for="tryItSaveVarName">Variable name</label>
+      <input type="text" id="tryItSaveVarName" placeholder="e.g. token">
+    </div>
+    <label style="display:flex; align-items:center; gap:6px; margin-top:4px; font-size:12px; color:var(--text-dim);">
+      <input type="checkbox" id="tryItSaveVarSecret"> Mask this value in the Variables tab
+    </label>
+    <div class="modal-actions" style="margin-top:20px;">
+      <div></div>
+      <div class="right">
+        <button type="button" id="tryItSaveVarCancel">Cancel</button>
+        <button type="button" class="primary" id="tryItSaveVarOk">Save variable</button>
       </div>
     </div>
   </div>

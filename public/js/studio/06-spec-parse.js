@@ -16,6 +16,9 @@ async function loadState(){
     state.projects = ws.projects || {};
     Object.values(state.projects).forEach(ensureProjectDefaults);
     state.requestHistory = ws.requestHistory || {};
+    state.tryitCollections = (ws.tryitCollections && typeof ws.tryitCollections === 'object')
+      ? { variables: Array.isArray(ws.tryitCollections.variables) ? ws.tryitCollections.variables : [], saved: Array.isArray(ws.tryitCollections.saved) ? ws.tryitCollections.saved : [] }
+      : { variables: [], saved: [] };
     state.environments = (Array.isArray(ws.environments) && ws.environments.length) ? ws.environments.map(migrateEnvironment) : [];
     state.customFlowDirections = Array.isArray(ws.customFlowDirections) ? ws.customFlowDirections : [];
     state.branding = ws.branding && typeof ws.branding === 'object' ? ws.branding : {};
@@ -24,6 +27,7 @@ async function loadState(){
     console.error('Failed to load workspace from server', e);
     state.projects = {};
     state.requestHistory = {};
+    state.tryitCollections = { variables: [], saved: [] };
     state.environments = [];
     state.customFlowDirections = [];
     state.branding = {};
@@ -145,6 +149,9 @@ function saveState(){
     });
     apiSend('PUT', '/request-history', { requestHistory: state.requestHistory }).catch(e=>{
       console.error('Save request history failed', e);
+    });
+    apiSend('PUT', '/tryit-collections', { tryitCollections: state.tryitCollections }).catch(e=>{
+      console.error('Save Try It collections failed', e);
     });
   }, 300);
   return true;
@@ -572,6 +579,126 @@ function parseSpecToProject(spec){
   };
 }
 
+// True for a real Postman Collection export (v2.0/v2.1) — detected the same
+// way Postman itself stamps its files, via info.schema, rather than by file
+// extension (both this and an OpenAPI spec are plain .json).
+function isPostmanCollectionJson(spec){
+  return !!(spec && spec.info && typeof spec.info.schema === 'string' && spec.info.schema.includes('collection.postman.com'));
+}
+
+// Postman's request.body can be a string in some exports and an object in
+// others (older Postman Legacy format) — always resolves to plain text.
+function postmanRawBody(body){
+  if(!body) return '';
+  if(body.mode === 'raw' && typeof body.raw === 'string') return body.raw;
+  if(typeof body === 'string') return body;
+  return '';
+}
+
+// Postman's url field is either a plain string or a structured object with
+// its own path[]/query[]/variable[] — normalizes both into what
+// parsePostmanItem needs, converting Postman's :param path-variable syntax
+// back into our {param} convention.
+function postmanUrlParts(url){
+  if(!url) return { path:'/', query:[], pathVars:[] };
+  if(typeof url === 'string'){
+    // Strip a leading {{host}}-style token or scheme+host, keep from the
+    // first '/' onward; query string (if any) is parsed off separately.
+    const withoutHost = url.replace(/^\{\{[^}]+\}\}/, '').replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i, '');
+    const [pathPart, qs] = withoutHost.split('?');
+    const query = (qs||'').split('&').filter(Boolean).map(pair=>{
+      const [k,v] = pair.split('=');
+      return { key: decodeURIComponent(k||''), value: decodeURIComponent(v||'') };
+    });
+    return { path: (pathPart||'/').replace(/:([A-Za-z0-9_]+)/g, '{$1}'), query, pathVars: [] };
+  }
+  const segments = Array.isArray(url.path) ? url.path : [];
+  const path = '/' + segments.map(s=>String(s).replace(/^:(.+)/, '{$1}')).join('/');
+  const query = (Array.isArray(url.query) ? url.query : []).filter(q=>!q.disabled).map(q=>({ key:q.key||'', value:q.value||'' }));
+  const pathVars = Array.isArray(url.variable) ? url.variable : [];
+  return { path: path === '/' ? (url.raw ? postmanUrlParts(url.raw).path : '/') : path, query, pathVars };
+}
+
+// Recursively walks Postman's item[] tree (folders nest arbitrarily deep)
+// and flattens every leaf request into one of our endpoint objects, tagged
+// with the name of the top-level folder it was found under (or 'General'
+// for a request sitting directly on the collection root) — same one-level
+// "tag" concept our own model uses, even though Postman folders can nest.
+function parsePostmanItems(items, topFolder, out){
+  (items||[]).forEach(node=>{
+    if(Array.isArray(node.item)){
+      parsePostmanItems(node.item, topFolder || node.name, out);
+      return;
+    }
+    const req = node.request;
+    if(!req || !req.method) return;
+    const { path, query, pathVars } = postmanUrlParts(req.url);
+    const headers = (Array.isArray(req.header) ? req.header : []).filter(h=>!h.disabled).map(h=>({
+      name: h.key || '', type:'String', required:false, example: h.value || '', description: h.description || '',
+    }));
+    const queryParams = query.map(q=>({ name:q.key, in:'query', type:'string', required:false, example:q.value||'', description:'' }));
+    const pathParamNames = [...path.matchAll(/\{([^}]+)\}/g)].map(m=>m[1]);
+    const pathParams = pathParamNames.map(name=>{
+      const v = pathVars.find(pv=>pv.key===name);
+      return { name, in:'path', type:'string', required:true, example: (v && v.value) || '', description: (v && v.description) || '' };
+    });
+    const rawBody = postmanRawBody(req.body);
+    const requestBody = rawBody.trim() ? { example: rawBody, fields: [] } : null;
+    const responses = (Array.isArray(node.response) ? node.response : []).map(r=>({
+      code: r.code || 200, description: r.name || '', example: postmanRawBody(r.body) || (typeof r.body === 'string' ? r.body : ''),
+    }));
+    out.push({
+      id: uid(), method: String(req.method).toUpperCase(), path,
+      tag: topFolder || 'General',
+      summary: node.name || `${req.method} ${path}`, description: (typeof req.description === 'string' ? req.description : (req.description && req.description.content) || ''),
+      parameters: [...pathParams, ...queryParams], headers, requestBody, responses,
+    });
+  });
+}
+
+// Collection-level auth -> our simple {type, headerName, description} shape.
+function postmanCollectionAuth(spec){
+  const a = spec.auth;
+  if(!a || !a.type) return { type:'', headerName:'', description:'' };
+  if(a.type === 'bearer') return { type:'bearer', headerName:'Authorization', description:'' };
+  if(a.type === 'basic') return { type:'basic', headerName:'Authorization', description:'' };
+  if(a.type === 'apikey'){
+    const kv = Array.isArray(a.apikey) ? a.apikey : [];
+    const keyName = (kv.find(x=>x.key==='key')||{}).value || 'Authorization';
+    return { type:'apiKey', headerName: keyName, description:'' };
+  }
+  return { type: a.type, headerName:'', description:'' };
+}
+
+// Collection variable[] entries named like our own export's convention
+// (<ENVID>-DNS, e.g. "SIT-DNS") seed proj.environments directly; anything
+// else is a request-level or auth-token variable, not an environment host,
+// so it's left alone here (Try It's own Collection Variables tab is where
+// those belong once the project's been imported).
+function postmanVariablesToEnvironments(spec){
+  const envs = blankEnvironments();
+  (Array.isArray(spec.variable) ? spec.variable : []).forEach(v=>{
+    const m = /^([A-Za-z0-9_-]+)-DNS$/.exec(v.key||'');
+    if(m && envIds().includes(m[1]) && v.value) envs[m[1]] = v.value;
+  });
+  return envs;
+}
+
+function parsePostmanCollectionToProject(spec){
+  const endpoints = [];
+  parsePostmanItems(spec.item, null, endpoints);
+  const now = new Date().toISOString();
+  return {
+    id: uid(), name: (spec.info && spec.info.name) || 'Imported Postman collection',
+    description: (spec.info && spec.info.description) || '',
+    environments: postmanVariablesToEnvironments(spec),
+    auth: postmanCollectionAuth(spec),
+    notes:'', lifecycle:'DEVELOPMENT', owner:'', team:'',
+    requestFlowDirection:'1-way', requestFlowLabel:'', requestFlowStages:[], requestFlows:[],
+    createdAt: now, updatedAt: now, endpoints, _open: true,
+  };
+}
+
 function handleImportedFile(file){
   const reader = new FileReader();
   reader.onload = (e)=>{
@@ -583,7 +710,7 @@ function handleImportedFile(file){
       toast('Could not parse file — check it is valid OpenAPI JSON/YAML.');
       return;
     }
-    const project = parseSpecToProject(spec);
+    const project = isPostmanCollectionJson(spec) ? parsePostmanCollectionToProject(spec) : parseSpecToProject(spec);
     if(!project.endpoints.length){
       toast('No endpoints found in that spec.');
       return;
@@ -691,6 +818,31 @@ async function exportProjectAsJson(projectId){
 
   logAudit('exported', 'project', proj.name, `Exported project "${proj.name}" as a JSON file`, proj.name);
   toast('Project exported');
+}
+
+// Downloads a real .postman_collection.json for the WHOLE project (every
+// endpoint, grouped into folders by tag) — buildPostmanCollection() does
+// the actual schema translation (07-codesamples.js); this is just the file-
+// save glue, same pattern as exportProjectAsJson() above. Uses whichever
+// environment/endpoints are currently in view (state.env, viewEndpoints),
+// so exporting from a promoted environment exports what's actually live
+// there, not necessarily the draft.
+function exportProjectAsPostmanCollection(projectId){
+  const proj = state.projects[projectId];
+  if(!proj){ toast('Project not found.'); return; }
+  const endpoints = viewEndpoints(proj);
+  if(!endpoints.length){ toast('This project has no endpoints to export.'); return; }
+  const collection = buildPostmanCollection(proj, endpoints);
+  const data = JSON.stringify(collection, null, 2);
+  const blob = new Blob([data], { type:'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${slugify(proj.name)}.postman_collection.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  logAudit('exported', 'project', proj.name, `Exported project "${proj.name}" as a Postman Collection`, proj.name);
+  toast('Postman Collection downloaded');
 }
 
 // Deep-regenerates every id in an imported project (the project itself and every
