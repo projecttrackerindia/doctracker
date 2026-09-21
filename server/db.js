@@ -495,6 +495,21 @@ async function initDb() {
   await pool.query(`ALTER TABLE project_env_version_history ADD COLUMN IF NOT EXISTS breaking_changes JSONB NOT NULL DEFAULT '[]';`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_env_version_history_project_feed ON project_env_version_history (project_id, promoted_at DESC);`);
 
+  // Migration path for databases created before 'prune' existed as an action
+  // (see POST /projects/:id/environments/:environmentId/prune-endpoints in
+  // workspace.js — pulls specific endpoints back out of one promoted
+  // environment without a full re-promotion) — widens the CHECK constraint
+  // the same way the 'custom' user role was added above.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'project_env_version_history_action_check') THEN
+        ALTER TABLE project_env_version_history DROP CONSTRAINT project_env_version_history_action_check;
+      END IF;
+      ALTER TABLE project_env_version_history ADD CONSTRAINT project_env_version_history_action_check CHECK (action IN ('promote', 'rollback', 'prune'));
+    END $$;
+  `);
+
   // ---- Promotion requests (Release Pipeline "protected branch" workflow) ----
   // GitHub's branch-protection model requires a SECOND person to approve a
   // merge into a protected branch — the person who opened the PR can't also
