@@ -2726,6 +2726,133 @@ router.post('/projects/:id/rollback', async (req, res) => {
   }
 });
 
+// POST /api/workspace/projects/:id/environments/:environmentId/prune-endpoints
+// Body: { endpointIds: [...], releaseNote }. Admin-only.
+//
+// The release-readiness gate (see checkReleaseReadiness) stops a NEW
+// promotion from landing an unapproved endpoint in Production — it can't
+// undo one that landed before the gate existed, or reach in and pull a
+// single endpoint back out without redoing a whole release. This is that:
+// edits ONE environment's current promoted snapshot in place, removing just
+// the given endpoints, without touching the upstream stage it came from (so
+// the next real promotion still diffs correctly against the stage above).
+// Writes a normal, fully-audited history entry (action='prune') rather than
+// silently rewriting anything, and — same as a real promotion into the
+// pipeline's last stage — cascades to DR, since DR exists to mirror what
+// Production actually serves, not what an old promotion happened to include.
+router.post('/projects/:id/environments/:environmentId/prune-endpoints', async (req, res) => {
+  if (!isAdminUser(req)) return res.status(403).json({ error: 'Only Admins can edit a promoted environment.' });
+  const { environmentId } = req.params;
+  const endpointIds = Array.isArray(req.body?.endpointIds) ? req.body.endpointIds.filter((id) => typeof id === 'string' && id) : [];
+  if (!endpointIds.length) return res.status(400).json({ error: 'endpointIds is required.' });
+  const releaseNote = String(req.body?.releaseNote || '').trim().slice(0, 500);
+  if (!releaseNote || releaseNote.length < 10) {
+    return res.status(400).json({ error: 'A release note is required (at least 10 characters) explaining why these endpoints are being pulled.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: projRows } = await client.query(
+      `SELECT id, organisation FROM projects WHERE id = $1 FOR UPDATE`,
+      [req.params.id]
+    );
+    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Project not found.' });
+    }
+    const project = projRows[0];
+
+    const allEnvs = await getOrgEnvironments(project.organisation);
+    const stages = pipelineStages(allEnvs);
+    const stageIdx = stages.findIndex((e) => e.id === environmentId);
+    if (stageIdx <= 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Unknown or non-editable environment.' });
+    }
+    const stage = stages[stageIdx];
+
+    const { rows: curRows } = await client.query(
+      `SELECT version, data_enc FROM project_env_versions WHERE project_id = $1 AND environment_id = $2 FOR UPDATE`,
+      [project.id, environmentId]
+    );
+    if (!curRows.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `Nothing has been promoted to ${stage.label} yet.` });
+    }
+    const current = JSON.parse(dataCrypto.decryptField(curRows[0].data_enc, `project-env:${project.id}:${environmentId}`));
+    const removeSet = new Set(endpointIds);
+    const before = (current.endpoints || []).length;
+    const removed = (current.endpoints || []).filter((e) => e && removeSet.has(e.id));
+    if (!removed.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'None of the given endpoint ids are currently present in this environment.' });
+    }
+    current.endpoints = (current.endpoints || []).filter((e) => !e || !removeSet.has(e.id));
+
+    const dataEnc = dataCrypto.encryptField(JSON.stringify(current), `project-env:${project.id}:${environmentId}`);
+    const dataKeyVersion = dataCrypto.currentKeyVersion();
+    await client.query(
+      `UPDATE project_env_versions SET data_enc = $1, data_key_version = $2, promoted_by = $3, promoted_by_username = $4, auto_mirrored = false, promoted_at = now()
+       WHERE project_id = $5 AND environment_id = $6`,
+      [dataEnc, dataKeyVersion, req.authUser.sub, req.authUser.username, project.id, environmentId]
+    );
+    await recordEnvVersionHistory(client, {
+      projectId: project.id, environmentId, version: curRows[0].version, dataEnc, dataKeyVersion,
+      sourceEnvironmentId: null, action: 'prune', promotedBy: req.authUser.sub, promotedByUsername: req.authUser.username,
+      autoMirrored: false, releaseNote: `${releaseNote} (removed ${removed.length} of ${before} endpoints)`,
+    });
+
+    let mirrored = null;
+    const isLastStage = stageIdx === stages.length - 1;
+    if (isLastStage) {
+      const drEnv = allEnvs.find((e) => String(e.label || '').trim().toUpperCase() === 'DR');
+      if (drEnv) {
+        const mirrorEnc = dataCrypto.encryptField(JSON.stringify(current), `project-env:${project.id}:${drEnv.id}`);
+        const mirrorKeyVersion = dataCrypto.currentKeyVersion();
+        await client.query(
+          `INSERT INTO project_env_versions
+             (project_id, environment_id, version, data_enc, data_key_version, source_environment_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, now())
+           ON CONFLICT (project_id, environment_id) DO UPDATE SET
+             version = EXCLUDED.version, data_enc = EXCLUDED.data_enc, data_key_version = EXCLUDED.data_key_version,
+             source_environment_id = EXCLUDED.source_environment_id, promoted_by = EXCLUDED.promoted_by,
+             promoted_by_username = EXCLUDED.promoted_by_username, auto_mirrored = true, promoted_at = now()`,
+          [project.id, drEnv.id, curRows[0].version, mirrorEnc, mirrorKeyVersion, stage.id, req.authUser.sub, req.authUser.username]
+        );
+        await recordEnvVersionHistory(client, {
+          projectId: project.id, environmentId: drEnv.id, version: curRows[0].version,
+          dataEnc: mirrorEnc, dataKeyVersion: mirrorKeyVersion, sourceEnvironmentId: stage.id,
+          action: 'prune', promotedBy: req.authUser.sub, promotedByUsername: req.authUser.username, autoMirrored: true,
+          releaseNote: `Auto-mirrored from ${stage.label}: ${releaseNote} (removed ${removed.length} of ${before} endpoints)`,
+        });
+        mirrored = { environmentId: drEnv.id, label: drEnv.label };
+      }
+    }
+
+    await client.query('COMMIT');
+    await cache.invalidateOrg(project.organisation);
+
+    await recordAuditEvent(req.authUser, req, {
+      action: 'PROJECT_ENDPOINTS_PRUNED',
+      resourceType: 'project',
+      resourceId: project.id,
+      entityName: stage.label,
+      details: `Removed ${removed.length} endpoint${removed.length === 1 ? '' : 's'} from ${stage.label}: ${removed.map((e) => `${(e.method || '').toUpperCase()} ${e.path || ''}`).join(', ')}. ${releaseNote}`,
+      severity: 'warning',
+      metadata: { environmentId, removedEndpointIds: removed.map((e) => e.id), remainingCount: current.endpoints.length },
+    });
+
+    res.json({ ok: true, environmentId, removedCount: removed.length, remainingCount: current.endpoints.length, mirrored });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('POST prune-endpoints failed:', err);
+    res.status(500).json({ error: 'Could not edit this environment.' });
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = router;
 module.exports.MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_BYTES;
 module.exports.reencryptOrganisation = reencryptOrganisation;
