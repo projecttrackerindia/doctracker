@@ -49,7 +49,47 @@ with a plain HTML/CSS/vanilla-JS frontend (no framework, no bundler).
   once `S3_*` env vars are set, still encrypted client-side before upload.
 - **Export** — OpenAPI spec generation with a signed, time-limited public
   link for "Open in Swagger Editor" (the one deliberately unauthenticated
-  route in the app), and PDF export of a project's docs.
+  route in the app), Postman Collection v2.1 export/import, and PDF export
+  of a project's docs.
+- **Try It / Live Mode** — a Postman-style request builder per endpoint:
+  Simulated sends match a real request against documented scenarios and
+  return the matching documented response (nothing ever invented); Live
+  sends proxy an actual outbound HTTP call through the server
+  (`server/routes/liveMode.js`), hardened against SSRF (scheme/IP/DNS-
+  rebinding checks with a fresh DNS lookup and manual redirect validation on
+  every send, see `server/urlSafety.js`). Also supports collection
+  variables (`{{key}}`, resolved for both modes), saving edited requests
+  into folders, and "save a response field as a variable" for simple
+  request chaining (e.g. carrying a login's token into the next call) —
+  see "Live Mode access model" below for who can use any of this.
+
+## Live Mode access model
+
+Two *separate* per-user, per-environment grants control non-admin access,
+both managed from Security ▸ Live Mode Access:
+
+- **Browse** — may see and switch to an environment in the top-right
+  switcher at all (`state.docBrowseEnvs`, `GET /api/live-mode/my-browse-access`).
+- **Live** — may additionally fire a REAL request from Try It against that
+  environment, not a simulated one (`state.liveModeEnvs`,
+  `GET /api/live-mode/my-access`). Checking Live in the admin UI
+  auto-checks Browse (you can't usefully test-fire something you can't look
+  at); it never implies the reverse.
+
+Neither grant is tied to role — an Admin can hand a Viewer Live access to
+DEV without touching their role, or give an Editor Browse-only access to
+UAT while withholding Live. `admin` and `custom` roles don't use this at
+all: Admins always see/fire everywhere (except Production/DR stay
+Admin-only regardless of any grant), and `custom` role uses its own
+`customPermissions.envs` for browsing, kept deliberately separate.
+
+Live Mode never stores a real credential — the secret/auth header is
+blanked every time Live is toggled on and has to be retyped per send. A
+live response is masked the same way every other render surface in the
+app is (`maskJsonExampleDeep`) unless the viewer has already revealed
+sensitive values; the "save response as variable" chaining feature is the
+one deliberate exception, since a masked token isn't usable to chain into
+the next request.
 
 ## Project layout
 

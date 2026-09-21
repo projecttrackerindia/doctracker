@@ -609,16 +609,34 @@ function tableRowInput(containerId, idx, field){
 }
 
 /* ---------- Variables tab: Postman-style collection variables ----------
-   state.tryitCollections.variables is shared across every endpoint/project
-   (org-wide, persisted via saveState() -> PUT /tryit-collections — see
-   06-spec-parse.js) — this is deliberately NOT part of tryItContext, which
-   resets every time a different endpoint is opened. A {{key}} typed into
-   any Params/Headers/Body value is resolved against this list at the exact
-   point collectTryItParams()/collectTryItHeaders() (and the body parse in
+   TWO backing stores, merged for display/resolution but genuinely separate
+   in storage: state.tryitCollections.variables is org-shared (every member
+   of the org receives it — PUT /tryit-collections); state.tryitPersonal.variables
+   is PER-USER, encrypted under this user's own id server-side, and never
+   included in any other user's payload at all (PUT /tryit-personal — see
+   the users.tryit_personal_enc comment in server/db.js). "Only me" on a row
+   controls which store it lives in. Neither is part of tryItContext, which
+   resets every time a different endpoint is opened — variables persist
+   across that. A {{key}} typed into any Params/Headers/Body value is
+   resolved against the merged list at the exact point
+   collectTryItParams()/collectTryItHeaders() (and the body parse in
    sendTryIt()) read the row values, so simulated preview and live send can
    never disagree about what a variable resolved to. */
-function tryitCollectionVariables(){
+function tryitTeamVariables(){
   return (state.tryitCollections && Array.isArray(state.tryitCollections.variables)) ? state.tryitCollections.variables : [];
+}
+function tryitPersonalVariables(){
+  return (state.tryitPersonal && Array.isArray(state.tryitPersonal.variables)) ? state.tryitPersonal.variables : [];
+}
+// Personal listed first so a personal override wins over a team default of
+// the same key (resolveVariables below uses .find(), which takes the first
+// match) — the same "your own value takes precedence" convention as an
+// environment variable overriding a shared default.
+function tryitCollectionVariables(){
+  return [
+    ...tryitPersonalVariables().map(r=>({ ...r, personal:true })),
+    ...tryitTeamVariables().map(r=>({ ...r, personal:false })),
+  ];
 }
 
 // Replaces every {{key}} in str with the matching variable's value.
@@ -634,7 +652,7 @@ function resolveVariables(str, vars){
   });
 }
 
-function makeEmptyVariableRow(){ return { id: uid(), key:'', value:'', secret:false, ghost:true }; }
+function makeEmptyVariableRow(){ return { id:null, key:'', value:'', secret:false, personal:false, ghost:true }; }
 
 function renderTryItVariablesTable(){
   const tableEl = document.getElementById('tryItVariablesTable');
@@ -647,65 +665,83 @@ function renderTryItVariablesTable(){
 
   tableEl.innerHTML = `
     <div class="tryit-headers-table">
-      <div class="tryit-headers-thead" style="grid-template-columns:24px 1fr 1.4fr 22px;"><span></span><span>Key</span><span>Value</span><span></span></div>
-      ${withGhost.map((r,i)=>{
+      <div class="tryit-headers-thead" style="grid-template-columns:24px 1fr 1.4fr 60px 22px;"><span></span><span>Key</span><span>Value</span><span>Only me</span><span></span></div>
+      ${withGhost.map((r)=>{
         const isGhost = !!r.ghost;
         // A native password input, not a custom mask string — same value is
         // editable in place, the browser just renders dots; simpler and
         // more correct than trying to distinguish "typing over the mask"
         // from "typing the real value" ourselves.
         const valType = (!isGhost && r.secret) ? 'password' : 'text';
-        return `<div class="tryit-headers-trow${isGhost?' ghost':''}" style="grid-template-columns:24px 1fr 1.4fr 22px;" data-var-idx="${i}">
+        const rowKey = isGhost ? 'ghost' : r.id;
+        return `<div class="tryit-headers-trow${isGhost?' ghost':''}" style="grid-template-columns:24px 1fr 1.4fr 60px 22px;" data-var-row="${rowKey}" data-var-personal="${r.personal?'1':'0'}">
           ${isGhost ? '<span></span>' : `<input type="checkbox" class="tryit-headers-check" data-var-field="secret" title="Mask this value" ${r.secret?'checked':''}>`}
           <input type="text" class="tryit-table-input mono" data-var-field="key" placeholder="${isGhost?'key':''}" value="${escapeHtml(r.key)}">
           <input type="${valType}" class="tryit-table-input mono" data-var-field="value" placeholder="${isGhost?'value':''}" value="${escapeHtml(r.value)}">
+          <input type="checkbox" class="tryit-headers-check" data-var-field="personal" title="Only visible to you, never synced to teammates" ${r.personal?'checked':''} style="justify-self:center;">
           ${isGhost ? '<span></span>' : '<button type="button" class="tryit-row-delete" data-var-del title="Delete variable">✕</button>'}
         </div>`;
       }).join('')}
     </div>`;
 }
 
-function tryitSaveVariables(rows){
+// Splits a MERGED row list (as returned by tryitCollectionVariables, each
+// carrying `.personal`) back into its two backing stores and persists both.
+// The one place that writes to either store, so team/personal can never
+// drift out of sync with what's actually rendered.
+function tryitSaveVariables(mergedRows){
+  const strip = (r)=>{ const { personal, ghost, ...rest } = r; return rest; };
+  const team = mergedRows.filter(r=>!r.personal).map(strip);
+  const personal = mergedRows.filter(r=>r.personal).map(strip);
   if(!state.tryitCollections) state.tryitCollections = { variables:[], saved:[] };
-  state.tryitCollections.variables = rows;
+  if(!state.tryitPersonal) state.tryitPersonal = { variables:[], saved:[] };
+  state.tryitCollections.variables = team;
+  state.tryitPersonal.variables = personal;
   saveState();
 }
 
 document.getElementById('tryItVariablesTable').addEventListener('input', (e)=>{
   const input = e.target.closest('[data-var-field]');
   if(!input) return;
-  const idx = Number(input.closest('[data-var-idx]').getAttribute('data-var-idx'));
+  const rowEl = input.closest('[data-var-row]');
+  const isGhostRow = rowEl.getAttribute('data-var-row') === 'ghost';
   const field = input.getAttribute('data-var-field');
-  const rows = tryitCollectionVariables().slice();
-  const isGhostRow = idx === rows.length; // the trailing row rendered from makeEmptyVariableRow(), not yet in the array
+  const rows = tryitCollectionVariables();
   // Same rule as the Headers table: a ghost row only promotes to a real row
-  // once its KEY gets a value — typing into value/secret on an empty ghost
-  // row is a no-op, same as it is there.
+  // once its KEY gets a value — typing into value on an empty ghost row is
+  // a no-op, same as it is there.
   if(isGhostRow && (field !== 'key' || !input.value.trim())) return;
-  if(isGhostRow) rows.push({ id: uid(), key:'', value:'', secret:false });
-  const row = rows[idx];
+  let row;
+  if(isGhostRow){
+    row = { id: uid(), key:'', value:'', secret:false, personal: rowEl.querySelector('[data-var-field="personal"]').checked };
+    rows.push(row);
+  } else {
+    row = rows.find(r=>r.id === rowEl.getAttribute('data-var-row'));
+  }
   if(!row) return;
   row[field] = input.value;
   tryitSaveVariables(rows);
   if(isGhostRow){
     renderTryItVariablesTable();
-    const fresh = tableRowInput('tryItVariablesTable', idx, 'key');
+    const fresh = document.querySelector(`#tryItVariablesTable [data-var-row="${row.id}"] [data-var-field="key"]`);
     if(fresh){ fresh.focus(); fresh.setSelectionRange(fresh.value.length, fresh.value.length); }
   }
 });
 document.getElementById('tryItVariablesTable').addEventListener('change', (e)=>{
-  const cb = e.target.closest('[data-var-field="secret"]');
+  const cb = e.target.closest('[data-var-field="secret"], [data-var-field="personal"]');
   if(!cb) return;
-  const idx = Number(cb.closest('[data-var-idx]').getAttribute('data-var-idx'));
-  const rows = tryitCollectionVariables().slice();
-  if(rows[idx]){ rows[idx].secret = cb.checked; tryitSaveVariables(rows); renderTryItVariablesTable(); }
+  const rowEl = cb.closest('[data-var-row]');
+  if(rowEl.getAttribute('data-var-row') === 'ghost') return; // nothing to persist yet — the input handler above creates the row once a key is typed
+  const field = cb.getAttribute('data-var-field');
+  const rows = tryitCollectionVariables();
+  const row = rows.find(r=>r.id === rowEl.getAttribute('data-var-row'));
+  if(row){ row[field] = cb.checked; tryitSaveVariables(rows); renderTryItVariablesTable(); }
 });
 document.getElementById('tryItVariablesTable').addEventListener('click', (e)=>{
   const del = e.target.closest('[data-var-del]');
   if(!del) return;
-  const idx = Number(del.closest('[data-var-idx]').getAttribute('data-var-idx'));
-  const rows = tryitCollectionVariables().slice();
-  rows.splice(idx, 1);
+  const rowEl = del.closest('[data-var-row]');
+  const rows = tryitCollectionVariables().filter(r=>r.id !== rowEl.getAttribute('data-var-row'));
   tryitSaveVariables(rows);
   renderTryItVariablesTable();
 });
@@ -873,11 +909,34 @@ function closeTryItModal(){
 /* ---------- Save Request (Postman-style collections) ----------
    Snapshots the CURRENT hand-edited Try It state (not the endpoint's own
    docs — those are always available by just opening the endpoint) into
-   state.tryitCollections.saved, organized by a freeform folder name. Never
-   captures a real credential: the auth/secret header's value is stripped
-   the same way it already is every time Live mode is toggled on. */
-function tryitSavedRequests(){
+   either state.tryitCollections.saved (org-shared) or state.tryitPersonal.saved
+   (PER-USER, never shipped to any other user — see the tryitTeamVariables/
+   tryitPersonalVariables comment above), organized by a freeform folder
+   name. Never captures a real credential: the auth/secret header's value is
+   stripped the same way it already is every time Live mode is toggled on. */
+function tryitTeamSavedRequests(){
   return (state.tryitCollections && Array.isArray(state.tryitCollections.saved)) ? state.tryitCollections.saved : [];
+}
+function tryitPersonalSavedRequests(){
+  return (state.tryitPersonal && Array.isArray(state.tryitPersonal.saved)) ? state.tryitPersonal.saved : [];
+}
+function tryitSavedRequests(){
+  return [
+    ...tryitPersonalSavedRequests().map(r=>({ ...r, personal:true })),
+    ...tryitTeamSavedRequests().map(r=>({ ...r, personal:false })),
+  ];
+}
+// Same split-and-persist-both pattern as tryitSaveVariables — the one place
+// that writes to either saved-requests store.
+function tryitSaveSavedRequests(mergedEntries){
+  const strip = (r)=>{ const { personal, ...rest } = r; return rest; };
+  const team = mergedEntries.filter(r=>!r.personal).map(strip);
+  const personal = mergedEntries.filter(r=>r.personal).map(strip);
+  if(!state.tryitCollections) state.tryitCollections = { variables:[], saved:[] };
+  if(!state.tryitPersonal) state.tryitPersonal = { variables:[], saved:[] };
+  state.tryitCollections.saved = team;
+  state.tryitPersonal.saved = personal;
+  saveState();
 }
 
 document.getElementById('tryItSaveReq').addEventListener('click', ()=>{
@@ -887,6 +946,8 @@ document.getElementById('tryItSaveReq').addEventListener('click', ()=>{
   document.getElementById('tryItSaveReqFolder').value = ep.tag || 'General';
   const folders = [...new Set(tryitSavedRequests().map(r=>r.folder).filter(Boolean))];
   document.getElementById('tryItSaveReqFolderList').innerHTML = folders.map(f=>`<option value="${escapeHtml(f)}">`).join('');
+  const personalCb = document.getElementById('tryItSaveReqPersonal');
+  if(personalCb) personalCb.checked = false;
   document.getElementById('tryItSaveReqModal').classList.add('show');
   document.getElementById('tryItSaveReqName').focus();
 });
@@ -897,10 +958,11 @@ document.getElementById('tryItSaveReqOk').addEventListener('click', ()=>{
   const name = document.getElementById('tryItSaveReqName').value.trim();
   if(!name){ toast('Name is required.'); return; }
   const folder = document.getElementById('tryItSaveReqFolder').value.trim() || 'General';
+  const personal = !!(document.getElementById('tryItSaveReqPersonal') && document.getElementById('tryItSaveReqPersonal').checked);
   const { proj, ep } = tryItContext;
   const entry = {
     id: uid(),
-    name, folder,
+    name, folder, personal,
     projectId: proj.id, endpointId: ep.id, method: ep.method, path: ep.path,
     pathRows: (tryItContext.pathRows||[]).map(r=>({ key:r.key, value:r.value })),
     queryRows: (tryItContext.queryRows||[]).filter(r=>!r.ghost && r.key).map(r=>({ ...r })),
@@ -911,9 +973,7 @@ document.getElementById('tryItSaveReqOk').addEventListener('click', ()=>{
     scenarioName: tryItSelectedScenarioName() || null,
     createdAt: new Date().toISOString(), createdBy: state.authorName || '',
   };
-  if(!state.tryitCollections) state.tryitCollections = { variables:[], saved:[] };
-  state.tryitCollections.saved = [...tryitSavedRequests(), entry];
-  saveState();
+  tryitSaveSavedRequests([...tryitSavedRequests(), entry]);
   document.getElementById('tryItSaveReqModal').classList.remove('show');
   toast(`Saved "${name}"`);
   renderTryItSidebar(document.getElementById('tryItSidebarSearch') ? document.getElementById('tryItSidebarSearch').value : '');
@@ -950,12 +1010,14 @@ function renderTryItSidebarSaved(){
     const collapsed = tryItSavedFolderCollapsed.has(folder);
     return `<div class="tryit-sidebar-saved-folder">
       <div class="tryit-sidebar-saved-folder-head" data-toggle-saved-folder="${escapeHtml(folder)}">
-        <span class="tryit-sidebar-proj-caret" style="transform:rotate(${collapsed?'-90deg':'0'});">▾</span><span>${escapeHtml(folder)}</span>
+        <span class="tryit-sidebar-proj-caret" style="transform:rotate(${collapsed?'-90deg':'0'});">▾</span><span style="flex:1;">${escapeHtml(folder)}</span>
+        ${byFolder[folder].length > 1 ? `<button type="button" class="tryit-sidebar-run-folder" data-run-folder="${escapeHtml(folder)}" title="Run every saved request in this folder, in order">▶ Run ${byFolder[folder].length}</button>` : ''}
       </div>
       ${collapsed ? '' : byFolder[folder].map(r=>`
         <div class="tryit-sidebar-saved-row${r.endpointId===activeId?' active':''}" data-saved-id="${escapeHtml(r.id)}">
           <span class="tryit-sidebar-ep-method" style="color:var(--${methodClass(r.method)});">${escapeHtml((r.method||'').toUpperCase())}</span>
           <span class="tryit-sidebar-saved-row-name">${escapeHtml(r.name)}</span>
+          ${r.personal ? '<span class="tryit-sidebar-saved-personal" title="Only visible to you">●</span>' : ''}
           <button type="button" class="tryit-sidebar-saved-del" data-saved-del="${escapeHtml(r.id)}" title="Delete saved request">✕</button>
         </div>`).join('')}
     </div>`;
@@ -971,12 +1033,17 @@ document.getElementById('tryItSavedToggle').addEventListener('click', ()=>{
 });
 
 document.getElementById('tryItSidebarSaved').addEventListener('click', (e)=>{
+  const runFolder = e.target.closest('[data-run-folder]');
+  if(runFolder){
+    e.stopPropagation();
+    runSavedRequestsInFolder(runFolder.getAttribute('data-run-folder'));
+    return;
+  }
   const del = e.target.closest('[data-saved-del]');
   if(del){
     e.stopPropagation();
     const id = del.getAttribute('data-saved-del');
-    state.tryitCollections.saved = tryitSavedRequests().filter(r=>r.id !== id);
-    saveState();
+    tryitSaveSavedRequests(tryitSavedRequests().filter(r=>r.id !== id));
     renderTryItSidebarSaved();
     return;
   }
@@ -993,6 +1060,92 @@ document.getElementById('tryItSidebarSaved').addEventListener('click', (e)=>{
     if(entry) loadSavedTryItRequest(entry);
   }
 });
+
+/* ---------- Collection Runner (batch-execute a folder, Postman-style) ----------
+   Deliberately reuses the REAL Try It UI/state machine instead of a second,
+   parallel "headless send" engine — for each saved request in the folder,
+   this quietly drives openTryItModal() (the exact function a click in the
+   sidebar already calls) to load it, clicks the real Send button, waits for
+   the simulated 450ms "network delay" sendTryIt() already uses, then reads
+   the outcome straight off the same DOM sendTryIt() itself renders into.
+   Zero duplicated request-matching/scenario logic to drift out of sync.
+   Deliberately Simulated-only: openTryItModal() always reopens with the
+   Live toggle off (see its own comment), and Live mode requires a fresh,
+   hand-typed credential per send anyway — neither saved requests nor a
+   batch runner can carry a real credential forward, by the same rule Live
+   mode already enforces everywhere else in this file. */
+async function tryitRunnerFireSingle(){
+  const sendBtn = document.getElementById('tryItSend');
+  if(sendBtn.disabled) return { outcome:'blocked' }; // a required field failed sendTryIt()'s own validation and toasted instead of sending
+  sendBtn.click();
+  // sendTryIt()'s simulated path uses a fixed 450ms setTimeout — wait past
+  // it (with a little slack for the toast/re-render) rather than polling.
+  await new Promise(r=>setTimeout(r, 650));
+  const resultCard = document.getElementById('tryItResultCard');
+  const notDocCard = document.getElementById('tryItNotDocCard');
+  if(resultCard.style.display !== 'none'){
+    return { outcome:'matched', code: document.getElementById('tryItStatusCode').textContent };
+  }
+  if(notDocCard.style.display !== 'none'){
+    return { outcome:'not-documented' };
+  }
+  return { outcome:'blocked' }; // e.g. a required param/header still failed validation
+}
+
+function renderTryItRunnerRows(entries, resultsById){
+  return entries.map(entry=>{
+    const r = resultsById[entry.id];
+    let pill = `<span class="tryit-runner-pill pending">Pending</span>`;
+    if(r){
+      if(r.outcome === 'matched') pill = `<span class="tryit-runner-pill pass">${escapeHtml(r.code)}</span>`;
+      else if(r.outcome === 'not-documented') pill = `<span class="tryit-runner-pill warn">Not documented</span>`;
+      else if(r.outcome === 'skipped') pill = `<span class="tryit-runner-pill skip">Skipped — ${escapeHtml(r.detail||'')}</span>`;
+      else pill = `<span class="tryit-runner-pill skip">Blocked</span>`;
+    } else if(r === undefined && entry._running){
+      pill = `<span class="tryit-runner-pill running">Running…</span>`;
+    }
+    return `<div class="tryit-runner-row" data-runner-row="${escapeHtml(entry.id)}">
+      <span class="tryit-sidebar-ep-method" style="color:var(--${methodClass(entry.method)});">${escapeHtml((entry.method||'').toUpperCase())}</span>
+      <span class="tryit-runner-row-name">${escapeHtml(entry.name)}</span>
+      ${pill}
+    </div>`;
+  }).join('');
+}
+
+async function runSavedRequestsInFolder(folder){
+  const entries = tryitSavedRequests().filter(r=>(r.folder||'General')===folder);
+  if(!entries.length) return;
+  const modal = document.getElementById('tryItRunnerModal');
+  const titleEl = document.getElementById('tryItRunnerTitle');
+  const listEl = document.getElementById('tryItRunnerList');
+  const summaryEl = document.getElementById('tryItRunnerSummary');
+  titleEl.textContent = `Running "${folder}" — ${entries.length} request${entries.length===1?'':'s'}`;
+  summaryEl.textContent = '';
+  const resultsById = {};
+  listEl.innerHTML = renderTryItRunnerRows(entries, resultsById);
+  modal.classList.add('show');
+
+  for(const entry of entries){
+    listEl.innerHTML = renderTryItRunnerRows(entries.map(e=>e===entry?{...e,_running:true}:e), resultsById);
+    const proj = state.projects[entry.projectId];
+    const ep = proj && (proj.endpoints||[]).find(e=>e.id===entry.endpointId);
+    if(!proj || !ep){
+      resultsById[entry.id] = { outcome:'skipped', detail:'Endpoint no longer exists' };
+      listEl.innerHTML = renderTryItRunnerRows(entries, resultsById);
+      continue;
+    }
+    openTryItModal(proj, ep, entry);
+    await new Promise(r=>setTimeout(r, 60)); // let the modal's own render settle before driving Send
+    resultsById[entry.id] = await tryitRunnerFireSingle();
+    listEl.innerHTML = renderTryItRunnerRows(entries, resultsById);
+  }
+
+  const counts = Object.values(resultsById).reduce((acc,r)=>{ acc[r.outcome] = (acc[r.outcome]||0)+1; return acc; }, {});
+  summaryEl.textContent = `${counts.matched||0} matched a documented response · ${counts['not-documented']||0} not documented · ${(counts.skipped||0)+(counts.blocked||0)} skipped/blocked`;
+}
+
+document.getElementById('tryItRunnerClose').addEventListener('click', ()=> document.getElementById('tryItRunnerModal').classList.remove('show'));
+document.getElementById('tryItRunnerModal').addEventListener('click', (e)=>{ if(e.target.id === 'tryItRunnerModal') document.getElementById('tryItRunnerModal').classList.remove('show'); });
 
 /* ---------- Save response field as variable (chaining, no scripting) ----------
    Covers Postman's #1 real-world scripting use case — take a value out of
@@ -1028,7 +1181,12 @@ document.getElementById('tryItSaveRespVar').addEventListener('click', ()=>{
   const fields = flattenJsonForVarPicker(tryItLastResponseJson, '');
   if(!fields.length){ toast('This response has no fields to save.'); return; }
   const sel = document.getElementById('tryItSaveVarField');
-  sel.innerHTML = fields.map((f,i)=>`<option value="${i}">${escapeHtml(f.path)} = ${escapeHtml(String(f.value).slice(0,40))}</option>`).join('');
+  // The dropdown preview text is a DISPLAY surface (same masking rule as
+  // the response body above) — a sensitive-looking field shows masked here
+  // too, even though the value actually saved into the variable (below,
+  // on Save) is the real one, since a masked token would be useless to
+  // chain into the next request.
+  sel.innerHTML = fields.map((f,i)=>`<option value="${i}">${escapeHtml(f.path)} = ${escapeHtml(String(displayValueFor(f.path.split('.').pop(), f.value)).slice(0,40))}</option>`).join('');
   sel.dataset.fields = JSON.stringify(fields);
   document.getElementById('tryItSaveVarName').value = fields[0].path.split('.').pop();
   document.getElementById('tryItSaveVarSecret').checked = /token|secret|password|key/i.test(fields[0].path);
@@ -1590,8 +1748,18 @@ async function sendTryItLive(proj, ep, typedBody){
       codeEl.textContent = String(data.status);
       codeEl.className = 'code-pill ' + respClass(data.status);
       resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(data.status)})`);
-      bodyEl.textContent = typeof data.body === 'string' ? data.body : JSON.stringify(data.body, null, 2);
+      // A live response is real backend data, not a documented example — it
+      // gets the SAME field-name/value-shape PII masking as every other
+      // render surface in the app (maskJsonExampleDeep), not a free pass
+      // just because it came back from a real call. tryItLastResponseJson
+      // keeps the REAL value (needed for "Save response as variable" to be
+      // useful — a masked token is not a usable token) but the visible body
+      // and what gets written into the shared request-history blob are
+      // masked unless this viewer has already revealed sensitive values
+      // (sensitiveRevealed() — same Admin-only toggle used everywhere else).
       tryItLastResponseJson = (data.body !== null && typeof data.body === 'object') ? data.body : null;
+      const displayBody = tryItLastResponseJson !== null ? maskJsonExampleDeep(tryItLastResponseJson) : data.body;
+      bodyEl.textContent = typeof data.body === 'string' ? data.body : JSON.stringify(displayBody, null, 2);
       tryItSetRespSize(bodyEl.textContent);
       latencyEl.textContent = `🔴 Live response from ${envMeta(state.env).label} · ${data.latencyMs} ms — not simulated`;
       renderTryItResponseHeaders(data.headers || {});

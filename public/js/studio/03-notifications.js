@@ -836,14 +836,17 @@ function ownsAnyProject(){
 // switcher. Admins always see everything. Below Admin, this used to just be
 // "every env that isn't hard-flagged restricted" — meaning Production/DR
 // were locked but Dev/SIT/UAT/Staging were open to any Viewer regardless of
-// what an Admin had actually granted them. That's now closed: for every
-// non-admin, non-custom role, the switcher is driven by the exact same
-// per-user grant matrix an Admin maintains under Security ▸ Live Mode
-// Access (state.liveModeEnvs, loaded once at boot from
-// /api/live-mode/my-access) — so a Viewer can only browse into an
-// environment an Admin has explicitly ticked for them, full stop. A
-// `restricted` env (Production/DR) still can't be granted this way; that
-// flag is a hard ceiling no grant can lift.
+// what an Admin had actually granted them. That was closed by driving the
+// switcher off the Live Mode grant matrix — but that then over-corrected:
+// it meant "let this Viewer browse SIT's docs" and "let this Viewer fire a
+// REAL request at SIT" were the same admin checkbox, with no way to grant
+// one without the other. So browsing is now its own SEPARATE grant
+// (state.docBrowseEnvs, loaded once at boot from
+// /api/live-mode/my-browse-access) — either it OR a Live Mode grant
+// (state.liveModeEnvs) is enough to browse an environment's docs, since a
+// live-fire grant obviously implies "trusted to at least look at it first".
+// A `restricted` env (Production/DR) still can't be granted this way; that
+// flag is a hard ceiling neither grant can lift.
 function roleAllowedEnvs(roleId){
   if(roleId === 'custom'){
     if(AUTH_USER && AUTH_USER.role === 'custom' && AUTH_USER.customPermissions){
@@ -854,8 +857,9 @@ function roleAllowedEnvs(roleId){
   }
   const role = roleMeta(roleId);
   if(role.seesAll) return environments();
-  const granted = Array.isArray(state.liveModeEnvs) ? state.liveModeEnvs : [];
-  return environments().filter(e=>!e.restricted && granted.includes(e.id));
+  const live = Array.isArray(state.liveModeEnvs) ? state.liveModeEnvs : [];
+  const browse = Array.isArray(state.docBrowseEnvs) ? state.docBrowseEnvs : [];
+  return environments().filter(e=>!e.restricted && (live.includes(e.id) || browse.includes(e.id)));
 }
 function roleAllowsEnv(envId){ return roleAllowedEnvs(state.authorRole).some(e=>e.id===envId); }
 

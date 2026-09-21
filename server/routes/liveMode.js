@@ -32,6 +32,18 @@ async function loadGrants(org) {
   return rows[0]?.live_mode_grants || {};
 }
 
+// SEPARATE from live_mode_grants above — "may browse this environment's
+// docs at all" vs "may fire a real request against it". Previously the env
+// switcher (roleAllowedEnvs, public/js/studio/03-notifications.js) reused
+// live_mode_grants for BOTH, which meant an Admin couldn't let a Viewer
+// browse SIT's docs without also handing them live-fire capability there.
+// No secrets live in this list — just environment ids — so it's a plain
+// column, no encryption (same treatment as live_mode_grants itself).
+async function loadBrowseGrants(org) {
+  const { rows } = await pool.query(`SELECT doc_browse_grants FROM org_workspace WHERE organisation = $1`, [org]);
+  return rows[0]?.doc_browse_grants || {};
+}
+
 // GET /api/live-mode/my-access — which environments the CALLER may go live
 // against. Every signed-in user can read their own; Try It uses this to
 // decide whether to show the Live toggle at all.
@@ -45,101 +57,148 @@ router.get('/my-access', async (req, res) => {
   }
 });
 
-// GET /api/live-mode/grants — Admin only. Full per-user grant matrix plus the
-// org's user list and environment catalog, for Security ▸ Live Mode Access.
+// GET /api/live-mode/my-browse-access — which environments the CALLER may
+// browse docs for, independent of Live mode. See loadBrowseGrants above.
+router.get('/my-browse-access', async (req, res) => {
+  try {
+    const grants = await loadBrowseGrants(req.authUser.organisation);
+    res.json({ environments: grants[String(req.authUser.sub)] || [] });
+  } catch (err) {
+    console.error('GET /api/live-mode/my-browse-access failed:', err);
+    res.status(500).json({ error: 'Could not load doc-browse access.' });
+  }
+});
+
+// GET /api/live-mode/grants — Admin only. Full per-user grant matrix (both
+// live-fire and doc-browse) plus the org's user list and environment
+// catalog, for Security ▸ Live Mode Access.
 router.get('/grants', requireAdmin, async (req, res) => {
   try {
     const org = req.authUser.organisation;
-    const [grants, usersResult, environments] = await Promise.all([
+    const [grants, browseGrants, usersResult, environments] = await Promise.all([
       loadGrants(org),
+      loadBrowseGrants(org),
       pool.query(`SELECT id, username, role FROM users WHERE organisation = $1 ORDER BY username ASC`, [org]),
       getOrgEnvironments(org),
     ]);
-    res.json({ grants, users: usersResult.rows, environments });
+    res.json({ grants, browseGrants, users: usersResult.rows, environments });
   } catch (err) {
     console.error('GET /api/live-mode/grants failed:', err);
     res.status(500).json({ error: 'Could not load Live mode grants.' });
   }
 });
 
-// PUT /api/live-mode/grants — Admin only. Body: { grants: { "<userId>": ["DEV",...] } }.
+// Cleans an incoming { "<userId>": ["DEV",...] } map against the org's real
+// users/environments, and diffs it against what was there before — shared
+// by both the live-fire and doc-browse grant maps below so the two stay in
+// perfect lockstep in how they're validated and reported.
+function cleanAndDiffGrantMap(incoming, previous, validEnvIds, validUserIds, usernameById) {
+  const clean = {};
+  Object.entries(incoming || {}).forEach(([userId, envIds]) => {
+    if (!validUserIds.has(String(userId)) || !Array.isArray(envIds)) return;
+    const filtered = envIds.filter((e) => validEnvIds.has(e));
+    if (filtered.length) clean[String(userId)] = filtered;
+  });
+  const perUserChanges = new Map(); // uid -> { added, removed }
+  new Set([...Object.keys(previous || {}), ...Object.keys(clean)]).forEach((uid) => {
+    const before = new Set(previous?.[uid] || []);
+    const after = new Set(clean[uid] || []);
+    const added = [...after].filter((e) => !before.has(e));
+    const removed = [...before].filter((e) => !after.has(e));
+    if (added.length || removed.length) perUserChanges.set(uid, { added, removed });
+  });
+  return { clean, perUserChanges };
+}
+
+// PUT /api/live-mode/grants — Admin only. Body:
+//   { grants: { "<userId>": ["DEV",...] }, browseGrants: { "<userId>": [...] } }
+// browseGrants is optional (older clients may still send just `grants`) —
+// omitting it leaves doc-browse access untouched rather than wiping it.
 // Silently drops any user id or environment id that isn't actually valid for
 // this organisation, rather than rejecting the whole save over one stale entry.
 router.put('/grants', requireAdmin, async (req, res) => {
   const org = req.authUser.organisation;
   const incoming = req.body?.grants;
+  const incomingBrowse = req.body?.browseGrants;
   if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
     return res.status(400).json({ error: 'grants must be an object keyed by user id.' });
   }
+  if (incomingBrowse !== undefined && (typeof incomingBrowse !== 'object' || Array.isArray(incomingBrowse))) {
+    return res.status(400).json({ error: 'browseGrants must be an object keyed by user id.' });
+  }
   try {
-    const [validEnvironments, userRows, previousGrants] = await Promise.all([
+    const [validEnvironments, userRows, previousGrants, previousBrowseGrants] = await Promise.all([
       getOrgEnvironments(org),
       pool.query(`SELECT id, username FROM users WHERE organisation = $1`, [org]),
       loadGrants(org),
+      loadBrowseGrants(org),
     ]);
     const validEnvIds = new Set(validEnvironments.map((e) => e.id));
     const usernameById = new Map(userRows.rows.map((r) => [String(r.id), r.username]));
     const validUserIds = new Set(userRows.rows.map((r) => String(r.id)));
 
-    const clean = {};
-    Object.entries(incoming).forEach(([userId, envIds]) => {
-      if (!validUserIds.has(String(userId)) || !Array.isArray(envIds)) return;
-      const filtered = envIds.filter((e) => validEnvIds.has(e));
-      if (filtered.length) clean[String(userId)] = filtered;
-    });
+    const { clean, perUserChanges } = cleanAndDiffGrantMap(incoming, previousGrants, validEnvIds, validUserIds, usernameById);
+    let cleanBrowse = previousBrowseGrants;
+    let browseChanges = new Map();
+    if (incomingBrowse !== undefined) {
+      const browseResult = cleanAndDiffGrantMap(incomingBrowse, previousBrowseGrants, validEnvIds, validUserIds, usernameById);
+      cleanBrowse = browseResult.clean;
+      browseChanges = browseResult.perUserChanges;
+    }
 
-    // Diff against what was there before, per user, so the audit trail says
-    // exactly what changed instead of just "something changed" — meaningful
-    // for a table that controls who can browse/fire real requests against
-    // which environment.
+    // One combined audit line + notification per user, covering whichever
+    // of the two grant types actually changed for them — so an Admin
+    // ticking both a browse and a live box for the same person in one save
+    // doesn't produce two separate, confusing history entries.
     const changedLines = [];
-    const perUserChanges = []; // { userId, added, removed } — fed to notifyUser below, after the save succeeds
-    new Set([...Object.keys(previousGrants || {}), ...Object.keys(clean)]).forEach((uid) => {
-      const before = new Set(previousGrants?.[uid] || []);
-      const after = new Set(clean[uid] || []);
-      const added = [...after].filter((e) => !before.has(e));
-      const removed = [...before].filter((e) => !after.has(e));
-      if (!added.length && !removed.length) return;
+    const perUserNotify = [];
+    new Set([...perUserChanges.keys(), ...browseChanges.keys()]).forEach((uid) => {
+      const live = perUserChanges.get(uid) || { added: [], removed: [] };
+      const browse = browseChanges.get(uid) || { added: [], removed: [] };
       const who = usernameById.get(uid) || `user ${uid}`;
       const parts = [];
-      if (added.length) parts.push(`granted ${added.join(', ')}`);
-      if (removed.length) parts.push(`revoked ${removed.join(', ')}`);
+      if (live.added.length) parts.push(`live-fire granted ${live.added.join(', ')}`);
+      if (live.removed.length) parts.push(`live-fire revoked ${live.removed.join(', ')}`);
+      if (browse.added.length) parts.push(`browse granted ${browse.added.join(', ')}`);
+      if (browse.removed.length) parts.push(`browse revoked ${browse.removed.join(', ')}`);
+      if (!parts.length) return;
       changedLines.push(`${who}: ${parts.join('; ')}`);
-      perUserChanges.push({ userId: Number(uid), added, removed });
+      perUserNotify.push({ userId: Number(uid), live, browse });
     });
 
     await pool.query(
-      `INSERT INTO org_workspace (organisation, live_mode_grants, updated_at) VALUES ($1, $2, now())
-       ON CONFLICT (organisation) DO UPDATE SET live_mode_grants = EXCLUDED.live_mode_grants, updated_at = now()`,
-      [org, JSON.stringify(clean)]
+      `INSERT INTO org_workspace (organisation, live_mode_grants, doc_browse_grants, updated_at) VALUES ($1, $2, $3, now())
+       ON CONFLICT (organisation) DO UPDATE SET live_mode_grants = EXCLUDED.live_mode_grants, doc_browse_grants = EXCLUDED.doc_browse_grants, updated_at = now()`,
+      [org, JSON.stringify(clean), JSON.stringify(cleanBrowse)]
     );
     await recordAuditEvent(req.authUser, req, {
       action: 'LIVE_MODE_GRANTS_UPDATED',
       resourceType: 'live_mode_grants',
-      details: changedLines.length ? changedLines.join(' | ') : 'Saved Live mode access with no effective change',
+      details: changedLines.length ? changedLines.join(' | ') : 'Saved Live mode / doc-browse access with no effective change',
       severity: 'warning',
-      metadata: { grants: clean, previousGrants },
+      metadata: { grants: clean, previousGrants, browseGrants: cleanBrowse, previousBrowseGrants },
     });
 
     // The person whose access just changed has no other way to find out —
     // this is exactly the "same blind spot" the Security nav badge covers
     // for doc-access requests, applied to the other side of Security
-    // (Live Mode Access). Only notify on an actual change (perUserChanges
-    // already filters out no-ops above).
-    await Promise.all(perUserChanges.map(({ userId, added, removed }) => {
+    // (Live Mode Access). Only notify on an actual change.
+    await Promise.all(perUserNotify.map(({ userId, live, browse }) => {
       const parts = [];
-      if (added.length) parts.push(`Granted: ${added.join(', ')}`);
-      if (removed.length) parts.push(`Revoked: ${removed.join(', ')}`);
+      if (live.added.length) parts.push(`Live-fire granted: ${live.added.join(', ')}`);
+      if (live.removed.length) parts.push(`Live-fire revoked: ${live.removed.join(', ')}`);
+      if (browse.added.length) parts.push(`Browse granted: ${browse.added.join(', ')}`);
+      if (browse.removed.length) parts.push(`Browse revoked: ${browse.removed.join(', ')}`);
       return notifyUser(userId, {
         organisation: org,
         type: 'LIVE_MODE_GRANTS_UPDATED',
-        title: 'Your Live Mode access changed',
+        title: 'Your environment access changed',
         body: parts.join(' · '),
         link: { view: 'tryit' },
       });
     }));
 
-    res.json({ grants: clean });
+    res.json({ grants: clean, browseGrants: cleanBrowse });
   } catch (err) {
     console.error('PUT /api/live-mode/grants failed:', err);
     res.status(500).json({ error: 'Could not save Live mode grants.' });

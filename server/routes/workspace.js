@@ -468,12 +468,16 @@ router.get('/', async (req, res) => {
       }));
     }
 
-    const wsResult = await pool.query(
-      `SELECT environments, environments_enc, request_history, request_history_enc, tryit_collections_enc, custom_flow_directions, custom_icons, branding
-       FROM org_workspace WHERE organisation = $1`,
-      [org]
-    );
+    const [wsResult, userRow] = await Promise.all([
+      pool.query(
+        `SELECT environments, environments_enc, request_history, request_history_enc, tryit_collections_enc, custom_flow_directions, custom_icons, branding
+         FROM org_workspace WHERE organisation = $1`,
+        [org]
+      ),
+      pool.query(`SELECT tryit_personal_enc FROM users WHERE id = $1`, [userId]),
+    ]);
     const ws = wsResult.rows[0] || {};
+    const tryitPersonalEnc = userRow.rows[0]?.tryit_personal_enc;
 
     // Audit log is no longer part of this payload — it's fetched separately
     // from GET /api/audit/events, which returns server-authoritative entries
@@ -483,6 +487,12 @@ router.get('/', async (req, res) => {
       environments: decryptOrgBlob(ws.environments_enc, ws.environments, org, 'environments', []),
       requestHistory: decryptOrgBlob(ws.request_history_enc, ws.request_history, org, 'request_history', {}),
       tryitCollections: decryptOrgBlob(ws.tryit_collections_enc, null, org, 'tryit_collections', { variables: [], saved: [] }),
+      // PER-USER, not org-shared — see the users.tryit_personal_enc comment
+      // in server/db.js. Safe to fold into this same cached payload because
+      // the cache itself is already keyed per (org, userId) — see cache.js.
+      tryitPersonal: tryitPersonalEnc
+        ? (() => { try { return JSON.parse(dataCrypto.decryptField(tryitPersonalEnc, `user:${userId}:tryit_personal`)); } catch (e) { console.error(`Failed to decrypt tryit_personal for user ${userId}:`, e); return { variables: [], saved: [] }; } })()
+        : { variables: [], saved: [] },
       customFlowDirections: ws.custom_flow_directions || [],
       customIcons: ws.custom_icons || [],
       branding: ws.branding || {},
@@ -1006,6 +1016,32 @@ router.put('/tryit-collections', async (req, res) => {
   } catch (err) {
     console.error('PUT tryit-collections failed:', err);
     res.status(500).json({ error: 'Could not save Try It collections.' });
+  }
+});
+
+// Personal Try It variables + saved requests — PER-USER, never included in
+// the org-shared tryit_collections blob above. See the users.tryit_personal_enc
+// comment in server/db.js for why this needs to be a genuinely separate,
+// per-user-encrypted column rather than a client-side-filtered flag on a
+// shared record (the latter would still ship everyone's "personal" tokens
+// to every other org member's browser, just hidden by the UI).
+router.put('/tryit-personal', async (req, res) => {
+  const body = req.body?.tryitPersonal;
+  if (!isPlainObject(body) || !Array.isArray(body.variables) || !Array.isArray(body.saved)) {
+    return res.status(400).json({ error: 'Expected { tryitPersonal: { variables: [], saved: [] } }.' });
+  }
+  try {
+    const userId = req.authUser.sub;
+    const enc = dataCrypto.encryptField(JSON.stringify(body), `user:${userId}:tryit_personal`);
+    await pool.query(
+      `UPDATE users SET tryit_personal_enc = $1, tryit_personal_key_version = $2 WHERE id = $3`,
+      [enc, dataCrypto.currentKeyVersion(), userId]
+    );
+    await cache.invalidateOrg(req.authUser.organisation);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('PUT tryit-personal failed:', err);
+    res.status(500).json({ error: 'Could not save your personal Try It data.' });
   }
 });
 

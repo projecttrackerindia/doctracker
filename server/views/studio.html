@@ -1872,12 +1872,8 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-empty-link[disabled]:hover{ text-decoration:none; }
 .tryit-empty-ic{ font-size:14px; }
 
-/* Cookies link + response History control, matching Postman's placement —
-   both honest stubs for now, same pattern as the Scripts/Settings tabs. */
 .tryit-tabs-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; }
 .tryit-tabs-row .tryit-tabs{ margin:0; flex:1; min-width:0; }
-.tryit-cookies-link{ font-size:11.5px; font-weight:600; color:var(--text-faint); background:none; border:none; cursor:pointer; white-space:nowrap; flex-shrink:0; }
-.tryit-cookies-link:hover{ color:var(--text-dim); }
 .tryit-history-wrap{ position:relative; flex-shrink:0; }
 .tryit-resp-history{
   font-size:11px; font-weight:600; color:var(--text-faint); background:var(--surface-2);
@@ -1966,6 +1962,27 @@ body.tryit-standalone #tryItClose{ display:none; }
 .tryit-sidebar-saved-row:hover{ background:var(--surface); color:var(--text); }
 .tryit-sidebar-saved-row.active{ background:var(--accent-soft); color:var(--accent); }
 .tryit-sidebar-saved-row-name{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tryit-sidebar-saved-personal{ color:var(--accent); font-size:8px; flex-shrink:0; }
+.tryit-sidebar-run-folder{
+  background:none; border:1px solid var(--border); color:var(--text-faint); border-radius:6px;
+  padding:2px 7px; font-size:10px; font-weight:600; cursor:pointer; flex-shrink:0;
+}
+.tryit-sidebar-run-folder:hover{ border-color:var(--accent); color:var(--accent); }
+.tryit-runner-list{ max-height:360px; overflow-y:auto; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); }
+.tryit-runner-row{
+  display:flex; align-items:center; gap:10px; padding:9px 12px; font-size:12.5px;
+  border-bottom:1px solid var(--border);
+}
+.tryit-runner-row:last-child{ border-bottom:none; }
+.tryit-runner-row-name{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); }
+.tryit-runner-pill{
+  font-size:10.5px; font-weight:700; padding:3px 8px; border-radius:999px; white-space:nowrap; flex-shrink:0;
+}
+.tryit-runner-pill.pending{ color:var(--text-faint); background:var(--surface); }
+.tryit-runner-pill.running{ color:var(--accent); background:var(--accent-soft); }
+.tryit-runner-pill.pass{ color:var(--post); background:var(--post-bg); }
+.tryit-runner-pill.warn{ color:var(--put); background:var(--put-bg); }
+.tryit-runner-pill.skip{ color:var(--text-faint); background:var(--surface); }
 .tryit-sidebar-saved-del{
   opacity:0; width:18px; height:18px; border-radius:5px; border:none; background:transparent;
   color:var(--text-faint); cursor:pointer; font-size:11px; flex-shrink:0;
@@ -3683,7 +3700,6 @@ pre.json-raw{ max-height:360px; margin:0; }
         <div class="lang-tab" data-trytab="scripts" id="tryItTabBtnScripts">Scripts</div>
         <div class="lang-tab" data-trytab="settings" id="tryItTabBtnSettings">Settings</div>
       </div>
-      <button type="button" class="tryit-cookies-link" id="tryItCookiesLink" title="Not built yet">Cookies</button>
     </div>
 
     <div class="tryit-tabpanel" id="tryItAuthPanel"></div>
@@ -3845,11 +3861,29 @@ pre.json-raw{ max-height:360px; margin:0; }
       <input type="text" id="tryItSaveReqFolder" placeholder="e.g. Payments" list="tryItSaveReqFolderList">
       <datalist id="tryItSaveReqFolderList"></datalist>
     </div>
+    <label style="display:flex; align-items:center; gap:6px; margin-top:4px; font-size:12px; color:var(--text-dim);">
+      <input type="checkbox" id="tryItSaveReqPersonal"> Only me — never shared with the rest of the team
+    </label>
     <div class="modal-actions" style="margin-top:20px;">
       <div></div>
       <div class="right">
         <button type="button" id="tryItSaveReqCancel">Cancel</button>
         <button type="button" class="primary" id="tryItSaveReqOk">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="tryItRunnerModal">
+  <div class="modal" style="width:460px;">
+    <h2 id="tryItRunnerTitle">Running…</h2>
+    <div class="modal-sub" style="margin-bottom:14px;">Each request is replayed Simulated — see the app's own docs for why Live can't run unattended.</div>
+    <div id="tryItRunnerList" class="tryit-runner-list"></div>
+    <div class="hint" id="tryItRunnerSummary" style="margin-top:12px;"></div>
+    <div class="modal-actions" style="margin-top:16px;">
+      <div></div>
+      <div class="right">
+        <button type="button" id="tryItRunnerClose">Close</button>
       </div>
     </div>
   </div>

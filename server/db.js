@@ -74,6 +74,16 @@ async function initDb() {
   // either of which a client could just... not enforce.
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ;`);
 
+  // Personal Try It collection variables + saved requests — deliberately a
+  // PER-USER column (unlike tryit_collections_enc on org_workspace, which
+  // every org member's browser receives) so a variable someone marks
+  // "only me" (e.g. their own personal token, not the team's) genuinely
+  // never reaches another user's payload, not just hidden from their UI.
+  // Encrypted with a purpose string bound to this specific user id, same
+  // AAD-binding pattern as every other encrypted blob in the app.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS tryit_personal_enc TEXT;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS tryit_personal_key_version INTEGER;`);
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(email));
   `);
@@ -180,6 +190,14 @@ async function initDb() {
   // much real-world blast radius a *person* is trusted with, not which
   // project they happen to be looking at. See server/routes/liveMode.js.
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS live_mode_grants JSONB NOT NULL DEFAULT '{}';`);
+  // A SEPARATE grant from live_mode_grants above: "may browse this
+  // environment's docs" vs "may fire a real request against it". Previously
+  // the switcher reused live_mode_grants for both, which meant an Admin
+  // could not let a Viewer browse SIT without also handing them live-fire
+  // capability there. No secrets live in this list (just environment ids),
+  // so — like custom_flow_directions/custom_icons — it's plain JSONB, not
+  // encrypted the way live_mode_grants' sibling request_history is.
+  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS doc_browse_grants JSONB NOT NULL DEFAULT '{}';`);
 
   // ---- Admin-managed sensitive-field masking rules (Admin ▸ Security ▸ PII & Data Masking) ----
   // Every request/response parameter table consults this list (merged with the

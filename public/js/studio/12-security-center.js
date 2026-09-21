@@ -1054,7 +1054,14 @@ function liveModeMatchesQuery(u, q){
   if(!q) return true;
   return `${u.username} ${u.role}`.toLowerCase().includes(q);
 }
-function renderLiveModeTableRows(users, environments, grants, q){
+// Two independent checkboxes per environment cell now, not one: Browse
+// (may see/switch to this environment's docs) and Live (may fire a REAL
+// request against it) — see loadBrowseGrants/loadGrants in
+// server/routes/liveMode.js. A live-fire grant implies browse (you can't
+// usefully test-fire something you can't even look at), so checking Live
+// auto-checks Browse and un-checking Browse auto-unchecks Live — enforced
+// in the change handler below, not just visually here.
+function renderLiveModeTableRows(users, environments, grants, browseGrants, q){
   const filtered = users.filter(u=>liveModeMatchesQuery(u, q));
   if(!filtered.length){
     return `<tr><td colspan="${environments.length+1}" style="text-align:center;padding:28px 16px;color:var(--text-faint);">No users match "${escapeHtml(q)}"</td></tr>`;
@@ -1066,14 +1073,20 @@ function renderLiveModeTableRows(users, environments, grants, q){
       ${environments.map(e=>{
         if(isFullAccess){
           return `<td style="text-align:center;padding:12px 20px;border-bottom:1px solid var(--border);" title="Admins always have full environment access">
-            <input type="checkbox" checked disabled style="opacity:.4;">
+            <span class="hint" style="margin:0;">Full access</span>
           </td>`;
         }
         const restricted = !!e.restricted;
-        return `<td style="text-align:center;padding:12px 20px;border-bottom:1px solid var(--border);">
-          <input type="checkbox" data-live-grant-user="${u.id}" data-live-grant-env="${escapeHtml(e.id)}"
-            ${((grants[String(u.id)]||[]).includes(e.id)) ? 'checked' : ''}
-            ${restricted ? 'disabled title="'+escapeHtml(e.label||e.id)+' is restricted to Admins — grant it from that role instead"' : ''}>
+        const isBrowse = (browseGrants[String(u.id)]||[]).includes(e.id);
+        const isLive = (grants[String(u.id)]||[]).includes(e.id);
+        const disabledAttr = restricted ? 'disabled title="'+escapeHtml(e.label||e.id)+' is restricted to Admins — grant it from that role instead"' : '';
+        return `<td style="text-align:center;padding:10px 20px;border-bottom:1px solid var(--border);white-space:nowrap;">
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:var(--text-faint);margin-right:10px;" title="May browse this environment's docs">
+            <input type="checkbox" data-browse-grant-user="${u.id}" data-browse-grant-env="${escapeHtml(e.id)}" ${isBrowse?'checked':''} ${disabledAttr}> Browse
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:var(--delete);" title="May send REAL requests against this environment from Try It">
+            <input type="checkbox" data-live-grant-user="${u.id}" data-live-grant-env="${escapeHtml(e.id)}" ${isLive?'checked':''} ${disabledAttr}> Live
+          </label>
         </td>`;
       }).join('')}
     </tr>`;
@@ -1082,22 +1095,24 @@ function renderLiveModeTableRows(users, environments, grants, q){
 function renderLiveModeAccessTab(body){
   body.innerHTML = `<div class="al-loading" style="padding:40px 0;text-align:center;color:var(--text-faint);font-size:13px;">Loading Live mode access…</div>`;
   _liveModeGrantsDirty = false;
-  liveModeApi('GET', '/grants').then(({ grants, users, environments })=>{
+  liveModeApi('GET', '/grants').then(({ grants, browseGrants, users, environments })=>{
     if(!environments.length){
       body.innerHTML = `<div class="sec-card"><div class="s">No environments are configured for this organisation yet — add one from Your Profile first.</div></div>`;
       return;
     }
+    const safeBrowseGrants = browseGrants || {};
     body.innerHTML = `
-      <div class="section" style="margin-bottom:18px;max-width:760px;">
-        <div class="sec-card" style="--sc-accent:var(--delete);">
-          <div class="s" style="line-height:1.6;">
-            Checking a box here does two things for that person: it lets them <strong>see and switch to</strong> that environment at all in the top-right switcher, and it lets them send <strong>real</strong> requests from Try It against it — not simulated ones. This app never stores real credentials, so they'll still need to enter their own at send time. Production and DR stay Admin-only no matter what's checked here.</div>
-        </div>
-      </div>
       <div class="section" style="margin-bottom:18px;max-width:760px;">
         <div class="sec-card" style="--sc-accent:var(--accent);">
           <div class="s" style="line-height:1.6;">
-            This is the single source of truth for non-admin environment access — a Viewer or Editor can only browse an environment's docs if it's checked here for them.
+            Two separate grants per environment: <strong>Browse</strong> lets that person see and switch to it at all in the top-right switcher; <strong>Live</strong> additionally lets them send <strong>real</strong> requests from Try It against it — not simulated ones. Checking Live auto-checks Browse (you can't usefully test-fire something you can't look at); un-checking Browse clears Live too.
+          </div>
+        </div>
+      </div>
+      <div class="section" style="margin-bottom:18px;max-width:760px;">
+        <div class="sec-card" style="--sc-accent:var(--delete);">
+          <div class="s" style="line-height:1.6;">
+            This app never stores real credentials — a Live grant just means they'll be asked to enter their own at send time. Production and DR stay Admin-only no matter what's checked here.
           </div>
         </div>
       </div>
@@ -1115,12 +1130,17 @@ function renderLiveModeAccessTab(body){
             </tr>
             <tr>
               <th style="padding:6px 20px 10px;border-bottom:1px solid var(--border);position:sticky;left:0;background:var(--surface);font-weight:400;color:var(--text-faint);font-size:10px;">Select all</th>
-              ${environments.map(e=>`<th style="text-align:center;padding:6px 20px 10px;border-bottom:1px solid var(--border);">
-                <input type="checkbox" data-live-grant-col="${escapeHtml(e.id)}" ${e.restricted?'disabled title="Restricted to Admins"':''}>
+              ${environments.map(e=>`<th style="text-align:center;padding:6px 20px 10px;border-bottom:1px solid var(--border);white-space:nowrap;">
+                <label style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--text-faint);margin-right:8px;">
+                  <input type="checkbox" data-browse-grant-col="${escapeHtml(e.id)}" ${e.restricted?'disabled title="Restricted to Admins"':''}> Browse
+                </label>
+                <label style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--delete);">
+                  <input type="checkbox" data-live-grant-col="${escapeHtml(e.id)}" ${e.restricted?'disabled title="Restricted to Admins"':''}> Live
+                </label>
               </th>`).join('')}
             </tr>
           </thead>
-          <tbody id="liveModeTableBody">${renderLiveModeTableRows(users, environments, grants, '')}</tbody>
+          <tbody id="liveModeTableBody">${renderLiveModeTableRows(users, environments, grants, safeBrowseGrants, '')}</tbody>
         </table>
       </div>
       <button type="button" class="primary" id="btnSaveLiveModeGrants" style="margin-top:16px;">Save access</button>
@@ -1128,8 +1148,27 @@ function renderLiveModeAccessTab(body){
 
     const dirtyBadge = document.getElementById('liveModeDirtyBadge');
     const markDirty = ()=>{ _liveModeGrantsDirty = true; dirtyBadge.style.display = ''; };
+    // A row's Live checkbox implies Browse — checking Live force-checks
+    // Browse; un-checking Browse force-unchecks Live. Applied via event
+    // delegation on the tbody (rows get replaced wholesale on every
+    // search/filter re-render, see the search handler below), not one
+    // listener per checkbox.
     const wireRowCheckboxes = ()=>{
-      body.querySelectorAll('[data-live-grant-user]').forEach(cb=>{
+      body.querySelectorAll('[data-live-grant-user], [data-browse-grant-user]').forEach(cb=>{
+        cb.addEventListener('change', ()=>{
+          const row = cb.closest('[data-live-row]');
+          if(!row) return;
+          if(cb.hasAttribute('data-live-grant-user') && cb.checked){
+            const browseCb = row.querySelector(`[data-browse-grant-env="${cb.getAttribute('data-live-grant-env')}"]`);
+            if(browseCb && !browseCb.checked) browseCb.checked = true;
+          }
+          if(cb.hasAttribute('data-browse-grant-user') && !cb.checked){
+            const liveCb = row.querySelector(`[data-live-grant-env="${cb.getAttribute('data-browse-grant-env')}"]`);
+            if(liveCb && liveCb.checked) liveCb.checked = false;
+          }
+        });
+      });
+      body.querySelectorAll('[data-live-grant-user], [data-browse-grant-user]').forEach(cb=>{
         cb.addEventListener('change', markDirty);
       });
     };
@@ -1138,46 +1177,53 @@ function renderLiveModeAccessTab(body){
     // Column "select all" — only ever touches the currently-visible (search-
     // filtered), non-admin, non-restricted checkboxes in that column, so it
     // can't silently grant an environment to someone hidden by the filter.
-    body.querySelectorAll('[data-live-grant-col]').forEach(colCb=>{
+    // Checking the Live column header also force-checks that row's Browse
+    // box (via the change listener wired above); un-checking the Browse
+    // column header force-unchecks Live the same way.
+    body.querySelectorAll('[data-live-grant-col], [data-browse-grant-col]').forEach(colCb=>{
       colCb.addEventListener('change', ()=>{
-        const envId = colCb.getAttribute('data-live-grant-col');
-        body.querySelectorAll(`[data-live-grant-env="${envId}"]`).forEach(cb=>{
+        const isLive = colCb.hasAttribute('data-live-grant-col');
+        const envId = colCb.getAttribute(isLive ? 'data-live-grant-col' : 'data-browse-grant-col');
+        const selector = isLive ? `[data-live-grant-env="${envId}"]` : `[data-browse-grant-env="${envId}"]`;
+        body.querySelectorAll(selector).forEach(cb=>{
           if(cb.disabled) return;
           cb.checked = colCb.checked;
+          cb.dispatchEvent(new Event('change', { bubbles:false }));
         });
         markDirty();
       });
     });
 
+    const collectDraft = ()=>{
+      const grantsDraft = {}, browseDraft = {};
+      body.querySelectorAll('[data-live-grant-user]').forEach(cb=>{
+        if(!cb.checked) return;
+        (grantsDraft[cb.getAttribute('data-live-grant-user')] = grantsDraft[cb.getAttribute('data-live-grant-user')] || []).push(cb.getAttribute('data-live-grant-env'));
+      });
+      body.querySelectorAll('[data-browse-grant-user]').forEach(cb=>{
+        if(!cb.checked) return;
+        (browseDraft[cb.getAttribute('data-browse-grant-user')] = browseDraft[cb.getAttribute('data-browse-grant-user')] || []).push(cb.getAttribute('data-browse-grant-env'));
+      });
+      return { grantsDraft, browseDraft };
+    };
+
     const searchInput = document.getElementById('liveModeSearch');
     searchInput.addEventListener('input', ()=>{
       // Collect in-progress (unsaved) checkbox state before re-rendering
       // rows, so filtering never discards a change the admin just made.
-      const draft = {};
-      body.querySelectorAll('[data-live-grant-user]').forEach(cb=>{
-        if(!cb.checked) return;
-        const uid = cb.getAttribute('data-live-grant-user');
-        const envId = cb.getAttribute('data-live-grant-env');
-        (draft[uid] = draft[uid] || []).push(envId);
-      });
+      const { grantsDraft, browseDraft } = collectDraft();
       const q = searchInput.value.trim().toLowerCase();
-      document.getElementById('liveModeTableBody').innerHTML = renderLiveModeTableRows(users, environments, draft, q);
+      document.getElementById('liveModeTableBody').innerHTML = renderLiveModeTableRows(users, environments, grantsDraft, browseDraft, q);
       wireRowCheckboxes();
     });
 
     document.getElementById('btnSaveLiveModeGrants').addEventListener('click', async ()=>{
       const btn = document.getElementById('btnSaveLiveModeGrants');
-      const next = {};
-      body.querySelectorAll('[data-live-grant-user]').forEach(cb=>{
-        if(!cb.checked) return;
-        const uid = cb.getAttribute('data-live-grant-user');
-        const envId = cb.getAttribute('data-live-grant-env');
-        (next[uid] = next[uid] || []).push(envId);
-      });
+      const { grantsDraft: next, browseDraft: nextBrowse } = collectDraft();
       btn.disabled = true; btn.textContent = 'Saving…';
       try{
-        await liveModeApi('PUT', '/grants', { grants: next });
-        toast('Live mode access updated');
+        await liveModeApi('PUT', '/grants', { grants: next, browseGrants: nextBrowse });
+        toast('Environment access updated');
         _liveModeGrantsDirty = false;
         dirtyBadge.style.display = 'none';
       }catch(e){

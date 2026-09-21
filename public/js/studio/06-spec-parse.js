@@ -19,6 +19,9 @@ async function loadState(){
     state.tryitCollections = (ws.tryitCollections && typeof ws.tryitCollections === 'object')
       ? { variables: Array.isArray(ws.tryitCollections.variables) ? ws.tryitCollections.variables : [], saved: Array.isArray(ws.tryitCollections.saved) ? ws.tryitCollections.saved : [] }
       : { variables: [], saved: [] };
+    state.tryitPersonal = (ws.tryitPersonal && typeof ws.tryitPersonal === 'object')
+      ? { variables: Array.isArray(ws.tryitPersonal.variables) ? ws.tryitPersonal.variables : [], saved: Array.isArray(ws.tryitPersonal.saved) ? ws.tryitPersonal.saved : [] }
+      : { variables: [], saved: [] };
     state.environments = (Array.isArray(ws.environments) && ws.environments.length) ? ws.environments.map(migrateEnvironment) : [];
     state.customFlowDirections = Array.isArray(ws.customFlowDirections) ? ws.customFlowDirections : [];
     state.branding = ws.branding && typeof ws.branding === 'object' ? ws.branding : {};
@@ -28,6 +31,7 @@ async function loadState(){
     state.projects = {};
     state.requestHistory = {};
     state.tryitCollections = { variables: [], saved: [] };
+    state.tryitPersonal = { variables: [], saved: [] };
     state.environments = [];
     state.customFlowDirections = [];
     state.branding = {};
@@ -152,6 +156,9 @@ function saveState(){
     });
     apiSend('PUT', '/tryit-collections', { tryitCollections: state.tryitCollections }).catch(e=>{
       console.error('Save Try It collections failed', e);
+    });
+    apiSend('PUT', '/tryit-personal', { tryitPersonal: state.tryitPersonal }).catch(e=>{
+      console.error('Save personal Try It data failed', e);
     });
   }, 300);
   return true;
