@@ -327,7 +327,15 @@ async function generateProjectPdf(){
         cursorY = marginTop;
       }
 
-      const canvas = await html2canvas(atomEl, { scale:2, backgroundColor:'#ffffff', useCORS:true, ignoreElements: ignoreForCanvas });
+      // scale:2 (4x the pixels of a plain screenshot) was overkill for mostly
+      // text/table content and is the single biggest lever on render time —
+      // html2canvas's raster cost scales with pixel area, so 1.5 (2.25x, not
+      // 4x) cuts real work per atom by roughly half with no visible quality
+      // loss in the final PDF (still well above native 1x/96dpi). This
+      // matters most at scale: with ~13-14 atoms per endpoint, a 50-endpoint
+      // export is 650-700 sequential html2canvas calls, so every bit of
+      // per-atom cost is multiplied hundreds of times over.
+      const canvas = await html2canvas(atomEl, { scale:1.5, backgroundColor:'#ffffff', useCORS:true, ignoreElements: ignoreForCanvas });
       const imgWidth = contentWidth;
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
