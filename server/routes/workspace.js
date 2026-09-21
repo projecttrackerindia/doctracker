@@ -299,7 +299,16 @@ function projectForViewer(row, viewerId, data, grant) {
   // when the whole project is public — never via the has_public_endpoint
   // loophole that lets an otherwise-private project's public endpoints show up here.
   const architectureDiagram = row.visibility === 'public' ? data.architectureDiagram : undefined;
-  return { ...data, id: row.id, visibility: row.visibility, endpoints, attachments, architectureDiagram, _owned: false, _readonly: true };
+  // SECURITY: `environments` (real DEV/UAT/PROD base URLs) was missing from
+  // this list entirely — the `...data` spread below let it straight through
+  // to ANY org member who can see this project via the public catalog, even
+  // one with zero endpoints unlocked yet, completely bypassing the per-
+  // endpoint doc-access-request system this whole branch exists to enforce.
+  // Same "only if the whole project is public" rule as attachments/diagram;
+  // real hosts otherwise never belong in a payload sent to someone who
+  // isn't the owner or an explicit project_access grantee.
+  const environments = row.visibility === 'public' ? data.environments : {};
+  return { ...data, id: row.id, visibility: row.visibility, endpoints, attachments, architectureDiagram, environments, _owned: false, _readonly: true };
 }
 
 // ---- Per-endpoint documentation access locking ----
