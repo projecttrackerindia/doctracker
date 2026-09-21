@@ -265,6 +265,49 @@ document.addEventListener('keydown', (e)=>{
 /* ---------- Sidebar / rail chrome toggles ---------- */
 document.getElementById('btnSidebarToggle').addEventListener('click', toggleSidebar);
 document.getElementById('btnSidebarEdgeToggle').addEventListener('click', toggleSidebar);
+
+/* ---------- Sidebar drag-to-resize ---------- */
+(function(){
+  const SB_WIDTH_KEY = 'sbWidth';
+  const MIN_W = 220, MAX_W = 520;
+  const app = document.getElementById('app');
+  const handle = document.getElementById('sidebarResizeHandle');
+  if(!handle) return;
+
+  const savedWidth = parseInt(localStorage.getItem(SB_WIDTH_KEY), 10);
+  if(savedWidth && savedWidth >= MIN_W && savedWidth <= MAX_W){
+    app.style.setProperty('--sb-w', savedWidth + 'px');
+  }
+
+  let dragging = false, startX = 0, startW = 0;
+  handle.addEventListener('pointerdown', (e)=>{
+    if(state.sidebarCollapsed) return;
+    dragging = true;
+    startX = e.clientX;
+    startW = document.getElementById('sidebar').getBoundingClientRect().width;
+    app.classList.add('sb-resizing');
+    handle.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  handle.addEventListener('pointermove', (e)=>{
+    if(!dragging) return;
+    const w = Math.min(MAX_W, Math.max(MIN_W, startW + (e.clientX - startX)));
+    app.style.setProperty('--sb-w', w + 'px');
+  });
+  function endDrag(e){
+    if(!dragging) return;
+    dragging = false;
+    app.classList.remove('sb-resizing');
+    const w = document.getElementById('sidebar').getBoundingClientRect().width;
+    localStorage.setItem(SB_WIDTH_KEY, String(Math.round(w)));
+  }
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
+  handle.addEventListener('dblclick', ()=>{
+    app.style.removeProperty('--sb-w');
+    localStorage.removeItem(SB_WIDTH_KEY);
+  });
+})();
 // When collapsed to the icon rail, clicking the search icon or the home icon
 // re-expands the sidebar (rather than doing nothing, or requiring the person
 // to find the edge handle) — search additionally focuses the input.
