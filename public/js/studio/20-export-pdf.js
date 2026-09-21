@@ -96,6 +96,76 @@ const PDF_MARGIN_BOTTOM_MM = 6 + PDF_FOOTER_BAND_HEIGHT_MM;
 const PDF_CONTENT_WIDTH_MM = PDF_PAGE_WIDTH_MM - PDF_MARGIN_X_MM * 2;
 const PDF_PAGE_CONTENT_HEIGHT_MM = PDF_PAGE_HEIGHT_MM - PDF_MARGIN_TOP_MM - PDF_MARGIN_BOTTOM_MM;
 
+// ============================================================================
+// Native (non-rasterized) drawing for per-endpoint content — see plan
+// "Native (non-rasterized) PDF export for per-endpoint content". Endpoint
+// header/description/chips/curl/param-tables/JSON examples/responses are
+// drawn directly with jsPDF text/vector primitives instead of being rendered
+// to HTML and rasterized by html2canvas — this is what actually fixes render
+// time scaling linearly with endpoint count (see generateProjectPdf below).
+// The cover page, Overview, Lifecycle wheel, and each endpoint's Request
+// Flow diagram stay HTML+html2canvas (Phase 2, deliberately out of scope —
+// they render once or a handful of times per project, not per endpoint, so
+// they're not the bottleneck; see placeCanvasAtom for that path).
+//
+// Colors below are pulled 1:1 from .pdf-print-root's CSS in studio.html so
+// natively-drawn endpoints match the still-rasterized surrounding pages.
+// ============================================================================
+const PDF_COLORS = {
+  border: '#e2e6ee', body: '#4b5468', heading: '#0f1420', faint: '#8890a3',
+  codeBg: '#f6f8fb', codeHeadBg: '#eef1f6', chipBg: '#eef1f6', white: '#ffffff',
+};
+// fg = pill/badge text color; base+alpha = pill/badge background (CSS rgba,
+// flattened onto white below since jsPDF fill colors are opaque);
+// borderBase+borderAlpha = pill/badge border.
+const PDF_METHOD_STYLE = {
+  get:    { fg: '#1f66c9', base: '#4fa3f7', alpha: .16, borderBase: '#2f7fd1', borderAlpha: .35 },
+  post:   { fg: '#128058', base: '#35c491', alpha: .16, borderBase: '#1f9d6f', borderAlpha: .35 },
+  put:    { fg: '#93611a', base: '#e0a83e', alpha: .18, borderBase: '#b1791f', borderAlpha: .35 },
+  patch:  { fg: '#6237a8', base: '#b389f0', alpha: .18, borderBase: '#7a53c9', borderAlpha: .35 },
+  delete: { fg: '#a41f33', base: '#ef5c6e', alpha: .16, borderBase: '#c73b4d', borderAlpha: .35 },
+};
+// Response status-pill tones (st-c2..st-c5 in CSS) reuse the exact same
+// method palette — c2=2xx(green/post), c3=3xx(blue/get), c4=4xx(amber/put), c5=5xx(red/delete).
+const PDF_STATUS_STYLE = { c2: PDF_METHOD_STYLE.post, c3: PDF_METHOD_STYLE.get, c4: PDF_METHOD_STYLE.put, c5: PDF_METHOD_STYLE.delete };
+
+function pdfHexToRgb(hex){
+  const h = String(hex).replace('#','');
+  return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+}
+function pdfBlendOverWhite(hex, alpha){
+  const [r,g,b] = pdfHexToRgb(hex);
+  const f = (c)=>Math.round(c*alpha + 255*(1-alpha));
+  return [f(r), f(g), f(b)];
+}
+function pdfSetFill(pdf, hex){ const [r,g,b] = pdfHexToRgb(hex); pdf.setFillColor(r,g,b); }
+function pdfSetFillBlend(pdf, hex, alpha){ const [r,g,b] = pdfBlendOverWhite(hex, alpha); pdf.setFillColor(r,g,b); }
+function pdfSetText(pdf, hex){ const [r,g,b] = pdfHexToRgb(hex); pdf.setTextColor(r,g,b); }
+function pdfSetDraw(pdf, hex){ const [r,g,b] = pdfHexToRgb(hex); pdf.setDrawColor(r,g,b); }
+function pdfSetDrawBlend(pdf, hex, alpha){ const [r,g,b] = pdfBlendOverWhite(hex, alpha); pdf.setDrawColor(r,g,b); }
+
+// A "pen": the one shared page/cursor-position tracker threaded through every
+// native draw call AND the (still-rasterized) atom placements, so the whole
+// document — native and raster content alike — flows through one consistent
+// page-break cursor instead of two disagreeing ones.
+function createPdfPen(pdf){ return { pdf, y: PDF_MARGIN_TOP_MM, firstContent: true }; }
+function pdfPageBottom(){ return PDF_PAGE_HEIGHT_MM - PDF_MARGIN_BOTTOM_MM; }
+function pdfNewPage(pen){ pen.pdf.addPage(); pen.y = PDF_MARGIN_TOP_MM; }
+// Starts a fresh page only if there's already content on the current one —
+// used where an endpoint must always begin at the top of its own page.
+function pdfForcePageBreak(pen){
+  if(!pen.firstContent && pen.y > PDF_MARGIN_TOP_MM) pdfNewPage(pen);
+}
+function pdfEnsureSpace(pen, neededMM){
+  if(pen.y + neededMM > pdfPageBottom()) pdfNewPage(pen);
+}
+
+// jsPDF text sizes are in points; splitTextToSize/getTextWidth return
+// measurements in the document's own unit (mm here) once setFont/setFontSize
+// have been called — this app's whole native layer relies on that, same as
+// stampPdfPage already does for the running header/footer.
+function pdfLineHeightMM(fontSizePt, lineFactor){ return fontSizePt * 0.3528 * (lineFactor || 1.15); }
+
 // Long JSON/curl examples (marked with data-pdf-code-chunkable) are the main reason an
 // atom would ever end up taller than a page. Rather than let that happen and rely on the
 // slice-across-pages fallback further down, split them into several page-sized code-card
@@ -147,6 +217,471 @@ function splitTallCodeAtomsForPdf(container){
     });
     atomEl.replaceWith(frag);
   });
+}
+
+// ---------- Native drawing helpers (endpoint content — see plan) ----------
+function pdfMeasure(pdf, fontSize, fontStyle, fontFamily){
+  pdf.setFont(fontFamily||'helvetica', fontStyle||'normal');
+  pdf.setFontSize(fontSize);
+}
+
+function drawSectionTitle(pen, text){
+  pdfEnsureSpace(pen, 9);
+  const pdf = pen.pdf;
+  pdfMeasure(pdf, 8.3, 'bold');
+  pdfSetText(pdf, PDF_COLORS.faint);
+  pdf.text(String(text).toUpperCase(), PDF_MARGIN_X_MM, pen.y + 3, { charSpace: 0.25 });
+  pen.y += 9;
+  pen.firstContent = false;
+}
+
+function drawChipsRow(pen, chips){
+  chips = (chips||[]).filter(Boolean);
+  if(!chips.length) return;
+  const pdf = pen.pdf;
+  const fontSize = 7.4, padX = 2.6, h = 5.6, gap = 2.2;
+  pdfMeasure(pdf, fontSize, 'bold');
+  pdfEnsureSpace(pen, h + 3);
+  let x = PDF_MARGIN_X_MM;
+  chips.forEach(txt=>{
+    const w = pdf.getTextWidth(txt) + padX*2;
+    if(x + w > PDF_MARGIN_X_MM + PDF_CONTENT_WIDTH_MM && x > PDF_MARGIN_X_MM){
+      x = PDF_MARGIN_X_MM; pen.y += h + 1.6; pdfEnsureSpace(pen, h+3);
+    }
+    pdfSetFill(pdf, PDF_COLORS.chipBg);
+    pdfSetDraw(pdf, PDF_COLORS.border);
+    pdf.setLineWidth(0.15);
+    pdf.roundedRect(x, pen.y, w, h, h/2, h/2, 'FD');
+    pdfSetText(pdf, PDF_COLORS.body);
+    pdf.text(txt, x + w/2, pen.y + h/2 + 1.1, { align:'center' });
+    x += w + gap;
+  });
+  pen.y += h + 4;
+  pen.firstContent = false;
+}
+
+// Method badge + path + version, on a lightly tinted card with a colored
+// left accent bar — a flat approximation of the original's CSS gradient
+// banner (jsPDF has no easy gradient fill; a tint reads the same at a
+// glance and needs no extra library).
+function drawEndpointBanner(pen, proj, ep, index){
+  const pdf = pen.pdf;
+  const method = String(ep.method||'GET').toLowerCase();
+  const style = PDF_METHOD_STYLE[method] || PDF_METHOD_STYLE.get;
+  const indexStr = String(index+1).padStart(2,'0');
+  const versionStr = (ep.version || proj.version) ? ('v' + String(ep.version||proj.version).replace(/^v/i,'')) : '';
+
+  const badgeFontSize = 9, badgePadX = 3, badgeH = 7.4;
+  pdfMeasure(pdf, badgeFontSize, 'bold');
+  const methodLabel = String(ep.method||'').toUpperCase();
+  const badgeW = Math.max(pdf.getTextWidth(methodLabel) + badgePadX*2, 15);
+
+  pdfMeasure(pdf, 8, 'bold');
+  const indexW = pdf.getTextWidth(indexStr);
+  const pathFontSize = 12.2;
+  pdfMeasure(pdf, pathFontSize, 'bold');
+  const pathAvailWidth = PDF_CONTENT_WIDTH_MM - 6 - indexW - 4 - badgeW - 5 - (versionStr ? 22 : 0) - 5;
+  const pathLines = pdf.splitTextToSize(ep.path||'', Math.max(pathAvailWidth, 40));
+
+  const bannerPadY = 4.2, bannerPadX = 5;
+  const pathBlockH = pathLines.length * pdfLineHeightMM(pathFontSize);
+  const rowH = Math.max(badgeH, pathBlockH);
+  const bannerH = rowH + bannerPadY*2;
+
+  pdfEnsureSpace(pen, bannerH + 3);
+  const x0 = PDF_MARGIN_X_MM, y0 = pen.y;
+
+  pdfSetFillBlend(pdf, style.base, 0.07);
+  pdfSetDrawBlend(pdf, style.borderBase, style.borderAlpha);
+  pdf.setLineWidth(0.2);
+  pdf.roundedRect(x0, y0, PDF_CONTENT_WIDTH_MM, bannerH, 2.4, 2.4, 'FD');
+  pdfSetFill(pdf, style.borderBase);
+  pdf.roundedRect(x0, y0+1.6, 1.3, bannerH-3.2, 0.6, 0.6, 'F');
+
+  let cx = x0 + bannerPadX + 1.5;
+  const midY = y0 + bannerH/2;
+
+  pdfMeasure(pdf, 8, 'bold');
+  pdfSetText(pdf, PDF_COLORS.faint);
+  pdf.text(indexStr, cx, midY + 1.2);
+  cx += indexW + 4;
+
+  pdfSetFillBlend(pdf, style.base, style.alpha);
+  pdfSetDrawBlend(pdf, style.borderBase, style.borderAlpha);
+  pdf.setLineWidth(0.15);
+  pdf.roundedRect(cx, midY - badgeH/2, badgeW, badgeH, 1.6, 1.6, 'FD');
+  pdfMeasure(pdf, badgeFontSize, 'bold');
+  pdfSetText(pdf, style.fg);
+  pdf.text(methodLabel, cx + badgeW/2, midY + 1.4, { align:'center' });
+  cx += badgeW + 5;
+
+  pdfMeasure(pdf, pathFontSize, 'bold');
+  pdfSetText(pdf, PDF_COLORS.heading);
+  const pathStartY = midY - ((pathLines.length-1)*pdfLineHeightMM(pathFontSize))/2 + 1.4;
+  pathLines.forEach((line,i)=> pdf.text(line, cx, pathStartY + i*pdfLineHeightMM(pathFontSize)));
+
+  if(versionStr){
+    pdfMeasure(pdf, 8, 'normal');
+    pdfSetText(pdf, PDF_COLORS.faint);
+    pdf.text(versionStr, x0 + PDF_CONTENT_WIDTH_MM - bannerPadX, midY + 1, { align:'right' });
+  }
+
+  pen.y = y0 + bannerH + 5;
+  pen.firstContent = false;
+}
+
+// ---- Native markdown-lite ----
+// Mirrors renderMarkdown's actual real feature set (public/js/studio/05-util.js):
+// ATX headers, **bold**/*italic*/`code` inline, flat/nested -/*/N. lists,
+// paragraphs. No links/images/tables/blockquotes/fenced code — renderMarkdown
+// doesn't support those either. Nested lists collapse to one indent level —
+// a deliberate v1 simplification, not a bug, for the rare deeply-nested case.
+function pdfInlineRuns(text){
+  const runs = [];
+  let rest = text;
+  const re = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`(.+?)`)/;
+  while(rest.length){
+    const m = re.exec(rest);
+    if(!m){ runs.push({text: rest, bold:false, italic:false, code:false}); break; }
+    if(m.index > 0) runs.push({text: rest.slice(0, m.index), bold:false, italic:false, code:false});
+    if(m[1]) runs.push({text: m[2], bold:true, italic:false, code:false});
+    else if(m[3]) runs.push({text: m[4], bold:false, italic:true, code:false});
+    else if(m[5]) runs.push({text: m[6], bold:false, italic:false, code:true});
+    rest = rest.slice(m.index + m[0].length);
+  }
+  return runs;
+}
+
+function drawRunsWrapped(pen, runs, opts){
+  opts = opts || {};
+  const pdf = pen.pdf;
+  const fontSize = opts.fontSize || 10.5;
+  const x0 = opts.x != null ? opts.x : PDF_MARGIN_X_MM;
+  const maxWidth = opts.maxWidth != null ? opts.maxWidth : PDF_CONTENT_WIDTH_MM;
+  const lh = pdfLineHeightMM(fontSize, opts.lineGapFactor || 1.5);
+  const color = opts.color || PDF_COLORS.body;
+
+  const words = [];
+  runs.forEach(r=>{
+    const style = r.code ? 'code' : (r.bold ? 'bold' : (r.italic ? 'italic' : 'normal'));
+    String(r.text).split(/(\s+)/).forEach(tok=>{ if(tok!=='') words.push({tok, style}); });
+  });
+
+  let line = [];
+  let lineW = 0;
+  const flushLine = ()=>{
+    if(!line.length) return;
+    pdfEnsureSpace(pen, lh);
+    let cx = x0;
+    line.forEach(w=>{
+      pdfMeasure(pdf, fontSize, w.style==='bold'?'bold':(w.style==='italic'?'italic':'normal'), w.style==='code'?'courier':'helvetica');
+      pdfSetText(pdf, w.style==='code' ? PDF_COLORS.heading : color);
+      pdf.text(w.tok, cx, pen.y + fontSize*0.3528*0.78);
+      cx += pdf.getTextWidth(w.tok);
+    });
+    pen.y += lh;
+    line = []; lineW = 0;
+  };
+
+  words.forEach(w=>{
+    pdfMeasure(pdf, fontSize, w.style==='bold'?'bold':(w.style==='italic'?'italic':'normal'), w.style==='code'?'courier':'helvetica');
+    const ww = pdf.getTextWidth(w.tok);
+    if(/^\s+$/.test(w.tok) && line.length===0) return;
+    if(lineW + ww > maxWidth && line.length){ flushLine(); }
+    line.push(w); lineW += ww;
+  });
+  flushLine();
+  pen.firstContent = false;
+}
+
+function drawMarkdownLite(pen, markdown){
+  if(!markdown) return;
+  const lines = String(markdown).replace(/\r\n/g,'\n').split('\n');
+  let i = 0;
+  const paraBuf = [];
+  const flushPara = ()=>{
+    if(!paraBuf.length) return;
+    drawRunsWrapped(pen, pdfInlineRuns(paraBuf.join(' ')), { fontSize: 10.5, color: PDF_COLORS.body });
+    pen.y += 2.2;
+    paraBuf.length = 0;
+  };
+  while(i < lines.length){
+    const line = lines[i].trim();
+    if(line === ''){ flushPara(); i++; continue; }
+    const hMatch = /^(#{1,4})\s+(.*)$/.exec(line);
+    if(hMatch){
+      flushPara();
+      const level = hMatch[1].length;
+      const fontSize = level<=2 ? 12.5 : (level===3 ? 11.3 : 10.3);
+      drawRunsWrapped(pen, [{text: hMatch[2], bold:true}], { fontSize, color: PDF_COLORS.heading });
+      pen.y += 1.6;
+      i++; continue;
+    }
+    const listMatch = /^([-*]|\d+[.)])\s+(.*)$/.exec(line);
+    if(listMatch){
+      flushPara();
+      const bullet = /\d/.test(listMatch[1]) ? listMatch[1] : '•';
+      pdfEnsureSpace(pen, pdfLineHeightMM(10.5));
+      const pdf = pen.pdf;
+      pdfMeasure(pdf, 10.5, 'normal');
+      pdfSetText(pdf, PDF_COLORS.body);
+      pdf.text(bullet, PDF_MARGIN_X_MM + 1, pen.y + 3.7);
+      drawRunsWrapped(pen, pdfInlineRuns(listMatch[2]), { fontSize: 10.5, color: PDF_COLORS.body, x: PDF_MARGIN_X_MM + 6, maxWidth: PDF_CONTENT_WIDTH_MM - 6 });
+      pen.y += 0.8;
+      i++; continue;
+    }
+    paraBuf.push(line);
+    i++;
+  }
+  flushPara();
+}
+
+// ---- Native table (params / headers / response fields) ----
+// Mirrors paramSection()'s exact masking behavior (public/js/studio/14-users.js:825)
+// so the PDF never shows more than the exporting user's role can currently
+// see — same piiRuleFor/maskByStrategy/sensitiveRevealed() calls, same rule.
+function drawNativeParamsTable(pen, title, params){
+  if(!params || !params.length) return;
+  drawSectionTitle(pen, title);
+  const pdf = pen.pdf;
+  const revealed = sensitiveRevealed();
+  const rules = params.map(p=> p.example ? piiRuleFor(p.name, p.example) : null);
+  const widths = [0.22, 0.15, 0.28, 0.35].map(f=>f*PDF_CONTENT_WIDTH_MM);
+  const colX = [PDF_MARGIN_X_MM];
+  for(let i=1;i<widths.length;i++) colX.push(colX[i-1]+widths[i-1]);
+  const padX = 2.2, padY = 1.8;
+  const fontSize = 8.6;
+
+  const rows = params.map((p,i)=>{
+    const rule = rules[i];
+    const masked = !!rule && !revealed;
+    const exampleVal = p.example ? (masked ? maskByStrategy(p.example, rule) : p.example) : '—';
+    return [ p.name + (p.required ? ' *' : ''), p.type||'', exampleVal, p.description || '—' ];
+  });
+
+  const drawHeaderRow = ()=>{
+    pdfEnsureSpace(pen, 6.6);
+    pdfSetFillBlend(pdf, '#4a5fe0', .08);
+    pdf.rect(PDF_MARGIN_X_MM, pen.y, PDF_CONTENT_WIDTH_MM, 6.6, 'F');
+    pdfMeasure(pdf, 7.6, 'bold');
+    pdfSetText(pdf, '#4a5fe0');
+    ['Name','Type','Example','Description'].forEach((h,i)=> pdf.text(h.toUpperCase(), colX[i]+padX, pen.y+4.4, { charSpace: 0.15 }));
+    pen.y += 6.6;
+  };
+  drawHeaderRow();
+
+  rows.forEach((cells)=>{
+    pdfMeasure(pdf, fontSize, 'normal');
+    const wrapped = cells.map((c,i)=> pdf.splitTextToSize(String(c), widths[i]-padX*2));
+    const lineCount = Math.max.apply(null, wrapped.map(w=>w.length).concat([1]));
+    const lh = pdfLineHeightMM(fontSize, 1.3);
+    const rowH = lineCount * lh + padY*2;
+
+    if(pen.y + rowH > pdfPageBottom()){
+      pdfNewPage(pen);
+      drawHeaderRow();
+    }
+
+    pdfSetFill(pdf, PDF_COLORS.white);
+    pdf.rect(PDF_MARGIN_X_MM, pen.y, PDF_CONTENT_WIDTH_MM, rowH, 'F');
+    pdfSetDraw(pdf, PDF_COLORS.border);
+    pdf.setLineWidth(0.12);
+    pdf.line(PDF_MARGIN_X_MM, pen.y+rowH, PDF_MARGIN_X_MM+PDF_CONTENT_WIDTH_MM, pen.y+rowH);
+
+    wrapped.forEach((cellLines, ci)=>{
+      pdfMeasure(pdf, fontSize, ci===0 ? 'bold' : 'normal');
+      pdfSetText(pdf, ci===0 ? PDF_COLORS.heading : (cellLines[0]==='—' ? PDF_COLORS.faint : PDF_COLORS.body));
+      cellLines.forEach((ln,li)=> pdf.text(ln, colX[ci]+padX, pen.y+padY+(li+0.8)*lh));
+    });
+    pen.y += rowH;
+  });
+
+  pdfSetDraw(pdf, PDF_COLORS.border);
+  pdf.setLineWidth(0.2);
+  pen.y += 5;
+  pen.firstContent = false;
+}
+
+// ---- Native monospace code block (curl / JSON examples) ----
+// Text is already fully masked by the caller (curlSample()/maskedJsonString())
+// before reaching here — this only wraps and paginates it. This replaces the
+// old "chunk into page-sized HTML cards, then crop-to-pixel-strips as a
+// fallback" approach: native text just continues on a fresh page like a
+// word processor would, which is actually more correct (a line is never
+// split mid-character) as well as far cheaper than rasterizing.
+function drawNativeCodeBlock(pen, label, sub, text){
+  const pdf = pen.pdf;
+  const fontSize = 8.2;
+  const padX = 4, padY = 3.2;
+  const headH = 7.2;
+  const lh = pdfLineHeightMM(fontSize, 1.35);
+  const innerWidth = PDF_CONTENT_WIDTH_MM - padX*2;
+
+  pdfMeasure(pdf, fontSize, 'normal', 'courier');
+  const rawLines = String(text||'').replace(/\r\n/g,'\n').split('\n');
+  const wrapped = [];
+  rawLines.forEach(l=>{
+    const w = pdf.splitTextToSize(l === '' ? ' ' : l, innerWidth);
+    (w.length ? w : ['']).forEach(x=>wrapped.push(x));
+  });
+
+  pdfEnsureSpace(pen, headH + lh + padY*2 + 2);
+  pdfSetFill(pdf, PDF_COLORS.codeHeadBg);
+  pdf.rect(PDF_MARGIN_X_MM, pen.y, PDF_CONTENT_WIDTH_MM, headH, 'F');
+  pdfMeasure(pdf, 8.3, 'bold');
+  pdfSetText(pdf, PDF_COLORS.body);
+  pdf.text(label, PDF_MARGIN_X_MM + padX, pen.y + 4.8);
+  if(sub){
+    const labelW = pdf.getTextWidth(label);
+    pdfMeasure(pdf, 7.6, 'normal');
+    pdfSetText(pdf, PDF_COLORS.faint);
+    pdf.text(sub, PDF_MARGIN_X_MM + padX + labelW + 6, pen.y + 4.8);
+  }
+  pen.y += headH;
+
+  let chunkStartY = pen.y;
+  let chunkLines = [];
+  const flushChunk = ()=>{
+    if(!chunkLines.length) return;
+    const chunkH = chunkLines.length * lh + padY*2;
+    pdfSetFill(pdf, PDF_COLORS.codeBg);
+    pdf.rect(PDF_MARGIN_X_MM, chunkStartY, PDF_CONTENT_WIDTH_MM, chunkH, 'F');
+    pdfSetDraw(pdf, PDF_COLORS.border);
+    pdf.setLineWidth(0.15);
+    pdf.rect(PDF_MARGIN_X_MM, chunkStartY, PDF_CONTENT_WIDTH_MM, chunkH, 'S');
+    pdfMeasure(pdf, fontSize, 'normal', 'courier');
+    pdfSetText(pdf, PDF_COLORS.heading);
+    chunkLines.forEach((ln,i)=> pdf.text(ln, PDF_MARGIN_X_MM + padX, chunkStartY + padY + (i+0.8)*lh));
+  };
+
+  wrapped.forEach(line=>{
+    const wouldBeH = (chunkLines.length+1) * lh + padY*2;
+    if(chunkStartY + wouldBeH > pdfPageBottom()){
+      flushChunk();
+      pdfNewPage(pen);
+      chunkStartY = pen.y;
+      chunkLines = [];
+    }
+    chunkLines.push(line);
+  });
+  flushChunk();
+  pen.y = chunkStartY + chunkLines.length * lh + padY*2 + 5;
+  pen.firstContent = false;
+}
+
+// ---- Responses ----
+function drawResponsesSection(pen, ep){
+  drawSectionTitle(pen, 'Responses');
+  const responses = ep.responses || [];
+  const pdf = pen.pdf;
+  if(!responses.length){
+    pdfEnsureSpace(pen, 8);
+    pdfMeasure(pdf, 9.5, 'italic');
+    pdfSetText(pdf, PDF_COLORS.faint);
+    pdf.text('No responses documented.', PDF_MARGIN_X_MM, pen.y + 4);
+    pen.y += 10;
+    return;
+  }
+  responses.forEach(r=>{
+    const cls = respClass(r.code);
+    const style = PDF_STATUS_STYLE[cls] || PDF_METHOD_STYLE.get;
+    pdfEnsureSpace(pen, 10);
+    const codeStr = String(r.code);
+    pdfMeasure(pdf, 9.5, 'bold');
+    const pillW = Math.max(pdf.getTextWidth(codeStr) + 5, 12);
+    pdfSetFillBlend(pdf, style.base, style.alpha);
+    pdfSetDrawBlend(pdf, style.borderBase, style.borderAlpha);
+    pdf.setLineWidth(0.15);
+    pdf.roundedRect(PDF_MARGIN_X_MM, pen.y, pillW, 6.6, 3.3, 3.3, 'FD');
+    pdfSetText(pdf, style.fg);
+    pdf.text(codeStr, PDF_MARGIN_X_MM + pillW/2, pen.y + 4.5, { align:'center' });
+
+    if(r.description){
+      pdfMeasure(pdf, 9.5, 'normal');
+      pdfSetText(pdf, PDF_COLORS.body);
+      const descLines = pdf.splitTextToSize(r.description, PDF_CONTENT_WIDTH_MM - pillW - 6);
+      descLines.forEach((l,i)=> pdf.text(l, PDF_MARGIN_X_MM + pillW + 5, pen.y + 4.5 + i*pdfLineHeightMM(9.5)));
+      pen.y += Math.max(6.6, descLines.length*pdfLineHeightMM(9.5)) + 4;
+    } else {
+      pen.y += 6.6 + 4;
+    }
+    pen.firstContent = false;
+
+    if(r.fields && r.fields.length) drawNativeParamsTable(pen, 'Response fields', r.fields);
+    if(r.example) drawNativeCodeBlock(pen, 'Example response', `status ${codeStr}`, maskedJsonString(r.example));
+  });
+}
+
+// ---- Place an already-rasterized html2canvas atom (cover page content, and
+// each endpoint's Request Flow diagram — see plan for why those stay images) ----
+function placeCanvasAtom(pen, canvas){
+  const pdf = pen.pdf;
+  const imgWidth = PDF_CONTENT_WIDTH_MM;
+  const imgHeight = (canvas.height * imgWidth) / canvas.width;
+  const contentBottom = pdfPageBottom();
+
+  if(!pen.firstContent && pen.y + imgHeight > contentBottom){
+    pdfNewPage(pen);
+  }
+  pen.firstContent = false;
+
+  if(imgHeight > (contentBottom - PDF_MARGIN_TOP_MM)){
+    const pxPerMM = canvas.width / imgWidth;
+    const pageSlicePx = Math.floor((contentBottom - PDF_MARGIN_TOP_MM) * pxPerMM);
+    let renderedPx = 0;
+    let firstSlice = true;
+    while(renderedPx < canvas.height){
+      if(!firstSlice){ pdfNewPage(pen); }
+      firstSlice = false;
+      const sliceHeightPx = Math.min(pageSlicePx, canvas.height - renderedPx);
+      const sliceCanvas = document.createElement('canvas');
+      sliceCanvas.width = canvas.width;
+      sliceCanvas.height = sliceHeightPx;
+      sliceCanvas.getContext('2d').drawImage(canvas, 0, renderedPx, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
+      const sliceImgHeight = sliceHeightPx / pxPerMM;
+      pdf.addImage(sliceCanvas.toDataURL('image/jpeg', 0.95), 'JPEG', PDF_MARGIN_X_MM, pen.y, imgWidth, sliceImgHeight);
+      pen.y += sliceImgHeight;
+      renderedPx += sliceHeightPx;
+    }
+    pen.y += 3;
+  } else {
+    const imgData = canvas.toDataURL('image/jpeg', 0.95);
+    pdf.addImage(imgData, 'JPEG', PDF_MARGIN_X_MM, pen.y, imgWidth, imgHeight);
+    pen.y += imgHeight + 3;
+  }
+}
+
+// ---- One endpoint, drawn natively except its Request Flow diagram ----
+async function drawEndpointNative(pen, proj, ep, index, env, flowContainer, ignoreForCanvas){
+  pdfForcePageBreak(pen);
+
+  drawEndpointBanner(pen, proj, ep, index);
+
+  if(ep.summary){
+    drawRunsWrapped(pen, [{text: ep.summary, bold:true}], { fontSize: 11.5, color: PDF_COLORS.heading });
+    pen.y += 1;
+  }
+  if(ep.description) drawMarkdownLite(pen, ep.description);
+
+  drawChipsRow(pen, [ep.tag || 'General', ep.contentType || 'application/json', `${env.label} environment`]);
+
+  flowContainer.innerHTML = `<section>${pdfRequestFlowSectionInnerHtml(proj, env, ep)}</section>`;
+  if(document.fonts && document.fonts.ready) await document.fonts.ready;
+  const flowCanvas = await html2canvas(flowContainer, { scale:1.5, backgroundColor:'#ffffff', useCORS:true, ignoreElements: ignoreForCanvas });
+  placeCanvasAtom(pen, flowCanvas);
+
+  drawNativeCodeBlock(pen, 'Request', 'host masked unless revealed by an Admin', curlSample(proj, ep));
+
+  const pathParams = (ep.parameters||[]).filter(p=>p.in==='path');
+  const queryParams = (ep.parameters||[]).filter(p=>!p.in || p.in==='query');
+  const allParams = [...pathParams.map(p=>({...p, in:'path'})), ...queryParams.map(p=>({...p, in:'query'}))];
+  const headerParams = ep.headers || (ep.parameters||[]).filter(p=>p.in==='header');
+
+  if(allParams.length) drawNativeParamsTable(pen, 'Path & query parameters', allParams);
+  if(headerParams.length) drawNativeParamsTable(pen, 'Headers', headerParams);
+  if(ep.requestBody && ep.requestBody.example) drawNativeCodeBlock(pen, 'Example request body', '', maskedJsonString(ep.requestBody.example));
+
+  drawResponsesSection(pen, ep);
 }
 
 // ---------- Native per-page letterhead, footer, and border ----------
@@ -250,6 +785,7 @@ async function generateProjectPdf(){
   const selectedIds = Array.from(document.querySelectorAll('.pdf-ep-check:checked')).map(c=>c.value);
   if(!selectedIds.length){ toast('Select at least one endpoint to export.'); return; }
   const endpoints = viewEndpoints(proj).filter(ep=>selectedIds.includes(ep.id));
+  const env = envMeta(state.env);
   const generatedAt = new Date();
   const generatedAtStr = generatedAt.toLocaleDateString(undefined,{month:'long', day:'numeric', year:'numeric'}) + ' at ' + generatedAt.toLocaleTimeString(undefined,{hour:'numeric', minute:'2-digit'});
   const author = state.authorName || 'Unknown';
@@ -272,20 +808,31 @@ async function generateProjectPdf(){
   const wait = (ms)=>new Promise(r=>setTimeout(r, ms));
 
   let container = null;
+  let flowContainer = null;
   try{
     setStage('Gathering endpoints…');
     await wait(200);
     setStage('Applying access rules…');
     await wait(200);
-    setStage('Rendering document…');
+    setStage('Rendering cover…');
+    // Only the cover/Overview/Lifecycle/TOC content is built as HTML now —
+    // endpoints are drawn natively below (see drawEndpointNative), not
+    // rasterized. See the "Native (non-rasterized) PDF export" plan.
     container = document.createElement('div');
     container.className = 'pdf-print-root';
     container.innerHTML = buildExportPdfContentHtml(proj, endpoints, opts);
     document.body.appendChild(container);
+    // A second, separate offscreen container just for each endpoint's
+    // Request Flow diagram (still HTML+html2canvas, one call per endpoint —
+    // see plan for why that piece alone stays rasterized) — reused across
+    // endpoints rather than rebuilding the whole document's HTML per one.
+    flowContainer = document.createElement('div');
+    flowContainer.className = 'pdf-print-root';
+    document.body.appendChild(flowContainer);
     if(document.fonts && document.fonts.ready) await document.fonts.ready;
     await wait(60); // let layout settle before rasterizing
 
-    splitTallCodeAtomsForPdf(container); // break up any long JSON/curl examples into page-sized chunks first
+    splitTallCodeAtomsForPdf(container);
 
     const atoms = Array.from(container.querySelectorAll('.pdf-atom'));
 
@@ -293,9 +840,10 @@ async function generateProjectPdf(){
     // element you pass it — so anything else on the page still gets walked. This app's
     // own UI (env pill, escalation dots, etc.) uses CSS color-mix(), which html2canvas's
     // renderer can't parse, and it throws the moment it reaches one. Since none of that
-    // is needed for the export, skip it entirely and only let our own container through.
+    // is needed for the export, skip it entirely and only let our own containers through.
     const ignoreForCanvas = (el)=>{
       if(el === container || container.contains(el)) return false;
+      if(el === flowContainer || flowContainer.contains(el)) return false;
       if(el.id === 'app') return true;
       if(el.classList && (el.classList.contains('modal-overlay') || el.classList.contains('palette-overlay') || el.classList.contains('render-overlay'))) return true;
       return false;
@@ -303,95 +851,28 @@ async function generateProjectPdf(){
 
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF('p', 'mm', 'a4');
-    const marginX = PDF_MARGIN_X_MM, marginTop = PDF_MARGIN_TOP_MM, marginBottom = PDF_MARGIN_BOTTOM_MM;
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const contentWidth = pageWidth - marginX * 2;
-    const contentBottom = pageHeight - marginBottom;
-    const gapMM = 3;
-    let cursorY = marginTop;
-    let firstAtom = true;
+    const pen = createPdfPen(pdf);
 
     for(let idx = 0; idx < atoms.length; idx++){
-      setStage(`Rendering section ${idx + 1} of ${atoms.length}…`);
+      setStage(`Rendering cover ${idx + 1} of ${atoms.length}…`);
       const atomEl = atoms[idx];
 
-      // Each endpoint's header atom carries this — guarantees an endpoint
-      // always starts at the top of a fresh page instead of sometimes being
-      // squeezed onto whatever little space is left at the bottom of the
-      // previous page (which also meant its own later sections routinely
-      // split awkwardly onto the page after that, with a big dead gap left
-      // behind on the page where it started).
-      if(atomEl.hasAttribute('data-pdf-force-page-break-before') && !firstAtom && cursorY > marginTop){
-        pdf.addPage();
-        cursorY = marginTop;
-      }
+      // Each atom flagged force-page-break-before/after keeps that exact
+      // behavior from the old loop (e.g. the cover page standing alone).
+      if(atomEl.hasAttribute('data-pdf-force-page-break-before')) pdfForcePageBreak(pen);
 
-      // scale:2 (4x the pixels of a plain screenshot) was overkill for mostly
-      // text/table content and is the single biggest lever on render time —
-      // html2canvas's raster cost scales with pixel area, so 1.5 (2.25x, not
-      // 4x) cuts real work per atom by roughly half with no visible quality
-      // loss in the final PDF (still well above native 1x/96dpi). This
-      // matters most at scale: with ~13-14 atoms per endpoint, a 50-endpoint
-      // export is 650-700 sequential html2canvas calls, so every bit of
-      // per-atom cost is multiplied hundreds of times over.
       const canvas = await html2canvas(atomEl, { scale:1.5, backgroundColor:'#ffffff', useCORS:true, ignoreElements: ignoreForCanvas });
-      const imgWidth = contentWidth;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      placeCanvasAtom(pen, canvas);
 
-      if(!firstAtom && cursorY + imgHeight > contentBottom){
-        pdf.addPage();
-        cursorY = marginTop;
-      }
-      firstAtom = false;
+      if(atomEl.hasAttribute('data-pdf-force-page-break-after') && idx < atoms.length - 1) pdfNewPage(pen);
+    }
 
-      if(imgHeight > (contentBottom - marginTop)){
-        // Rare even after the code-chunking pass above (e.g. one unbroken line too long
-        // to split, or a very tall diagram): crop the *source canvas* into exact
-        // page-sized pixel strips and place each as its own image, so every page shows
-        // a precise, non-overlapping portion.
-        //
-        // The previous approach drew the same full image on each page, shifted upward,
-        // and relied on the page boundary to clip whatever didn't belong on that page —
-        // but a PDF page only clips at its physical edge, not at the bottom-margin line
-        // the math here assumed. That margin strip actually got drawn (bleeding past
-        // where the margin should start), and the same rows were then drawn again at the
-        // top of the next page — a visible band of duplicated text at every seam.
-        // Cropping the pixels themselves up front removes the ambiguity entirely.
-        const pxPerMM = canvas.width / imgWidth;
-        const pageSlicePx = Math.floor((contentBottom - marginTop) * pxPerMM);
-        let renderedPx = 0;
-        let firstSlice = true;
-        while(renderedPx < canvas.height){
-          if(!firstSlice){ pdf.addPage(); cursorY = marginTop; }
-          firstSlice = false;
-          const sliceHeightPx = Math.min(pageSlicePx, canvas.height - renderedPx);
-          const sliceCanvas = document.createElement('canvas');
-          sliceCanvas.width = canvas.width;
-          sliceCanvas.height = sliceHeightPx;
-          sliceCanvas.getContext('2d').drawImage(canvas, 0, renderedPx, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
-          const sliceImgHeight = sliceHeightPx / pxPerMM;
-          pdf.addImage(sliceCanvas.toDataURL('image/jpeg', 0.95), 'JPEG', marginX, cursorY, imgWidth, sliceImgHeight);
-          cursorY += sliceImgHeight;
-          renderedPx += sliceHeightPx;
-        }
-        cursorY += gapMM;
-      } else {
-        const imgData = canvas.toDataURL('image/jpeg', 0.95);
-        pdf.addImage(imgData, 'JPEG', marginX, cursorY, imgWidth, imgHeight);
-        cursorY += imgHeight + gapMM;
-      }
-
-      // The cover page opts out of the normal "keep packing atoms onto this page
-      // until they stop fitting" flow: it's meant to stand alone (large logo, lots
-      // of quiet whitespace), never sharing a page with Overview/Stats/etc. just
-      // because there happened to be room left over. data-pdf-force-page-break-after
-      // forces the next atom onto a fresh page unconditionally, regardless of how
-      // little vertical space this one actually used.
-      if(atomEl.hasAttribute('data-pdf-force-page-break-after') && idx < atoms.length - 1){
-        pdf.addPage();
-        cursorY = marginTop;
-      }
+    // Endpoints: natively drawn (see drawEndpointNative) — this is the part
+    // that scales with endpoint count, and is why this is fast at 50+ where
+    // rasterizing every atom of every endpoint was not.
+    for(let i = 0; i < endpoints.length; i++){
+      setStage(`Rendering endpoint ${i + 1} of ${endpoints.length}…`);
+      await drawEndpointNative(pen, proj, endpoints[i], i, env, flowContainer, ignoreForCanvas);
     }
     // Every atom is placed now, and the page count is final — stamp the letterhead,
     // border, and page-numbered footer onto every page in one pass. See the "Native
@@ -421,78 +902,14 @@ async function generateProjectPdf(){
     toast(`Couldn't generate the PDF${err && err.message ? ': ' + err.message : ''} — please try again.`);
   }finally{
     if(container && container.parentNode) container.parentNode.removeChild(container);
+    if(flowContainer && flowContainer.parentNode) flowContainer.parentNode.removeChild(flowContainer);
     gen.classList.remove('loading');
     label.textContent = 'Generate PDF';
   }
 }
 
-function buildExportPdfEndpointSection(proj, ep, index, env){
-  const mClass = methodClass(ep.method);
-  const pathParams = (ep.parameters||[]).filter(p=>p.in==='path');
-  const queryParams = (ep.parameters||[]).filter(p=>!p.in || p.in==='query');
-  const headerParams = ep.headers || (ep.parameters||[]).filter(p=>p.in==='header');
-  const allParams = [...pathParams.map(p=>({...p, in:'path'})), ...queryParams.map(p=>({...p, in:'query'}))];
-
-  const hasReqBody = !!(ep.requestBody && ep.requestBody.example);
-  const responses = ep.responses || [];
-
-  // Each endpoint gets its own Request flow section — its own flows if it
-  // has any, otherwise it falls back to the project's (see
-  // resolveRequestFlows's ep parameter), same as the on-screen doc page.
-  const epRequestFlowHtml = `
-    <div class="pdf-atom">
-    <section>
-      ${pdfRequestFlowSectionInnerHtml(proj, env, ep)}
-    </section>
-    </div>`;
-
-  return `
-  <section class="pdf-endpoint" id="ep-${escapeHtml(ep.id)}">
-    <div class="pdf-atom pdf-atom-header" data-pdf-force-page-break-before>
-      <div class="pdf-ep-banner grad-${mClass}">
-        <span class="pdf-ep-index">${String(index+1).padStart(2,'0')}</span>
-        <span class="badge-lg ${mClass}">${escapeHtml(ep.method)}</span>
-        <span class="pdf-ep-path">${escapeHtml(ep.path)}</span>
-        ${(ep.version || proj.version) ? `<span class="pdf-ep-version">v${escapeHtml(String(ep.version || proj.version).replace(/^v/i, ''))}</span>` : ''}
-      </div>
-      ${ep.summary ? `<div class="pdf-ep-summary">${escapeHtml(ep.summary)}</div>` : ''}
-      ${ep.description ? `<div class="pdf-ep-desc">${renderMarkdown(ep.description)}</div>` : ''}
-      <div class="pdf-ep-chips">
-        <span class="pdf-chip">${escapeHtml(ep.tag || 'General')}</span>
-        <span class="pdf-chip">${escapeHtml(ep.contentType || 'application/json')}</span>
-        <span class="pdf-chip">${escapeHtml(envMeta(state.env).label)} environment</span>
-      </div>
-    </div>
-
-    ${epRequestFlowHtml}
-
-    <div class="pdf-atom" data-pdf-code-chunkable data-pdf-chunk-label="Request" data-pdf-chunk-sub="host masked unless revealed by an Admin">
-      <div class="pdf-code-card">
-        <div class="pdf-code-head">Request<span class="pdf-code-head-sub">host masked unless revealed by an Admin</span></div>
-        <pre class="pdf-code">${escapeHtml(curlSample(proj, ep))}</pre>
-      </div>
-    </div>
-
-    ${allParams.length ? `<div class="pdf-atom">${paramSection('Path &amp; query parameters', allParams)}</div>` : ''}
-    ${headerParams.length ? `<div class="pdf-atom">${paramSection('Headers', headerParams, 'header')}</div>` : ''}
-    ${hasReqBody ? `<div class="pdf-atom" data-pdf-code-chunkable data-pdf-chunk-label="Example request body"><div class="pdf-code-card"><div class="pdf-code-head">Example request body</div><pre class="pdf-code">${escapeHtml(maskedJsonString(ep.requestBody.example))}</pre></div></div>` : ''}
-
-    <div class="pdf-atom pdf-atom-tight"><div class="pdf-section-title">Responses</div></div>
-    ${responses.length ? responses.map(r=>{
-      const cls = respClass(r.code);
-      return `<div class="pdf-atom">
-        <div class="pdf-resp">
-          <div class="pdf-resp-head">
-            <span class="pdf-status-pill st-${cls}">${escapeHtml(String(r.code))}</span>
-            <span class="pdf-resp-desc">${escapeHtml(r.description || '')}</span>
-          </div>
-          ${r.fields && r.fields.length ? paramSection('Response fields', r.fields, r.code) : ''}
-        </div>
-      </div>
-      ${r.example ? `<div class="pdf-atom" data-pdf-code-chunkable data-pdf-chunk-label="Example response" data-pdf-chunk-sub="status ${escapeHtml(String(r.code))}"><div class="pdf-code-card"><div class="pdf-code-head">Example response<span class="pdf-code-head-sub">status ${escapeHtml(String(r.code))}</span></div><pre class="pdf-code">${escapeHtml(maskedJsonString(r.example))}</pre></div></div>` : ''}`;
-    }).join('') : '<div class="pdf-atom pdf-atom-tight"><div class="pdf-empty">No responses documented.</div></div>'}
-  </section>`;
-}
+// Endpoints are now drawn natively (see drawEndpointNative above) instead of
+// being built as HTML here and rasterized — this function's job is gone.
 
 function buildExportPdfContentHtml(proj, endpoints, opts){
   const groups = groupByTag(endpoints);
@@ -633,14 +1050,14 @@ function buildExportPdfContentHtml(proj, endpoints, opts){
     </section>
     </div>` : '';
 
-  const endpointsHtml = endpoints.map((ep,i)=>buildExportPdfEndpointSection(proj, ep, i, env)).join('');
-
+  // Endpoints are no longer part of this HTML — they're drawn natively in
+  // generateProjectPdf() (see drawEndpointNative), not rasterized. Only the
+  // cover/Overview/Lifecycle/TOC content above still goes through HTML +
+  // html2canvas (Phase 2, deliberately out of scope — see plan).
+  //
   // No trailing "pdf-footer" HTML atom here anymore — the native per-page footer
   // stamped in stampPdfPage() (see generateProjectPdf()) now carries this same
   // "project · Generated by DocTracker · date · by author" line, plus a page
   // number, on every single page instead of only appearing once at the very end.
-  return `
-    ${coverHtml}
-    ${endpointsHtml}
-  `;
+  return coverHtml;
 }
