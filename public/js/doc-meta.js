@@ -150,10 +150,11 @@
     var src = ep && ep.sourceSystem ? String(ep.sourceSystem).trim() : '';
     var tgt = ep && ep.targetSystem ? String(ep.targetSystem).trim() : '';
     if (!src && !tgt) return '';
-    return '<span class="dm-flow" title="Source → Target system">' +
-      (src ? esc(src) : '<span class="dm-flow-empty">?</span>') +
+    var full = (src || '?') + ' → ' + (tgt || '?');
+    return '<span class="dm-flow" title="' + esc(full) + '">' +
+      '<span class="dm-flow-side">' + (src ? esc(src) : '<span class="dm-flow-empty">?</span>') + '</span>' +
       '<span class="dm-flow-arrow">→</span>' +
-      (tgt ? esc(tgt) : '<span class="dm-flow-empty">?</span>') +
+      '<span class="dm-flow-side">' + (tgt ? esc(tgt) : '<span class="dm-flow-empty">?</span>') + '</span>' +
       '</span>';
   }
 

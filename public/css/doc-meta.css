@@ -45,10 +45,15 @@
 /* ---------- source -> target system flow pill ---------- */
 .dm-flow{
   display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:999px;
-  font-size:11.5px; font-weight:600; letter-spacing:.1px; white-space:nowrap;
+  font-size:11.5px; font-weight:600; letter-spacing:.1px; max-width:100%;
   color:var(--text-dim); background:var(--surface-2); border:1px solid var(--border);
 }
-.dm-flow-arrow{ color:var(--text-faint); font-weight:400; }
+/* Each side truncates on its own (rather than the whole pill forcing its
+   column wide) — a long chain like "Salesforce, Outsystems, Payment
+   Engine…" shrinks to fit instead of stretching a table column out of
+   proportion with every other one. Full text is always in the title. */
+.dm-flow-side{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:150px; }
+.dm-flow-arrow{ color:var(--text-faint); font-weight:400; flex-shrink:0; }
 .dm-flow-empty{ color:var(--text-faint); font-style:italic; font-weight:500; }
 
 /* ---------- version pill ---------- */

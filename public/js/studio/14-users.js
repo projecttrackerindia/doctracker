@@ -731,6 +731,7 @@ function renderProjectOverview(main, projectId){
     <div class="section">
       <div class="section-title">Endpoints <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— added &amp; last-modified history</span></div>
       ${epsForView.length ? `
+      <div class="table-scroll">
       <table class="data-table">
         <thead><tr><th>Endpoint</th><th title="Goes up automatically each time this endpoint is saved">Version</th><th>Source → Target</th><th>Status</th><th>Added</th><th>Last modified</th><th title="Google SecOps review status">SecOps</th><th title="VAPT review status">VAPT</th><th title="Common Log Management review status">Log Mgmt</th></tr></thead>
         <tbody>
@@ -756,7 +757,8 @@ function renderProjectOverview(main, projectId){
               <td>${DocMeta.reviewChipHtml(ep, 'logMgmt')}</td>
             </tr>`).join('')}
         </tbody>
-      </table>` : `<div class="empty-field">${viewingDraft ? 'No endpoints in this project yet.' : `Nothing promoted to ${escapeHtml(env.label)} yet.`}</div>`}
+      </table>
+      </div>` : `<div class="empty-field">${viewingDraft ? 'No endpoints in this project yet.' : `Nothing promoted to ${escapeHtml(env.label)} yet.`}</div>`}
     </div>
 
     <div class="section">
