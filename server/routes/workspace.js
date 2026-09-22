@@ -2651,8 +2651,26 @@ router.get('/projects/:id/diff', async (req, res) => {
       [fromEndpoints, toEndpoints] = await Promise.all([filterAndLock(fromEndpoints, fromKey), filterAndLock(toEndpoints, toKey)]);
     }
 
+    // The diff-token hash has to match exactly what POST /promote recomputes
+    // at promotion time — and that recomputation reads the RAW (unmasked)
+    // stage content, since that's what's actually being written. Snapshot
+    // the access-filtered-but-unmasked lists here, before masking, so the
+    // token below is minted from the same content promote will hash.
+    // Without this, ANY promotion touching a "modified" endpoint whose
+    // masked fields differ from their raw values (a header example, a PII
+    // field, anything maskEndpoint touches) would mint a token that can
+    // never match — a real request would recompute the diff on raw data,
+    // get a different hash, and fail every single time with a false
+    // "diff has changed since you last viewed it" error.
+    const rawFromEndpoints = fromEndpoints;
+    const rawToEndpoints = toEndpoints;
+    const rawDiff = diffEndpointLists(rawFromEndpoints, rawToEndpoints);
+    const rawBreakingChanges = detectBreakingChanges(rawToEndpoints, rawFromEndpoints);
+
     // SECURITY (Finding 4.2): same masking as GET /api/workspace and the
     // snapshot route — a diff is still a full read path for example values.
+    // This masked copy is for the response payload the client actually
+    // displays; the diff token above is minted from the raw copy instead.
     const orgRules = await getOrgPiiRules(project.organisation);
     fromEndpoints = fromEndpoints.map((ep) => piiMasking.maskEndpoint(ep, orgRules));
     toEndpoints = toEndpoints.map((ep) => piiMasking.maskEndpoint(ep, orgRules));
@@ -2670,7 +2688,7 @@ router.get('/projects/:id/diff', async (req, res) => {
       // ever accept) — see the diff-viewed gate above. A non-adjacent,
       // purely-informational comparison (e.g. Dev vs Production) doesn't
       // need one since it can never back a promote call anyway.
-      diffToken: canMerge ? mintDiffToken({ projectId: project.id, from: fromKey, to: toKey, diff, breakingChanges }) : null,
+      diffToken: canMerge ? mintDiffToken({ projectId: project.id, from: fromKey, to: toKey, diff: rawDiff, breakingChanges: rawBreakingChanges }) : null,
       summary: { added: diff.added.length, removed: diff.removed.length, modified: diff.modified.length },
       added: diff.added,
       removed: diff.removed,
