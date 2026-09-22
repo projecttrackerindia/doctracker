@@ -118,9 +118,9 @@ function renderMain(){
 }
 
 function kpiCard(label, value, color, sub){
-  return `<div class="kpi-card">
+  return `<div class="kpi-card" style="${color?`--kpi-accent:${color};`:''}">
     <div class="kpi-label">${escapeHtml(label)}</div>
-    <div class="kpi-value" style="${color?`color:${color};`:''}">${value}</div>
+    <div class="kpi-value" style="${color?`color:${color};`:''}"><span class="kpi-dot"></span>${value}</div>
     ${sub ? `<div class="kpi-sub">${sub}</div>` : ''}
   </div>`;
 }
@@ -216,11 +216,33 @@ function renderControlCenter(main){
   const fullyPromotedCount = em ? (em.perProject||[]).filter(p=>p.fullyPromoted).length : 0;
   const lastStageLabel = em && em.stages && em.stages.length ? em.stages[em.stages.length-1].label : 'the last stage';
 
+  // Same "good/needs attention/problem" tiering the Documentation coverage
+  // KPI card below already uses — reused here to color the hero's glow and
+  // icon so the very first thing on the page reads as good news or not,
+  // the same way Security Center's shield does for protection status.
+  const healthTier = m.avgDoc>=80 ? 'good' : m.avgDoc>=50 ? 'warn' : 'bad';
+  const ctrlColorVar = healthTier==='good' ? '--post' : healthTier==='warn' ? '--put' : '--delete';
+  const ctrlBgVar = healthTier==='good' ? '--post-bg' : healthTier==='warn' ? '--put-bg' : '--delete-bg';
+  const ctrlIcon = healthTier==='good'
+    ? '<path d="M9 12l2 2 4-4"></path><circle cx="12" cy="12" r="9"></circle>'
+    : healthTier==='warn'
+      ? '<path d="M12 8v4.5"></path><circle cx="12" cy="15.5" r="0.9" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="9"></circle>'
+      : '<path d="M3 12h4l2-7 4 14 2-7h6"></path>';
+
   main.innerHTML = `
     <div class="crumb">API Control Center</div>
-    <div class="cc-hero">
-      <h1>What's happening with your APIs</h1>
-      <div class="cc-hero-sub">${isAdmin() ? 'A live rollup of every API in this workspace — no external monitoring involved.' : 'A live rollup of the APIs and endpoints visible to you — no external monitoring involved.'}</div>
+    <div class="ctrl-hero" style="--ctrl-glow-bg:var(${ctrlBgVar});">
+      <div class="ctrl-hero-icon" style="--ctrl-icon-color:var(${ctrlColorVar});--ctrl-icon-bg:var(${ctrlBgVar});">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ctrlIcon}</svg>
+      </div>
+      <div class="ctrl-hero-copy">
+        <h1>What's happening with your APIs</h1>
+        <p>${isAdmin() ? 'A live rollup of every API in this workspace — no external monitoring involved.' : 'A live rollup of the APIs and endpoints visible to you — no external monitoring involved.'}</p>
+      </div>
+      <div class="ctrl-hero-stat">
+        <div class="n">${m.avgDoc}%</div>
+        <div class="l">documentation coverage</div>
+      </div>
     </div>
 
     <div class="kpi-grid">
