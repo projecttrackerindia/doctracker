@@ -9,12 +9,17 @@
    auditActionMeta); that's now server/views/auditlog.html instead, so the
    dead client-side generator was removed and only the actual "open it in a
    new tab" launcher below remains. */
-function openAuditLogTab(){
+function openAuditLogTab(searchQuery){
   // Real, bookmarkable, shareable URL now — /<orgToken>/auditlog — instead of
   // an about:blank popup built from document.write(). Still gated by
   // requireAuth + the org-token check server-side (see server.js), so opening
   // it in a new tab is safe: the session cookie travels with it.
-  const w = window.open('/' + ORG_TOKEN + '/auditlog', '_blank');
+  // Optional `searchQuery` pre-fills the audit log's own search box (see the
+  // ?q= deep-link handling in auditlog.html) — used by Security Center's
+  // "Audit trail" card to jump straight to the reveal/key-rotation events it
+  // describes instead of an unfiltered log the visitor has to filter by hand.
+  const url = '/' + ORG_TOKEN + '/auditlog' + (searchQuery ? '?q=' + encodeURIComponent(searchQuery) : '');
+  const w = window.open(url, '_blank');
   if(!w){ toast('Please allow popups to open the audit log in a new tab.'); }
 }
 

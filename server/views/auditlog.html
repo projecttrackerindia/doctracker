@@ -445,6 +445,15 @@ tbody tr.al-hidden{ display:none; }
     }
   });
 
+  // Deep-link support: ?q=<term> pre-fills the search box before the first
+  // load, so another page (e.g. Security Center's "Audit trail" card) can
+  // link straight to a filtered view instead of dumping the visitor on an
+  // unfiltered log they then have to filter by hand. Read once, on boot —
+  // applyFilters() runs from renderAll() at the end of the initial load()
+  // and picks this up automatically since it just reads els.search.value.
+  const deepLinkQ = new URLSearchParams(location.search).get('q');
+  if(deepLinkQ) els.search.value = deepLinkQ;
+
   load();
 })();
 </script>

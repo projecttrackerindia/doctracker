@@ -2585,7 +2585,9 @@ pre.json-raw{ max-height:360px; margin:0; }
   border:1px solid color-mix(in srgb, var(--sec-shield-color, var(--post)) 35%, transparent);
 }
 .sec-shield.live{ animation:secPulse 2.4s ease-out infinite; }
+.sec-shield.scanning svg{ animation:secSweep 1.1s linear infinite; transform-origin:center; }
 .sec-shield svg{ width:26px; height:26px; }
+.sec-sparkline{ display:block; margin-top:6px; }
 .sec-hero-copy{ position:relative; z-index:1; flex:1; min-width:0; }
 .sec-hero-copy h1{ font-size:19px; font-weight:800; letter-spacing:-.3px; margin-bottom:3px; }
 .sec-hero-copy p{ font-size:12.5px; color:var(--text-faint); max-width:52ch; }
@@ -2636,9 +2638,11 @@ pre.json-raw{ max-height:360px; margin:0; }
 .sec-card .v{ display:flex; align-items:center; gap:8px; font-size:16px; font-weight:800; margin-bottom:4px; }
 .sec-card .v .dot{ width:8px; height:8px; border-radius:50%; background:var(--sc-accent, var(--text-faint)); flex-shrink:0; }
 .sec-card .s{ font-size:11.5px; color:var(--text-dim); line-height:1.5; }
-.sec-card .s a, .sec-card .s button.linklike{
+.sec-card .s a, .sec-card .s .linklike{
   background:none; border:none; padding:0; font:inherit; color:var(--accent); cursor:pointer; font-weight:600;
 }
+.sec-card-link{ transition:border-color .15s ease, transform .15s ease; }
+.sec-card-link:hover{ border-color:var(--sc-accent, var(--accent)); transform:translateY(-1px); }
 
 .sec-env-strip{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:26px; }
 .sec-env-pill{

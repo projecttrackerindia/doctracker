@@ -18,6 +18,7 @@ const STORAGE_KEY_KNOWLEDGE = {
   apiStudio_migratedToServer_v1: { purpose:'One-time flag: has this browser\'s old local data been migrated to Postgres yet', classification:'INTERNAL', risk:'Low' },
   apiStudio_workspace_v1: { purpose:'Pre-Postgres workspace cache — should be empty post-migration; if present, migration may not have completed for this browser', classification:'CONFIDENTIAL', risk:'Medium' },
   apiStudio_auditLog: { purpose:'Pre-Postgres audit log cache — should be empty post-migration (audit is now server-authoritative)', classification:'CONFIDENTIAL', risk:'Medium' },
+  apiStudio_secScanHistory: { purpose:'Rolling history of this browser\'s own storage-scan results (risky-key count over time), used to draw the trend sparkline below — holds counts only, never the scanned values themselves', classification:'INTERNAL', risk:'Low' },
 };
 function classifyStorageKey(mechanism, key, rawValue){
   const known = STORAGE_KEY_KNOWLEDGE[key];
@@ -52,6 +53,49 @@ async function scanClientStorage(){
   return rows;
 }
 
+// Rolling per-browser history of scan results — genuinely this browser's own
+// past scans, not a fabricated trend. A scan is inherently a per-browser
+// signal (it reads THIS browser's own storage), so a shared/server-side
+// "org security score" would misrepresent what's actually being measured;
+// keeping the trend local keeps it honest. Capped at 20 points (~enough for
+// a useful sparkline without the key growing unbounded).
+const SEC_SCAN_HISTORY_KEY = 'apiStudio_secScanHistory';
+const SEC_SCAN_HISTORY_CAP = 20;
+function loadScanHistory(){
+  try{ const raw = localStorage.getItem(SEC_SCAN_HISTORY_KEY); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr : []; }
+  catch(e){ return []; }
+}
+function recordScanHistory(rows){
+  const counts = rows.reduce((a,r)=>{ a[r.risk]=(a[r.risk]||0)+1; return a; }, {});
+  const riskyCount = (counts.Critical||0) + (counts.High||0);
+  const point = { ts: new Date().toISOString(), riskyCount, totalCount: rows.length };
+  const history = loadScanHistory();
+  history.push(point);
+  while(history.length > SEC_SCAN_HISTORY_CAP) history.shift();
+  try{ localStorage.setItem(SEC_SCAN_HISTORY_KEY, JSON.stringify(history)); }catch(e){}
+  return history;
+}
+// Small inline SVG sparkline — no charting library needed for ~20 points.
+// Flat/empty history still draws a legible baseline rather than nothing.
+function renderScanHistorySparkline(history){
+  if(!history || history.length < 2) return '';
+  const w = 120, h = 28, pad = 3;
+  const max = Math.max(1, ...history.map(p=>p.riskyCount));
+  const stepX = (w - pad*2) / (history.length - 1);
+  const pts = history.map((p,i)=>{
+    const x = pad + i*stepX;
+    const y = h - pad - (p.riskyCount / max) * (h - pad*2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const last = history[history.length-1];
+  const lastPt = pts[pts.length-1].split(',');
+  const color = last.riskyCount>0 ? 'var(--delete)' : 'var(--post)';
+  return `<svg class="sec-sparkline" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">
+    <polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    <circle cx="${lastPt[0]}" cy="${lastPt[1]}" r="2.2" fill="${color}"></circle>
+  </svg>`;
+}
+
 const PII_CATEGORY_OPTIONS = ['PUBLIC','INTERNAL','CONFIDENTIAL','PII','SENSITIVE_PII','FINANCIAL','AUTHENTICATION_SECRET'];
 const PII_STRATEGY_OPTIONS = [
   { id:'partial', label:'Partial (first + last char)' }, { id:'last4', label:'Keep last 4' },
@@ -74,14 +118,22 @@ function renderSecurityCenter(main){
   const lastScan = state._lastStorageScan;
   const riskyCount = lastScan ? lastScan.filter(r=>r.risk==='Critical'||r.risk==='High').length : null;
   const protectionOn = settings.automaticProtection !== false;
-  const shieldState = !protectionOn ? 'off' : (riskyCount ? 'risk' : 'protected');
-  const shieldColorVar = shieldState==='off' ? '--put' : shieldState==='risk' ? '--delete' : '--post';
-  const shieldBgVar = shieldState==='off' ? '--put-bg' : shieldState==='risk' ? '--delete-bg' : '--post-bg';
+  // Before this browser has ever actually been scanned this session, the
+  // shield used to default straight to "protected" (green) — technically
+  // just "we haven't looked," not "we checked and it's clean." That's fixed
+  // two ways: an honest neutral "unknown" state renders here, AND (below,
+  // after first paint) a scan kicks off automatically in the background so
+  // it stops being "unknown" within a second or two on every real visit.
+  const shieldState = !protectionOn ? 'off' : lastScan===undefined ? 'unknown' : (riskyCount ? 'risk' : 'protected');
+  const shieldColorVar = shieldState==='off' ? '--put' : shieldState==='risk' ? '--delete' : shieldState==='unknown' ? '--accent' : '--post';
+  const shieldBgVar = shieldState==='off' ? '--put-bg' : shieldState==='risk' ? '--delete-bg' : shieldState==='unknown' ? '--accent-soft' : '--post-bg';
   const shieldGlyph = shieldState==='protected'
     ? '<path d="M9 12l2 2 4-4"></path>'
     : shieldState==='risk'
       ? '<path d="M12 8v4.5"></path><circle cx="12" cy="15.5" r="0.9" fill="currentColor" stroke="none"></circle>'
-      : '<path d="M9 9l6 6M15 9l-6 6"></path>';
+      : shieldState==='unknown'
+        ? '<circle cx="12" cy="12" r="3" opacity=".5"></circle><path d="M12 12L12 7"></path>'
+        : '<path d="M9 9l6 6M15 9l-6 6"></path>';
   const activeRules = (PII_CONFIG.rules||[]).filter(r=>r.enabled!==false).length;
   // A project owner who isn't an Admin can only reach here at all to review
   // documentation-access requests for their own project (see requireAdminOrProjectOwner
@@ -102,7 +154,7 @@ function renderSecurityCenter(main){
   main.innerHTML = `
     <div class="crumb">Security</div>
     <div class="sec-hero" style="--sec-shield-color:var(${shieldColorVar});--sec-shield-bg:var(${shieldBgVar});--sec-glow-bg:var(${shieldBgVar});">
-      <div class="sec-shield${shieldState==='protected'?' live':''}" style="--sec-pulse-color:var(${shieldBgVar});">
+      <div class="sec-shield${shieldState==='protected'?' live':''}${shieldState==='unknown'?' scanning':''}" style="--sec-pulse-color:var(${shieldBgVar});">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 2l8 4v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6l8-4z"></path>${shieldGlyph}
         </svg>
@@ -156,6 +208,21 @@ function renderSecurityCenter(main){
   else if(tab === 'docaccess') renderDocAccessTab(body);
   else if(tab === 'ai') renderAiSettingsTab(body);
   else renderStorageScanTab(body);
+
+  // Auto-scan once per session, in the background, the first time this page
+  // is opened — see the shieldState comment above for why. Guarded so it
+  // never re-fires on a tab switch or a later re-render; a real re-scan
+  // still only ever happens from the explicit "Run scan"/"Re-run scan"
+  // buttons, which stay the source of truth for anything the user clicked.
+  if(state._lastStorageScan===undefined && !window._secAutoScanStarted){
+    window._secAutoScanStarted = true;
+    scanClientStorage().then(rows=>{
+      state._lastStorageScan = rows;
+      state._lastStorageScanAt = new Date().toISOString();
+      recordScanHistory(rows);
+      if(state.selected && state.selected.type==='security') renderSecurityCenter(main);
+    });
+  }
 }
 function positionSecTabIndicator(tabsEl, noAnim){
   if(!tabsEl) return;
@@ -177,6 +244,32 @@ const SEC_TAB_ICON = {
   ai: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z"></path><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15z"></path></svg>',
 };
 
+// Rollup of the SAME SecOps/VAPT/Log Mgmt review gate the Production
+// promotion pipeline enforces server-side (see partitionForFinalStagePromotion
+// in server/routes/workspace.js) — computed here across every project's
+// current draft so Security Center becomes the one place that answers
+// "how much of the estate is actually release-ready," instead of that only
+// being visible one project's Overview page at a time.
+function computeReviewReadinessRollup(){
+  const KINDS = [ { id:'secOps', label:'SecOps' }, { id:'vapt', label:'VAPT' }, { id:'logMgmt', label:'Log Mgmt' } ];
+  let totalEndpoints = 0, fullyReady = 0, notActive = 0;
+  const pendingByKind = { secOps:0, vapt:0, logMgmt:0 };
+  allProjects().forEach(p=>{
+    (p.endpoints||[]).forEach(ep=>{
+      totalEndpoints++;
+      const status = ep.status || 'active';
+      if(status !== 'active') notActive++;
+      let allApproved = status === 'active';
+      KINDS.forEach(k=>{
+        const st = ep[k.id+'Status'] || (ep[k.id+'Reviewed'] ? 'approved' : 'none');
+        if(st !== 'approved'){ pendingByKind[k.id]++; allApproved = false; }
+      });
+      if(allApproved) fullyReady++;
+    });
+  });
+  return { KINDS, totalEndpoints, fullyReady, notActive, pendingByKind };
+}
+
 function renderSecuritySummaryTab(body){
   const settings = PII_CONFIG.settings || {};
   const lastScan = state._lastStorageScan;
@@ -190,6 +283,16 @@ function renderSecuritySummaryTab(body){
     return `<span class="sec-env-pill" style="--se-bg:${envBgColor(e.id)};--se-color:${envAccentColor(e.id)};">${e.label}<span class="lv">${policyLabel[lv]||lv}</span></span>`;
   }).join('');
 
+  const scanHistory = loadScanHistory();
+  const sparkline = renderScanHistorySparkline(scanHistory);
+
+  const rollup = computeReviewReadinessRollup();
+  const notReadyCount = rollup.totalEndpoints - rollup.fullyReady;
+  const readinessChips = rollup.KINDS.map(k=>{
+    const n = rollup.pendingByKind[k.id];
+    return `<span class="sec-status-dot"><span class="dot" style="background:${n?'var(--delete)':'var(--post)'};"></span>${n} ${k.label} pending</span>`;
+  }).join('');
+
   body.innerHTML = `
     <div class="sec-grid">
       <div class="sec-card" style="--sc-accent:var(${protectionOn?'--post':'--put'});">
@@ -197,15 +300,16 @@ function renderSecuritySummaryTab(body){
         <div class="v"><span class="dot"></span>${protectionOn?'Enabled':'Disabled'}</div>
         <div class="s">Automatic field-name &amp; pattern detection is ${protectionOn?'on':'off'} — admin rules ${protectionOn?'still apply either way':'are the only active check'}.</div>
       </div>
-      <div class="sec-card" style="--sc-accent:var(--accent);">
+      <div class="sec-card sec-card-link" id="secAuditTrailCard" style="--sc-accent:var(--accent);cursor:pointer;" title="Open the audit log, filtered to PII reveal events">
         <div class="k">Audit trail</div>
         <div class="v"><span class="dot"></span>PostgreSQL</div>
-        <div class="s">Append-only, server-authoritative — identity and timestamps come from the session, never the browser.</div>
+        <div class="s">Append-only, server-authoritative — identity and timestamps come from the session, never the browser. <span class="linklike">View reveal events →</span></div>
       </div>
       <div class="sec-card" style="--sc-accent:var(${riskyCount===null?'--text-faint':riskyCount===0?'--post':'--delete'});">
         <div class="k">Browser storage</div>
-        <div class="v"><span class="dot"></span>${riskyCount===null ? 'Not scanned' : riskyCount+' risk'+(riskyCount===1?'':'s')}</div>
-        <div class="s">${state._lastStorageScanAt ? 'Last scan: '+new Date(state._lastStorageScanAt).toLocaleString() : "Live scan of this browser's own storage."} <button type="button" class="linklike" id="btnRunScanFromSummary">Run scan</button></div>
+        <div class="v"><span class="dot"></span>${riskyCount===null ? 'Scanning…' : riskyCount+' risk'+(riskyCount===1?'':'s')}</div>
+        <div class="s">${state._lastStorageScanAt ? 'Last scan: '+new Date(state._lastStorageScanAt).toLocaleString() : "Live scan of this browser's own storage, starting automatically…"} <button type="button" class="linklike" id="btnRunScanFromSummary">Run scan</button></div>
+        ${sparkline ? `${sparkline}<div class="s" style="margin-top:2px;font-size:10px;">Trend — this browser's last ${scanHistory.length} scans</div>` : ''}
       </div>
     </div>
     <div class="section">
@@ -218,11 +322,22 @@ function renderSecuritySummaryTab(body){
         <div class="v" style="font-size:14px;"><span class="dot"></span>Reason required, auto-remasks after ${settings.revealTimeoutSeconds||60}s</div>
         <div class="s">Every reveal is Admin-only and recorded as a <span class="sec-field-name" style="font-size:11px;">PII_REVEAL</span> audit event with the reason given.</div>
       </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Release readiness across all APIs <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— the same SecOps/VAPT/Log Mgmt gate Production promotion enforces</span></div>
+      <div class="sec-card" style="--sc-accent:var(${notReadyCount?'--put':'--post'});">
+        <div class="v" style="font-size:14px;"><span class="dot"></span>${rollup.fullyReady} of ${rollup.totalEndpoints} endpoint${rollup.totalEndpoints===1?'':'s'} fully release-ready</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;">${readinessChips}</div>
+        <div class="s" style="margin-top:8px;">${notReadyCount ? `${notReadyCount} endpoint${notReadyCount===1?'':'s'} would be held back from a Production promotion today.` : 'Every documented endpoint is Active with SecOps, VAPT, and Log Mgmt all approved.'}</div>
+      </div>
     </div>`;
+  document.getElementById('secAuditTrailCard').addEventListener('click', ()=> openAuditLogTab('PII Reveal'));
   document.getElementById('btnRunScanFromSummary').addEventListener('click', async (e)=>{
     e.currentTarget.textContent = 'Scanning…';
-    state._lastStorageScan = await scanClientStorage();
+    const rows = await scanClientStorage();
+    state._lastStorageScan = rows;
     state._lastStorageScanAt = new Date().toISOString();
+    recordScanHistory(rows);
     renderSecuritySummaryTab(body);
   });
 }
@@ -264,6 +379,7 @@ function renderStorageScanTab(body){
     const rows = await scanClientStorage();
     state._lastStorageScan = rows;
     state._lastStorageScanAt = new Date().toISOString();
+    recordScanHistory(rows);
     renderRows(rows);
   }
   document.getElementById('btnRunScan') && document.getElementById('btnRunScan').addEventListener('click', runScan);
