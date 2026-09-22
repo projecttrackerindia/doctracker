@@ -519,6 +519,46 @@ function maskedJsonString(rawStr){
   if(!parsed.ok) return rawStr;
   try{ return JSON.stringify(maskJsonExampleDeep(parsed.value), null, 2); }catch(e){ return rawStr; }
 }
+// Auto-derives a Parameters-tab field list straight from a JSON example when
+// nobody has hand-authored a matching fields[] array (e.g. a freshly added
+// named scenario) — closes the gap where the Parameters tab shows "No
+// parameters documented" even though the JSON tab has real, structured data.
+// Flattens nested objects to dot-paths; arrays are summarized by length
+// (plus one level of their first entry's shape) rather than expanded per
+// index, since a field list describes shape, not every array element.
+// Reuses displayValueFor so an auto-derived example is masked exactly like
+// every other rendered value.
+function autoFieldsFromJsonString(rawStr){
+  const parsed = tryParseJson(rawStr);
+  if(!parsed.ok || parsed.value == null || typeof parsed.value !== 'object') return [];
+  const out = [];
+  const typeOf = (v)=>{
+    if(v === null) return 'String';
+    if(Array.isArray(v)) return 'Array';
+    switch(typeof v){
+      case 'number': return Number.isInteger(v) ? 'Integer' : 'Number';
+      case 'boolean': return 'Boolean';
+      default: return 'String';
+    }
+  };
+  const walk = (node, path)=>{
+    if(Array.isArray(node)){
+      out.push({ name: path, type:'Array', required:true, example: `[${node.length} item${node.length===1?'':'s'}]`, description:'' });
+      if(node.length && node[0] && typeof node[0] === 'object' && !Array.isArray(node[0])) walk(node[0], path+'[0]');
+      return;
+    }
+    if(node && typeof node === 'object'){
+      Object.keys(node).forEach(k=>{
+        const v = node[k];
+        const full = path ? `${path}.${k}` : k;
+        if(v && typeof v === 'object') walk(v, full);
+        else out.push({ name: full, type: typeOf(v), required:true, example: String(displayValueFor(k, v==null?'null':v)), description:'' });
+      });
+    }
+  };
+  walk(parsed.value, '');
+  return out;
+}
 async function loadPiiConfig(){
   try{
     const res = await fetch('/api/pii', { credentials:'same-origin' });

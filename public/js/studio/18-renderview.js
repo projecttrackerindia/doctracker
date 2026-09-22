@@ -2076,7 +2076,10 @@ function wireRenderSheet(proj, ep){
   // including anything from "Infer fields from JSON") belong in this list
   // too, not just path/query params — otherwise this preview disagrees with
   // what "Infer fields from JSON" just did.
-  const bodyFieldParams = ((ep.requestBody && ep.requestBody.fields) || []).map(p=>({...p, in:'body'}));
+  const bodyFieldParams = (((ep.requestBody && ep.requestBody.fields) && ep.requestBody.fields.length)
+    ? ep.requestBody.fields
+    : autoFieldsFromJsonString(ep.requestBody && ep.requestBody.example)
+  ).map(p=>({...p, in:'body'}));
   const allParams = [...pathParams.map(p=>({...p, in:'path'})), ...queryParams.map(p=>({...p, in:'query'})), ...bodyFieldParams];
   const cardHtml = p=>`
     <div class="param-card${p.in==='header'?' is-header':''}">
@@ -2140,7 +2143,10 @@ function wireRenderSheet(proj, ep){
           <button type="button" class="resp-tab ${activeTab==='json'?'active':''}" data-rtab="json">Response JSON</button>
         </div>
         ${activeTab==='params'
-          ? (r.fields && r.fields.length ? paramSection('Response parameters', r.fields, r.code) : '<div class="render-empty">No response parameters documented.</div>')
+          ? (()=>{
+              const autoFields = (r.fields && r.fields.length) ? r.fields : autoFieldsFromJsonString(r.example);
+              return autoFields.length ? paramSection('Response parameters', autoFields, r.code) : '<div class="render-empty">No response parameters documented.</div>';
+            })()
           : (()=>{
               const list = [{ label:'Default', value: r.example || '' }, ...((r.examples)||[]).map(ex=>({ label: ex.name || 'Example', value: ex.value }))];
               return `<div class="render-code-card">

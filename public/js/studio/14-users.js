@@ -1135,13 +1135,26 @@ function renderEndpointDoc(main, proj, ep){
     // different shape) — path/query stay put since those don't vary by
     // request-body scenario. Falls back to the endpoint's base body fields
     // when the scenario has none of its own, same as before.
-    if(activeReqScenario && activeReqScenario.name !== 'Default' && activeReqScenario.fields && activeReqScenario.fields.length){
-      return [
-        `<div class="json-preview-label"><span>Parameters — ${escapeHtml(activeReqScenario.name)}</span></div>`,
-        paramSection('Path parameters', pathParams, 'request'),
-        paramSection('Query parameters', queryParams, 'request'),
-        paramSection('Body parameters', activeReqScenario.fields, 'request'),
-      ].join('');
+    if(activeReqScenario && activeReqScenario.name !== 'Default'){
+      // Hand-authored fields win when present; otherwise auto-derive a body
+      // parameter breakdown straight from this scenario's own JSON so a
+      // freshly added named example never shows "No parameters documented"
+      // just because nobody typed out a matching fields[] array yet.
+      const scenarioFields = (activeReqScenario.fields && activeReqScenario.fields.length)
+        ? activeReqScenario.fields
+        : autoFieldsFromJsonString(activeReqScenario.value);
+      if(scenarioFields.length || pathParams.length || queryParams.length){
+        return [
+          `<div class="json-preview-label"><span>Parameters — ${escapeHtml(activeReqScenario.name)}</span></div>`,
+          paramSection('Path parameters', pathParams, 'request'),
+          paramSection('Query parameters', queryParams, 'request'),
+          paramSection('Body parameters', scenarioFields, 'request'),
+        ].join('');
+      }
+    }
+    if(!hasAnyParams && hasReqJson){
+      const autoFields = autoFieldsFromJsonString(requestJsonValue());
+      if(autoFields.length) return paramSection('Body parameters (auto-derived from JSON)', autoFields, 'request');
     }
     return paramsHtml;
   }
@@ -1193,9 +1206,13 @@ function renderEndpointDoc(main, proj, ep){
     // documents one (falling back to the response block's base fields
     // otherwise, see tryItResponseScenarios) — previously this always showed
     // r.fields regardless of which scenario pill was selected, so picking a
-    // scenario only ever changed the JSON tab, never Parameters.
-    return fields && fields.length
-      ? paramSection(matchedScenario && matchedScenario.name !== 'Default' ? `Response parameters — ${matchedScenario.name}` : 'Response parameters', fields, code)
+    // scenario only ever changed the JSON tab, never Parameters. When
+    // neither has a hand-authored fields[] array, auto-derive one from the
+    // JSON that's already sitting in the Response JSON tab instead of
+    // showing "No response parameters documented" for data that's right there.
+    const effectiveFields = (fields && fields.length) ? fields : autoFieldsFromJsonString(value);
+    return effectiveFields.length
+      ? paramSection(matchedScenario && matchedScenario.name !== 'Default' ? `Response parameters — ${matchedScenario.name}` : 'Response parameters', effectiveFields, code)
       : `<div class="empty-field">No response parameters documented.</div>`;
   }
   function buildResponseItemHtml(i, isOpen){
