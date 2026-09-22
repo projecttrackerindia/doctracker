@@ -25,6 +25,13 @@ function workspaceMetrics(){
   let missingAuth = 0, envsFullyConfigured = 0;
   const lifecycleCounts = {};
   LIFECYCLE_STAGES.forEach(s=>lifecycleCounts[s]=0);
+  // Endpoint lifecycle status (Active / Under development / .../ Deprecated)
+  // rollup — the "API level" half of the Control Center's status breakdown.
+  // Draft/current data only (what's live in each project's own doc right
+  // now); the environment-level half comes from GET /environment-metrics'
+  // per-stage byStatus, since promoted-snapshot endpoints aren't in state.
+  const statusCounts = {};
+  DocMeta.ENDPOINT_STATUSES.forEach(s=>statusCounts[s.id]=0);
 
   projects.forEach(proj=>{
     lifecycleCounts[proj.lifecycle] = (lifecycleCounts[proj.lifecycle]||0) + 1;
@@ -35,6 +42,8 @@ function workspaceMetrics(){
       const score = computeDocScore(ep, proj).percent;
       scoreSum += score;
       if(score >= 80) wellDocumented++; else if(score >= 50) partial++; else poor++;
+      const stId = DocMeta.endpointStatusOf(ep);
+      statusCounts[stId] = (statusCounts[stId]||0) + 1;
     });
   });
 
@@ -44,8 +53,23 @@ function workspaceMetrics(){
   return {
     apiCount: projects.length, totalEndpoints, avgDoc,
     wellDocumented, partial, poor,
-    missingAuth, envsFullyConfigured, deprecated, lifecycleCounts,
+    missingAuth, envsFullyConfigured, deprecated, lifecycleCounts, statusCounts,
   };
+}
+
+// Small chip-per-status row — reused for both the API-level rollup (counts
+// from workspaceMetrics().statusCounts / a single project's endpoints) and
+// per-project cells in the APIs table. `counts` is {statusId: n}; statuses
+// with a zero count still render (muted) so the set of possible statuses is
+// always visible, not just whichever ones happen to be in use right now.
+function statusCountChipsHtml(counts, opts){
+  opts = opts || {};
+  return DocMeta.ENDPOINT_STATUSES.map(s=>{
+    const n = counts[s.id] || 0;
+    if(opts.hideZero && !n) return '';
+    const muted = !n ? ' style="opacity:.45;"' : '';
+    return `<span class="dm-chip dm-t-${s.tone}"${muted} title="${escapeHtml(s.label)}"><span class="dm-dot dm-t-${s.tone}"></span>${n}</span>`;
+  }).join('');
 }
 
 function lifecycleWheelSvg(currentStage){

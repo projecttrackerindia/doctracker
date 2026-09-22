@@ -177,15 +177,41 @@ function renderControlCenter(main){
     const envsCell = emLoading ? '<span class="empty-field">…</span>'
       : pp ? `${pp.stagesReached}/${Math.max(pipelineStageCount-1,0)}`
       : `0/${Math.max(pipelineStageCount-1,0)}`;
+    const statusTally = {};
+    p.endpoints.forEach(ep=>{ const id = DocMeta.endpointStatusOf(ep); statusTally[id] = (statusTally[id]||0)+1; });
     return `<tr class="cc-proj-row" data-cc-proj="${p.id}">
       <td><span class="cc-proj-name">${escapeHtml(p.name)}</span></td>
       <td><span class="lc-badge lc-${p.lifecycle.toLowerCase().replace(/[^a-z]/g,'')}">${p.lifecycle}</span></td>
       <td class="mono">${p.endpoints.length}</td>
       <td style="min-width:120px;">${docScoreBarHtml(stats,'sm')}<span class="mono" style="font-size:10.5px;color:var(--text-faint);">${stats}%</span></td>
       <td class="mono" title="Pipeline stages (past Dev) this API has at least one endpoint promoted to">${envsCell}</td>
+      <td><div style="display:flex;gap:4px;flex-wrap:wrap;">${statusCountChipsHtml(statusTally, {hideZero:true}) || '<span class="empty-field">—</span>'}</div></td>
       <td>${p.owner ? escapeHtml(p.owner) : '<span class="empty-field">—</span>'}</td>
     </tr>`;
-  }).join('') : `<tr><td colspan="6" class="empty-field" style="padding:16px;">No APIs yet — import a spec or add an endpoint to populate the control center.</td></tr>`;
+  }).join('') : `<tr><td colspan="7" class="empty-field" style="padding:16px;">No APIs yet — import a spec or add an endpoint to populate the control center.</td></tr>`;
+
+  // Environment-level status breakdown — one column per pipeline stage (plus
+  // any DR mirrors), one row per lifecycle status, straight from each
+  // stage's byStatus (GET /environment-metrics — see buildStageMetric
+  // server-side, which tallies ep.status across every promoted snapshot).
+  const statusEnvStages = em ? [...(em.stages||[]), ...(em.mirrors||[])] : [];
+  let statusEnvRows;
+  if(emLoading){
+    statusEnvRows = `<tr><td colspan="${statusEnvStages.length+1}" class="empty-field" style="padding:16px;">Loading…</td></tr>`;
+  } else if(emError){
+    statusEnvRows = `<tr><td colspan="2" class="empty-field" style="padding:16px;">Couldn't load environment metrics.</td></tr>`;
+  } else if(!statusEnvStages.length){
+    statusEnvRows = `<tr><td colspan="2" class="empty-field" style="padding:16px;">No pipeline environments configured yet.</td></tr>`;
+  } else {
+    statusEnvRows = DocMeta.ENDPOINT_STATUSES.map(s=>{
+      const cells = statusEnvStages.map(stage=>{
+        const n = (stage.byStatus && stage.byStatus[s.id]) || 0;
+        return `<td class="mono"${!n?' style="color:var(--text-faint);"':''}>${n}</td>`;
+      }).join('');
+      return `<tr><td><span class="dm-chip dm-t-${s.tone}"><span class="dm-dot dm-t-${s.tone}"></span>${escapeHtml(s.label)}</span></td>${cells}</tr>`;
+    }).join('');
+  }
+  const statusEnvHead = statusEnvStages.map(stage=>`<th>${escapeHtml(stage.label)}${stage.isDraftStage?' <span style="opacity:.6;font-weight:500;">(draft)</span>':''}</th>`).join('');
 
   const fullyPromotedCount = em ? (em.perProject||[]).filter(p=>p.fullyPromoted).length : 0;
   const lastStageLabel = em && em.stages && em.stages.length ? em.stages[em.stages.length-1].label : 'the last stage';
@@ -209,6 +235,12 @@ function renderControlCenter(main){
     </div>
 
     <div class="section">
+      <div class="section-title">Endpoints by status — API level</div>
+      <div class="hint" style="margin-top:-4px;">Every endpoint's current lifecycle status (Active / Under development / Under review / No consumers yet / Deprecated), summed across all APIs' live draft docs.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">${statusCountChipsHtml(m.statusCounts)}</div>
+    </div>
+
+    <div class="section">
       <div class="section-title">Documentation health</div>
       <div class="health-bars">
         <div class="health-row"><span class="health-label">Well documented</span><div class="health-track"><div class="health-fill" style="width:${wellPct}%;background:var(--post);"></div></div><span class="health-pct">${wellPct}%</span></div>
@@ -227,10 +259,21 @@ function renderControlCenter(main){
     </div>
 
     <div class="section">
+      <div class="section-title">Endpoints by status — environment level</div>
+      <div class="hint" style="margin-top:-4px;">Status mix of the endpoints actually present in each promoted environment snapshot (Dev shows the live draft).</div>
+      <div class="table-scroll">
+      <table class="data-table">
+        <thead><tr><th>Status</th>${statusEnvHead}</tr></thead>
+        <tbody>${statusEnvRows}</tbody>
+      </table>
+      </div>
+    </div>
+
+    <div class="section">
       <div class="section-title">APIs</div>
       <div class="table-scroll">
       <table class="data-table cc-proj-table">
-        <thead><tr><th>Name</th><th>Lifecycle</th><th>Endpoints</th><th>Documentation</th><th>Stages reached</th><th>Owner</th></tr></thead>
+        <thead><tr><th>Name</th><th>Lifecycle</th><th>Endpoints</th><th>Documentation</th><th>Stages reached</th><th>Status mix</th><th>Owner</th></tr></thead>
         <tbody>${projectRows}</tbody>
       </table>
       </div>

@@ -1329,6 +1329,30 @@ function pipelineStages(allEnvironments) {
 // owns it, or it (or one of its endpoints) is public. For someone else's
 // project, only its public endpoints are counted, in both the draft and any
 // promoted snapshot, mirroring projectForViewer()'s rule.
+// Same ids/default as ENDPOINT_STATUSES / DEFAULT_ENDPOINT_STATUS in
+// public/js/doc-meta.js — kept in sync by hand since that file is
+// browser-only. An ep.status this list doesn't recognise (older/newer
+// build, hand-edited data) is still counted, just under its own raw key,
+// mirroring endpointStatusOf()'s "unknown status passes through" behavior.
+const ENDPOINT_STATUS_IDS = ['active', 'in_development', 'in_review', 'no_consumers', 'deprecated'];
+const DEFAULT_ENDPOINT_STATUS_ID = 'active';
+function endpointStatusIdOf(ep) {
+  const s = ep && ep.status;
+  return s ? String(s) : DEFAULT_ENDPOINT_STATUS_ID;
+}
+function tallyByStatus(endpoints) {
+  const tally = {};
+  (endpoints || []).forEach((ep) => {
+    const id = endpointStatusIdOf(ep);
+    tally[id] = (tally[id] || 0) + 1;
+  });
+  return tally;
+}
+function mergeByStatus(target, addition) {
+  Object.keys(addition || {}).forEach((id) => { target[id] = (target[id] || 0) + addition[id]; });
+  return target;
+}
+
 router.get('/environment-metrics', async (req, res) => {
   try {
     const userId = req.authUser.sub;
@@ -1346,17 +1370,23 @@ router.get('/environment-metrics', async (req, res) => {
     const stages = pipelineStages(allEnvs);
     if (!stages.length) return res.json({ stages: [], mirrors: [], totalProjects: rows.length, baselineTotal: 0 });
 
-    // Stage 0 (the live draft) — counts come straight from each project's
-    // current data, filtered down to what this viewer is allowed to see.
+    // Stage 0 (the live draft) — counts (and now per-status tallies) come
+    // straight from each project's current data, filtered down to what this
+    // viewer is allowed to see.
     const draftCounts = new Map(); // projectId -> count
+    const draftByStatus = new Map(); // projectId -> {statusId: count}
     rows.forEach((row) => {
       const viewerData = projectForViewer(row, userId, decryptProjectData(row));
-      draftCounts.set(row.id, (viewerData.endpoints || []).length);
+      const endpoints = viewerData.endpoints || [];
+      draftCounts.set(row.id, endpoints.length);
+      draftByStatus.set(row.id, tallyByStatus(endpoints));
     });
 
     // Promoted stages — one query for every frozen snapshot across these
-    // projects, decrypted and counted the same viewer-scoped way.
+    // projects, decrypted and counted (and tallied by status) the same
+    // viewer-scoped way.
     const promotedCounts = new Map(); // `${projectId}:${environmentId}` -> count
+    const promotedByStatus = new Map(); // `${projectId}:${environmentId}` -> {statusId: count}
     const projectIds = rows.map((r) => r.id);
     if (projectIds.length) {
       const { rows: verRows } = await pool.query(
@@ -1368,15 +1398,19 @@ router.get('/environment-metrics', async (req, res) => {
         const projRow = rowById.get(v.project_id);
         if (!projRow) return;
         let count = 0;
+        let byStatus = {};
         try {
           const stageData = JSON.parse(dataCrypto.decryptField(v.data_enc, `project-env:${v.project_id}:${v.environment_id}`));
           const endpoints = Array.isArray(stageData.endpoints) ? stageData.endpoints : [];
           const isOwner = projRow.owner_id === userId;
-          count = isOwner ? endpoints.length : endpoints.filter((ep) => ep && ep.visibility === 'public').length;
+          const visible = isOwner ? endpoints : endpoints.filter((ep) => ep && ep.visibility === 'public');
+          count = visible.length;
+          byStatus = tallyByStatus(visible);
         } catch (err) {
           console.error('Failed to decrypt env snapshot for environment-metrics:', err);
         }
         promotedCounts.set(`${v.project_id}:${v.environment_id}`, count);
+        promotedByStatus.set(`${v.project_id}:${v.environment_id}`, byStatus);
       });
     }
 
@@ -1384,10 +1418,13 @@ router.get('/environment-metrics', async (req, res) => {
 
     const buildStageMetric = (env, idx) => {
       let totalEndpoints = 0, projectsWithEndpoints = 0;
+      const byStatus = {};
       rows.forEach((row) => {
         const count = idx === 0 ? (draftCounts.get(row.id) || 0) : (promotedCounts.get(`${row.id}:${env.id}`) || 0);
+        const statusTally = idx === 0 ? (draftByStatus.get(row.id) || {}) : (promotedByStatus.get(`${row.id}:${env.id}`) || {});
         totalEndpoints += count;
         if (count > 0) projectsWithEndpoints++;
+        mergeByStatus(byStatus, statusTally);
       });
       return {
         environmentId: env.id,
@@ -1398,6 +1435,7 @@ router.get('/environment-metrics', async (req, res) => {
         projectsWithEndpoints,
         totalProjects: rows.length,
         percentOfBaseline: baselineTotal ? Math.round((totalEndpoints / baselineTotal) * 100) : (idx === 0 ? 0 : 0),
+        byStatus,
       };
     };
 
@@ -1423,7 +1461,11 @@ router.get('/environment-metrics', async (req, res) => {
       const stagesReached = stages.filter((env, idx) => idx > 0 && (byEnvironment[env.id] || 0) > 0).length;
       const lastStage = stages[stages.length - 1];
       const fullyPromoted = draftTotal > 0 && lastStage && byEnvironment[lastStage.id] === draftTotal;
-      return { projectId: row.id, byEnvironment, draftTotal, stagesReached, fullyPromoted };
+      // Draft-stage status mix — this is the "current/API-level" breakdown
+      // (what's live in the editable doc right now), as opposed to the
+      // per-environment byStatus above which is scoped to a promoted snapshot.
+      const byStatus = draftByStatus.get(row.id) || {};
+      return { projectId: row.id, byEnvironment, draftTotal, stagesReached, fullyPromoted, byStatus };
     });
 
     res.json({
