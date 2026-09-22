@@ -117,17 +117,60 @@ function renderMain(){
   }
 }
 
-function kpiCard(label, value, color, sub){
-  return `<div class="kpi-card" style="${color?`--kpi-accent:${color};`:''}">
+// `filterId` (Control Center only — see CC_KPI_FILTERS) makes the card a
+// real button that narrows the APIs table to exactly what it's counting,
+// instead of just being a static number with no next step.
+function kpiCard(label, value, color, sub, filterId){
+  const clickable = filterId ? ` data-cc-kpi-filter="${filterId}" tabindex="0" role="button"` : '';
+  return `<div class="kpi-card${filterId?' kpi-card-link':''}" style="${color?`--kpi-accent:${color};`:''}"${clickable}>
     <div class="kpi-label">${escapeHtml(label)}</div>
     <div class="kpi-value" style="${color?`color:${color};`:''}"><span class="kpi-dot"></span>${value}</div>
     ${sub ? `<div class="kpi-sub">${sub}</div>` : ''}
   </div>`;
 }
 
+// Roughly-human "how long ago" for the APIs table's freshness column —
+// staleness matters here (an API nobody's touched in months while its
+// upstream systems moved on is a real signal), so this also hands back a
+// color tier the caller can use, not just a label.
+function timeAgoLabel(iso){
+  if(!iso) return { label:'—', tier:'unknown' };
+  const ms = Date.now() - new Date(iso).getTime();
+  if(!Number.isFinite(ms) || ms < 0) return { label:'—', tier:'unknown' };
+  const days = Math.floor(ms / 86400000);
+  const label = days < 1 ? 'Today' : days === 1 ? '1 day ago' : days < 30 ? `${days} days ago`
+    : days < 365 ? `${Math.round(days/30)} mo ago` : `${Math.round(days/365)}y ago`;
+  const tier = days > 90 ? 'stale' : days > 30 ? 'aging' : 'fresh';
+  return { label, tier };
+}
+
+// Predicates behind each clickable KPI card — kept in one place so the
+// count shown in the card and the rows a click actually filters to can
+// never silently disagree. Only KPIs with a real per-project meaning are
+// wired up (see the callers below) — "Endpoints" or "Well documented" are
+// genuinely endpoint-level totals spread across projects, and forcing them
+// into a project filter would show a number that doesn't match what's
+// literally on the card.
+const CC_KPI_FILTERS = {
+  missingAuth: { label:'Missing auth', test:(p)=> !(p.auth && p.auth.type) },
+  deprecated: { label:'Deprecated / retired', test:(p)=> ['DEPRECATED','RETIRED'].includes(p.lifecycle) },
+  fullyPromoted: { label:'Fully promoted APIs', test:(p, ctx)=> !!(ctx.perProjectById.get(p.id) && ctx.perProjectById.get(p.id).fullyPromoted) },
+  needsAttention: { label:'Needs attention', test:(p)=> p.endpoints.some(ep=> computeDocScore(ep,p).percent < 80) },
+};
+
+const CC_SORT_COLS = {
+  name: { label:'Name', get:(p)=> (p.name||'').toLowerCase() },
+  lifecycle: { label:'Lifecycle', get:(p)=> p.lifecycle||'' },
+  endpoints: { label:'Endpoints', get:(p)=> p.endpoints.length },
+  doc: { label:'Documentation', get:(p)=> p.endpoints.length ? p.endpoints.reduce((s,ep)=>s+computeDocScore(ep,p).percent,0)/p.endpoints.length : 0 },
+  stages: { label:'Stages reached', get:(p, ctx)=> (ctx.perProjectById.get(p.id) || {}).stagesReached || 0 },
+  owner: { label:'Owner', get:(p)=> (p.owner||'').toLowerCase() },
+  updated: { label:'Last updated', get:(p)=> p.updatedAt||'' },
+};
+
 function renderControlCenter(main){
   const m = workspaceMetrics();
-  const projects = allProjects().slice().sort((a,b)=> (b.updatedAt||'').localeCompare(a.updatedAt||''));
+  const allProjectsSorted = allProjects().slice().sort((a,b)=> (b.updatedAt||'').localeCompare(a.updatedAt||''));
 
   const healthTotal = m.totalEndpoints || 1;
   const wellPct = Math.round((m.wellDocumented/healthTotal)*100);
@@ -171,24 +214,57 @@ function renderControlCenter(main){
     envRows = `<tr><td colspan="4" class="empty-field" style="padding:16px;">No pipeline environments configured yet — add one from Your Profile first.</td></tr>`;
   }
 
-  const projectRows = projects.length ? projects.map(p=>{
+  // Search box + clickable KPI filter + sortable columns all narrow/order
+  // the SAME filteredProjects list that feeds the APIs table — kept as one
+  // pipeline so there's never a mismatch between what a KPI card claims and
+  // what clicking it actually shows.
+  const ccCtx = { perProjectById };
+  const kpiFilterId = state.ccKpiFilter && CC_KPI_FILTERS[state.ccKpiFilter] ? state.ccKpiFilter : null;
+  const searchQ = (state.ccSearch || '').trim().toLowerCase();
+  const sortKey = state.ccSort && CC_SORT_COLS[state.ccSort.key] ? state.ccSort.key : null;
+  const sortDir = state.ccSort && state.ccSort.dir === 'asc' ? 'asc' : 'desc';
+
+  let filteredProjects = allProjectsSorted.filter(p=>{
+    if(kpiFilterId && !CC_KPI_FILTERS[kpiFilterId].test(p, ccCtx)) return false;
+    if(searchQ && !`${p.name} ${p.owner||''}`.toLowerCase().includes(searchQ)) return false;
+    return true;
+  });
+  if(sortKey){
+    const getter = CC_SORT_COLS[sortKey].get;
+    filteredProjects = filteredProjects.slice().sort((a,b)=>{
+      const av = getter(a, ccCtx), bv = getter(b, ccCtx);
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }
+
+  const ccColHeader = (key, label, extra)=>{
+    const active = sortKey === key;
+    const arrow = active ? (sortDir==='asc' ? '↑' : '↓') : '';
+    return `<th class="cc-sortable${active?' active':''}" data-cc-sort-key="${key}">${escapeHtml(label)}${extra||''} <span class="cc-sort-arrow">${arrow}</span></th>`;
+  };
+
+  const projectRows = filteredProjects.length ? filteredProjects.map(p=>{
     const stats = p.endpoints.length ? Math.round(p.endpoints.reduce((s,ep)=>s+computeDocScore(ep,p).percent,0)/p.endpoints.length) : 0;
     const pp = perProjectById.get(p.id);
-    const envsCell = emLoading ? '<span class="empty-field">…</span>'
-      : pp ? `${pp.stagesReached}/${Math.max(pipelineStageCount-1,0)}`
-      : `0/${Math.max(pipelineStageCount-1,0)}`;
+    const stagesTotal = Math.max(pipelineStageCount-1,0);
+    const stagesReached = emLoading ? null : (pp ? pp.stagesReached : 0);
+    const stagesPct = stagesTotal ? Math.round(((stagesReached||0)/stagesTotal)*100) : 0;
     const statusTally = {};
     p.endpoints.forEach(ep=>{ const id = DocMeta.endpointStatusOf(ep); statusTally[id] = (statusTally[id]||0)+1; });
+    const fresh = timeAgoLabel(p.updatedAt);
+    const freshColor = fresh.tier==='stale' ? 'var(--put)' : fresh.tier==='aging' ? 'var(--text-dim)' : 'var(--text-faint)';
     return `<tr class="cc-proj-row" data-cc-proj="${p.id}">
       <td><span class="cc-proj-name">${escapeHtml(p.name)}</span></td>
       <td><span class="lc-badge lc-${p.lifecycle.toLowerCase().replace(/[^a-z]/g,'')}">${p.lifecycle}</span></td>
       <td class="mono">${p.endpoints.length}</td>
       <td style="min-width:120px;">${docScoreBarHtml(stats,'sm')}<span class="mono" style="font-size:10.5px;color:var(--text-faint);">${stats}%</span></td>
-      <td class="mono" title="Pipeline stages (past Dev) this API has at least one endpoint promoted to">${envsCell}</td>
+      <td style="min-width:100px;" title="Pipeline stages (past Dev) this API has at least one endpoint promoted to">${emLoading ? '<span class="empty-field">…</span>' : `${docScoreBarHtml(stagesPct,'sm')}<span class="mono" style="font-size:10.5px;color:var(--text-faint);">${stagesReached}/${stagesTotal}</span>`}</td>
       <td><div style="display:flex;gap:4px;flex-wrap:wrap;">${statusCountChipsHtml(statusTally, {hideZero:true}) || '<span class="empty-field">—</span>'}</div></td>
       <td>${p.owner ? escapeHtml(p.owner) : '<span class="empty-field">—</span>'}</td>
+      <td class="mono" style="font-size:10.5px;color:${freshColor};" title="${p.updatedAt ? formatDateTime(p.updatedAt) : ''}">${fresh.label}</td>
     </tr>`;
-  }).join('') : `<tr><td colspan="7" class="empty-field" style="padding:16px;">No APIs yet — import a spec or add an endpoint to populate the control center.</td></tr>`;
+  }).join('') : `<tr><td colspan="8" class="empty-field" style="padding:16px;">${allProjectsSorted.length ? 'No APIs match the current search/filter.' : 'No APIs yet — import a spec or add an endpoint to populate the control center.'}</td></tr>`;
 
   // Environment-level status breakdown — one column per pipeline stage (plus
   // any DR mirrors), one row per lifecycle status, straight from each
@@ -229,6 +305,45 @@ function renderControlCenter(main){
       ? '<path d="M12 8v4.5"></path><circle cx="12" cy="15.5" r="0.9" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="9"></circle>'
       : '<path d="M3 12h4l2-7 4 14 2-7h6"></path>';
 
+  // Same SecOps/VAPT/Log Mgmt gate as Security Center's Summary tab (see
+  // computeReviewReadinessRollup in 12-security-center.js) — surfaced here
+  // too since "what's happening with your APIs" is exactly what release
+  // readiness is, and this is the page people actually land on first.
+  const ccRollup = computeReviewReadinessRollup();
+  const ccReadiness = {
+    rollup: ccRollup,
+    notReadyCount: ccRollup.totalEndpoints - ccRollup.fullyReady,
+    chips: ccRollup.KINDS.map(k=>{
+      const n = ccRollup.pendingByKind[k.id];
+      return `<span class="sec-status-dot"><span class="dot" style="background:${n?'var(--delete)':'var(--post)'};"></span>${n} ${k.label} pending</span>`;
+    }).join(''),
+  };
+
+  // Needs-attention digest — the worst 5 endpoints org-wide by doc score, so
+  // there's a concrete starting point ("go fix these 5") instead of just a
+  // count. Opens straight into the endpoint editor, same as every other
+  // "jump to this endpoint" affordance in the app.
+  const ccWorstEndpoints = [];
+  allProjectsSorted.forEach(p=> p.endpoints.forEach(ep=>{
+    ccWorstEndpoints.push({ proj:p, ep, score: computeDocScore(ep, p).percent });
+  }));
+  ccWorstEndpoints.sort((a,b)=> a.score - b.score);
+  const ccWorst5 = ccWorstEndpoints.slice(0, 5);
+  const ccDigestHtml = ccWorst5.length ? `
+    <div class="section">
+      <div class="section-title">Needs attention first <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— the lowest-scoring endpoints org-wide</span></div>
+      <div class="cc-digest">
+        ${ccWorst5.map(({proj,ep,score})=>`
+          <div class="cc-digest-row" data-cc-digest-proj="${proj.id}" data-cc-digest-ep="${ep.id}">
+            <span class="badge ${methodClass(ep.method)}">${ep.method}</span>
+            <span class="cc-digest-path mono">${escapeHtml(ep.path)}</span>
+            <span class="cc-digest-proj">${escapeHtml(proj.name)}</span>
+            ${docScoreBarHtml(score,'sm')}
+            <span class="mono cc-digest-pct" style="color:${score>=50?'var(--put)':'var(--delete)'};">${score}%</span>
+          </div>`).join('')}
+      </div>
+    </div>` : '';
+
   main.innerHTML = `
     <div class="crumb">API Control Center</div>
     <div class="ctrl-hero" style="--ctrl-glow-bg:var(${ctrlBgVar});">
@@ -250,11 +365,23 @@ function renderControlCenter(main){
       ${kpiCard('Endpoints', m.totalEndpoints)}
       ${kpiCard('Documentation coverage', m.avgDoc+'%', m.avgDoc>=80?'var(--post)':m.avgDoc>=50?'var(--put)':'var(--delete)')}
       ${kpiCard('Well documented', m.wellDocumented, 'var(--post)', '≥80% complete')}
-      ${kpiCard('Needs attention', m.partial+m.poor, 'var(--put)', '<80% complete')}
-      ${kpiCard('Fully promoted APIs', emLoading ? '…' : fullyPromotedCount, 'var(--get)', 'every draft endpoint reached '+lastStageLabel)}
-      ${kpiCard('Missing auth', m.missingAuth, m.missingAuth?'var(--delete)':'var(--post)')}
-      ${kpiCard('Deprecated / retired', m.deprecated, m.deprecated?'var(--patch)':'var(--text-dim)')}
+      ${kpiCard('Needs attention', m.partial+m.poor, 'var(--put)', '<80% complete — click to filter', 'needsAttention')}
+      ${kpiCard('Fully promoted APIs', emLoading ? '…' : fullyPromotedCount, 'var(--get)', 'reached '+lastStageLabel+' — click to filter', 'fullyPromoted')}
+      ${kpiCard('Missing auth', m.missingAuth, m.missingAuth?'var(--delete)':'var(--post)', m.missingAuth?'click to filter':'', 'missingAuth')}
+      ${kpiCard('Deprecated / retired', m.deprecated, m.deprecated?'var(--patch)':'var(--text-dim)', m.deprecated?'click to filter':'', 'deprecated')}
     </div>
+    ${kpiFilterId ? `<div class="cc-active-filter">Filtered to: <strong>${escapeHtml(CC_KPI_FILTERS[kpiFilterId].label)}</strong> (${filteredProjects.length} API${filteredProjects.length===1?'':'s'}) <button type="button" id="ccClearKpiFilter" class="linklike">Clear filter</button></div>` : ''}
+
+    <div class="section">
+      <div class="section-title">Release readiness across all APIs <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— the same SecOps/VAPT/Log Mgmt gate Production promotion enforces</span></div>
+      <div class="sec-card" style="--sc-accent:var(${ccReadiness.notReadyCount?'--put':'--post'});">
+        <div class="v" style="font-size:14px;"><span class="dot"></span>${ccReadiness.rollup.fullyReady} of ${ccReadiness.rollup.totalEndpoints} endpoint${ccReadiness.rollup.totalEndpoints===1?'':'s'} fully release-ready</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;">${ccReadiness.chips}</div>
+        <div class="s" style="margin-top:8px;">${ccReadiness.notReadyCount ? `${ccReadiness.notReadyCount} endpoint${ccReadiness.notReadyCount===1?'':'s'} would be held back from a Production promotion today.` : 'Every documented endpoint is Active with SecOps, VAPT, and Log Mgmt all approved.'}</div>
+      </div>
+    </div>
+
+    ${ccDigestHtml}
 
     <div class="section">
       <div class="section-title">Endpoints by status — API level</div>
@@ -292,10 +419,22 @@ function renderControlCenter(main){
     </div>
 
     <div class="section">
-      <div class="section-title">APIs</div>
+      <div class="section-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+        <span>APIs</span>
+        <input type="text" id="ccProjSearch" placeholder="Search by name or owner…" value="${escapeHtml(state.ccSearch||'')}" style="max-width:220px;">
+      </div>
       <div class="table-scroll">
       <table class="data-table cc-proj-table">
-        <thead><tr><th>Name</th><th>Lifecycle</th><th>Endpoints</th><th>Documentation</th><th>Stages reached</th><th>Status mix</th><th>Owner</th></tr></thead>
+        <thead><tr>
+          ${ccColHeader('name','Name')}
+          ${ccColHeader('lifecycle','Lifecycle')}
+          ${ccColHeader('endpoints','Endpoints')}
+          ${ccColHeader('doc','Documentation')}
+          ${ccColHeader('stages','Stages reached')}
+          <th>Status mix</th>
+          ${ccColHeader('owner','Owner')}
+          ${ccColHeader('updated','Last updated')}
+        </tr></thead>
         <tbody>${projectRows}</tbody>
       </table>
       </div>
@@ -309,6 +448,45 @@ function renderControlCenter(main){
     row.addEventListener('click', ()=>{
       state.selected = { type:'overview', projectId: row.getAttribute('data-cc-proj') };
       renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
+    });
+  });
+
+  main.querySelectorAll('[data-cc-kpi-filter]').forEach(card=>{
+    const filterId = card.getAttribute('data-cc-kpi-filter');
+    const activate = ()=>{
+      state.ccKpiFilter = state.ccKpiFilter === filterId ? null : filterId;
+      renderControlCenter(main);
+    };
+    card.addEventListener('click', activate);
+    card.addEventListener('keydown', (e)=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); activate(); } });
+  });
+  const clearBtn = document.getElementById('ccClearKpiFilter');
+  if(clearBtn) clearBtn.addEventListener('click', ()=>{ state.ccKpiFilter = null; renderControlCenter(main); });
+
+  const searchInput = document.getElementById('ccProjSearch');
+  if(searchInput){
+    searchInput.addEventListener('input', ()=>{
+      state.ccSearch = searchInput.value;
+      renderControlCenter(main);
+      const el = document.getElementById('ccProjSearch');
+      if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    });
+  }
+
+  main.querySelectorAll('[data-cc-sort-key]').forEach(th=>{
+    th.addEventListener('click', ()=>{
+      const key = th.getAttribute('data-cc-sort-key');
+      const current = state.ccSort;
+      state.ccSort = (current && current.key===key) ? { key, dir: current.dir==='asc'?'desc':'asc' } : { key, dir:'asc' };
+      renderControlCenter(main);
+    });
+  });
+
+  main.querySelectorAll('[data-cc-digest-proj]').forEach(row=>{
+    row.addEventListener('click', ()=>{
+      const proj = state.projects[row.getAttribute('data-cc-digest-proj')];
+      const ep = proj && proj.endpoints.find(e=>e.id===row.getAttribute('data-cc-digest-ep'));
+      if(proj && ep) openEditorTab(proj, ep);
     });
   });
 }
