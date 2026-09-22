@@ -241,6 +241,17 @@ function renderControlCenter(main){
     </div>
 
     <div class="section">
+      <div class="section-title">Endpoints by status — environment level</div>
+      <div class="hint" style="margin-top:-4px;">Status mix of the endpoints actually present in each promoted environment snapshot (Dev shows the live draft).</div>
+      <div class="table-scroll">
+      <table class="data-table">
+        <thead><tr><th>Status</th>${statusEnvHead}</tr></thead>
+        <tbody>${statusEnvRows}</tbody>
+      </table>
+      </div>
+    </div>
+
+    <div class="section">
       <div class="section-title">Documentation health</div>
       <div class="health-bars">
         <div class="health-row"><span class="health-label">Well documented</span><div class="health-track"><div class="health-fill" style="width:${wellPct}%;background:var(--post);"></div></div><span class="health-pct">${wellPct}%</span></div>
@@ -256,17 +267,6 @@ function renderControlCenter(main){
         <thead><tr><th>Environment</th><th>Endpoints</th><th>% of Dev</th><th>Coverage</th></tr></thead>
         <tbody>${envRows}</tbody>
       </table>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Endpoints by status — environment level</div>
-      <div class="hint" style="margin-top:-4px;">Status mix of the endpoints actually present in each promoted environment snapshot (Dev shows the live draft).</div>
-      <div class="table-scroll">
-      <table class="data-table">
-        <thead><tr><th>Status</th>${statusEnvHead}</tr></thead>
-        <tbody>${statusEnvRows}</tbody>
-      </table>
-      </div>
     </div>
 
     <div class="section">
