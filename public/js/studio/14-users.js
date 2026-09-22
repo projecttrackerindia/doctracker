@@ -557,7 +557,13 @@ function renderProjectOverview(main, projectId){
   const envsConfigured = environments().filter(e=>proj.environments[e.id]).length;
   const tagCount = new Set(epsForView.map(e=>e.tag || 'General')).size;
 
-  const docs = (proj.attachments || []).slice().sort((a,b)=> new Date(b.uploadedAt) - new Date(a.uploadedAt));
+  // Attachments are frozen into each promoted stage's snapshot exactly like
+  // endpoints are — viewing SIT/UAT/Staging/Production has to show what was
+  // actually promoted there, not whatever's currently on the draft (that
+  // used to always read `proj.attachments`, so every environment looked
+  // identical no matter which stage was selected).
+  const attachmentsForView = viewingDraft ? (proj.attachments || []) : (snap && snap.status === 'ready' ? (snap.attachments || []) : []);
+  const docs = attachmentsForView.slice().sort((a,b)=> new Date(b.uploadedAt) - new Date(a.uploadedAt));
   const docsHtml = docs.length
     ? `<div class="doc-grid">${docs.map(d=>{
         const meta = docTypeMeta(d.name);
@@ -569,7 +575,8 @@ function renderProjectOverview(main, projectId){
         // silently becomes `href="undefined"` for any attachment saved
         // after storage was turned on. The streaming route below handles
         // both cases (storageKey or a still-inline dataUrl) correctly.
-        const href = d.dataUrl || `/api/workspace/projects/${encodeURIComponent(proj.id)}/attachments/${encodeURIComponent(d.id)}`;
+        const envQuery = viewingDraft ? '' : `?environmentId=${encodeURIComponent(state.env)}`;
+        const href = d.dataUrl || `/api/workspace/projects/${encodeURIComponent(proj.id)}/attachments/${encodeURIComponent(d.id)}${envQuery}`;
         return `<a class="doc-card" style="--doc-accent:var(${meta.accent});--doc-accent-bg:var(${meta.bg});" href="${href}" download="${escapeHtml(d.name)}" title="Download ${escapeHtml(d.name)}">
           <div class="doc-card-ic">${meta.label}</div>
           <div class="doc-card-main">

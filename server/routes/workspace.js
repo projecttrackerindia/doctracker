@@ -907,7 +907,23 @@ router.get('/projects/:id/attachments/:docId', async (req, res) => {
       return res.status(403).json({ error: 'This project is private.' });
     }
 
-    const data = decryptProjectData(row);
+    // Attachments are frozen into each stage's snapshot the same as
+    // endpoints are (see finalizePromotion) — without this, downloading a
+    // document while viewing SIT/UAT/Staging/Production always served
+    // whatever's on the current DEV draft instead of what was actually
+    // promoted, so a document replaced after a promotion looked identical
+    // in every environment even though the live stages hadn't changed.
+    const envKey = req.query.environmentId;
+    let data;
+    if (envKey) {
+      const allEnvs = await getOrgEnvironments(row.organisation);
+      const stages = pipelineStages(allEnvs);
+      const idx = stages.findIndex((e) => e.id === envKey);
+      if (idx < 0) return res.status(400).json({ error: 'Unknown environment.' });
+      data = await loadStageData(row, envKey, idx);
+    } else {
+      data = decryptProjectData(row);
+    }
     const doc = (data.attachments || []).find((a) => a && a.id === req.params.docId);
     if (!doc) return res.status(404).json({ error: 'Attachment not found.' });
 
@@ -1874,11 +1890,10 @@ router.post('/projects/:id/promote', async (req, res) => {
       newReleaseVersion = srcRows[0].version;
     }
 
-    const readinessError = checkReleaseReadiness(stages, targetStage, sourceData);
-    if (readinessError) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ error: readinessError, notReleaseReady: true });
-    }
+    // Note: the per-endpoint readiness gate (partitionForFinalStagePromotion)
+    // only ever applies to the LAST stage, and the last stage is always
+    // flagged requiresApproval, which is refused above before sourceData is
+    // even loaded — so this route never actually reaches the last stage.
 
     // ---- Diff-viewed gate (see checkDiffToken above) ----
     // Recompute the exact same diff a caller would see for this from/to
@@ -1974,13 +1989,20 @@ router.post('/projects/:id/promotion-requests', async (req, res) => {
     }
 
     const fromData = fromIdx === 0 ? decryptProjectData(project) : await loadStageData(project, fromEnvironmentId, fromIdx);
-
-    const readinessError = checkReleaseReadiness(stages, targetStage, fromData);
-    if (readinessError) return res.status(409).json({ error: readinessError, notReleaseReady: true });
-
     const toStageData = await loadStageData(project, targetStage.id, fromIdx + 1);
-    const liveDiff = diffEndpointLists(fromData.endpoints || [], toStageData.endpoints || []);
-    const liveBreakingChanges = detectBreakingChanges(toStageData.endpoints || [], fromData.endpoints || []);
+
+    // Per-endpoint Production gate: only ready endpoints (plus whatever's
+    // already frozen in Production for the ones that aren't) go into this
+    // request — see partitionForFinalStagePromotion. targetStage is always
+    // the last stage here since only it is ever flagged requiresApproval.
+    const isFinalStage = targetStage.id === stages[stages.length - 1].id;
+    const gate = isFinalStage
+      ? partitionForFinalStagePromotion(fromData.endpoints || [], toStageData.endpoints || [])
+      : { endpoints: fromData.endpoints || [], excluded: [] };
+    const gatedFromEndpoints = gate.endpoints;
+
+    const liveDiff = diffEndpointLists(gatedFromEndpoints, toStageData.endpoints || []);
+    const liveBreakingChanges = detectBreakingChanges(toStageData.endpoints || [], gatedFromEndpoints);
     const ackBreakingChanges = req.body?.ackBreakingChanges === true;
     if (liveBreakingChanges.length && !ackBreakingChanges) {
       const n = liveBreakingChanges.length;
@@ -1990,7 +2012,14 @@ router.post('/projects/:id/promotion-requests', async (req, res) => {
       });
     }
     const total = liveDiff.added.length + liveDiff.removed.length + liveDiff.modified.length;
-    if (!total) return res.status(400).json({ error: `${stages[fromIdx].label} and ${targetStage.label} are already in sync — nothing to promote.` });
+    if (!total) {
+      return res.status(400).json({
+        error: gate.excluded.length
+          ? `Nothing release-ready to promote — ${gate.excluded.length} endpoint${gate.excluded.length === 1 ? '' : 's'} in ${stages[fromIdx].label} still ${gate.excluded.length === 1 ? "isn't" : "aren't"} Active with SecOps/VAPT/Log Mgmt approved.`
+          : `${stages[fromIdx].label} and ${targetStage.label} are already in sync — nothing to promote.`,
+        excludedNotReady: gate.excluded,
+      });
+    }
 
     const diffHash = hashDiff(liveDiff, liveBreakingChanges);
     let created;
@@ -2017,9 +2046,10 @@ router.post('/projects/:id/promotion-requests', async (req, res) => {
       resourceType: 'project',
       resourceId: project.id,
       entityName: stages[fromIdx].label + ' → ' + targetStage.label,
-      details: `Requested promotion of "${project.id}" from ${stages[fromIdx].label} to ${targetStage.label} — awaiting a second Admin's approval.`,
+      details: `Requested promotion of "${project.id}" from ${stages[fromIdx].label} to ${targetStage.label} — awaiting a second Admin's approval.`
+        + (gate.excluded.length ? ` ${gate.excluded.length} endpoint${gate.excluded.length === 1 ? '' : 's'} left out as not release-ready.` : ''),
       severity: liveBreakingChanges.length ? 'warning' : 'info',
-      metadata: { fromEnvironmentId, toEnvironmentId: targetStage.id, requestId: created.id },
+      metadata: { fromEnvironmentId, toEnvironmentId: targetStage.id, requestId: created.id, excludedNotReadyCount: gate.excluded.length },
     });
 
     const recipientIds = (await adminUserIds(project.organisation)).filter((id) => id !== req.authUser.sub);
@@ -2033,7 +2063,7 @@ router.post('/projects/:id/promotion-requests', async (req, res) => {
       });
     }
 
-    res.json({ ok: true, id: created.id, toEnvironmentLabel: targetStage.label, createdAt: created.created_at });
+    res.json({ ok: true, id: created.id, toEnvironmentLabel: targetStage.label, createdAt: created.created_at, excludedNotReady: gate.excluded });
   } catch (err) {
     console.error('POST promotion-requests failed:', err);
     res.status(500).json({ error: 'Could not open a promotion request.' });
@@ -2147,8 +2177,21 @@ router.post('/projects/:id/promotion-requests/:reqId/approve', async (req, res) 
       sourceData = JSON.parse(dataCrypto.decryptField(srcRows[0].data_enc, `project-env:${project.id}:${request.from_environment_id}`));
     }
     const toStageData = await loadStageData(project, targetStage.id, fromIdx + 1);
-    const liveDiff = diffEndpointLists(sourceData.endpoints || [], toStageData.endpoints || []);
-    const liveBreakingChanges = detectBreakingChanges(toStageData.endpoints || [], sourceData.endpoints || []);
+
+    // Same per-endpoint Production gate as when the request was opened — has
+    // to be recomputed identically here so the hash check below still
+    // matches (it's a pure function of sourceData + Production's current
+    // content, and Production hasn't moved since unless someone else
+    // promoted into it in the meantime, which the hash check below still
+    // correctly catches).
+    const isFinalStage = targetStage.id === stages[stages.length - 1].id;
+    const gate = isFinalStage
+      ? partitionForFinalStagePromotion(sourceData.endpoints || [], toStageData.endpoints || [])
+      : { endpoints: sourceData.endpoints || [], excluded: [] };
+    const gatedSourceData = { ...sourceData, endpoints: gate.endpoints };
+
+    const liveDiff = diffEndpointLists(gatedSourceData.endpoints, toStageData.endpoints || []);
+    const liveBreakingChanges = detectBreakingChanges(toStageData.endpoints || [], gatedSourceData.endpoints);
     if (hashDiff(liveDiff, liveBreakingChanges) !== request.diff_hash) {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: "What's changed since this request was opened — ask the requester to cancel it and open a fresh one." });
@@ -2166,7 +2209,7 @@ router.post('/projects/:id/promotion-requests/:reqId/approve', async (req, res) 
     }
 
     const result = await finalizePromotion(client, req, {
-      project, allEnvs, stages, fromIdx, targetStage, sourceData, newReleaseVersion,
+      project, allEnvs, stages, fromIdx, targetStage, sourceData: gatedSourceData, newReleaseVersion,
       fromEnvironmentId: request.from_environment_id, releaseNote: request.release_note,
       breakingChanges: liveBreakingChanges, actingUser: { sub: request.requested_by, username: request.requested_by_username },
     });
@@ -2213,7 +2256,7 @@ router.post('/projects/:id/promotion-requests/:reqId/approve', async (req, res) 
       console.error('POST promotion-requests/approve: side effects after commit failed (approval itself still succeeded):', sideEffectErr);
     }
 
-    res.json({ ok: true, ...result });
+    res.json({ ok: true, ...result, excludedNotReady: gate.excluded });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('POST promotion-requests/approve failed:', err);
@@ -2367,37 +2410,64 @@ function epSummary(ep) {
 // turn `from` into `to`.)
 // ---- Release readiness gate (item #7) ----
 // A promotion into the pipeline's LAST stage (Production, by convention —
-// DR isn't a manual stage, it inherits Production's readiness for free) is
-// refused unless every endpoint being promoted is status:active and has
-// SecOps/VAPT/Log Mgmt all approved. Without this, the review columns in
-// the Overview table are just a display — nothing stops an endpoint nobody
-// signed off on from reaching Production anyway.
+// DR isn't a manual stage, it inherits Production's readiness for free)
+// used to be all-or-nothing: a single endpoint that wasn't status:active
+// with SecOps/VAPT/Log Mgmt all approved blocked the ENTIRE project from
+// reaching Production, even when most of it was long since ready. That
+// pushed teams into forking a project into a second "-prod" copy just to
+// get its finished endpoints live, fragmenting the documentation for no
+// real reason. Instead, a Production promotion now carries forward only
+// the endpoints that are actually release-ready — see
+// partitionForFinalStagePromotion below — while everything not ready
+// simply sits out of this particular promotion; the next promotion picks
+// it up automatically once it passes. An endpoint already live in
+// Production is never silently pulled or overwritten by an unapproved
+// edit just because its review status later regressed — it's kept frozen
+// at its last-promoted content until it's ready again.
 const RELEASE_REVIEW_KINDS = ['secOps', 'vapt', 'logMgmt'];
-function checkReleaseReadiness(stages, targetStage, sourceData) {
-  if (!stages.length || targetStage.id !== stages[stages.length - 1].id) return null;
-  const endpoints = (sourceData && sourceData.endpoints) || [];
-  const problems = [];
-  for (const ep of endpoints) {
-    if (!ep || !ep.id) continue;
-    const label = `${(ep.method || '').toUpperCase()} ${ep.path || ''}`;
-    const status = ep.status || 'active';
-    if (status !== 'active') {
-      problems.push(`${label} is marked "${status.replace(/_/g, ' ')}", not Active`);
-      continue; // one reason per endpoint keeps the message skimmable
-    }
-    for (const kind of RELEASE_REVIEW_KINDS) {
-      const st = ep[kind + 'Status'] || (ep[kind + 'Reviewed'] ? 'approved' : 'none');
-      if (st !== 'approved') {
-        problems.push(`${label} — ${kind} review is "${st.replace(/_/g, ' ')}", not approved`);
-        break;
-      }
+
+function endpointReadinessProblem(ep) {
+  const label = `${(ep.method || '').toUpperCase()} ${ep.path || ''}`;
+  const status = ep.status || 'active';
+  if (status !== 'active') {
+    return `${label} is marked "${status.replace(/_/g, ' ')}", not Active`;
+  }
+  for (const kind of RELEASE_REVIEW_KINDS) {
+    const st = ep[kind + 'Status'] || (ep[kind + 'Reviewed'] ? 'approved' : 'none');
+    if (st !== 'approved') {
+      return `${label} — ${kind} review is "${st.replace(/_/g, ' ')}", not approved`;
     }
   }
-  if (!problems.length) return null;
-  const shown = problems.slice(0, 5);
-  const more = problems.length - shown.length;
-  return `${problems.length} endpoint${problems.length === 1 ? '' : 's'} aren't release-ready for ${targetStage.label}: ` +
-    shown.join('; ') + (more > 0 ? `; and ${more} more` : '') + '.';
+  return null;
+}
+
+// Splits `fromEndpoints` (what's about to be promoted) into what actually
+// gets carried into Production this time. Ready endpoints pass through
+// as-is. Not-ready endpoints that are already live in Production are kept
+// at their CURRENT Production content (not silently dropped, not silently
+// updated). Not-ready endpoints that have never reached Production are
+// left out entirely. Returns the effective endpoint list to promote plus
+// a summary of what was excluded, for transparency in the diff/response.
+function partitionForFinalStagePromotion(fromEndpoints, currentTargetEndpoints) {
+  const currentById = new Map((currentTargetEndpoints || []).filter((e) => e && e.id).map((e) => [e.id, e]));
+  const endpoints = [];
+  const excluded = [];
+  for (const ep of fromEndpoints || []) {
+    if (!ep || !ep.id) continue;
+    const problem = endpointReadinessProblem(ep);
+    if (!problem) {
+      endpoints.push(ep);
+      continue;
+    }
+    const already = currentById.get(ep.id);
+    if (already) {
+      endpoints.push(already);
+      excluded.push({ ...epSummary(ep), reason: problem, keptAsIs: true });
+    } else {
+      excluded.push({ ...epSummary(ep), reason: problem, keptAsIs: false });
+    }
+  }
+  return { endpoints, excluded };
 }
 
 function diffEndpointLists(fromEps, toEps) {
@@ -2618,6 +2688,15 @@ router.get('/projects/:id/snapshot', async (req, res) => {
     const orgRules = await getOrgPiiRules(project.organisation);
     endpoints = endpoints.map((ep) => piiMasking.maskEndpoint(ep, orgRules));
 
+    // Attachments are project-level, frozen into the stage snapshot exactly
+    // like endpoints are — so switching the environment switcher off the
+    // draft has to switch the Documents list too, not keep showing whatever
+    // is currently on the draft. Same visibility rule as projectForViewer's
+    // attachments field: a non-owner/non-grant viewer only sees them if the
+    // whole project is public, never per-endpoint-public.
+    let attachments = Array.isArray(stageData.attachments) ? stageData.attachments : [];
+    if (!isOwner && !grant && project.visibility !== 'public') attachments = [];
+
     res.json({
       environmentId: envKey,
       label: stages[idx].label,
@@ -2626,6 +2705,7 @@ router.get('/projects/:id/snapshot', async (req, res) => {
       promotedAt,
       promotedBy,
       endpoints,
+      attachments,
     });
   } catch (err) {
     console.error('GET project snapshot failed:', err);
@@ -2714,6 +2794,19 @@ router.get('/projects/:id/diff', async (req, res) => {
     // never match — a real request would recompute the diff on raw data,
     // get a different hash, and fail every single time with a false
     // "diff has changed since you last viewed it" error.
+    // Per-endpoint Production gate: previewing a promotion INTO the last
+    // stage only shows what would actually go — ready endpoints, plus
+    // whatever's already frozen in Production for anything not ready yet
+    // (see partitionForFinalStagePromotion). Without this, the diff would
+    // show endpoints as "added" that a subsequent promotion-request would
+    // then silently leave out, which is confusing at best.
+    const fromIdxForGate = stageById.get(fromKey).idx, toIdxForGate = stageById.get(toKey).idx;
+    const isFinalStageTarget = toIdxForGate === stages.length - 1 && toIdxForGate === fromIdxForGate + 1;
+    const gate = isFinalStageTarget
+      ? partitionForFinalStagePromotion(fromEndpoints, toEndpoints)
+      : { endpoints: fromEndpoints, excluded: [] };
+    fromEndpoints = gate.endpoints;
+
     const rawFromEndpoints = fromEndpoints;
     const rawToEndpoints = toEndpoints;
     const rawDiff = diffEndpointLists(rawFromEndpoints, rawToEndpoints);
@@ -2747,6 +2840,7 @@ router.get('/projects/:id/diff', async (req, res) => {
       modified: diff.modified,
       breakingChanges,
       hasBreakingChanges: breakingChanges.length > 0,
+      excludedNotReady: gate.excluded,
     });
   } catch (err) {
     console.error('GET project diff failed:', err);
