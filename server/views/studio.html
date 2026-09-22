@@ -1245,10 +1245,24 @@ pre.code-block{
 }
 .cc-active-filter strong{ color:var(--text); }
 
-.cc-sortable{ cursor:pointer; user-select:none; white-space:nowrap; }
-.cc-sortable:hover{ color:var(--accent); }
-.cc-sortable.active{ color:var(--accent); }
-.cc-sort-arrow{ display:inline-block; width:8px; font-size:10px; }
+.cc-sortable{ cursor:pointer; user-select:none; white-space:nowrap; transition:background-color .12s ease, color .12s ease; }
+.cc-sortable:hover{ color:var(--accent-ink); background:var(--accent); }
+.cc-sortable.active{ color:var(--accent-ink); background:var(--accent); }
+.cc-sort-arrow{ display:inline-block; width:9px; font-size:10px; }
+
+/* Table-toolbar search — same icon-inset pattern the sidebar's own "Filter
+   endpoints…" box uses (see .sidebar-search), instead of a bare unstyled
+   <input> falling back to the browser default control. */
+.cc-search-wrap{ position:relative; display:flex; align-items:center; }
+.cc-search-ic{ position:absolute; left:11px; width:13px; height:13px; color:var(--text-faint); pointer-events:none; display:flex; }
+.cc-search-ic svg{ width:100%; height:100%; }
+.cc-search-wrap input{
+  width:100%; background:var(--bg-elevated); border:1px solid var(--border); color:var(--text);
+  font-family:var(--sans); font-size:12.5px; padding:8px 12px 8px 32px; border-radius:999px;
+  transition:border-color .15s ease, box-shadow .15s ease;
+}
+.cc-search-wrap input::placeholder{ color:var(--text-faint); }
+.cc-search-wrap input:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
 
 .cc-digest{ display:flex; flex-direction:column; gap:2px; }
 .cc-digest-row{

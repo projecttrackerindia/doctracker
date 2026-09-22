@@ -421,7 +421,10 @@ function renderControlCenter(main){
     <div class="section">
       <div class="section-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
         <span>APIs</span>
-        <input type="text" id="ccProjSearch" placeholder="Search by name or owner…" value="${escapeHtml(state.ccSearch||'')}" style="max-width:220px;">
+        <span class="cc-search-wrap" style="max-width:240px;width:100%;">
+          <span class="cc-search-ic">${ICON_SEARCH}</span>
+          <input type="text" id="ccProjSearch" placeholder="Search by name or owner…" value="${escapeHtml(state.ccSearch||'')}" autocomplete="off">
+        </span>
       </div>
       <div class="table-scroll">
       <table class="data-table cc-proj-table">
