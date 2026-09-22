@@ -1365,10 +1365,23 @@ function renderEndpointDoc(main, proj, ep){
   // expanded/collapsed by the person. Re-binding toggle/copy listeners after
   // each pass is safe (and matches the rest of this file's convention)
   // because innerHTML replacement discards the old nodes — nothing to leak.
-  function rerenderReqResp(forceOpenIndex){
-    const openSet = new Set();
-    main.querySelectorAll('[data-resp].open').forEach(el=> openSet.add(parseInt(el.getAttribute('data-resp'),10)));
-    if(forceOpenIndex != null) openSet.add(forceOpenIndex);
+  //
+  // `exclusiveOpenIndex` (used by the scenario picker below) bypasses the
+  // "preserve what's open" behavior entirely: it closes every response item
+  // and opens only the one that matches the newly-picked scenario (or none,
+  // if the scenario has no matching response), instead of adding to whatever
+  // was already left open from a previous scenario — otherwise clicking
+  // through several scenario pills in a row leaves every previously-matched
+  // response accordion stacked open at once.
+  function rerenderReqResp(forceOpenIndex, exclusiveOpenIndex){
+    let openSet;
+    if(exclusiveOpenIndex !== undefined){
+      openSet = new Set(exclusiveOpenIndex != null ? [exclusiveOpenIndex] : []);
+    } else {
+      openSet = new Set();
+      main.querySelectorAll('[data-resp].open').forEach(el=> openSet.add(parseInt(el.getAttribute('data-resp'),10)));
+      if(forceOpenIndex != null) openSet.add(forceOpenIndex);
+    }
     const reqWrap = main.querySelector('[data-request-wrap]');
     if(reqWrap) reqWrap.innerHTML = buildRequestItemHtml();
     const respWrap = main.querySelector('[data-responses-wrap]');
@@ -1429,8 +1442,8 @@ function renderEndpointDoc(main, proj, ep){
       main.querySelectorAll('[data-scenario-pick]').forEach(p=>p.classList.remove('active'));
       pill.classList.add('active');
       const respScenario = responseScenarios.find(s=>s.name===name);
-      const forceOpenIndex = respScenario ? ep.responses.indexOf(respScenario.response) : null;
-      rerenderReqResp(forceOpenIndex);
+      const matchedIndex = respScenario ? ep.responses.indexOf(respScenario.response) : null;
+      rerenderReqResp(undefined, matchedIndex);
       if(respScenario){
         const item = main.querySelector(`[data-resp="${ep.responses.indexOf(respScenario.response)}"]`);
         if(item) item.scrollIntoView({ behavior:'smooth', block:'nearest' });
