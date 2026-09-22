@@ -1365,9 +1365,10 @@ function renderEndpointDoc(main, proj, ep){
   // expanded/collapsed by the person. Re-binding toggle/copy listeners after
   // each pass is safe (and matches the rest of this file's convention)
   // because innerHTML replacement discards the old nodes — nothing to leak.
-  function rerenderReqResp(){
+  function rerenderReqResp(forceOpenIndex){
     const openSet = new Set();
     main.querySelectorAll('[data-resp].open').forEach(el=> openSet.add(parseInt(el.getAttribute('data-resp'),10)));
+    if(forceOpenIndex != null) openSet.add(forceOpenIndex);
     const reqWrap = main.querySelector('[data-request-wrap]');
     if(reqWrap) reqWrap.innerHTML = buildRequestItemHtml();
     const respWrap = main.querySelector('[data-responses-wrap]');
@@ -1413,10 +1414,13 @@ function renderEndpointDoc(main, proj, ep){
   // Picking a scenario re-renders both panels together: the Request side
   // shows that scenario's JSON (Parameters view is schema-level and doesn't
   // change per example), and whichever Response documents that same
-  // scenario name gets its header code/colour + body updated to match and
-  // is scrolled into view — this is what actually fixes a scenario's
-  // overridden status code (e.g. 400) showing up instead of the response
-  // block's own default code always winning.
+  // scenario name gets its header code/colour + body updated to match, is
+  // force-expanded (previously this only scrolled to it while leaving the
+  // accordion collapsed, so picking a scenario with no response item already
+  // open looked like nothing happened), and is scrolled into view — this is
+  // what actually fixes a scenario's overridden status code (e.g. 400)
+  // showing up instead of the response block's own default code always
+  // winning.
   main.querySelectorAll('[data-scenario-pick]').forEach(pill=>{
     pill.addEventListener('click', ()=>{
       const name = pill.getAttribute('data-scenario-pick');
@@ -1424,8 +1428,9 @@ function renderEndpointDoc(main, proj, ep){
       activeScenario = name;
       main.querySelectorAll('[data-scenario-pick]').forEach(p=>p.classList.remove('active'));
       pill.classList.add('active');
-      rerenderReqResp();
       const respScenario = responseScenarios.find(s=>s.name===name);
+      const forceOpenIndex = respScenario ? ep.responses.indexOf(respScenario.response) : null;
+      rerenderReqResp(forceOpenIndex);
       if(respScenario){
         const item = main.querySelector(`[data-resp="${ep.responses.indexOf(respScenario.response)}"]`);
         if(item) item.scrollIntoView({ behavior:'smooth', block:'nearest' });
