@@ -373,11 +373,13 @@ function renderControlCenter(main){
     ${kpiFilterId ? `<div class="cc-active-filter">Filtered to: <strong>${escapeHtml(CC_KPI_FILTERS[kpiFilterId].label)}</strong> (${filteredProjects.length} API${filteredProjects.length===1?'':'s'}) <button type="button" id="ccClearKpiFilter" class="linklike">Clear filter</button></div>` : ''}
 
     <div class="section">
-      <div class="section-title">Release readiness across all APIs <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— the same SecOps/VAPT/Log Mgmt gate Production promotion enforces</span></div>
+      <div class="section-title">Review sign-off status <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— documentation review approvals, not what's actually deployed</span></div>
       <div class="sec-card" style="--sc-accent:var(${ccReadiness.notReadyCount?'--put':'--post'});">
-        <div class="v" style="font-size:14px;"><span class="dot"></span>${ccReadiness.rollup.fullyReady} of ${ccReadiness.rollup.totalEndpoints} endpoint${ccReadiness.rollup.totalEndpoints===1?'':'s'} fully release-ready</div>
+        <div class="v" style="font-size:14px;"><span class="dot"></span>${ccReadiness.rollup.fullyReady} of ${ccReadiness.rollup.totalEndpoints} endpoint${ccReadiness.rollup.totalEndpoints===1?'':'s'} have SecOps + VAPT + Log Mgmt all signed off</div>
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;">${ccReadiness.chips}</div>
-        <div class="s" style="margin-top:8px;">${ccReadiness.notReadyCount ? `${ccReadiness.notReadyCount} endpoint${ccReadiness.notReadyCount===1?'':'s'} would be held back from a Production promotion today.` : 'Every documented endpoint is Active with SecOps, VAPT, and Log Mgmt all approved.'}</div>
+        <div class="s" style="margin-top:8px;">${ccReadiness.notReadyCount
+          ? `${ccReadiness.notReadyCount} endpoint${ccReadiness.notReadyCount===1?'':'s'} still need a review marked approved in their own documentation — this number only moves when someone updates THAT, not when a promotion request is approved. Endpoints that already have sign-off may still be waiting on a separate Production promotion request (see each project's Release Pipeline).`
+          : 'Every documented endpoint has SecOps, VAPT, and Log Mgmt all signed off. Whether they\'re actually live in Production is a separate question — check each project\'s Release Pipeline.'}</div>
       </div>
     </div>
 
