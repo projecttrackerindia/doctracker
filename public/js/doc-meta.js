@@ -119,7 +119,7 @@
     { id: 'active',          label: 'Active',             tone: 'ok',   title: 'Live and ready to use' },
     { id: 'in_development',  label: 'Under development',  tone: 'info', title: 'Still being built — shape may still change' },
     { id: 'in_review',       label: 'Under review',       tone: 'warn', title: 'Built, awaiting sign-off before general use' },
-    { id: 'no_consumers',    label: 'No consumers yet',   tone: 'info', title: 'Live and working, but not yet integrated by any source system' },
+    { id: 'no_consumers',    label: 'No consumers yet',   tone: 'purple', title: 'Live and working, but not yet integrated by any source system' },
     { id: 'deprecated',      label: 'Deprecated',         tone: 'bad',  title: 'Still present but should not be used for new integrations' }
   ];
   var ENDPOINT_STATUS_BY_ID = {};

@@ -12,12 +12,14 @@
   --dm-warn:#e0a83e; --dm-warn-bg:rgba(224,168,62,.14); --dm-warn-bd:rgba(224,168,62,.34);
   --dm-bad:#ef5c6e;  --dm-bad-bg:rgba(239,92,110,.14);  --dm-bad-bd:rgba(239,92,110,.34);
   --dm-info:#4fa3f7; --dm-info-bg:rgba(79,163,247,.14); --dm-info-bd:rgba(79,163,247,.34);
+  --dm-purple:#a26fe0; --dm-purple-bg:rgba(162,111,224,.14); --dm-purple-bd:rgba(162,111,224,.34);
 }
 [data-theme="light"]{
   --dm-ok:#1c8f66;   --dm-ok-bg:rgba(28,143,102,.10);  --dm-ok-bd:rgba(28,143,102,.30);
   --dm-warn:#a06f10; --dm-warn-bg:rgba(160,111,16,.10); --dm-warn-bd:rgba(160,111,16,.30);
   --dm-bad:#d13750;  --dm-bad-bg:rgba(209,55,80,.10);   --dm-bad-bd:rgba(209,55,80,.30);
   --dm-info:#2a6fc9; --dm-info-bg:rgba(42,111,201,.10); --dm-info-bd:rgba(42,111,201,.30);
+  --dm-purple:#7c4fd1; --dm-purple-bg:rgba(124,79,209,.10); --dm-purple-bd:rgba(124,79,209,.30);
 }
 
 /* ---------- status dot (also used inside the segmented control) ---------- */
@@ -26,6 +28,7 @@
 .dm-dot.dm-t-warn{ background:var(--dm-warn); }
 .dm-dot.dm-t-bad{ background:var(--dm-bad); }
 .dm-dot.dm-t-info{ background:var(--dm-info); }
+.dm-dot.dm-t-purple{ background:var(--dm-purple); }
 .dm-dot.dm-t-none{ background:transparent; box-shadow:inset 0 0 0 1.5px var(--text-faint); }
 
 /* ---------- status chip (read-only, used in tables) ---------- */
@@ -40,7 +43,8 @@
 .dm-chip.dm-t-warn{ color:var(--dm-warn); background:var(--dm-warn-bg); border-color:var(--dm-warn-bd); }
 .dm-chip.dm-t-bad{ color:var(--dm-bad); background:var(--dm-bad-bg); border-color:var(--dm-bad-bd); }
 .dm-chip.dm-t-info{ color:var(--dm-info); background:var(--dm-info-bg); border-color:var(--dm-info-bd); }
-.dm-chip .dm-dot.dm-t-ok, .dm-chip .dm-dot.dm-t-warn, .dm-chip .dm-dot.dm-t-bad, .dm-chip .dm-dot.dm-t-info{ background:currentColor; }
+.dm-chip.dm-t-purple{ color:var(--dm-purple); background:var(--dm-purple-bg); border-color:var(--dm-purple-bd); }
+.dm-chip .dm-dot.dm-t-ok, .dm-chip .dm-dot.dm-t-warn, .dm-chip .dm-dot.dm-t-bad, .dm-chip .dm-dot.dm-t-info, .dm-chip .dm-dot.dm-t-purple{ background:currentColor; }
 
 /* ---------- source -> target system flow pill ---------- */
 .dm-flow{
