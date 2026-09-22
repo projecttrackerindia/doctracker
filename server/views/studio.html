@@ -156,7 +156,14 @@ button.primary{ background:var(--accent); color:var(--accent-ink); border-color:
 button.primary:hover{ filter:brightness(1.08); color:var(--accent-ink); }
 button.ghost{ background:transparent; border-color:transparent; }
 button.ghost:hover{ background:var(--surface-hover); border-color:transparent; color:var(--text); }
-button.danger:hover{ border-color:var(--danger); color:var(--danger); }
+/* Previously button.danger only changed color ON HOVER — at rest it was
+   visually identical to a plain neutral button, so a genuinely destructive
+   action (rotate the encryption key, revoke a doc-access grant, deny a
+   request) never read as dangerous until the pointer was already over it.
+   Now it's tinted red at rest too, using the same --danger-bg convention
+   status chips already use elsewhere, so severity is visible at a glance. */
+button.danger{ background:var(--danger-bg, rgba(224,62,62,.1)); border-color:color-mix(in srgb, var(--danger) 45%, transparent); color:var(--danger); }
+button.danger:hover{ background:var(--danger); border-color:var(--danger); color:var(--accent-ink); }
 button.icon{ padding:7px; width:32px; height:32px; justify-content:center; }
 button:disabled{ opacity:.4; cursor:not-allowed; pointer-events:none; }
 input[type=file]{ display:none; }
@@ -2753,7 +2760,8 @@ pre.json-raw{ max-height:360px; margin:0; }
 .sec-drawer-body input[type="text"],
 .sec-drawer-body input[type="number"],
 .sec-drawer-body select,
-.sec-card input[type="number"]{
+.sec-card input[type="number"],
+.sec-card input[type="text"]{
   width:100%; box-sizing:border-box; font-family:inherit; font-size:12.5px;
   background:var(--bg-elevated); border:1px solid var(--border); color:var(--text);
   padding:8px 10px; border-radius:8px; transition:border-color .15s ease;
@@ -2763,11 +2771,13 @@ pre.json-raw{ max-height:360px; margin:0; }
 .sec-drawer-body input[type="text"]:focus,
 .sec-drawer-body input[type="number"]:focus,
 .sec-drawer-body select:focus,
-.sec-card input[type="number"]:focus{
+.sec-card input[type="number"]:focus,
+.sec-card input[type="text"]:focus{
   outline:none; border-color:var(--accent);
 }
 .sec-field-input::placeholder,
-.sec-drawer-body input::placeholder{ color:var(--text-faint); }
+.sec-drawer-body input::placeholder,
+.sec-card input[type="text"]::placeholder{ color:var(--text-faint); }
 
 /* Slide-over drawer for adding/editing a rule. */
 .sec-drawer-scrim{
