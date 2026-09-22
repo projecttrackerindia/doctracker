@@ -1121,6 +1121,7 @@ function renderEndpointDoc(main, proj, ep){
     return (requestScenarios[0] && requestScenarios[0].value) || '';
   }
   function requestPanelContent(){
+    const activeReqScenario = requestScenarios.find(s=>s.name===activeScenario);
     if(activeTab === 'json'){
       if(!hasReqJson) return `<div class="empty-field">No request JSON documented.</div>`;
       const value = requestJsonValue();
@@ -1128,6 +1129,19 @@ function renderEndpointDoc(main, proj, ep){
       return `
         <div class="json-preview-label"><span>Request JSON${matched && activeScenario!=='Default' ? ` — ${escapeHtml(activeScenario)}` : ''}</span></div>
         <div class="code-wrap"><pre class="code-block" data-req-json>${escapeHtml(maskedJsonString(value))}</pre><button class="copy-btn" data-copy-block="reqbody">Copy</button></div>`;
+    }
+    // Body parameters switch with the active scenario when that scenario
+    // documents its own field list (e.g. a malformed-payload example with a
+    // different shape) — path/query stay put since those don't vary by
+    // request-body scenario. Falls back to the endpoint's base body fields
+    // when the scenario has none of its own, same as before.
+    if(activeReqScenario && activeReqScenario.name !== 'Default' && activeReqScenario.fields && activeReqScenario.fields.length){
+      return [
+        `<div class="json-preview-label"><span>Parameters — ${escapeHtml(activeReqScenario.name)}</span></div>`,
+        paramSection('Path parameters', pathParams, 'request'),
+        paramSection('Query parameters', queryParams, 'request'),
+        paramSection('Body parameters', activeReqScenario.fields, 'request'),
+      ].join('');
     }
     return paramsHtml;
   }
@@ -1158,11 +1172,12 @@ function renderEndpointDoc(main, proj, ep){
       code: s ? s.code : r.code,
       description: s ? s.description : r.description,
       value: s ? s.value : r.example,
+      fields: s ? s.fields : r.fields,
       matchedScenario: s,
     };
   }
   function responsePanelContent(i){
-    const { r, code, value, matchedScenario } = effectiveFor(i);
+    const { r, code, value, fields, matchedScenario } = effectiveFor(i);
     if(activeTab === 'json'){
       if(!value) return `<div class="empty-field">No example body${matchedScenario ? '' : ' for this response'}.</div>`;
       // NOTE: the accordion row directly above (buildResponseItemHtml) already
@@ -1174,8 +1189,13 @@ function renderEndpointDoc(main, proj, ep){
         <div class="json-preview-label"><span>Response JSON${matchedScenario && matchedScenario.name !== 'Default' ? ` — ${escapeHtml(matchedScenario.name)}` : ''}</span></div>
         <div class="code-wrap"><pre class="code-block" data-resp-json="${i}">${escapeHtml(maskedJsonString(value))}</pre><button class="copy-btn" data-copy-resp="${i}">Copy</button></div>`;
     }
-    return r.fields && r.fields.length
-      ? paramSection('Response parameters', r.fields, code)
+    // fields resolves to the active scenario's own field list when it
+    // documents one (falling back to the response block's base fields
+    // otherwise, see tryItResponseScenarios) — previously this always showed
+    // r.fields regardless of which scenario pill was selected, so picking a
+    // scenario only ever changed the JSON tab, never Parameters.
+    return fields && fields.length
+      ? paramSection(matchedScenario && matchedScenario.name !== 'Default' ? `Response parameters — ${matchedScenario.name}` : 'Response parameters', fields, code)
       : `<div class="empty-field">No response parameters documented.</div>`;
   }
   function buildResponseItemHtml(i, isOpen){

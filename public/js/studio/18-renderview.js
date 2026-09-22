@@ -862,8 +862,8 @@ function tryItRequestScenarios(ep){
   const rb = ep.requestBody;
   if(!rb) return [];
   const list = [];
-  if(rb.example && rb.example.trim()) list.push({ name:'Default', value:rb.example });
-  (rb.examples||[]).forEach(ex=>{ if(ex.name && ex.value) list.push({ name:ex.name, value:ex.value, condition: ex.condition||null }); });
+  if(rb.example && rb.example.trim()) list.push({ name:'Default', value:rb.example, fields: rb.fields||[] });
+  (rb.examples||[]).forEach(ex=>{ if(ex.name && ex.value) list.push({ name:ex.name, value:ex.value, condition: ex.condition||null, fields: ex.fields||[] }); });
   return list;
 }
 
@@ -1258,10 +1258,10 @@ function jsonDiffScore(a, b){
 function tryItResponseScenarios(ep){
   const out = [];
   (ep.responses||[]).forEach(r=>{
-    if(r.example && r.example.trim()) out.push({ name:'Default', code:r.code, description:r.description, value:r.example, response:r });
+    if(r.example && r.example.trim()) out.push({ name:'Default', code:r.code, description:r.description, value:r.example, response:r, fields: r.fields||[] });
     (r.examples||[]).forEach(ex=>{
       if(!ex.name || !ex.value) return;
-      out.push({ name:ex.name, code: ex.statusCode || r.code, description: ex.description || r.description, value:ex.value, response:r });
+      out.push({ name:ex.name, code: ex.statusCode || r.code, description: ex.description || r.description, value:ex.value, response:r, fields: (ex.fields && ex.fields.length ? ex.fields : (r.fields||[])) });
     });
   });
   return out;
