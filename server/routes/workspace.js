@@ -1391,11 +1391,19 @@ router.get('/environment-metrics', async (req, res) => {
     // viewer is allowed to see.
     const draftCounts = new Map(); // projectId -> count
     const draftByStatus = new Map(); // projectId -> {statusId: count}
+    // How many of this project's draft endpoints actually pass the
+    // Production gate right now (see partitionForFinalStagePromotion) —
+    // needed below so "fully promoted" means "every endpoint that CAN be in
+    // Production IS," not "literally every endpoint the project has ever
+    // documented," which a project using partial Production promotion could
+    // never satisfy even once its ready endpoints are genuinely all live.
+    const draftReadyCounts = new Map(); // projectId -> count
     rows.forEach((row) => {
       const viewerData = projectForViewer(row, userId, decryptProjectData(row));
       const endpoints = viewerData.endpoints || [];
       draftCounts.set(row.id, endpoints.length);
       draftByStatus.set(row.id, tallyByStatus(endpoints));
+      draftReadyCounts.set(row.id, endpoints.filter((ep) => !endpointReadinessProblem(ep)).length);
     });
 
     // Promoted stages — one query for every frozen snapshot across these
@@ -1474,14 +1482,22 @@ router.get('/environment-metrics', async (req, res) => {
         byEnvironment[env.id] = idx === 0 ? (draftCounts.get(row.id) || 0) : (promotedCounts.get(`${row.id}:${env.id}`) || 0);
       });
       const draftTotal = draftCounts.get(row.id) || 0;
+      const readyTotal = draftReadyCounts.get(row.id) || 0;
       const stagesReached = stages.filter((env, idx) => idx > 0 && (byEnvironment[env.id] || 0) > 0).length;
       const lastStage = stages[stages.length - 1];
-      const fullyPromoted = draftTotal > 0 && lastStage && byEnvironment[lastStage.id] === draftTotal;
+      // "Fully promoted" means every endpoint that's actually release-ready
+      // has reached the last stage — NOT every endpoint the project has ever
+      // documented. A project intentionally leaving not-yet-ready endpoints
+      // out of Production (see partitionForFinalStagePromotion) should still
+      // be able to show as fully promoted once its ready subset is all live,
+      // rather than being permanently stuck below 100% for endpoints that
+      // were never eligible in the first place.
+      const fullyPromoted = readyTotal > 0 && lastStage && byEnvironment[lastStage.id] === readyTotal;
       // Draft-stage status mix — this is the "current/API-level" breakdown
       // (what's live in the editable doc right now), as opposed to the
       // per-environment byStatus above which is scoped to a promoted snapshot.
       const byStatus = draftByStatus.get(row.id) || {};
-      return { projectId: row.id, byEnvironment, draftTotal, stagesReached, fullyPromoted, byStatus };
+      return { projectId: row.id, byEnvironment, draftTotal, readyTotal, stagesReached, fullyPromoted, byStatus };
     });
 
     res.json({
