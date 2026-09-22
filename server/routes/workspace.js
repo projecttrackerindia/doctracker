@@ -1686,6 +1686,17 @@ router.get('/projects/:id/release-health', async (req, res) => {
 // DOES require approval — see project_promotion_requests below). This is
 // that shared tail end, so the two call sites can't drift out of sync on
 // what "a promotion" actually does.
+// Writes the promotion itself (target stage + optional DR mirror) inside
+// the caller's already-open transaction. Deliberately does NOT commit —
+// see the two call sites: direct-promote has nothing left to do and
+// commits right after calling this, but the approve-a-request path still
+// has one more write of its own (marking the request row 'approved') that
+// must land in the SAME transaction as everything here. This function used
+// to commit+release internally, which meant the approve route's later
+// UPDATE ran against an already-closed transaction — any hiccup there
+// (which is exactly what happened in practice) left the promotion silently
+// applied while the request stayed stuck "pending" forever, with no way to
+// tell from the outside that anything had actually gone through.
 async function finalizePromotion(client, req, {
   project, allEnvs, stages, fromIdx, targetStage, sourceData, newReleaseVersion,
   fromEnvironmentId, releaseNote, breakingChanges, actingUser,
@@ -1736,7 +1747,19 @@ async function finalizePromotion(client, req, {
     }
   }
 
-  await client.query('COMMIT');
+  return { toEnvironmentId: targetStage.id, toEnvironmentLabel: targetStage.label, versionLabel: `1.0.${newReleaseVersion}`, mirrored };
+}
+
+// Side effects that only make sense once the promotion has ACTUALLY
+// committed — cache invalidation, audit log, notifications. Called by both
+// finalizePromotion() callers right after their own successful COMMIT,
+// never before. Failures here (e.g. a notification hiccup) intentionally
+// don't roll back the promotion — the write already happened — they just
+// won't crash the request; each call site still returns ok:true either way
+// since the promotion itself is what the caller actually asked for.
+async function afterPromotionCommitted(req, {
+  project, stages, fromIdx, targetStage, newReleaseVersion, fromEnvironmentId, releaseNote, breakingChanges, actingUser, mirrored,
+}) {
   await cache.invalidateOrg(project.organisation);
 
   await recordAuditEvent(actingUser, req, {
@@ -1772,8 +1795,6 @@ async function finalizePromotion(client, req, {
       link: { view: 'release-pipeline', projectId: project.id },
     });
   }
-
-  return { toEnvironmentId: targetStage.id, toEnvironmentLabel: targetStage.label, versionLabel: `1.0.${newReleaseVersion}`, mirrored };
 }
 
 // POST /api/workspace/projects/:id/promote — { fromEnvironmentId }. Promotes
@@ -1885,6 +1906,20 @@ router.post('/projects/:id/promote', async (req, res) => {
       project, allEnvs, stages, fromIdx, targetStage, sourceData, newReleaseVersion,
       fromEnvironmentId, releaseNote, breakingChanges: liveBreakingChanges, actingUser: req.authUser,
     });
+    await client.query('COMMIT');
+
+    // The promotion has now genuinely committed — anything past this point
+    // (cache, audit log, notifications) must not be able to turn a
+    // successful promotion into a reported failure, so it's isolated in its
+    // own try/catch rather than sharing the one above.
+    try {
+      await afterPromotionCommitted(req, {
+        project, stages, fromIdx, targetStage, newReleaseVersion, fromEnvironmentId,
+        releaseNote, breakingChanges: liveBreakingChanges, actingUser: req.authUser, mirrored: result.mirrored,
+      });
+    } catch (sideEffectErr) {
+      console.error('POST promote: side effects after commit failed (promotion itself still succeeded):', sideEffectErr);
+    }
 
     res.json({ ok: true, ...result, breakingChangesCount: liveBreakingChanges.length });
   } catch (err) {
@@ -2136,29 +2171,46 @@ router.post('/projects/:id/promotion-requests/:reqId/approve', async (req, res) 
       breakingChanges: liveBreakingChanges, actingUser: { sub: request.requested_by, username: request.requested_by_username },
     });
 
+    // This UPDATE has to land in the SAME transaction as finalizePromotion's
+    // writes above (see finalizePromotion's own comment) — this is exactly
+    // that commit point, covering both at once.
     await client.query(
       `UPDATE project_promotion_requests SET status = 'approved', decided_by = $1, decided_by_username = $2, decided_at = now() WHERE id = $3`,
       [req.authUser.sub, req.authUser.username, request.id]
     );
     await client.query('COMMIT');
 
-    await recordAuditEvent(req.authUser, req, {
-      action: 'PROJECT_PROMOTION_APPROVED',
-      resourceType: 'project',
-      resourceId: project.id,
-      entityName: stages[fromIdx].label + ' → ' + targetStage.label,
-      details: `Approved ${request.requested_by_username || 'a teammate'}'s promotion request from ${stages[fromIdx].label} to ${targetStage.label} — v1.0.${newReleaseVersion}.`,
-      severity: 'info',
-      metadata: { requestId: request.id, version: newReleaseVersion },
-    });
-    if (request.requested_by) {
-      await notifyUsers([request.requested_by], {
-        organisation: project.organisation,
-        type: 'PROJECT_PROMOTION_APPROVED',
-        title: `${req.authUser.username} approved your promotion into ${targetStage.label}`,
-        body: `${result.versionLabel} is now live in ${targetStage.label}.`,
-        link: { view: 'release-pipeline', projectId: project.id },
+    // Everything below is now purely post-commit side effects — the
+    // promotion AND the request's approved status are both already durable.
+    // Isolated in its own try/catch so a notification hiccup can never be
+    // reported back as "approval failed" when it actually succeeded.
+    try {
+      const requestedByActingUser = { sub: request.requested_by, username: request.requested_by_username };
+      await afterPromotionCommitted(req, {
+        project, stages, fromIdx, targetStage, newReleaseVersion,
+        fromEnvironmentId: request.from_environment_id, releaseNote: request.release_note,
+        breakingChanges: liveBreakingChanges, actingUser: requestedByActingUser, mirrored: result.mirrored,
       });
+      await recordAuditEvent(req.authUser, req, {
+        action: 'PROJECT_PROMOTION_APPROVED',
+        resourceType: 'project',
+        resourceId: project.id,
+        entityName: stages[fromIdx].label + ' → ' + targetStage.label,
+        details: `Approved ${request.requested_by_username || 'a teammate'}'s promotion request from ${stages[fromIdx].label} to ${targetStage.label} — v1.0.${newReleaseVersion}.`,
+        severity: 'info',
+        metadata: { requestId: request.id, version: newReleaseVersion },
+      });
+      if (request.requested_by) {
+        await notifyUsers([request.requested_by], {
+          organisation: project.organisation,
+          type: 'PROJECT_PROMOTION_APPROVED',
+          title: `${req.authUser.username} approved your promotion into ${targetStage.label}`,
+          body: `${result.versionLabel} is now live in ${targetStage.label}.`,
+          link: { view: 'release-pipeline', projectId: project.id },
+        });
+      }
+    } catch (sideEffectErr) {
+      console.error('POST promotion-requests/approve: side effects after commit failed (approval itself still succeeded):', sideEffectErr);
     }
 
     res.json({ ok: true, ...result });
