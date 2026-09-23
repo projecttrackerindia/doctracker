@@ -115,7 +115,7 @@ function renderIpBreakdown(topIps, totalRequests, rowIdx){
 // Control Center/Security Center so this reads as part of the same design
 // system rather than a one-off widget.
 function healthKpi(label, value, sub, accentVar){
-  return `<div class="kpi-card"${accentVar ? ` style="--kpi-accent:var(${accentVar});"` : ''}>
+  return `<div class="kpi-card obs-kpi-card"${accentVar ? ` style="--kpi-accent:var(${accentVar});"` : ''}>
     <div class="kpi-label">${escapeHtml(label)}</div>
     <div class="kpi-value">${accentVar ? `<span class="kpi-dot"></span>` : ''}${value}</div>
     ${sub ? `<div class="kpi-sub">${sub}</div>` : ''}
@@ -849,19 +849,13 @@ function renderObservability(main){
   const fullCapture = logRecords && logRecords.length > 0;
 
   const heroDesc = fullCapture
-    ? `Hit counts, status breakdown, error rate, source IPs, and (this agent is running in full-capture mode) real per-request records — timestamps, latency, and field values — auto-discovered by the SIT log agent, never written into your documented endpoints. Any field named like a credential is always shown redacted, enforced by the agent before it ever reaches DocTracker.`
-    : `Hit counts, status breakdown, error rate, and source IPs auto-discovered by the SIT log agent — never written into your documented endpoints, only shown here, cross-referenced by method + path. Field <em>values</em> from requests are never captured in this mode, only counts and structure. Path segments that look like per-request ids are templated to <code>{id}</code> so one busy endpoint doesn't fragment into thousands of rows.`;
+    ? `Real per-request records, auto-discovered from server logs — never written into documented endpoints. Credential-named fields always redacted.`
+    : `Auto-discovered from server logs, never written into documented endpoints. Field values aren't captured in this mode — only counts and structure.`;
 
   main.innerHTML = `
-    <div class="crumb">Observability</div>
-    <div class="ctrl-hero" style="--ctrl-glow-bg:var(--accent-soft);">
-      <div class="ctrl-hero-icon" style="--ctrl-icon-color:var(--accent);--ctrl-icon-bg:var(--accent-soft);">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 6"></polyline><polyline points="15 6 21 6 21 12"></polyline></svg>
-      </div>
-      <div class="ctrl-hero-copy">
-        <h1>Real traffic, straight from server logs</h1>
-        <p>${heroDesc}</p>
-      </div>
+    <div class="obs-header">
+      <h1>Observability</h1>
+      <p>${heroDesc}</p>
     </div>
     <div id="obsBody"></div>
   `;
