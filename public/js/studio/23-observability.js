@@ -333,9 +333,17 @@ function renderHostHealthSection(agentHealth){
     </div>`;
   }
   if(!samples.length){
+    // Distinguish the two reasons this is empty, because the fix differs and
+    // "no data" alone sends someone looking in the wrong place. If the agent
+    // is reporting at all but sent no hostSamples key, it's an older build
+    // that predates host sampling and needs redeploying on the log server.
+    const agentReporting = !!(agentHealth && agentHealth.generatedAt);
+    const staleAgent = agentReporting && agentHealth.hostSamples === undefined;
     return `<div class="obs-panel">
       <div class="section-title">Host health</div>
-      <div class="empty-field" style="padding:6px 0;">No host samples yet. The agent reads these from <code>/proc</code> and <code>statvfs</code> once per poll cycle, so they appear after its next push — and stay empty on a host without <code>/proc</code> (non-Linux), where they're reported as unavailable rather than guessed.</div>
+      <div class="empty-field" style="padding:6px 0;">${staleAgent
+        ? `The log agent running on the server predates host sampling, so it isn't sending CPU/memory yet. Deploy the current <code>ops/sit-doc-agent/mule_doc_agent.py</code> to the log server and restart it — the first CPU reading needs two poll cycles (CPU is a delta, not a snapshot), and reaches this page on the next push.`
+        : `No host samples yet. The agent reads these from <code>/proc</code> and <code>statvfs</code> once per poll cycle, so they appear after its next push — and stay empty on a host without <code>/proc</code> (non-Linux), where they're reported as unavailable rather than guessed.`}</div>
     </div>`;
   }
 
@@ -1206,6 +1214,8 @@ function renderConsole(main, metrics, agentHealth, logRecords){
       ${healthKpi('Last seen', agg.lastSeenAt ? formatDateTime(agg.lastSeenAt) : '—', '')}
     </div>
 
+    ${renderHostHealthSection(agentHealth)}
+
     ${state.obsScope.type === 'all' ? `<div class="grid2">
       ${renderServiceHealth(groups, metrics, logRecords, win)}
       ${renderStatusBreakdown(agg.statusBreakdown, agg.total)}
@@ -1221,8 +1231,6 @@ function renderConsole(main, metrics, agentHealth, logRecords){
         ? `<div class="grid2">${renderAlertsSection(alerts)}${clustering}</div>`
         : renderAlertsSection(alerts);
     })()}
-
-    ${renderHostHealthSection(agentHealth)}
 
     <div class="grid2">
       <div class="obs-panel"><div class="section-title">Top source IPs</div><div class="hint" style="margin-top:-4px;">Current scope, ranked by request count</div>${renderIpBreakdown(agg.topIps, agg.total, 'console')}</div>

@@ -207,6 +207,16 @@ document.querySelectorAll('.pinned-row').forEach(row=>{
       closeMobileSidebar();
       return;
     }
+    // The Observability-only exit row - leaves the page entirely rather than
+    // changing scope within it, which is what the relabelled row above now
+    // does. Both land on the API Control Center; this is the one that
+    // actually navigates there.
+    if(nav === 'home-exit'){
+      state.selected = { type:'home' };
+      renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
+      closeMobileSidebar();
+      return;
+    }
     state.selected = { type: nav };
     renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
     closeMobileSidebar();
