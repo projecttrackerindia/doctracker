@@ -230,14 +230,44 @@ def assemble_multiline_observations(lines, carry):
     return observations
 
 
+def _all_keys(obj, depth=0, out=None):
+    """Collects every key name (not value) up to a bounded depth, for safe
+    diagnostic printing - never includes a value, only structure."""
+    if out is None:
+        out = []
+    if depth > 4 or len(out) > 60:
+        return out
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            out.append(k)
+            _all_keys(v, depth + 1, out)
+    elif isinstance(obj, list):
+        for item in obj[:3]:
+            _all_keys(item, depth + 1, out)
+    return out
+
+
 def _finish_block(carry, observations):
     try:
         obj = json.loads(carry["buffer"])
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        # Diagnostic only - never prints buffer CONTENT (it may hold real
+        # captured field values), only the parse error and buffer length.
+        print(f"[warn] found what looked like a JSON block (method={carry['method']}) but it failed to parse: "
+              f"{e} (buffer length {len(carry['buffer'])} chars) - not counted as a match.", file=sys.stderr)
         obj = None
     carry["buffer"] = ""
+    if isinstance(obj, dict) and not carry["method"]:
+        print(f"[warn] parsed a JSON block successfully but no HTTP method was captured off the preceding "
+              f"request-start line (HEADER_METHOD_PATTERN found no match) - not counted as a match. Key names "
+              f"seen in the block: {sorted(set(_all_keys(obj)))}", file=sys.stderr)
     if isinstance(obj, dict) and carry["method"]:
         path = _find_key_value(obj, REQUEST_URI_KEY_PATTERN)
+        if not path:
+            print(f"[warn] parsed a JSON block (method={carry['method']}) but found no path-like key "
+                  f"(looked for a name matching 'requesturi'/'path'/'uri'). Top-level/nested key names seen: "
+                  f"{sorted(set(_all_keys(obj)))} - adjust REQUEST_URI_KEY_PATTERN if your real key is named "
+                  f"differently.", file=sys.stderr)
         if path:
             req_payload = _find_key_dict(obj, REQUEST_PAYLOAD_KEY_PATTERN)
             resp_payload = _find_key_dict(obj, RESPONSE_PAYLOAD_KEY_PATTERN)
