@@ -652,16 +652,15 @@ function renderConsole(main, metrics, agentHealth, logRecords){
 }
 
 /* ==================== Page entry point ==================== */
-
+// One view, not a toggle a viewer has to discover - the drill-down
+// dashboard (scope panel, KPIs, service health, status breakdown, source
+// IPs, alerts, agent health, and - once the agent's CAPTURE_MODE=full -
+// the log explorer/volume chart/clustering) is now the only Observability
+// page. Everything on it is still real data from state.endpointMetrics;
+// nothing here is sample/placeholder.
 function renderObservability(main){
   const { endpoints: metrics, agentHealth, logRecords } = observabilityData();
-  if(!state.obsView) state.obsView = 'overview';
   const fullCapture = logRecords && logRecords.length > 0;
-
-  const toggleHtml = `<div class="view-toggle" style="margin-left:auto;flex-shrink:0;position:relative;z-index:1;">
-    <button type="button" class="vt-btn${state.obsView==='overview'?' active':''}" id="obsViewOverview">Overview</button>
-    <button type="button" class="vt-btn${state.obsView==='console'?' active':''}" id="obsViewConsole">Console</button>
-  </div>`;
 
   const heroDesc = fullCapture
     ? `Hit counts, status breakdown, error rate, source IPs, and (this agent is running in full-capture mode) real per-request records — timestamps, latency, and field values — auto-discovered by the SIT log agent, never written into your documented endpoints. Any field named like a credential is always shown redacted, enforced by the agent before it ever reaches DocTracker.`
@@ -677,19 +676,9 @@ function renderObservability(main){
         <h1>Real traffic, straight from server logs</h1>
         <p>${heroDesc}</p>
       </div>
-      ${toggleHtml}
     </div>
     <div id="obsBody"></div>
   `;
 
-  const body = document.getElementById('obsBody');
-  if(state.obsView === 'console'){
-    renderConsole(body, metrics, agentHealth, logRecords);
-  } else {
-    body.innerHTML = renderAgentHealth(agentHealth) + renderEndpointsTable(Object.keys(metrics).sort((a,b)=> (a===OBS_OVERFLOW_KEY) - (b===OBS_OVERFLOW_KEY) || a.localeCompare(b)), metrics);
-    wireEndpointsTable(body);
-  }
-
-  document.getElementById('obsViewOverview').addEventListener('click', ()=>{ state.obsView = 'overview'; renderObservability(main); });
-  document.getElementById('obsViewConsole').addEventListener('click', ()=>{ state.obsView = 'console'; renderObservability(main); });
+  renderConsole(document.getElementById('obsBody'), metrics, agentHealth, logRecords);
 }
