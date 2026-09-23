@@ -1339,6 +1339,46 @@ pre.code-block{
 .obs-log-fields{ display:none; }
 .obs-log-fields.open{ display:table-row; }
 .obs-log-fields-inner{ padding:10px 14px; background:var(--surface-2); border-radius:8px; margin:6px 0; }
+/* Analysis-window bar: the time range every number on the page is computed
+   over. Pills are disabled (with an explaining tooltip) when only
+   cumulative aggregates are available - see renderWindowSelector(). */
+.obs-window-bar{ display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px; margin-bottom:18px; }
+.obs-win-pills{ display:inline-flex; background:var(--surface-2); border:1px solid var(--border); border-radius:9px; padding:3px; gap:2px; }
+.obs-win-pill{
+  background:transparent; border:none; color:var(--text-dim); cursor:pointer;
+  font-size:11.5px; font-weight:700; padding:5px 11px; border-radius:6px; white-space:nowrap;
+  transition:background-color .12s ease, color .12s ease;
+}
+.obs-win-pill:hover:not(:disabled):not(.active){ background:var(--surface-hover); color:var(--text); }
+.obs-win-pill.active{ background:var(--accent); color:var(--accent-ink); }
+.obs-win-pill:disabled{ opacity:.35; cursor:not-allowed; }
+.obs-win-note{ font-size:11px; color:var(--text-faint); }
+
+/* Period-over-period change indicator on the KPI tiles. */
+.obs-delta{ font-weight:700; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.obs-delta.good{ color:var(--post); }
+.obs-delta.bad{ color:var(--delete); }
+.obs-delta.flat{ color:var(--text-faint); }
+
+/* Marks a row whose numbers are cumulative because it has no per-request
+   records, in a view where other rows ARE windowed - see renderServiceHealth
+   / renderEndpointsTable. */
+.obs-basis-tag{
+  font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.3px;
+  color:var(--text-faint); background:var(--surface-2); border:1px solid var(--border);
+  border-radius:4px; padding:1px 5px; margin-left:6px; white-space:nowrap; font-family:var(--sans);
+}
+
+.obs-sort-th{ cursor:pointer; user-select:none; white-space:nowrap; }
+.obs-sort-th:hover{ color:var(--text); }
+.obs-sort-th.active{ color:var(--accent); }
+
+.obs-trace-link{
+  background:none; border:none; padding:0; cursor:pointer; font-family:var(--mono);
+  font-size:10px; color:var(--accent); text-decoration:underline dotted; text-underline-offset:2px;
+}
+.obs-trace-link:hover{ text-decoration-style:solid; }
+
 .obs-log-filters{ display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px; margin:10px 0 14px; }
 .obs-log-filters label{ display:flex; flex-direction:column; gap:4px; font-size:10.5px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.4px; font-weight:700; }
 .obs-log-filters input[type="datetime-local"], .obs-log-filters input[type="text"], .obs-log-filters select{

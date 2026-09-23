@@ -261,41 +261,119 @@ function renderLogVolumeAndLevelsSection(agentHealth){
 // Shared by both views - one row per metrics key. `keys` is whatever subset
 // the caller wants shown (all of them for Overview, the current scope's
 // subset for Console).
-function renderEndpointsTable(keys, metrics){
-  const rows = keys.length ? keys.map((key, idx)=>{
+// Sortable columns on the endpoints table. Default is busiest-first, which
+// is what someone scanning for "where is the traffic" wants; error rate and
+// p95 are the two other orders that actually get used in practice.
+const OBS_EP_SORTS = {
+  total:     { label:'Requests',   get: r => r.total },
+  errorRate: { label:'Error rate', get: r => r.rate },
+  p95:       { label:'p95',        get: r => (r.latency ? r.latency.p95 : -1) },
+  lastSeen:  { label:'Last seen',  get: r => (r.lastSeenAt ? new Date(r.lastSeenAt).getTime() : -1) },
+};
+
+// `basis` mirrors whatever obsComputeStats decided for the page as a whole
+// ('aggregate' for the complete all-time counters, 'records' for a bounded
+// window) so this table can never disagree with the KPIs above it.
+function renderEndpointsTable(keys, metrics, records, basis){
+  if(!state.obsEpSort) state.obsEpSort = { col:'total', dir:'desc' };
+  const sort = state.obsEpSort;
+
+  // Per-endpoint stats follow the same rule as the rest of the page: when
+  // windowed per-request records exist for a key, everything about that row
+  // (count, error rate, latency, last seen) is computed from them. Keys with
+  // no records keep their cumulative aggregate and are tagged "all-time", so
+  // a table mixing the two bases says which rows are which instead of
+  // quietly presenting all-time counts under a windowed heading.
+  const recordsByKey = new Map();
+  (records || []).forEach(r=>{
+    if(!recordsByKey.has(r.key)) recordsByKey.set(r.key, []);
+    recordsByKey.get(r.key).push(r);
+  });
+
+  const rowData = keys.map(key=>{
+    const keyRecords = recordsByKey.get(key) || [];
+    const s = keyRecords.length ? statsFromRecords(keyRecords) : null;
+    if(basis === 'records' && s){
+      return {
+        key,
+        total: s.total,
+        rate: s.errorRate,
+        breakdown: s.statusBreakdown,
+        topIps: s.topIps,
+        lastSeenAt: s.lastSeenAt,
+        latency: s.latency,
+        windowed: true,
+      };
+    }
+    // Aggregate basis (or no records for this key): the complete counters,
+    // with latency filled in from records where they happen to exist since
+    // aggregates can't express it at all.
     const m = metrics[key] || {};
-    const total = m.totalRequests || 0;
-    const rate = typeof m.errorRate === 'number' ? m.errorRate : 0;
-    const breakdown = m.statusBreakdown || {};
-    const breakdownLabel = Object.keys(breakdown).sort().map(fam=>`${fam}: ${breakdown[fam]}`).join(', ') || '—';
-    const topIps = Array.isArray(m.topSourceIps) ? m.topSourceIps : [];
-    const isOverflow = key === OBS_OVERFLOW_KEY;
-    const found = isOverflow ? null : findDocumentedEndpointForMetricsKey(key);
-    const [method, ...pathParts] = key.split(' ');
+    return {
+      key,
+      total: m.totalRequests || 0,
+      rate: typeof m.errorRate === 'number' ? m.errorRate : 0,
+      breakdown: m.statusBreakdown || {},
+      topIps: Array.isArray(m.topSourceIps) ? m.topSourceIps : [],
+      lastSeenAt: m.lastSeenAt || null,
+      latency: s ? s.latency : null,
+      windowed: false,
+    };
+  });
+  // Only worth tagging rows when the table is actually mixing bases.
+  const anyWindowed = basis === 'records' && rowData.some(r => r.windowed);
+
+  const sorter = OBS_EP_SORTS[sort.col] || OBS_EP_SORTS.total;
+  rowData.sort((a,b)=>{
+    const d = sorter.get(a) - sorter.get(b);
+    return sort.dir === 'asc' ? d : -d;
+  });
+
+  const rows = rowData.length ? rowData.map((r, idx)=>{
+    const breakdownLabel = Object.keys(r.breakdown).sort().map(fam=>`${fam}: ${r.breakdown[fam]}`).join(', ') || '—';
+    const isOverflow = r.key === OBS_OVERFLOW_KEY;
+    const found = isOverflow ? null : findDocumentedEndpointForMetricsKey(r.key);
+    const [method, ...pathParts] = r.key.split(' ');
     const path = pathParts.join(' ');
     const linkAttr = found ? ` data-obs-ep="${found.ep.id}"` : '';
     const methodCell = isOverflow
       ? `<span class="badge badge-lg" style="background:var(--put-bg);color:var(--put);">OVERFLOW</span>`
       : `<span class="badge badge-lg ${methodClass(method)}">${escapeHtml(method||'')}</span>`;
+    const basisTag = (anyWindowed && !r.windowed)
+      ? ` <span class="obs-basis-tag" title="No per-request records for this endpoint — showing its cumulative total, not the selected window">all-time</span>`
+      : '';
     return `<tr class="cc-proj-row"${linkAttr} style="${found?'':'cursor:default;'}">
       <td>${methodCell}</td>
-      <td class="mono">${escapeHtml(path)}</td>
-      <td class="mono">${total.toLocaleString()}</td>
-      <td style="color:${errorRateColor(rate)};font-weight:600;">${(rate*100).toFixed(1)}%</td>
+      <td class="mono">${escapeHtml(path)}${basisTag}</td>
+      <td class="mono">${r.total.toLocaleString()}</td>
+      <td style="color:${errorRateColor(r.rate)};font-weight:600;">${(r.rate*100).toFixed(1)}%</td>
+      <td class="mono">${r.latency ? `${r.latency.p95}ms <span style="color:var(--text-faint);font-size:10px;">/ p50 ${r.latency.p50}ms</span>` : '<span class="empty-field">—</span>'}</td>
       <td class="mono" style="font-size:11px;color:var(--text-faint);">${escapeHtml(breakdownLabel)}</td>
-      <td>${renderIpBreakdown(topIps, total, idx)}</td>
-      <td class="mono" style="font-size:10.5px;color:var(--text-faint);">${m.lastSeenAt ? formatDateTime(m.lastSeenAt) : '—'}</td>
+      <td>${renderIpBreakdown(r.topIps, r.total, idx)}</td>
+      <td class="mono" style="font-size:10.5px;color:var(--text-faint);">${r.lastSeenAt ? formatDateTime(r.lastSeenAt) : '—'}</td>
       <td>${isOverflow ? '<span class="empty-field">Not an endpoint</span>' : (found ? '<span style="color:var(--post);">Documented</span>' : '<span class="empty-field">Not yet documented</span>')}</td>
     </tr>`;
-  }).join('') : `<tr><td colspan="8" class="empty-field" style="padding:16px;">No traffic discovered yet. This fills in once the SIT log auto-discovery agent (ops/sit-doc-agent) has pushed at least one batch — see AGENT_README.md.</td></tr>`;
+  }).join('') : `<tr><td colspan="9" class="empty-field" style="padding:16px;">No traffic discovered yet. This fills in once the SIT log auto-discovery agent (ops/sit-doc-agent) has pushed at least one batch — see AGENT_README.md.</td></tr>`;
+
+  const sortableTh = (col, label)=>{
+    const active = sort.col === col;
+    const arrow = active ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    return `<th class="obs-sort-th${active?' active':''}" data-obs-sort="${col}" title="Sort by ${escapeHtml(label)}">${escapeHtml(label)}${arrow}</th>`;
+  };
 
   return `<div class="obs-panel">
     <div class="section-title">Endpoints${keys.length ? ` (${keys.length})` : ''}</div>
+    <div class="hint" style="margin-top:-4px;">Every discovered method + path in the current scope — click a sortable column to reorder, or a documented row to open its docs.</div>
     <div class="table-scroll">
     <table class="data-table cc-proj-table">
       <thead><tr>
-        <th>Method</th><th>Path</th><th>Total requests</th><th>Error rate</th>
-        <th>Status breakdown</th><th>Source IPs</th><th>Last seen</th><th>Documentation</th>
+        <th>Method</th><th>Path</th>
+        ${sortableTh('total','Requests')}
+        ${sortableTh('errorRate','Error rate')}
+        ${sortableTh('p95','p95 latency')}
+        <th>Status breakdown</th><th>Source IPs</th>
+        ${sortableTh('lastSeen','Last seen')}
+        <th>Documentation</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
@@ -304,6 +382,19 @@ function renderEndpointsTable(keys, metrics){
 }
 
 function wireEndpointsTable(main){
+  main.querySelectorAll('[data-obs-sort]').forEach(th=>{
+    th.addEventListener('click', ()=>{
+      const col = th.getAttribute('data-obs-sort');
+      const cur = state.obsEpSort || { col:'total', dir:'desc' };
+      // Same column toggles direction; a new column starts descending,
+      // which is the useful default for every one of these (busiest,
+      // worst error rate, slowest, most recent).
+      state.obsEpSort = (cur.col === col)
+        ? { col, dir: cur.dir === 'desc' ? 'asc' : 'desc' }
+        : { col, dir: 'desc' };
+      renderMain();
+    });
+  });
   main.querySelectorAll('[data-obs-ep]').forEach(row=>{
     row.style.cursor = 'pointer';
     row.addEventListener('click', (e)=>{
@@ -387,6 +478,188 @@ function computeConsoleAlerts(metrics){
   return alerts.sort((a,b)=> (a.sev==='crit'?0:1) - (b.sev==='crit'?0:1) || b.rate - a.rate);
 }
 
+/* ==================== Analysis window ====================
+   The page used to silently mix two incompatible bases: cumulative
+   aggregate counters (metrics[key].totalRequests - no time dimension at
+   all, they only ever grow since the agent started) and real per-request
+   records (which DO carry timestamps). Service health even claimed
+   "current time range" while showing all-time counters.
+
+   Everything below is built on one honest rule: if real per-request
+   records exist for the current scope, every number on the page is
+   recomputed from the records inside the selected window, and a
+   period-over-period delta is computed against the immediately preceding
+   window of equal length. If they don't (CAPTURE_MODE=aggregate), the
+   page falls back to the cumulative aggregates and SAYS SO - the window
+   selector is disabled with a note, rather than relabelling all-time
+   counters as if they were windowed. */
+const OBS_WINDOWS = [
+  { key:'1h',  label:'Last hour',     ms: 3600e3 },
+  { key:'24h', label:'Last 24 hours', ms: 86400e3 },
+  { key:'7d',  label:'Last 7 days',   ms: 7 * 86400e3 },
+  { key:'30d', label:'Last 30 days',  ms: 30 * 86400e3 },
+  { key:'all', label:'All time',      ms: null },
+];
+
+function obsActiveWindow(){
+  const key = state.obsWindow || 'all';
+  return OBS_WINDOWS.find(w => w.key === key) || OBS_WINDOWS[OBS_WINDOWS.length - 1];
+}
+
+function statusFamily(code){
+  const c = Number(code) || 0;
+  return c ? `${String(c)[0]}xx` : 'unknown';
+}
+
+// Everything the page needs, derived from one set of real records.
+function statsFromRecords(records){
+  const statusBreakdown = {};
+  const ipCounts = {};
+  let errCount = 0, lastSeenAt = null;
+  const latencies = [];
+  records.forEach(r=>{
+    const fam = statusFamily(r.statusCode);
+    statusBreakdown[fam] = (statusBreakdown[fam] || 0) + 1;
+    if(fam === '4xx' || fam === '5xx') errCount++;
+    if(r.clientIp) ipCounts[r.clientIp] = (ipCounts[r.clientIp] || 0) + 1;
+    if(r.ts && (!lastSeenAt || r.ts > lastSeenAt)) lastSeenAt = r.ts;
+    if(typeof r.latencyMs === 'number') latencies.push(r.latencyMs);
+  });
+  latencies.sort((a,b)=>a-b);
+  const topIps = Object.entries(ipCounts).map(([ip,count])=>({ip,count})).sort((a,b)=>b.count-a.count).slice(0,10);
+  return {
+    total: records.length,
+    errCount,
+    errorRate: records.length ? errCount / records.length : 0,
+    statusBreakdown,
+    topIps,
+    lastSeenAt,
+    endpointCount: new Set(records.map(r=>r.key)).size,
+    latency: latencies.length
+      ? { p50: percentile(latencies, 0.50), p95: percentile(latencies, 0.95), p99: percentile(latencies, 0.99), count: latencies.length }
+      : null,
+  };
+}
+
+function recordsInWindow(records, win, now){
+  if(!win.ms) return records;
+  return records.filter(r=>{
+    const t = new Date(r.ts).getTime();
+    return !isNaN(t) && (now - t) <= win.ms;
+  });
+}
+
+// The previous window of equal length, immediately before the current one -
+// what the KPI deltas compare against.
+function recordsInPreviousWindow(records, win, now){
+  if(!win.ms) return [];
+  return records.filter(r=>{
+    const t = new Date(r.ts).getTime();
+    if(isNaN(t)) return false;
+    const age = now - t;
+    return age > win.ms && age <= win.ms * 2;
+  });
+}
+
+function obsComputeStats(keys, metrics, allRecords, win){
+  const scoped = (allRecords || []).filter(r => keys.includes(r.key));
+
+  // "All time" ALWAYS uses the aggregate counters, even when records exist.
+  // logRecords is a capped ring buffer (MAX_LOG_RECORDS_TOTAL /
+  // MAX_LOG_RECORDS_PER_ENDPOINT in mule_doc_agent.py) - oldest dropped
+  // first - so it is deliberately NOT a complete history. Totalling it
+  // would undercount any endpoint busy enough to have rolled its buffer,
+  // and would drop endpoints with no records at all. The aggregate
+  // counters are the only complete source, so they own the all-time view.
+  // Records still supply latency, which aggregates can't express.
+  if(!win.ms || !scoped.length){
+    const agg = aggregateKeys(keys, metrics);
+    agg.source = 'aggregate';
+    agg.latency = scoped.length ? statsFromRecords(scoped).latency : null;
+    agg.prev = null;
+    agg.records = scoped;
+    agg.canWindow = scoped.length > 0;
+    return agg;
+  }
+
+  // A bounded window can only be answered by records - aggregates have no
+  // time dimension at all. This covers just the endpoints that have
+  // records, which the UI marks per row rather than hiding.
+  const now = Date.now();
+  const cur = recordsInWindow(scoped, win, now);
+  const prevRecords = recordsInPreviousWindow(scoped, win, now);
+  const stats = statsFromRecords(cur);
+  stats.source = 'records';
+  stats.records = cur;
+  stats.prev = prevRecords.length ? statsFromRecords(prevRecords) : null;
+  stats.canWindow = true;
+  return stats;
+}
+
+// Period-over-period change badge. `mode` decides how the change reads:
+// 'pp' for rates (percentage POINTS, so 4% -> 6% is "+2.0pp", not "+50%"),
+// 'pct' for counts/latency. `goodDirection` flips the colour so a drop in
+// error rate is green and a drop in traffic is merely neutral-informative.
+function deltaBadge(curr, prev, mode, goodDirection){
+  if(prev === null || prev === undefined || !isFinite(prev)) return '';
+  let diff, text;
+  if(mode === 'pp'){
+    diff = (curr - prev) * 100;
+    if(Math.abs(diff) < 0.05) return `<span class="obs-delta flat">no change</span>`;
+    text = `${diff > 0 ? '+' : ''}${diff.toFixed(1)}pp`;
+  } else {
+    if(prev === 0) return '';
+    diff = ((curr - prev) / prev) * 100;
+    if(Math.abs(diff) < 0.5) return `<span class="obs-delta flat">no change</span>`;
+    text = `${diff > 0 ? '+' : ''}${diff.toFixed(0)}%`;
+  }
+  let tone = 'flat';
+  if(goodDirection === 'down') tone = diff > 0 ? 'bad' : 'good';
+  else if(goodDirection === 'up') tone = diff > 0 ? 'good' : 'bad';
+  return `<span class="obs-delta ${tone}">${diff > 0 ? '▲' : '▼'} ${text}</span>`;
+}
+
+// Alerts computed on whichever basis the page is actually showing, so a
+// windowed view doesn't raise an alert from traffic outside the window.
+function computeAlertsFromRecords(records){
+  const byKey = new Map();
+  records.forEach(r=>{
+    if(!byKey.has(r.key)) byKey.set(r.key, { total:0, err:0 });
+    const e = byKey.get(r.key);
+    e.total++;
+    const fam = statusFamily(r.statusCode);
+    if(fam === '4xx' || fam === '5xx') e.err++;
+  });
+  const alerts = [];
+  byKey.forEach((v, key)=>{
+    if(v.total < 5) return;
+    const rate = v.err / v.total;
+    if(rate >= 0.25) alerts.push({ key, sev:'crit', rate, total:v.total, title:`${key} — error rate ${(rate*100).toFixed(1)}%`, meta:`${v.total.toLocaleString()} request(s) in window` });
+    else if(rate >= 0.05) alerts.push({ key, sev:'warn', rate, total:v.total, title:`${key} — error rate ${(rate*100).toFixed(1)}%`, meta:`${v.total.toLocaleString()} request(s) in window` });
+  });
+  return alerts.sort((a,b)=> (a.sev==='crit'?0:1) - (b.sev==='crit'?0:1) || b.rate - a.rate);
+}
+
+function renderWindowSelector(stats){
+  const active = obsActiveWindow();
+  const locked = !stats.canWindow;
+  const pills = OBS_WINDOWS.map(w=>`
+    <button type="button" class="obs-win-pill${w.key===active.key?' active':''}" data-obs-window="${w.key}"${locked && w.key!=='all' ? ' disabled' : ''} title="${locked && w.key!=='all' ? 'Needs per-request records (CAPTURE_MODE=full) to filter by time' : escapeHtml(w.label)}">${escapeHtml(w.label)}</button>
+  `).join('');
+  let note;
+  if(locked){
+    note = 'Cumulative totals since the agent started — time filtering needs per-request records (CAPTURE_MODE=full)';
+  } else if(stats.source === 'aggregate'){
+    note = 'Complete cumulative totals from the agent’s counters — pick a window above to analyse recent per-request records instead';
+  } else {
+    note = `Computed from ${stats.total.toLocaleString()} per-request record(s) in this window — covers endpoints that have records, as far back as the agent retains them`;
+  }
+  return `<div class="obs-window-bar">
+    <div class="obs-win-pills">${pills}</div>
+    <span class="obs-win-note">${note}</span>
+  </div>`;
+}
+
 function renderStatusBreakdown(breakdown, total){
   const t = total || 1;
   const fams = ['2xx','3xx','4xx','5xx'];
@@ -401,24 +674,36 @@ function renderStatusBreakdown(breakdown, total){
 // Per-project ranked-by-error-rate list, org-wide - only shown at "All
 // traffic" scope (once you've scoped into one project/endpoint, its own
 // stats are already the KPI row above, this list would be redundant).
-function renderServiceHealth(groups, metrics){
-  const rows = groups.map(g=>{
-    const agg = aggregateKeys(g.keys, metrics);
-    return { id: g.id, name: g.name, agg };
-  }).sort((a,b)=> b.agg.errorRate - a.agg.errorRate);
+function renderServiceHealth(groups, metrics, allRecords, win){
+  const rows = groups.map(g=>({
+    id: g.id,
+    name: g.name,
+    agg: obsComputeStats(g.keys, metrics, allRecords, win),
+  })).filter(r => r.agg.total > 0)
+     .sort((a,b)=> b.agg.errorRate - a.agg.errorRate || b.agg.total - a.agg.total);
 
+  // A project with no per-request records falls back to its cumulative
+  // aggregate, so in a mixed workspace one row can be windowed and the next
+  // all-time. That's worth showing rather than hiding - the marker says
+  // which rows the window didn't apply to.
+  const anyWindowed = rows.some(r => r.agg.source === 'records');
   const body = rows.length ? rows.map(r=>{
     const dot = r.agg.errorRate>=0.25 ? 'var(--delete)' : r.agg.errorRate>=0.05 ? 'var(--put)' : 'var(--post)';
+    const p95 = r.agg.latency ? ` · p95 ${r.agg.latency.p95}ms` : '';
+    const basisTag = (anyWindowed && r.agg.source !== 'records')
+      ? ` <span class="obs-basis-tag" title="No per-request records for this API — showing its cumulative total, not the selected window">all-time</span>`
+      : '';
     return `<div class="obs-health-row" data-obs-jump-proj="${r.id}">
       <span class="obs-health-dot" style="background:${dot};"></span>
-      <span class="obs-health-name">${escapeHtml(r.name)}</span>
-      <span class="obs-health-meta">${(r.agg.errorRate*100).toFixed(1)}% err · ${r.agg.total.toLocaleString()} req · ${r.agg.endpointCount} endpoint(s)</span>
+      <span class="obs-health-name">${escapeHtml(r.name)}${basisTag}</span>
+      <span class="obs-health-meta">${(r.agg.errorRate*100).toFixed(1)}% err · ${r.agg.total.toLocaleString()} req${p95} · ${r.agg.endpointCount} endpoint(s)</span>
     </div>`;
-  }).join('') : `<div class="empty-field" style="padding:6px 0;">No traffic discovered yet.</div>`;
+  }).join('') : `<div class="empty-field" style="padding:6px 0;">No traffic in the selected window.</div>`;
 
+  const basis = (allRecords && allRecords.length) ? obsActiveWindow().label.toLowerCase() : 'all time (cumulative)';
   return `<div class="obs-panel">
     <div class="section-title">Service health — API status</div>
-    <div class="hint" style="margin-top:-4px;">Sorted by error rate, current time range — click to drill in</div>
+    <div class="hint" style="margin-top:-4px;">Ranked by error rate, ${escapeHtml(basis)} — click to drill in</div>
     ${body}
   </div>`;
 }
@@ -444,13 +729,6 @@ function percentile(sortedNums, p){
   return sortedNums[idx];
 }
 
-function computeLatencyStats(records){
-  const nums = records.map(r=>r.latencyMs).filter(n=>typeof n === 'number').sort((a,b)=>a-b);
-  if(!nums.length) return null;
-  return { p50: percentile(nums, 0.50), p95: percentile(nums, 0.95), p99: percentile(nums, 0.99), count: nums.length };
-}
-
-
 function fieldKvHtml(fields){
   if(!fields || !Object.keys(fields).length) return '<div class="empty-field">None observed.</div>';
   return Object.entries(fields).map(([k,v])=>{
@@ -474,6 +752,88 @@ function fromDatetimeLocalValue(str){
   if(!str) return null;
   const ms = new Date(str).getTime();
   return isNaN(ms) ? null : ms;
+}
+
+/* ---- Log explorer query language ----
+   `field:value` terms AND together, bare words are free-text across every
+   searchable field. Supported fields mirror what a record actually carries
+   (there's no message field in this log format - see renderClusteringSection),
+   so the syntax can't promise something the data can't answer:
+     status:500   status:5xx   method:POST   path:/orders
+     ip:192.0.2   trace:abc123  flow:my-flow  level:error|warn|ok
+   Unknown field names fall back to free-text rather than erroring, the same
+   forgiving behaviour the rest of the app's filters use. */
+const OBS_QUERY_FIELDS = ['status','method','path','ip','trace','flow','level'];
+
+// The full filtered set from the last log-explorer render (every match, not
+// just the visible page) - what "Export CSV" writes out. Kept here rather
+// than re-deriving it in the click handler so the file can never disagree
+// with what the table was showing.
+let obsLastFilteredRecords = [];
+
+function parseLogQuery(raw){
+  const terms = [];
+  const free = [];
+  (raw || '').split(/\s+/).filter(Boolean).forEach(tok=>{
+    const idx = tok.indexOf(':');
+    if(idx > 0){
+      const field = tok.slice(0, idx).toLowerCase();
+      const value = tok.slice(idx + 1).toLowerCase();
+      if(value && OBS_QUERY_FIELDS.includes(field)){ terms.push({ field, value }); return; }
+    }
+    free.push(tok.toLowerCase());
+  });
+  return { terms, free };
+}
+
+function recordMatchesQuery(r, query){
+  const haystack = `${r.method||''} ${r.path||''} ${r.clientIp||''} ${r.correlationId||''} ${r.flowName||''} ${r.statusCode||''}`.toLowerCase();
+  for(const word of query.free){
+    if(!haystack.includes(word)) return false;
+  }
+  for(const { field, value } of query.terms){
+    let hay;
+    switch(field){
+      case 'status': {
+        const code = String(r.statusCode || '');
+        // status:5xx matches a whole family, status:500 an exact code.
+        if(/^\dxx$/.test(value)){ if(statusFamily(r.statusCode) !== value) return false; continue; }
+        hay = code; break;
+      }
+      case 'method': hay = String(r.method || ''); break;
+      case 'path':   hay = String(r.path || ''); break;
+      case 'ip':     hay = String(r.clientIp || ''); break;
+      case 'trace':  hay = String(r.correlationId || ''); break;
+      case 'flow':   hay = String(r.flowName || ''); break;
+      case 'level': {
+        const lvlName = r._lvl === 'err' ? 'error' : r._lvl === 'warn' ? 'warn' : 'ok';
+        if(lvlName !== value) return false;
+        continue;
+      }
+      default: hay = haystack;
+    }
+    if(!hay.toLowerCase().includes(value)) return false;
+  }
+  return true;
+}
+
+// CSV of exactly what's currently filtered in (not just the visible page) -
+// the usual reason to want this is attaching evidence to a ticket.
+function exportLogRecordsCsv(records){
+  const cols = ['ts','method','path','statusCode','latencyMs','clientIp','correlationId','flowName'];
+  const esc = (v)=>{
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+  };
+  const lines = [cols.join(',')].concat(records.map(r => cols.map(c => esc(r[c])).join(',')));
+  const blob = new Blob([lines.join('\n')], { type:'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `observability-logs-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(`Exported ${records.length.toLocaleString()} record(s) to CSV`);
 }
 
 function renderLogExplorerSection(records){
@@ -502,17 +862,16 @@ function renderLogExplorerSection(records){
   });
 
   const sorted = withLevel.sort((a,b)=> new Date(b.ts) - new Date(a.ts));
+  const query = parseLogQuery(q);
   const filtered = sorted.filter(r=>{
     const t = new Date(r.ts).getTime();
     if(fromMs !== null && t < fromMs) return false;
     if(toMs !== null && t > toMs) return false;
     if(ex.level !== 'all' && r._lvl !== ex.level) return false;
-    if(q){
-      const hay = `${r.method||''} ${r.path||''} ${r.clientIp||''} ${r.correlationId||''} ${r.flowName||''}`.toLowerCase();
-      if(!hay.includes(q)) return false;
-    }
-    return true;
+    return recordMatchesQuery(r, query);
   });
+
+  obsLastFilteredRecords = filtered;
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / OBS_LOG_PAGE_SIZE));
   if(ex.page > totalPages) ex.page = totalPages;
@@ -535,15 +894,17 @@ function renderLogExplorerSection(records){
         <td class="mono">${typeof r.latencyMs === 'number' ? r.latencyMs + 'ms' : '—'}</td>
         <td class="mono" style="font-size:10.5px;"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;background:${ipColor};"></span>${escapeHtml(r.clientIp||'—')}</td>
         <td class="mono" style="font-size:10.5px;color:var(--text-faint);">${escapeHtml(r.flowName||'—')}</td>
+        <td class="mono" style="font-size:10px;">${r.correlationId
+          ? `<button type="button" class="obs-trace-link" data-obs-trace="${escapeHtml(r.correlationId)}" title="Show every record sharing this trace id">${escapeHtml(r.correlationId)}</button>`
+          : '<span class="empty-field">—</span>'}</td>
         <td>${hasFields ? '<span style="color:var(--accent);">View fields</span>' : '<span class="empty-field">—</span>'}</td>
       </tr>
-      <tr class="obs-log-fields" id="obsLogFields${i}"><td colspan="9">
+      <tr class="obs-log-fields" id="obsLogFields${i}"><td colspan="10">
         <div class="obs-log-fields-inner">
           <div style="font-weight:700;font-size:11px;margin-bottom:6px;">Request fields</div>
           ${fieldKvHtml(r.requestFields)}
           <div style="font-weight:700;font-size:11px;margin:10px 0 6px;">Response fields</div>
           ${fieldKvHtml(r.responseFields)}
-          <div class="hint" style="margin-top:8px;">Correlation ID: <span class="mono">${escapeHtml(r.correlationId||'—')}</span></div>
         </div>
       </td></tr>`;
   }).join('');
@@ -571,14 +932,15 @@ function renderLogExplorerSection(records){
           <option value="err"${ex.level==='err'?' selected':''}>ERROR</option>
         </select>
       </label>
-      <label style="flex:1;min-width:180px;">Search<input type="text" id="obsLogSearch" value="${escapeHtml(ex.q)}" placeholder="method, path, IP or trace id"></label>
+      <label style="flex:1;min-width:230px;">Query<input type="text" id="obsLogSearch" value="${escapeHtml(ex.q)}" placeholder="status:5xx  path:/orders  ip:192.0.2  trace:…  or free text"></label>
       <label>From<input type="datetime-local" id="obsLogFrom" value="${escapeHtml(ex.from)}" min="${oldestVal}" max="${newestVal}"></label>
       <label>To<input type="datetime-local" id="obsLogTo" value="${escapeHtml(ex.to)}" min="${oldestVal}" max="${newestVal}"></label>
       ${filtersActive ? `<button type="button" class="obs-log-btn" id="obsLogClearRange" style="align-self:flex-end;">Clear filters</button>` : ''}
+      <button type="button" class="obs-log-btn" id="obsLogExportCsv" style="align-self:flex-end;" ${filtered.length?'':'disabled'} title="Download every record matching the current filters (not just this page)">Export CSV</button>
     </div>
     <div class="table-scroll"><table class="data-table cc-proj-table">
-      <thead><tr><th>Time</th><th>Level</th><th>Method</th><th>Path</th><th>Status</th><th>Latency</th><th>Source IP</th><th>Flow</th><th>Fields</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="9"><div class="empty-field" style="padding:10px 0;">No records${rangeNote}.</div></td></tr>`}</tbody>
+      <thead><tr><th>Time</th><th>Level</th><th>Method</th><th>Path</th><th>Status</th><th>Latency</th><th>Source IP</th><th>Flow</th><th>Trace</th><th>Fields</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="10"><div class="empty-field" style="padding:10px 0;">No records${rangeNote}.</div></td></tr>`}</tbody>
     </table></div>
     <div class="obs-log-pagination">
       <span>Showing ${rangeSummary}</span>
@@ -664,11 +1026,15 @@ function renderConsole(main, metrics, agentHealth, logRecords){
     scopedKeys = Object.keys(metrics);
   }
 
-  const agg = aggregateKeys(scopedKeys, metrics);
-  const alerts = computeConsoleAlerts(metrics).filter(a => scopedKeys.includes(a.key));
+  const win = obsActiveWindow();
+  const agg = obsComputeStats(scopedKeys, metrics, logRecords, win);
+  const alerts = agg.source === 'records'
+    ? computeAlertsFromRecords(agg.records)
+    : computeConsoleAlerts(metrics).filter(a => scopedKeys.includes(a.key));
   const info = obsScopeInfo(state.obsScope, metrics);
-  const scopedRecords = (logRecords || []).filter(r => scopedKeys.includes(r.key));
-  const latency = computeLatencyStats(scopedRecords);
+  const scopedRecords = agg.records;
+  const latency = agg.latency;
+  const prev = agg.prev;
 
   main.innerHTML = `
     <div class="crumb">Observability / Console${state.obsScope.type!=='all' ? ' / ' + escapeHtml(info.title) : ''}</div>
@@ -680,17 +1046,24 @@ function renderConsole(main, metrics, agentHealth, logRecords){
       ${state.obsScope.type!=='all' ? `<button type="button" class="obs-ip-more" id="obsClearScope">Clear scope</button>` : ''}
     </div>
 
+    ${renderWindowSelector(agg)}
+
     <div class="kpi-grid">
-      ${healthKpi('Total requests', agg.total.toLocaleString(), `${agg.endpointCount} endpoint(s) in scope`)}
-      ${healthKpi('Error rate', (agg.errorRate*100).toFixed(1)+'%', agg.errCount.toLocaleString()+' error(s)', agg.errorRate>=0.25?'--delete':agg.errorRate>=0.05?'--put':'--post')}
+      ${healthKpi('Requests', agg.total.toLocaleString(),
+        `${agg.endpointCount} endpoint(s)${prev ? ' · ' + deltaBadge(agg.total, prev.total, 'pct', 'neutral') : ''}`)}
+      ${healthKpi('Error rate', (agg.errorRate*100).toFixed(1)+'%',
+        `${agg.errCount.toLocaleString()} error(s)${prev ? ' · ' + deltaBadge(agg.errorRate, prev.errorRate, 'pp', 'down') : ''}`,
+        agg.errorRate>=0.25?'--delete':agg.errorRate>=0.05?'--put':'--post')}
       ${healthKpi('Alerts', String(alerts.length), alerts.filter(a=>a.sev==='crit').length + ' critical', alerts.length ? (alerts.some(a=>a.sev==='crit')?'--delete':'--put') : '--post')}
+      ${latency ? healthKpi('Latency p95', latency.p95 + 'ms',
+        `p50 ${latency.p50}ms · p99 ${latency.p99}ms${prev && prev.latency ? ' · ' + deltaBadge(latency.p95, prev.latency.p95, 'pct', 'down') : ''}`)
+        : healthKpi('Latency p95', '—', 'Needs per-request records')}
       ${healthKpi('Distinct source IPs', String(agg.topIps.length) + (agg.topIps.length>=10?'+':''), 'top 10 shown below')}
       ${healthKpi('Last seen', agg.lastSeenAt ? formatDateTime(agg.lastSeenAt) : '—', '')}
-      ${latency ? healthKpi('Latency p95 (real)', latency.p95 + 'ms', `p50 ${latency.p50}ms · p99 ${latency.p99}ms · from ${latency.count.toLocaleString()} record(s)`) : ''}
     </div>
 
     ${state.obsScope.type === 'all' ? `<div class="grid2">
-      ${renderServiceHealth(groups, metrics)}
+      ${renderServiceHealth(groups, metrics, logRecords, win)}
       ${renderStatusBreakdown(agg.statusBreakdown, agg.total)}
     </div>` : renderStatusBreakdown(agg.statusBreakdown, agg.total)}
 
@@ -712,10 +1085,21 @@ function renderConsole(main, metrics, agentHealth, logRecords){
 
     ${renderLogExplorerSection(scopedRecords)}
 
-    ${renderEndpointsTable(scopedKeys, metrics)}
+    ${renderEndpointsTable(scopedKeys, metrics, scopedRecords, agg.source)}
 
     ${renderAgentHealth(agentHealth)}
   `;
+
+  main.querySelectorAll('[data-obs-window]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      state.obsWindow = btn.getAttribute('data-obs-window');
+      if(state.obsLogExplorer) state.obsLogExplorer.page = 1;
+      // Sidebar too - its per-project dots are computed over the same
+      // window (see renderObservabilitySidebar).
+      renderSidebar();
+      renderMain();
+    });
+  });
 
   main.querySelectorAll('[data-obs-log-toggle]').forEach(row=>{
     row.addEventListener('click', ()=>{
@@ -723,6 +1107,22 @@ function renderConsole(main, metrics, agentHealth, logRecords){
       if(target) target.classList.toggle('open');
     });
   });
+
+  // Clicking a trace id pivots the explorer to every record sharing it -
+  // the closest thing to a distributed-trace view this data supports.
+  main.querySelectorAll('[data-obs-trace]').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      state.obsLogExplorer = state.obsLogExplorer || { from:'', to:'', page:1, level:'all', q:'' };
+      state.obsLogExplorer.q = `trace:${btn.getAttribute('data-obs-trace')}`;
+      state.obsLogExplorer.level = 'all';
+      state.obsLogExplorer.page = 1;
+      renderMain();
+    });
+  });
+
+  const logExport = main.querySelector('#obsLogExportCsv');
+  if(logExport) logExport.addEventListener('click', ()=> exportLogRecordsCsv(obsLastFilteredRecords));
 
   const logFrom = main.querySelector('#obsLogFrom');
   const logTo = main.querySelector('#obsLogTo');
@@ -799,9 +1199,13 @@ function renderConsole(main, metrics, agentHealth, logRecords){
 // the sidebar's existing #searchBox filters it the same way it filters the
 // normal project tree.
 function renderObservabilitySidebar(list, filter){
-  const { endpoints: metrics } = observabilityData();
+  const { endpoints: metrics, logRecords } = observabilityData();
   if(!state.obsScope) state.obsScope = { type:'all' };
   if(!state.obsOpenProjects) state.obsOpenProjects = {};
+  // Same window the Console is showing, so a project's dot here can't say
+  // "healthy" while the page next to it reports a red error rate for the
+  // same project over the same period.
+  const win = obsActiveWindow();
 
   const groups = groupMetricsByProject(metrics);
   const q = filter.trim().toLowerCase();
@@ -822,7 +1226,7 @@ function renderObservabilitySidebar(list, filter){
   }
   visibleGroups.forEach(g=>{
     const isOpen = state.obsOpenProjects[g.id] || (q && g.keys.length);
-    const agg = aggregateKeys(g.keys, metrics);
+    const agg = obsComputeStats(g.keys, metrics, logRecords, win);
     const dotColor = agg.errorRate>=0.25?'var(--delete)':agg.errorRate>=0.05?'var(--put)':'var(--post)';
     const groupActive = state.obsScope.type==='project' && state.obsScope.id===g.id;
     const visKeys = q ? g.keys.filter(k=>k.toLowerCase().includes(q) || g.name.toLowerCase().includes(q)) : g.keys;
