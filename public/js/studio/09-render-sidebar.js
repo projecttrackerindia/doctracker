@@ -1,7 +1,15 @@
 /* ==================== SECTION:RENDER-SIDEBAR ==================== */
 function updatePinnedNavActive(){
+  const onObservability = !!state.selected && state.selected.type === 'observability';
   document.querySelectorAll('.pinned-row').forEach(row=>{
-    row.classList.toggle('active', !!state.selected && state.selected.type === row.getAttribute('data-nav'));
+    const nav = row.getAttribute('data-nav');
+    // On Observability, the "API Control Center" row doubles as "All
+    // traffic" (see renderSidebar() below) - it's active there whenever
+    // the observability scope is 'all', not the normal home-tab check.
+    const active = (nav === 'home' && onObservability)
+      ? !!(state.obsScope && state.obsScope.type === 'all')
+      : !!state.selected && state.selected.type === nav;
+    row.classList.toggle('active', active);
   });
 }
 
@@ -9,6 +17,8 @@ function renderSidebar(){
   updatePinnedNavActive();
   const list = document.getElementById('projectList');
   const filter = document.getElementById('searchBox').value.trim().toLowerCase();
+  const homeRow = document.querySelector('.pinned-row[data-nav="home"]');
+  const homeLabel = homeRow ? homeRow.querySelector('.pinned-label') : null;
 
   // Observability takes over this same sidebar slot with its own API/
   // endpoint drill-down tree (see 23-observability.js) instead of the
@@ -16,12 +26,16 @@ function renderSidebar(){
   // rather than the app's project navigator PLUS a second nested picker
   // inside the page content. The search box above is reused as-is (same
   // #searchBox, same input listener) - typing into it filters whichever
-  // tree is currently showing.
+  // tree is currently showing. The pinned "API Control Center" row itself
+  // relabels to "All traffic" and becomes the top of that tree, instead of
+  // the tree repeating an "All traffic" row of its own right underneath it.
   if(state.selected && state.selected.type === 'observability'){
     document.getElementById('searchBox').placeholder = 'Filter APIs / endpoints…';
+    if(homeLabel){ homeLabel.textContent = 'All traffic'; homeRow.title = 'All traffic — every endpoint DocTracker has seen hits for'; }
     renderObservabilitySidebar(list, filter);
     return;
   }
+  if(homeLabel){ homeLabel.textContent = 'API Control Center'; homeRow.title = 'API Control Center'; }
   document.getElementById('searchBox').placeholder = 'Filter endpoints…';
 
   const projects = allProjects();

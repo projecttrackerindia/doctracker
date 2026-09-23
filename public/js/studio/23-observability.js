@@ -612,8 +612,10 @@ function renderObservabilitySidebar(list, filter){
   const groups = groupMetricsByProject(metrics);
   const q = filter.trim().toLowerCase();
 
-  let html = `<div style="padding:8px;">
-    <div class="obs-all-row${state.obsScope.type==='all'?' active':''}" data-obs-scope-all="1">All traffic</div>`;
+  // "All traffic" itself is the pinned "API Control Center" row up top
+  // (relabeled by renderSidebar() while on this page) - this tree starts
+  // straight at the per-project breakdown instead of repeating it here.
+  let html = `<div style="padding:8px;">`;
 
   const visibleGroups = groups.filter(g=>{
     if(!q) return true;
@@ -653,8 +655,6 @@ function renderObservabilitySidebar(list, filter){
 
   list.innerHTML = html;
 
-  const allRow = list.querySelector('[data-obs-scope-all]');
-  if(allRow) allRow.addEventListener('click', ()=> obsSetScope({ type:'all' }));
   list.querySelectorAll('[data-obs-proj]').forEach(el=>{
     el.addEventListener('click', ()=>{
       const id = el.getAttribute('data-obs-proj');

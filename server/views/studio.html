@@ -1241,11 +1241,14 @@ pre.code-block{
 /* Observability (23-observability.js). The scope picker (All traffic ->
    project -> endpoint) lives in the app's OWN left sidebar while
    state.selected.type === 'observability' (see renderObservabilitySidebar()
-   and 09-render-sidebar.js's branch) - these .obs-all-row/.obs-proj-*/
-   .obs-scope-ep-row classes style rows THERE, inside #projectList, not in
-   a second nested panel in the page content. Everything is built from the
-   exact same real state.endpointMetrics/state.projects data the old flat
-   table used - a different arrangement of real data, not a second source.
+   and 09-render-sidebar.js's branch) - these .obs-proj-*/.obs-scope-ep-row
+   classes style rows THERE, inside #projectList, not in a second nested
+   panel in the page content. "All traffic" itself is the pinned "API
+   Control Center" row above #projectList, relabeled while on this page
+   (see updatePinnedNavActive()/renderSidebar()) rather than a second row
+   repeating it right underneath. Everything is built from the exact same
+   real state.endpointMetrics/state.projects data the old flat table used -
+   a different arrangement of real data, not a second source.
    DocTracker's app-wide .section class (studio.html - see server.js/other
    pages) is only a spacing utility (margin-bottom:30px), not a card style -
    it relies on the table/kpi-grid content inside it to provide its own
@@ -1255,9 +1258,6 @@ pre.code-block{
    instead - scoped to this page on purpose, not a change to the shared
    .section class every other page already depends on rendering bare. */
 .obs-panel{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px 18px; margin-bottom:16px; }
-.obs-all-row{ display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:7px; cursor:pointer; font-size:12px; font-weight:700; margin-bottom:4px; }
-.obs-all-row:hover{ background:var(--surface-hover); }
-.obs-all-row.active{ background:var(--accent-soft); color:var(--accent); }
 .obs-proj-row{ display:flex; align-items:center; gap:7px; padding:6px 8px; border-radius:7px; cursor:pointer; }
 .obs-proj-row:hover{ background:var(--surface-hover); }
 .obs-proj-row.active{ background:var(--accent-soft); }

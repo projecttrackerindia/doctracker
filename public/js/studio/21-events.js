@@ -197,7 +197,17 @@ document.getElementById('importModal').addEventListener('click', (e)=>{ if(e.tar
 
 document.querySelectorAll('.pinned-row').forEach(row=>{
   row.addEventListener('click', ()=>{
-    state.selected = { type: row.getAttribute('data-nav') };
+    const nav = row.getAttribute('data-nav');
+    // While on Observability, this same row doubles as "All traffic" (its
+    // label/active-state are swapped in renderSidebar()) instead of
+    // navigating away to the API Control Center dashboard — see
+    // 09-render-sidebar.js.
+    if(nav === 'home' && state.selected && state.selected.type === 'observability'){
+      obsSetScope({ type:'all' });
+      closeMobileSidebar();
+      return;
+    }
+    state.selected = { type: nav };
     renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
     closeMobileSidebar();
   });
