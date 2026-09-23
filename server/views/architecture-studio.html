@@ -582,6 +582,10 @@ svg{ display:block; }
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="M7 10l5-5 5 5"></path><path d="M4 20h16"></path></svg>
       Import
     </button>
+    <button type="button" class="tb-btn" id="btnAutoLayout" title="Auto-layout — re-pack frames and re-space nodes so nothing overlaps">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="7" rx="1.4"></rect><rect x="14" y="4" width="7" height="16" rx="1.4"></rect><rect x="3" y="14" width="7" height="6" rx="1.4"></rect></svg>
+      Auto-layout
+    </button>
     <button type="button" class="tb-btn" id="btnExport" title="Export diagram">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"></path><path d="M7 10l5 5 5-5"></path><path d="M4 20h16"></path></svg>
       Export
@@ -1157,6 +1161,119 @@ function frameContaining(node, excludeId){
   return best;
 }
 function childrenOf(frameId){ return state.nodes.filter(n=>n.parentId===frameId); }
+
+/* ==================== Auto-layout ====================
+ * "Tidy up" — re-packs each frame's children into one clean column sized to
+ * fit them, then arranges frames and free-floating nodes left-to-right by
+ * graph distance (a source with no inbound edges lands in column 0, its
+ * targets one column to the right, etc. — a standard Sugiyama-style layer
+ * assignment), stacking whatever lands in the same column and centering it
+ * vertically. A frame and everything inside it move as one unit, so this
+ * can't produce the overlap bug (a child positioned with coordinates meant
+ * for a different frame) that motivated adding this in the first place.
+ * Deliberately leaves `text` nodes alone — titles/captions are usually
+ * hand-placed above the diagram, not part of the graph, and moving them
+ * around based on graph layering would fight whatever the author intended. */
+function autoLayout(){
+  const COL_GAP = 110;      // horizontal gap between layout columns
+  const ROW_GAP = 26;       // vertical gap between stacked items in a column
+  const FRAME_PAD_X = 26;   // frame inner side padding
+  const FRAME_PAD_TOP = 50; // room for the frame's own label at its top edge
+  const FRAME_PAD_BOTTOM = 22;
+  const START_X = 40;
+
+  const frames = state.nodes.filter(n=>n.kind==='frame');
+  const freeNodes = state.nodes.filter(n=>n.kind!=='frame' && n.kind!=='text' && !n.parentId);
+  if(!frames.length && !freeNodes.length){ toast('Nothing to lay out yet.'); return; }
+
+  // 1) Re-pack each frame's own children into one tidy column, normalized to
+  // a common width so edges lined up on the same side line up visually too.
+  frames.forEach(f=>{
+    const kids = childrenOf(f.id);
+    if(!kids.length) return;
+    const w = Math.max(...kids.map(k=>k.w), 150);
+    let y = f.y + FRAME_PAD_TOP;
+    kids.forEach(k=>{
+      k.x = f.x + FRAME_PAD_X;
+      k.w = w;
+      k.y = y;
+      y += k.h + ROW_GAP;
+    });
+    f.w = w + FRAME_PAD_X*2;
+    f.h = (y - ROW_GAP) - f.y + FRAME_PAD_BOTTOM;
+  });
+
+  // 2) Every frame and every free node is a "unit". Layer units left-to-right
+  // by longest-path distance from a root (a unit with no inbound edges from
+  // another unit), using edges between whichever units their endpoints
+  // belong to (a child node's edges count for its parent frame).
+  const unitOf = (nodeId)=>{
+    const n = nodeById(nodeId);
+    if(!n) return null;
+    return n.kind === 'frame' ? n.id : (n.parentId || n.id);
+  };
+  const units = [...frames.map(f=>f.id), ...freeNodes.map(n=>n.id)];
+  const unitSet = new Set(units);
+  const adj = new Map(); units.forEach(u=>adj.set(u, new Set()));
+  const indeg = new Map(); units.forEach(u=>indeg.set(u, 0));
+  state.edges.forEach(e=>{
+    const a = unitOf(e.from), b = unitOf(e.to);
+    if(!a || !b || a===b || !unitSet.has(a) || !unitSet.has(b)) return;
+    if(!adj.get(a).has(b)){ adj.get(a).add(b); indeg.set(b, indeg.get(b)+1); }
+  });
+  const layer = new Map(); units.forEach(u=>layer.set(u,0));
+  const queue = units.filter(u=>indeg.get(u)===0);
+  const seen = new Set(queue);
+  for(let head=0; head<queue.length; head++){
+    const u = queue[head];
+    adj.get(u).forEach(v=>{
+      layer.set(v, Math.max(layer.get(v), layer.get(u)+1));
+      indeg.set(v, indeg.get(v)-1);
+      if(indeg.get(v) <= 0 && !seen.has(v)){ seen.add(v); queue.push(v); }
+    });
+  }
+  units.forEach(u=>{ if(!seen.has(u)){ layer.set(u, 0); seen.add(u); } }); // leftover cycle members — pin to column 0 rather than dropping them
+
+  // 3) Place columns left-to-right; whatever shares a column stacks and
+  // centers vertically around the diagram's own y=0 axis.
+  const blockSize = (u)=>{ const n = nodeById(u); return { w:n.w, h:n.h }; };
+  const moveUnitTo = (u, newX, newY)=>{
+    const n = nodeById(u);
+    if(n.kind === 'frame'){
+      const dx = newX - n.x, dy = newY - n.y;
+      n.x = newX; n.y = newY;
+      childrenOf(u).forEach(k=>{ k.x += dx; k.y += dy; });
+    } else {
+      n.x = newX; n.y = newY;
+    }
+  };
+  const byLayer = new Map();
+  units.forEach(u=>{ const L = layer.get(u); if(!byLayer.has(L)) byLayer.set(L, []); byLayer.get(L).push(u); });
+  const maxLayer = Math.max(0, ...byLayer.keys());
+
+  let cursorX = START_X;
+  for(let L=0; L<=maxLayer; L++){
+    const colUnits = byLayer.get(L) || [];
+    if(!colUnits.length) continue;
+    const colWidth = Math.max(...colUnits.map(u=>blockSize(u).w));
+    const totalH = colUnits.reduce((s,u)=>s+blockSize(u).h,0) + ROW_GAP*Math.max(0,colUnits.length-1);
+    let y = -totalH/2;
+    colUnits.forEach(u=>{
+      const sz = blockSize(u);
+      moveUnitTo(u, cursorX, y);
+      y += sz.h + ROW_GAP;
+    });
+    cursorX += colWidth + COL_GAP;
+  }
+
+  // 4) Safety pass — re-derive parentId from final geometry so a node that
+  // moved out of (or into) a frame's box is reflected correctly.
+  state.nodes.filter(n=>n.kind!=='frame').forEach(n=>recomputeContainment(n.id));
+
+  render();
+  pushHistory();
+  toast(`Auto-layout applied — ${frames.length} frame${frames.length===1?'':'s'} re-packed, ${units.length} block${units.length===1?'':'s'} re-arranged. Click Publish to save.`);
+}
 function recomputeContainment(nodeId){
   const n = nodeById(nodeId);
   if(!n || n.kind === 'frame') return;
@@ -2949,6 +3066,10 @@ function exportDiagramJson(){
   };
   downloadBlob(new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'}), `${slugify(proj?proj.name:'architecture')}-diagram.json`);
 }
+document.getElementById('btnAutoLayout').addEventListener('click', ()=>{
+  pushHistory(); // snapshot the pre-layout state so a single Ctrl+Z undoes the whole tidy-up
+  autoLayout();
+});
 document.getElementById('btnExport').addEventListener('click', (e)=>{
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
