@@ -75,6 +75,12 @@ function renderMain(){
     return;
   }
 
+  if(state.selected.type === 'observability'){
+    if(!isAdmin() && !ownsAnyProject()){ state.selected = { type:'home' }; renderControlCenter(main); return; }
+    renderObservability(main);
+    return;
+  }
+
   if(state.selected.type === 'overview'){
     renderProjectOverview(main, state.selected.projectId);
     return;

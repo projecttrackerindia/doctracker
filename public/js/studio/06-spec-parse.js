@@ -22,6 +22,7 @@ async function loadState(){
     state.tryitPersonal = (ws.tryitPersonal && typeof ws.tryitPersonal === 'object')
       ? { variables: Array.isArray(ws.tryitPersonal.variables) ? ws.tryitPersonal.variables : [], saved: Array.isArray(ws.tryitPersonal.saved) ? ws.tryitPersonal.saved : [] }
       : { variables: [], saved: [] };
+    state.endpointMetrics = (ws.endpointMetrics && typeof ws.endpointMetrics === 'object') ? ws.endpointMetrics : {};
     state.environments = (Array.isArray(ws.environments) && ws.environments.length) ? ws.environments.map(migrateEnvironment) : [];
     state.customFlowDirections = Array.isArray(ws.customFlowDirections) ? ws.customFlowDirections : [];
     state.branding = ws.branding && typeof ws.branding === 'object' ? ws.branding : {};
@@ -32,6 +33,7 @@ async function loadState(){
     state.requestHistory = {};
     state.tryitCollections = { variables: [], saved: [] };
     state.tryitPersonal = { variables: [], saved: [] };
+    state.endpointMetrics = {};
     state.environments = [];
     state.customFlowDirections = [];
     state.branding = {};

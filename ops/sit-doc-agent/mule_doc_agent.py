@@ -131,6 +131,13 @@ CORR_ID_KEY_PATTERN = re.compile(r'correlationid', re.IGNORECASE)
 STATUS_KEY_PATTERN = re.compile(r'httpstatus|statuscode|^status$', re.IGNORECASE)
 REQUEST_PAYLOAD_KEY_PATTERN = re.compile(r'^requestpayload$', re.IGNORECASE)
 RESPONSE_PAYLOAD_KEY_PATTERN = re.compile(r'^responsepayload$', re.IGNORECASE)
+# X-Forwarded-For is CONFIRMED present in this deployment's own "common" block
+# (see jwt-token-api.log). It's the client IP as seen by whatever's in front
+# of Mule (a load balancer/proxy) - not raw TCP peer address, but the closest
+# thing available from log content alone. A comma-separated chain (multiple
+# hops) is possible; only the first (left-most, closest to the real client)
+# hop is used - see extract_client_ip().
+CLIENT_IP_KEY_PATTERN = re.compile(r'x-forwarded-for|clientip|remoteaddr|^ip$', re.IGNORECASE)
 
 
 def _find_key_dict(obj, pattern):
@@ -247,6 +254,17 @@ def _all_keys(obj, depth=0, out=None):
     return out
 
 
+def extract_client_ip(obj):
+    """Client IP is an identifying value, not payload content, so unlike
+    request/response field VALUES it's fine to extract and keep (it's what's
+    needed for the "where are hits coming from" observability view) - see
+    CLIENT_IP_KEY_PATTERN's note on why X-Forwarded-For specifically."""
+    raw = _find_key_value(obj, CLIENT_IP_KEY_PATTERN)
+    if not raw:
+        return None
+    return str(raw).split(",")[0].strip() or None
+
+
 def _finish_block(carry, observations):
     try:
         obj = json.loads(carry["buffer"])
@@ -278,6 +296,7 @@ def _finish_block(carry, observations):
                 "correlationId": _find_key_value(obj, CORR_ID_KEY_PATTERN),
                 "body": req_payload if isinstance(req_payload, dict) else None,
                 "responseBody": resp_payload if isinstance(resp_payload, dict) else None,
+                "clientIp": extract_client_ip(obj),
             })
     carry["method"] = None
 
@@ -463,7 +482,16 @@ def aggregate(state, observations):
             "method": obs["method"], "path": obs["path"],
             "statusCodes": {}, "correlationIds": [], "fieldShapes": {},
             "responseFieldShapes": {}, "statusesWithErrorLikeFields": [],
+            "totalRequests": 0, "sourceIps": {}, "lastSeenAt": None,
         })
+        ep["totalRequests"] += 1
+        ep["lastSeenAt"] = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+        if obs.get("clientIp"):
+            ips = ep["sourceIps"]
+            if obs["clientIp"] in ips:
+                ips[obs["clientIp"]] += 1
+            elif len(ips) < 50:  # cap distinct IPs tracked - observability sample, not a full access log
+                ips[obs["clientIp"]] = 1
         if obs.get("statusCode"):
             sc = str(obs["statusCode"])
             ep["statusCodes"][sc] = ep["statusCodes"].get(sc, 0) + 1
@@ -497,6 +525,11 @@ def anomaly_notes(ep):
     if len(codes) >= 4:
         notes.append(f"{len(codes)} distinct status codes observed ({', '.join(sorted(codes))}) - "
                       "worth confirming which are documented, expected outcomes vs. undocumented edge cases.")
+    total = sum(ep["statusCodes"].values())
+    errors = sum(c for sc, c in ep["statusCodes"].items() if sc and sc[0] in ("4", "5"))
+    if total >= 5 and errors / total >= 0.25:
+        notes.append(f"High error rate: {errors}/{total} ({errors/total:.0%}) of observed responses were 4xx/5xx - "
+                      "see the Observability page for the full breakdown and source IPs.")
     return notes
 
 
@@ -556,6 +589,50 @@ class DocTrackerClient:
         if PROJECT_ID in data.get("conflicts", []):
             raise RuntimeError("Write conflict - project was modified elsewhere since last fetch; will retry next cycle.")
         print(f"[info] pushed {PROJECT_ID}: {data}")
+
+    def push_endpoint_metrics(self, metrics):
+        # Whole-blob overwrite (not merged with get_workspace() first) - this
+        # agent is the ONLY writer of this data (see server/routes/workspace.js's
+        # endpoint_metrics route), so there's nothing to conflict with, unlike
+        # push_project() which competes with human edits on the same project.
+        status, data, _ = self._request("PUT", "/api/workspace/endpoint-metrics", {"endpointMetrics": metrics})
+        if status != 200 or not data.get("ok"):
+            raise RuntimeError(f"PUT /api/workspace/endpoint-metrics failed ({status}): {data}")
+        print(f"[info] pushed endpoint metrics for {len(metrics)} endpoint(s): {data}")
+
+
+# ============================================================================
+# Build the endpoint-metrics payload (hits, error rate, source IPs) - a
+# SEPARATE store from the doc-discovery project above, pushed to its own
+# endpoint (PUT /api/workspace/endpoint-metrics), never merged into project
+# data. See CLIENT_IP_KEY_PATTERN's note: IPs are identifying values kept
+# on purpose (this is what the observability view is for), unlike request/
+# response field VALUES, which are never kept anywhere in this agent.
+# ============================================================================
+def build_endpoint_metrics(state):
+    metrics = {}
+    for key, ep in state.get("endpoints", {}).items():
+        status_codes = ep.get("statusCodes", {})
+        breakdown = {}
+        error_count = 0
+        total_with_status = 0
+        for sc, count in status_codes.items():
+            family = f"{sc[0]}xx" if sc and sc[0].isdigit() else "unknown"
+            breakdown[family] = breakdown.get(family, 0) + count
+            total_with_status += count
+            if family in ("4xx", "5xx"):
+                error_count += count
+        error_rate = round(error_count / total_with_status, 4) if total_with_status else 0.0
+        top_ips = sorted(ep.get("sourceIps", {}).items(), key=lambda kv: -kv[1])[:10]
+        metrics[key] = {
+            "totalRequests": ep.get("totalRequests", 0),
+            "statusBreakdown": breakdown,
+            "errorRate": error_rate,
+            "lastSeenAt": ep.get("lastSeenAt"),
+            "topSourceIps": [{"ip": ip, "count": count} for ip, count in top_ips],
+            "sourceLog": os.path.basename(MULE_LOG_PATH),
+        }
+    return metrics
 
 
 # ============================================================================
@@ -864,8 +941,11 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
                     print(f"[error] writing local HTML report failed, will retry next cycle: {e}", file=sys.stderr)
             elif dry_run:
                 project = build_project(state)
+                metrics = build_endpoint_metrics(state)
                 print("[dry-run] would push project:")
                 print(json.dumps(project, indent=2)[:4000])
+                print("[dry-run] would push endpoint metrics:")
+                print(json.dumps(metrics, indent=2)[:2000])
             else:
                 try:
                     existing = client.get_workspace()
@@ -874,6 +954,7 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
                     if existing_project:
                         project["_rev"] = existing_project.get("_rev")
                     client.push_project(project)
+                    client.push_endpoint_metrics(build_endpoint_metrics(state))
                 except Exception as e:
                     print(f"[error] push failed, will retry next cycle: {e}", file=sys.stderr)
             state["last_push"] = time.time()

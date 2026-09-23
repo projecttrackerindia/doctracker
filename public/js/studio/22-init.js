@@ -29,6 +29,11 @@
   // (approve/cancel authority is Admin-only server-side — see the
   // /promotion-requests org-wide route) — same visibility gate as Security.
   document.getElementById('btnReleasePipeline').style.display = (isAdmin() || ownsAnyProject()) ? '' : 'none';
+  // Observability shows traffic auto-discovered from server logs (hit
+  // counts, error rates, client IPs) - same visibility gate as Security/
+  // Release Pipeline, since it's an ops-facing view, not part of the docs a
+  // regular Editor/Viewer reads day to day.
+  document.getElementById('btnObservability').style.display = (isAdmin() || ownsAnyProject()) ? '' : 'none';
 
   // Access-schedule banner/lock state — rendered immediately from the
   // server-injected AUTH_USER (so it's correct on first paint, before any

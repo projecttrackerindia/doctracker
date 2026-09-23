@@ -345,6 +345,15 @@ async function initDb() {
   // variable value), so encrypted at rest the same way, org-shared.
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS tryit_collections_enc TEXT;`);
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS tryit_collections_key_version INTEGER;`);
+  // Endpoint traffic metrics (hit counts, status breakdown, error rate,
+  // client IPs, last-seen) pushed by the SIT log auto-discovery agent
+  // (ops/sit-doc-agent). Keyed by "METHOD /path", cross-referenced against
+  // real endpoints by the UI for display only - deliberately never written
+  // INTO a project's own endpoint data, so it can never conflict with a
+  // human editing that project concurrently. Encrypted at rest like
+  // request_history: client IPs are PII, same sensitivity class.
+  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS endpoint_metrics_enc TEXT;`);
+  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS endpoint_metrics_key_version INTEGER;`);
 
   // ---- Environment release pipeline ----
   // `release_version` is the project-wide "cut number" (displayed as 1.0.N) —

@@ -233,7 +233,8 @@ async function reencryptOrganisation(organisation) {
 
   const { rows: wsRows } = await pool.query(
     `SELECT environments, environments_enc, request_history, request_history_enc,
-            tryit_collections_enc, environments_key_version, request_history_key_version, tryit_collections_key_version
+            tryit_collections_enc, endpoint_metrics_enc, environments_key_version,
+            request_history_key_version, tryit_collections_key_version, endpoint_metrics_key_version
      FROM org_workspace WHERE organisation = $1`,
     [organisation]
   );
@@ -242,20 +243,24 @@ async function reencryptOrganisation(organisation) {
     const envPlain = decryptOrgBlob(ws.environments_enc, ws.environments, organisation, 'environments', []);
     const histPlain = decryptOrgBlob(ws.request_history_enc, ws.request_history, organisation, 'request_history', {});
     const tryitPlain = decryptOrgBlob(ws.tryit_collections_enc, null, organisation, 'tryit_collections', { variables: [], saved: [] });
+    const metricsPlain = decryptOrgBlob(ws.endpoint_metrics_enc, null, organisation, 'endpoint_metrics', {});
     const envEnc = encryptOrgBlob(envPlain, organisation, 'environments');
     const histEnc = encryptOrgBlob(histPlain, organisation, 'request_history');
     const tryitEnc = encryptOrgBlob(tryitPlain, organisation, 'tryit_collections');
+    const metricsEnc = encryptOrgBlob(metricsPlain, organisation, 'endpoint_metrics');
     await pool.query(
       `UPDATE org_workspace SET
          environments = '[]'::jsonb, environments_enc = $1, environments_key_version = $2,
          request_history = '{}'::jsonb, request_history_enc = $3, request_history_key_version = $4,
-         tryit_collections_enc = $5, tryit_collections_key_version = $6
-       WHERE organisation = $7
-         AND environments_key_version IS NOT DISTINCT FROM $8
-         AND request_history_key_version IS NOT DISTINCT FROM $9
-         AND tryit_collections_key_version IS NOT DISTINCT FROM $10`,
-      [envEnc.enc, envEnc.version, histEnc.enc, histEnc.version, tryitEnc.enc, tryitEnc.version,
-        organisation, ws.environments_key_version, ws.request_history_key_version, ws.tryit_collections_key_version]
+         tryit_collections_enc = $5, tryit_collections_key_version = $6,
+         endpoint_metrics_enc = $7, endpoint_metrics_key_version = $8
+       WHERE organisation = $9
+         AND environments_key_version IS NOT DISTINCT FROM $10
+         AND request_history_key_version IS NOT DISTINCT FROM $11
+         AND tryit_collections_key_version IS NOT DISTINCT FROM $12
+         AND endpoint_metrics_key_version IS NOT DISTINCT FROM $13`,
+      [envEnc.enc, envEnc.version, histEnc.enc, histEnc.version, tryitEnc.enc, tryitEnc.version, metricsEnc.enc, metricsEnc.version,
+        organisation, ws.environments_key_version, ws.request_history_key_version, ws.tryit_collections_key_version, ws.endpoint_metrics_key_version]
     );
   }
   return { projects: projectsTouched, orgWorkspace: true };
@@ -470,7 +475,7 @@ router.get('/', async (req, res) => {
 
     const [wsResult, userRow] = await Promise.all([
       pool.query(
-        `SELECT environments, environments_enc, request_history, request_history_enc, tryit_collections_enc, custom_flow_directions, custom_icons, branding
+        `SELECT environments, environments_enc, request_history, request_history_enc, tryit_collections_enc, endpoint_metrics_enc, custom_flow_directions, custom_icons, branding
          FROM org_workspace WHERE organisation = $1`,
         [org]
       ),
@@ -487,6 +492,7 @@ router.get('/', async (req, res) => {
       environments: decryptOrgBlob(ws.environments_enc, ws.environments, org, 'environments', []),
       requestHistory: decryptOrgBlob(ws.request_history_enc, ws.request_history, org, 'request_history', {}),
       tryitCollections: decryptOrgBlob(ws.tryit_collections_enc, null, org, 'tryit_collections', { variables: [], saved: [] }),
+      endpointMetrics: decryptOrgBlob(ws.endpoint_metrics_enc, null, org, 'endpoint_metrics', {}),
       // PER-USER, not org-shared — see the users.tryit_personal_enc comment
       // in server/db.js. Safe to fold into this same cached payload because
       // the cache itself is already keyed per (org, userId) — see cache.js.
@@ -968,16 +974,18 @@ async function upsertOrgWorkspace(org, column, value) {
 // (it was born encrypted-only), so it always writes '{}' into that slot.
 async function upsertEncryptedOrgWorkspace(org, purpose, value) {
   const column = purpose === 'environments' ? 'environments'
-    : purpose === 'tryit_collections' ? 'tryit_collections' : 'request_history';
+    : purpose === 'tryit_collections' ? 'tryit_collections'
+    : purpose === 'endpoint_metrics' ? 'endpoint_metrics' : 'request_history';
   const legacyPlaceholder = column === 'environments' ? '[]' : '{}';
-  if (column === 'tryit_collections') {
+  if (column === 'tryit_collections' || column === 'endpoint_metrics') {
+    // No legacy plaintext column for either - both were born encrypted-only.
     const { enc, version } = encryptOrgBlob(value, org, purpose);
     await pool.query(
-      `INSERT INTO org_workspace (organisation, tryit_collections_enc, tryit_collections_key_version, updated_at)
+      `INSERT INTO org_workspace (organisation, ${column}_enc, ${column}_key_version, updated_at)
        VALUES ($1, $2, $3, now())
        ON CONFLICT (organisation) DO UPDATE SET
-         tryit_collections_enc = EXCLUDED.tryit_collections_enc,
-         tryit_collections_key_version = EXCLUDED.tryit_collections_key_version, updated_at = now()`,
+         ${column}_enc = EXCLUDED.${column}_enc,
+         ${column}_key_version = EXCLUDED.${column}_key_version, updated_at = now()`,
       [org, enc, version]
     );
     return;
@@ -1014,6 +1022,24 @@ router.put('/request-history', async (req, res) => {
   } catch (err) {
     console.error('PUT request-history failed:', err);
     res.status(500).json({ error: 'Could not save request history.' });
+  }
+});
+
+// Traffic metrics pushed by the SIT log auto-discovery agent (ops/sit-doc-agent) -
+// keyed by "METHOD /path", org-shared, encrypted like request_history (client IPs
+// are PII). Whole-blob overwrite by design: the agent recomputes and replaces its
+// own metrics wholesale from its own state each push, same as the doc-discovery
+// project push - no merge-by-key needed since there's exactly one writer
+// (the service account), not multiple humans editing concurrently.
+router.put('/endpoint-metrics', async (req, res) => {
+  if (!isPlainObject(req.body?.endpointMetrics)) return res.status(400).json({ error: 'Expected { endpointMetrics: {} }.' });
+  try {
+    await upsertEncryptedOrgWorkspace(req.authUser.organisation, 'endpoint_metrics', req.body.endpointMetrics);
+    await cache.invalidateOrg(req.authUser.organisation);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('PUT endpoint-metrics failed:', err);
+    res.status(500).json({ error: 'Could not save endpoint metrics.' });
   }
 });
 
