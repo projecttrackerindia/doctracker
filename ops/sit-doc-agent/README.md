@@ -59,6 +59,33 @@ Railway domain will eventually break silently when it rotates.
 - Does not touch any of your existing, reviewed DocTracker projects — it
   only ever writes to its own dedicated `sitautodisc1` project.
 
+## Data residency: an offline mode that never contacts DocTracker
+
+DocTracker is hosted on Railway, **outside India**. If nothing discovered
+from this SIT server's logs should cross that boundary, don't run the agent
+in its default mode at all — use `--local-html` instead:
+
+```bash
+python3 mule_doc_agent.py --local-html /path/to/report.html
+```
+
+This tails and aggregates the log exactly the same way, but instead of
+pushing to DocTracker it renders a single self-contained HTML file (inline
+CSS only, no external fonts/scripts/CDN — works with no internet access)
+and writes it to the path you give it. **No network call is made at all in
+this mode** — `DOCTRACKER_BASE_URL`/`DOCTRACKER_USERNAME`/`DOCTRACKER_PASSWORD`
+aren't even read. Open the file directly in a browser on the SIT server
+(`file://...`) or copy it out through whatever channel your data-handling
+rules already allow for that server.
+
+Trade-off: you lose DocTracker's shared/searchable project view, its
+history, and its audit trail of who reviewed what — this is purely a local
+snapshot, re-generated fresh each push interval. If that trade-off isn't
+acceptable either, the fallback is a manual one: run `--sample-lines`/
+`--dry-run` to eyeball what the agent *would* discover, then only push data
+you've personally reviewed as acceptable to leave the server, rather than
+running the agent unattended in its normal push mode.
+
 ## Requirements
 
 - Python 3.6+ (standard library only — nothing to `pip install`)
@@ -108,6 +135,11 @@ python3 mule_doc_agent.py --dry-run
 Lets it tail the real log and print what it *would* push to DocTracker,
 without ever calling the API. Confirm the discovered endpoints and field
 shapes look reasonable before moving on.
+
+**If cross-border data transfer to Railway isn't acceptable, stop here** and
+use `--local-html /path/to/report.html` instead of Step 3 below — see
+"Data residency" above. It's the same tail-and-aggregate logic, just with a
+local HTML file as the only output and no network call ever made.
 
 ## Step 3 — run for real
 

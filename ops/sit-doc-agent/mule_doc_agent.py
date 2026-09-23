@@ -26,9 +26,23 @@ to your actual log layout - see the comment above LINE_PATTERNS for how.
 -------------------------------------------------------------------------------
 
 Usage:
-    python3 mule_doc_agent.py --dry-run          # parse + print, no network calls at all
-    python3 mule_doc_agent.py --sample-lines 50   # print first 50 parsed/unparsed lines, then exit
-    python3 mule_doc_agent.py                     # real run: tail, aggregate, push to DocTracker
+    python3 mule_doc_agent.py --dry-run              # parse + print, no network calls at all
+    python3 mule_doc_agent.py --sample-lines 50       # print first 50 parsed/unparsed lines, then exit
+    python3 mule_doc_agent.py --local-html out.html   # tail + aggregate, write a local HTML report only -
+                                                       # NO network call to DocTracker at all (see below)
+    python3 mule_doc_agent.py                         # real run: tail, aggregate, push to DocTracker
+
+--- Data residency: keeping everything on this server -------------------------
+DocTracker (the destination in the default mode above) is hosted on Railway,
+outside India. If that's not acceptable for what ends up in the logs on this
+SIT server, use --local-html instead of a real run: it tails and aggregates
+exactly the same way, but renders a self-contained static HTML report to a
+local file path and NEVER makes a network call anywhere - DOCTRACKER_* env
+vars are not read at all in this mode. Open the file directly in a browser
+(file://) on this server, or copy it wherever your data-handling rules allow.
+You lose DocTracker's shared/searchable view and its audit trail, but nothing
+discovered from the logs leaves this machine.
+-------------------------------------------------------------------------------
 
 Configuration is via environment variables (see CONFIG section below) so no
 secrets live in this file or in source control.
@@ -409,9 +423,95 @@ def build_project(state, existing_project=None):
 
 
 # ============================================================================
+# Local HTML report - fully offline, no network call, no DocTracker involved.
+# Renders the same aggregated data build_project() would send, as a single
+# self-contained HTML file (inline CSS only, no external fonts/CDN/scripts -
+# this needs to work on a server that may have no internet access at all).
+# ============================================================================
+def _esc(s):
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def render_html(project):
+    now_iso = project.get("updatedAt", "")
+    rows = []
+    for ep in project.get("endpoints", []):
+        fields_html = "".join(
+            f"<tr><td><code>{_esc(f['name'])}</code></td><td>{_esc(f['type'])}</td>"
+            f"<td>{_esc(f['description'])}</td></tr>"
+            for f in ep["requestBody"]["fields"]
+        ) or "<tr><td colspan='3'><em>No request-body fields observed in logs.</em></td></tr>"
+
+        resp_html = "".join(
+            f"<tr><td>{_esc(r['code'])}</td><td>{_esc(r['description'])}</td>"
+            f"<td><code>{_esc(r['example'])[:300]}</code></td></tr>"
+            for r in ep["responses"]
+        ) or "<tr><td colspan='3'><em>No responses observed.</em></td></tr>"
+
+        rows.append(f"""
+        <section class="ep">
+          <h2><span class="method {_esc(ep['method'].lower())}">{_esc(ep['method'])}</span>
+              <code>{_esc(ep['path'])}</code></h2>
+          <p class="desc">{_esc(ep['description']).replace(chr(10), '<br>')}</p>
+          <h3>Request body fields (observed)</h3>
+          <table><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+          <tbody>{fields_html}</tbody></table>
+          <h3>Responses (observed)</h3>
+          <table><thead><tr><th>Status</th><th>Notes</th><th>Example (truncated)</th></tr></thead>
+          <tbody>{resp_html}</tbody></table>
+        </section>""")
+
+    endpoints_html = "".join(rows) or "<p><em>No endpoints discovered yet - keep the agent running and re-check.</em></p>"
+
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>{_esc(project['name'])} (local, offline report)</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  body {{ font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 960px; margin: 32px auto;
+          padding: 0 16px; line-height: 1.5; }}
+  h1 {{ font-size: 1.4rem; }}
+  .banner {{ background: #fff3cd; border: 1px solid #ffe69c; padding: 10px 14px; border-radius: 6px;
+             font-size: 0.9rem; margin-bottom: 20px; }}
+  .ep {{ border: 1px solid #d0d7de; border-radius: 8px; padding: 14px 18px; margin-bottom: 18px; }}
+  .ep h2 {{ font-size: 1.05rem; margin: 0 0 6px; }}
+  .desc {{ color: #57606a; font-size: 0.88rem; }}
+  .method {{ display: inline-block; font-weight: 700; font-size: 0.75rem; padding: 2px 8px; border-radius: 4px;
+             color: #fff; margin-right: 6px; }}
+  .method.get {{ background: #0969da; }} .method.post {{ background: #1a7f37; }}
+  .method.put {{ background: #9a6700; }} .method.patch {{ background: #8250df; }}
+  .method.delete {{ background: #cf222e; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; margin: 6px 0 14px; }}
+  th, td {{ text-align: left; padding: 5px 8px; border-bottom: 1px solid #eaeef2; vertical-align: top; }}
+  code {{ background: #f6f8fa; padding: 1px 4px; border-radius: 3px; }}
+</style></head>
+<body>
+<h1>{_esc(project['name'])}</h1>
+<p class="banner">
+  Rendered locally by the DocTracker SIT Auto-Discovery Agent in <code>--local-html</code> mode.
+  <b>No network call was made to render this file</b> - nothing discovered from this server's logs
+  was sent anywhere, including DocTracker. Every field description is auto-generated from the field's
+  own name and needs human review before being trusted. Generated at {_esc(now_iso)}.
+</p>
+{endpoints_html}
+</body></html>"""
+
+
+def write_local_html(state, path):
+    project = build_project(state)
+    html = render_html(project)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(html)
+    os.replace(tmp, path)
+    print(f"[info] wrote local HTML report to {path} ({len(project.get('endpoints', []))} endpoint(s)) - "
+          f"no network call was made")
+
+
+# ============================================================================
 # Main loop
 # ============================================================================
-def run(dry_run=False, sample_lines=None):
+def run(dry_run=False, sample_lines=None, local_html=None):
     state = load_state()
 
     if sample_lines:
@@ -434,15 +534,18 @@ def run(dry_run=False, sample_lines=None):
         return
 
     client = None
-    if not dry_run:
+    if local_html:
+        print(f"[info] --local-html mode: DOCTRACKER_* settings are ignored - no network call will ever be made")
+    elif not dry_run:
         if not DOCTRACKER_PASSWORD:
-            print("[error] DOCTRACKER_PASSWORD is not set. Set it (or run with --dry-run) before running for real.", file=sys.stderr)
+            print("[error] DOCTRACKER_PASSWORD is not set. Set it (or run with --dry-run / --local-html) before running for real.", file=sys.stderr)
             sys.exit(1)
         client = DocTrackerClient(DOCTRACKER_BASE_URL, DOCTRACKER_USERNAME, DOCTRACKER_PASSWORD)
         client.login()
 
-    print(f"[info] tailing {MULE_LOG_PATH} every {POLL_INTERVAL_SECONDS}s, "
-          f"pushing every {PUSH_INTERVAL_SECONDS}s{' (DRY RUN - no network writes)' if dry_run else ''}")
+    mode = f"writing local HTML to {local_html} (offline, no network)" if local_html else \
+           ("DRY RUN - no network writes" if dry_run else "pushing to DocTracker")
+    print(f"[info] tailing {MULE_LOG_PATH} every {POLL_INTERVAL_SECONDS}s, {mode}")
 
     while True:
         lines = tail_new_lines(MULE_LOG_PATH, state)
@@ -454,8 +557,13 @@ def run(dry_run=False, sample_lines=None):
         save_state(state)
 
         if time.time() - state.get("last_push", 0) >= PUSH_INTERVAL_SECONDS and state.get("endpoints"):
-            project = build_project(state)
-            if dry_run:
+            if local_html:
+                try:
+                    write_local_html(state, local_html)
+                except Exception as e:
+                    print(f"[error] writing local HTML report failed, will retry next cycle: {e}", file=sys.stderr)
+            elif dry_run:
+                project = build_project(state)
                 print("[dry-run] would push project:")
                 print(json.dumps(project, indent=2)[:4000])
             else:
@@ -478,5 +586,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="Parse and aggregate, but never call DocTracker.")
     ap.add_argument("--sample-lines", type=int, default=None, help="Print N parsed lines and exit (for validating the log parser).")
+    ap.add_argument("--local-html", metavar="PATH", default=None,
+                     help="Write a self-contained local HTML report to PATH instead of pushing to DocTracker. "
+                          "No network call is ever made in this mode - see the data-residency note at the top of this file.")
     args = ap.parse_args()
-    run(dry_run=args.dry_run, sample_lines=args.sample_lines)
+    run(dry_run=args.dry_run, sample_lines=args.sample_lines, local_html=args.local_html)
