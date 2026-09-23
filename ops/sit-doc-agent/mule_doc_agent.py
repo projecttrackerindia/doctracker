@@ -352,7 +352,19 @@ def save_state(state):
 def tail_new_lines(path, state):
     """Reads any lines appended since the last recorded offset. Detects log
     rotation (inode change or file shrank) and restarts from the top of the
-    new file rather than crashing or silently missing the rotated-out tail."""
+    new file rather than crashing or silently missing the rotated-out tail.
+
+    CONFIRMED bug found against the real, actively-growing jwt-token-api.log:
+    the original version used `for line in f: ...` then `f.tell()` at the
+    end, which happily returns a LAST "line" that has no trailing newline
+    yet (the writer hasn't finished it at the moment we read), then advances
+    the offset PAST that partial content. The next poll cycle then only sees
+    the REMAINDER of that line once it's completed - which looks like a
+    brand new, out-of-context line (e.g. just `"RequestPayload": {` on its
+    own), desyncing the multi-line JSON brace counter for every block after
+    it. Fixed by reading line-by-line via readline() and only ever
+    committing the offset past a line that actually ends in "\\n" - an
+    incomplete trailing line is left unread and picked up whole next cycle."""
     try:
         st = os.stat(path)
     except FileNotFoundError:
@@ -369,8 +381,18 @@ def tail_new_lines(path, state):
     lines = []
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         f.seek(state["offset"])
-        for line in f:
-            lines.append(line.rstrip("\n"))
+        while True:
+            pos_before = f.tell()
+            line = f.readline()
+            if not line:
+                break  # EOF - nothing more written yet
+            if line.endswith("\n"):
+                lines.append(line.rstrip("\n"))
+            else:
+                # Partial line - writer hasn't finished it. Don't consume it;
+                # rewind so the WHOLE line is re-read next cycle.
+                f.seek(pos_before)
+                break
         state["offset"] = f.tell()
     return lines
 
