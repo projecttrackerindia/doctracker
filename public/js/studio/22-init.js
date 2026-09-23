@@ -18,6 +18,11 @@
         : null;
       state.selected = ep ? { type:'endpoint', id: ep.id } : { type:'overview', projectId: proj.id };
     }
+  } else if(INITIAL_VIEW === 'observability'){
+    // Permission check happens at render time (renderMain() already falls
+    // back to Home for a non-Admin/non-owner) - same guard a button click
+    // goes through, so it's not duplicated here.
+    state.selected = { type:'observability' };
   }
   // A non-Admin still needs to reach Security if they own at least one
   // project (see requireAdminOrProjectOwner server-side) — otherwise they'd

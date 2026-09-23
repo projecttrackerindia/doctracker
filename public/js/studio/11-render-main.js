@@ -1,13 +1,16 @@
 /* ==================== SECTION:RENDER-MAIN ==================== */
 // Keeps the address bar matching whatever's on screen — so copying the URL
 // from a normal browsing session (not just a link someone constructs by
-// hand) reaches the same project/endpoint. Mirrors the :projectSlug/
-// :endpointSlug dashboard.html routes in server.js and INITIAL_PROJECT_SLUG/
-// INITIAL_ENDPOINT_SLUG's handling in boot() (22-init.js) — same slugify/
-// endpointSlugFor functions, so a URL built here resolves the same way a
-// hand-typed one does. replaceState (not pushState): this runs on every
-// render, and pushState here would flood browser history with an entry per
-// click instead of per actual navigation.
+// hand) reaches the same project/endpoint/view. Mirrors the :projectSlug/
+// :endpointSlug and observability dashboard.html routes in server.js and
+// INITIAL_PROJECT_SLUG/INITIAL_ENDPOINT_SLUG/INITIAL_VIEW's handling in
+// boot() (22-init.js) — same slugify/endpointSlugFor functions, so a URL
+// built here resolves the same way a hand-typed one does. replaceState (not
+// pushState): this runs on every render, and pushState here would flood
+// browser history with an entry per click instead of per actual navigation.
+// Other special views (Security, Release Pipeline, Error Catalog, Profile)
+// still fall through to the bare dashboard.html below, same gap this just
+// closed for Observability - not fixed here, only flagged.
 function syncUrlToSelection(){
   if(state.standaloneTryIt) return; // the standalone Try It tab manages its own URL — see boot()
   let path = `/${ORG_TOKEN}/dashboard.html`;
@@ -17,6 +20,8 @@ function syncUrlToSelection(){
   } else if(state.selected && state.selected.type === 'endpoint' && !state.selected.tryIt){
     const found = findEndpointForView(state.selected.id);
     if(found) path = `/${ORG_TOKEN}/${slugify(found.proj.name)}/${endpointSlugFor(found.ep)}/dashboard.html`;
+  } else if(state.selected && state.selected.type === 'observability'){
+    path = `/${ORG_TOKEN}/observability/dashboard.html`;
   }
   if(location.pathname !== path) history.replaceState(null, '', path + location.search);
 }

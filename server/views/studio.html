@@ -4400,6 +4400,10 @@ const ORG_TOKEN = '__ORG_TOKEN__';
 // this session already has access to, never trusted server-side.
 const INITIAL_PROJECT_SLUG = __PROJECT_SLUG__;
 const INITIAL_ENDPOINT_SLUG = __ENDPOINT_SLUG__;
+// Non-project views (currently just Observability) that get their own
+// bookmarkable/refreshable URL - see the /:orgToken/observability/dashboard.html
+// route in server.js and its handling in 22-init.js's boot().
+const INITIAL_VIEW = __INITIAL_VIEW__;
 
 </script>
 <!-- The rest of the app (previously ~10,500 more lines in one inline

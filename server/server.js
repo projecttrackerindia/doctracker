@@ -286,7 +286,7 @@ function escapeHtml(str) {
 // deep-links a project's Overview or one endpoint's doc page instead of
 // always landing on the default view. Never trusted for access; the
 // session cookie is what actually gates what loads.
-function renderDashboard(req, res, { projectSlug = '', endpointSlug = '' } = {}) {
+function renderDashboard(req, res, { projectSlug = '', endpointSlug = '', initialView = '' } = {}) {
   const authUser = {
     id: req.user.sub,
     username: req.user.username,
@@ -305,7 +305,8 @@ function renderDashboard(req, res, { projectSlug = '', endpointSlug = '' } = {})
     // instead of the static "DocTracker" — see server/views/studio.html.
     .replace(/__ORG_NAME__/g, escapeHtml(req.user.organisation))
     .replace('__PROJECT_SLUG__', JSON.stringify(projectSlug))
-    .replace('__ENDPOINT_SLUG__', JSON.stringify(endpointSlug));
+    .replace('__ENDPOINT_SLUG__', JSON.stringify(endpointSlug))
+    .replace('__INITIAL_VIEW__', JSON.stringify(initialView));
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
 }
@@ -318,6 +319,21 @@ app.get('/:orgToken/dashboard.html', requireAuth, (req, res) => {
     return res.redirect(`/${tokenForUser(req.user)}/dashboard.html`);
   }
   renderDashboard(req, res);
+});
+
+// Registered BEFORE the generic :projectSlug route below so the literal
+// "observability" segment wins - Express matches route patterns in
+// registration order, and :projectSlug would otherwise swallow this path
+// too (it matches any single segment). This gives the Observability page
+// its own bookmarkable/refreshable URL instead of falling through to the
+// same /:orgToken/dashboard.html every other unrouted view still shares -
+// see syncUrlToSelection() in 11-render-main.js for the client-side half.
+app.get('/:orgToken/observability/dashboard.html', requireAuth, (req, res) => {
+  const org = dataCrypto.decryptOrgToken(req.params.orgToken);
+  if (org !== req.user.organisation) {
+    return res.redirect(`/${tokenForUser(req.user)}/observability/dashboard.html`);
+  }
+  renderDashboard(req, res, { initialView: 'observability' });
 });
 
 app.get('/:orgToken/:projectSlug/dashboard.html', requireAuth, (req, res) => {
