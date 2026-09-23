@@ -9,7 +9,7 @@ let state = {
   requestHistory: {},               // { [endpointId]: [ {method,url,status,statusText,timeMs,sizeBytes,timestamp,error} ] }
   tryitCollections: { variables: [], saved: [] }, // Postman-style Try It collection vars + saved requests — org-shared, see loadState()
   tryitPersonal: { variables: [], saved: [] },      // PER-USER Try It variables + saved requests — never shipped to any other user, see loadState()
-  endpointMetrics: {},              // { "METHOD /path": {totalRequests, statusBreakdown, errorRate, lastSeenAt, topSourceIps, sourceLog} } — pushed by ops/sit-doc-agent, org-shared, see loadState()
+  endpointMetrics: {},              // { endpoints: { "METHOD /path": {totalRequests, statusBreakdown, errorRate, lastSeenAt, topSourceIps, sourceLog} }, agentHealth: {...} } — pushed by ops/sit-doc-agent, org-shared, see loadState() and observabilityData() in 23-observability.js (which also tolerates the older flat-map-only shape)
   authorName: '',                   // display name used to attribute added/modified endpoints — from AUTH_USER when signed in
   organisation: '',                 // from AUTH_USER when signed in
   sidebarCollapsed: false,          // desktop sidebar collapse (persisted) — separate from the mobile drawer's .show class

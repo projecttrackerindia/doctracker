@@ -136,6 +136,33 @@ access to the log directory.
 | `DOCTRACKER_PROJECT_ID` | No | `sitautodisc1` | |
 | `POLL_INTERVAL_SECONDS` | No | `60` | How often it checks the log file for new lines |
 | `PUSH_INTERVAL_SECONDS` | No | `900` (15 min) | How often it batches everything discovered and pushes to DocTracker — deliberately NOT per-line, to keep write volume low |
+| `MAX_LINES_PER_CYCLE` | No | `20000` | Caps how many new log lines one poll cycle reads. If a backlog is bigger than this, the agent processes it in back-to-back bounded chunks (no sleep between them) instead of one unbounded blocking read — see "Scaling to high traffic volumes" below |
+| `MAX_TRACKED_ENDPOINTS` | No | `500` | Caps how many distinct method+path combinations are tracked. Past this cap, further new combinations are folded into one shared "OVERFLOW" bucket (still counted, just not broken out individually) instead of growing memory/state.json without bound |
+
+## Scaling to high traffic volumes
+
+The agent never sits in the request path — it only tails a log file Mule has
+already written — so no amount of real API traffic can make it slow down or
+hang the actual server. What high volume *can* do to the agent itself:
+
+- **Fall behind reading its own input.** `MAX_LINES_PER_CYCLE` bounds each
+  poll to a fixed chunk, so a big backlog (e.g. the agent having been
+  stopped for a while, or a genuine burst of ~100k requests in 30 minutes)
+  is caught up over several fast, bounded cycles rather than one long
+  blocking pass. You'll see `[warn] backlog: ...` in the logs while it's
+  catching up — that's expected, not an error.
+- **Grow its tracked-endpoint count without bound.** Path segments that look
+  like per-request ids (numeric ids, UUIDs, long hex/token-looking strings)
+  are automatically templated to `{id}` before aggregation, so
+  `GET /orders/1001` and `GET /orders/1002` count as the same endpoint. Past
+  `MAX_TRACKED_ENDPOINTS` distinct combinations, anything further is folded
+  into one shared overflow bucket rather than growing forever.
+
+The agent reports its own throughput, backlog, and how close it is to these
+caps as **Agent Health** on DocTracker's Observability page (see "Reviewing
+what it found" below) — that's the place to check whether it's actually
+keeping up under real load, rather than guessing from stdout on a server
+you may not be logged into at the time.
 
 ## Step 1 — validate the log parser BEFORE running for real
 
@@ -227,6 +254,13 @@ Log in to DocTracker as an Admin/Editor and open the project named
 generated is marked as needing review. Promote confirmed endpoints into
 your real project(s) manually (or copy/adapt them) — this project is a
 staging area, not a destination.
+
+For real traffic (hit counts, error rate, source IPs, and the agent's own
+throughput/backlog health) rather than field-shape documentation, use the
+**Observability** page in the top bar instead — it's kept separate from the
+project above on purpose (see the top of `mule_doc_agent.py`'s
+`build_endpoint_metrics()`), so this traffic data is never written into, or
+mixed up with, documentation a human has reviewed and signed off on.
 
 ## Rotating the service account credential
 

@@ -53,6 +53,7 @@ import re
 import sys
 import json
 import time
+import platform
 import hashlib
 import argparse
 import http.client
@@ -87,6 +88,18 @@ PROJECT_NAME = "SIT Auto-Discovery - unreviewed"
 
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "60"))
 PUSH_INTERVAL_SECONDS = int(os.environ.get("PUSH_INTERVAL_SECONDS", "900"))  # 15 min batches, not per-line
+
+# --- Scale safeguards -------------------------------------------------------
+# These two bound the agent's own resource use so it degrades gracefully
+# instead of blocking the poll loop or growing memory/state.json without
+# bound under high real traffic (e.g. ~55 req/s sustained, ~100k requests
+# per 30 min). Neither touches Mule/the JVM itself - this agent only reads
+# already-written log files, it never sits in the request path, so it cannot
+# slow down or hang the actual API server no matter how much traffic there
+# is. What it CAN do under enough traffic is fall behind reading its own
+# input or grow unbounded state - these two caps stop both:
+MAX_LINES_PER_CYCLE = int(os.environ.get("MAX_LINES_PER_CYCLE", "20000"))
+MAX_TRACKED_ENDPOINTS = int(os.environ.get("MAX_TRACKED_ENDPOINTS", "500"))
 
 USER_AGENT = "DocTracker-SIT-Agent/1.0 (svc-doc-agent; see AGENT_README.md)"
 
@@ -138,6 +151,31 @@ RESPONSE_PAYLOAD_KEY_PATTERN = re.compile(r'^responsepayload$', re.IGNORECASE)
 # hops) is possible; only the first (left-most, closest to the real client)
 # hop is used - see extract_client_ip().
 CLIENT_IP_KEY_PATTERN = re.compile(r'x-forwarded-for|clientip|remoteaddr|^ip$', re.IGNORECASE)
+
+
+# A path segment that looks like a per-request identifier: pure numeric,
+# a UUID, or a long hex/token-looking string.
+PATH_ID_SEGMENT_PATTERN = re.compile(
+    r'^[0-9]+$'
+    r'|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    r'|^[0-9a-fA-F]{16,}$'
+)
+
+
+def templatize_path(path):
+    """Collapses path segments that look like per-request identifiers into a
+    fixed "{id}" placeholder, so e.g. GET /orders/1001 and GET /orders/1002
+    aggregate as ONE tracked endpoint instead of one distinct entry per order
+    id. This is the main thing that keeps this agent scalable under high
+    real traffic: without it, an endpoint called with a different id on
+    every request would make state.json and the endpoint-metrics payload
+    grow without bound as request volume grows - not a network/CPU problem
+    (parsing a log line is trivial), but a memory/storage one. See
+    MAX_TRACKED_ENDPOINTS for the hard backstop on top of this, for traffic
+    patterns this heuristic doesn't catch."""
+    segments = path.split("/")
+    templated = ["{id}" if s and PATH_ID_SEGMENT_PATTERN.match(s) else s for s in segments]
+    return "/".join(templated)
 
 
 def _find_key_dict(obj, pattern):
@@ -368,10 +406,17 @@ def save_state(state):
     os.replace(tmp, STATE_FILE)
 
 
-def tail_new_lines(path, state):
+def tail_new_lines(path, state, max_lines=None):
     """Reads any lines appended since the last recorded offset. Detects log
     rotation (inode change or file shrank) and restarts from the top of the
     new file rather than crashing or silently missing the rotated-out tail.
+
+    `max_lines` bounds how much a SINGLE call reads (default: unbounded).
+    This is what stops a large backlog (e.g. the agent falling behind
+    briefly, or a burst of ~100k requests in a short window) from turning
+    one poll cycle into one huge blocking read-and-process pass - see
+    MAX_LINES_PER_CYCLE and run()'s catch-up loop, which calls this
+    repeatedly in bounded chunks instead of once unbounded.
 
     CONFIRMED bug found against the real, actively-growing jwt-token-api.log:
     the original version used `for line in f: ...` then `f.tell()` at the
@@ -401,6 +446,8 @@ def tail_new_lines(path, state):
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         f.seek(state["offset"])
         while True:
+            if max_lines is not None and len(lines) >= max_lines:
+                break  # bounded chunk full - remainder stays for the next call, offset only advances past what we took
             pos_before = f.tell()
             line = f.readline()
             if not line:
@@ -474,16 +521,37 @@ def parse_line(line):
 # pre-encrypted - the agent has no way to know that's true for every field
 # on every endpoint, so field values are dropped unconditionally.
 # ============================================================================
+OVERFLOW_KEY = "* OVERFLOW - too many distinct endpoints"
+
+
 def aggregate(state, observations):
     endpoints = state.setdefault("endpoints", {})
+    health = state.setdefault("health", {})
     for obs in observations:
-        key = f"{obs['method']} {obs['path']}"
-        ep = endpoints.setdefault(key, {
-            "method": obs["method"], "path": obs["path"],
-            "statusCodes": {}, "correlationIds": [], "fieldShapes": {},
-            "responseFieldShapes": {}, "statusesWithErrorLikeFields": [],
-            "totalRequests": 0, "sourceIps": {}, "lastSeenAt": None,
-        })
+        templated_path = templatize_path(obs["path"])
+        key = f"{obs['method']} {templated_path}"
+        if key not in endpoints and len(endpoints) >= MAX_TRACKED_ENDPOINTS:
+            # Hard backstop on top of templatize_path(): whatever traffic
+            # pattern is still producing new distinct keys past the cap
+            # (MAX_TRACKED_ENDPOINTS, default 500) gets folded into one
+            # shared bucket instead of growing state.json/the metrics push
+            # forever. Counted in health so it's visible on the
+            # Observability page rather than silently dropped.
+            key = OVERFLOW_KEY
+            health["overflowObservations"] = health.get("overflowObservations", 0) + 1
+            ep = endpoints.setdefault(key, {
+                "method": "*", "path": "(too many distinct endpoints to track individually - see Agent Health)",
+                "statusCodes": {}, "correlationIds": [], "fieldShapes": {},
+                "responseFieldShapes": {}, "statusesWithErrorLikeFields": [],
+                "totalRequests": 0, "sourceIps": {}, "lastSeenAt": None,
+            })
+        else:
+            ep = endpoints.setdefault(key, {
+                "method": obs["method"], "path": templated_path,
+                "statusCodes": {}, "correlationIds": [], "fieldShapes": {},
+                "responseFieldShapes": {}, "statusesWithErrorLikeFields": [],
+                "totalRequests": 0, "sourceIps": {}, "lastSeenAt": None,
+            })
         ep["totalRequests"] += 1
         ep["lastSeenAt"] = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
         if obs.get("clientIp"):
@@ -590,15 +658,17 @@ class DocTrackerClient:
             raise RuntimeError("Write conflict - project was modified elsewhere since last fetch; will retry next cycle.")
         print(f"[info] pushed {PROJECT_ID}: {data}")
 
-    def push_endpoint_metrics(self, metrics):
-        # Whole-blob overwrite (not merged with get_workspace() first) - this
-        # agent is the ONLY writer of this data (see server/routes/workspace.js's
+    def push_endpoint_metrics(self, payload):
+        # `payload` is {"endpoints": {...}, "agentHealth": {...}} - whole-blob
+        # overwrite (not merged with get_workspace() first) - this agent is
+        # the ONLY writer of this data (see server/routes/workspace.js's
         # endpoint_metrics route), so there's nothing to conflict with, unlike
         # push_project() which competes with human edits on the same project.
-        status, data, _ = self._request("PUT", "/api/workspace/endpoint-metrics", {"endpointMetrics": metrics})
+        status, data, _ = self._request("PUT", "/api/workspace/endpoint-metrics", {"endpointMetrics": payload})
         if status != 200 or not data.get("ok"):
             raise RuntimeError(f"PUT /api/workspace/endpoint-metrics failed ({status}): {data}")
-        print(f"[info] pushed endpoint metrics for {len(metrics)} endpoint(s): {data}")
+        print(f"[info] pushed endpoint metrics for {len(payload.get('endpoints', {}))} endpoint(s) "
+              f"+ agent health: {data}")
 
 
 # ============================================================================
@@ -609,6 +679,55 @@ class DocTrackerClient:
 # on purpose (this is what the observability view is for), unlike request/
 # response field VALUES, which are never kept anywhere in this agent.
 # ============================================================================
+def build_agent_health(state):
+    """Self-monitoring for the agent itself - throughput, backlog, and how
+    close it is to the scale safeguards' caps. This is what answers "is this
+    keeping up, or quietly falling behind / dropping things" - shown as its
+    own card on the Observability page rather than only being visible in
+    stdout logs on a server the reviewer isn't logged into."""
+    health = state.get("health", {})
+    now = time.time()
+    started_at = health.get("startedAtEpoch") or now
+    samples = health.get("throughputSamples", [])
+    requests_per_minute = None
+    if len(samples) >= 2:
+        (t0, c0), (t1, c1) = samples[0], samples[-1]
+        elapsed = t1 - t0
+        if elapsed > 0:
+            requests_per_minute = round((c1 - c0) / elapsed * 60, 1)
+
+    try:
+        backlog_bytes = max(0, os.stat(MULE_LOG_PATH).st_size - state.get("offset", 0))
+    except OSError:
+        backlog_bytes = None
+
+    endpoints = state.get("endpoints", {})
+    return {
+        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+        "startedAt": health.get("startedAt"),
+        "uptimeSeconds": round(now - started_at),
+        "pythonVersion": platform.python_version(),
+        "sourceLog": os.path.basename(MULE_LOG_PATH),
+        "pollIntervalSeconds": POLL_INTERVAL_SECONDS,
+        "cyclesRun": health.get("cyclesRun", 0),
+        "linesProcessedTotal": health.get("linesProcessedTotal", 0),
+        "requestsProcessedTotal": health.get("requestsProcessedTotal", 0),
+        "requestsPerMinute": requests_per_minute,
+        "lastCycleAt": health.get("lastCycleAt"),
+        "lastCycleDurationMs": health.get("lastCycleDurationMs"),
+        "lastCycleLinesRead": health.get("lastCycleLinesRead"),
+        "catchingUp": health.get("catchingUp", False),
+        "backlogBytes": backlog_bytes,
+        "trackedEndpointCount": len([k for k in endpoints if k != OVERFLOW_KEY]),
+        "maxTrackedEndpoints": MAX_TRACKED_ENDPOINTS,
+        "overflowObservations": health.get("overflowObservations", 0),
+        "maxLinesPerCycle": MAX_LINES_PER_CYCLE,
+        "lastPushAt": health.get("lastPushAt"),
+        "lastPushOk": health.get("lastPushOk"),
+        "lastError": health.get("lastError"),
+    }
+
+
 def build_endpoint_metrics(state):
     metrics = {}
     for key, ep in state.get("endpoints", {}).items():
@@ -642,6 +761,8 @@ def build_project(state, existing_project=None):
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
     endpoints = []
     for key, ep in state.get("endpoints", {}).items():
+        if key == OVERFLOW_KEY:
+            continue  # not a real endpoint - only ever shown on the Observability page, never documented
         fields = [
             {
                 "id": f"auto-{stable_id(key, k)}",
@@ -923,17 +1044,53 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
     # docstring for why a partially-read JSON block should never touch disk.
     multiline_carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
 
+    health = state.setdefault("health", {})
+    health.setdefault("startedAt", time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()))
+    health.setdefault("startedAtEpoch", time.time())
+
     while True:
-        lines = tail_new_lines(MULE_LOG_PATH, state)
+        cycle_start = time.time()
+        # Bounded read: at most MAX_LINES_PER_CYCLE lines per call, so one
+        # poll cycle can never block for an unbounded amount of time no
+        # matter how large the backlog is (a burst of traffic, or the agent
+        # having been stopped for a while). If the backlog is bigger than
+        # one chunk, `caught_up` is False below and the next cycle starts
+        # immediately (no sleep) instead of waiting POLL_INTERVAL_SECONDS -
+        # this is how the agent catches back up without ever doing all of
+        # it in one giant blocking pass.
+        lines = tail_new_lines(MULE_LOG_PATH, state, max_lines=MAX_LINES_PER_CYCLE)
+        caught_up = len(lines) < MAX_LINES_PER_CYCLE
         observations = [o for o in (parse_line(l) for l in lines) if o]
         observations += assemble_multiline_observations(lines, multiline_carry)
         if observations:
             aggregate(state, observations)
             print(f"[info] parsed {len(observations)} HTTP-shaped line(s) this cycle "
-                  f"({len(state['endpoints'])} distinct endpoint(s) known so far)")
+                  f"({len([k for k in state['endpoints'] if k != OVERFLOW_KEY])} distinct endpoint(s) known so far)")
+
+        cycle_duration_ms = round((time.time() - cycle_start) * 1000, 1)
+        health["cyclesRun"] = health.get("cyclesRun", 0) + 1
+        health["linesProcessedTotal"] = health.get("linesProcessedTotal", 0) + len(lines)
+        health["requestsProcessedTotal"] = health.get("requestsProcessedTotal", 0) + len(observations)
+        health["lastCycleAt"] = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+        health["lastCycleDurationMs"] = cycle_duration_ms
+        health["lastCycleLinesRead"] = len(lines)
+        health["catchingUp"] = not caught_up
+        # Rolling throughput samples: (epoch time, cumulative requests seen)
+        # capped to the last 30 - build_agent_health() derives requests/min
+        # from the oldest and newest sample still kept, so this is a moving
+        # window, not a since-startup average that goes stale over days.
+        samples = health.setdefault("throughputSamples", [])
+        samples.append([time.time(), health["requestsProcessedTotal"]])
+        if len(samples) > 30:
+            del samples[0]
+        if not caught_up:
+            print(f"[warn] backlog: read the full {MAX_LINES_PER_CYCLE}-line chunk this cycle "
+                  f"({cycle_duration_ms}ms) and more remains - continuing immediately without sleeping "
+                  f"to catch up, see Agent Health on the Observability page")
         save_state(state)
 
         if time.time() - state.get("last_push", 0) >= PUSH_INTERVAL_SECONDS and state.get("endpoints"):
+            metrics_payload = {"endpoints": build_endpoint_metrics(state), "agentHealth": build_agent_health(state)}
             if local_html:
                 try:
                     write_local_html(state, local_html)
@@ -941,11 +1098,10 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
                     print(f"[error] writing local HTML report failed, will retry next cycle: {e}", file=sys.stderr)
             elif dry_run:
                 project = build_project(state)
-                metrics = build_endpoint_metrics(state)
                 print("[dry-run] would push project:")
                 print(json.dumps(project, indent=2)[:4000])
-                print("[dry-run] would push endpoint metrics:")
-                print(json.dumps(metrics, indent=2)[:2000])
+                print("[dry-run] would push endpoint metrics + agent health:")
+                print(json.dumps(metrics_payload, indent=2)[:2500])
             else:
                 try:
                     existing = client.get_workspace()
@@ -954,12 +1110,19 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
                     if existing_project:
                         project["_rev"] = existing_project.get("_rev")
                     client.push_project(project)
-                    client.push_endpoint_metrics(build_endpoint_metrics(state))
+                    client.push_endpoint_metrics(metrics_payload)
+                    health["lastPushOk"] = True
+                    health["lastError"] = None
                 except Exception as e:
                     print(f"[error] push failed, will retry next cycle: {e}", file=sys.stderr)
+                    health["lastPushOk"] = False
+                    health["lastError"] = str(e)[:500]
             state["last_push"] = time.time()
+            health["lastPushAt"] = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
             save_state(state)
 
+        if not caught_up:
+            continue  # skip the sleep - go straight into the next bounded chunk
         time.sleep(POLL_INTERVAL_SECONDS)
 
 
