@@ -596,7 +596,12 @@ def build_project(state, existing_project=None):
             "id": f"auto-{stable_id(key)}",
             "method": ep["method"], "path": ep["path"],
             "name": f"{ep['method']} {ep['path']} (auto-discovered)",
-            "visibility": "private", "tag": "Auto-discovered", "sourceSystem": "", "targetSystem": "",
+            # "public" here means "visible to other users in this organisation" (see
+            # server/routes/workspace.js) - NOT internet-exposed. Needed so a human
+            # reviewer (who isn't svc-doc-agent) can actually see this in DocTracker;
+            # a project the agent's own account marks "private" is invisible to
+            # everyone else, including Admins, without an explicit share grant.
+            "visibility": "public", "tag": "Auto-discovered", "sourceSystem": "", "targetSystem": "",
             "version": "0.0.1-draft", "contentType": "application/json",
             "summary": "Auto-discovered from SIT logs - unreviewed.",
             "description": ("Discovered automatically from SIT server logs by the DocTracker SIT Auto-Discovery "
@@ -619,7 +624,7 @@ def build_project(state, existing_project=None):
                          "design - see AGENT_README.md). Nothing here is reviewed. Treat every field/description/"
                          "requirement as a draft only, and promote individual endpoints into a real project once "
                          "confirmed."),
-        "visibility": "private",
+        "visibility": "public",  # org-visible, not internet-exposed - see note on endpoint visibility above
         "environments": project.get("environments") or {"SIT": "https://{{SIT-DNS}}"},
         "auth": project.get("auth") or {"type": "Unknown - auto-discovered", "method": "", "path": "", "headerName": "",
                                           "description": "Not yet determined by the auto-discovery agent.",
