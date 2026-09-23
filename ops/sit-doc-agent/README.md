@@ -186,6 +186,26 @@ access to the log directory.
 | `CAPTURE_MODE` | No | `aggregate` | `aggregate` (default): counts/types only, never a real field value. `full`: also captures real per-request records including real field values (credential-named fields always redacted) — see "Capture mode" below, this is a deliberate opt-in, not a default to leave on |
 | `MAX_LOG_RECORDS_PER_ENDPOINT` | No | `200` | Only applies when `CAPTURE_MODE=full`. Per-endpoint ring-buffer cap on stored per-request records, oldest dropped first |
 | `MAX_LOG_RECORDS_TOTAL` | No | `3000` | Only applies when `CAPTURE_MODE=full`. Global ring-buffer cap across all endpoints, oldest dropped first |
+| `MAX_LOG_VOLUME_SAMPLES` | No | `700` | Caps how many "log volume" samples (one per push, so ~700 ≈ a week at the default 15-min push interval) are kept for the Observability page's Log volume chart |
+
+## Log volume & level distribution
+
+Independent of `CAPTURE_MODE`, every cycle the agent also does a best-effort
+per-line scan for a standard log4j-style level token (`FATAL`/`ERROR`/`WARN`/
+`INFO`/`DEBUG`/`TRACE`) near the start of each raw line, and once per push it
+records a `(timestamp, cumulative lines processed)` sample. Together these
+power the Observability page's "Log volume" chart (raw log lines over time)
+and "Log level distribution" bar — real counts, not derived from the
+HTTP-request parsing above.
+
+This deployment's confirmed log format (see "Style C" in
+`mule_doc_agent.py`) is a custom pretty-printed one, and whether its lines
+carry a level token at all — or where — isn't confirmed. So the level
+distribution is self-diagnosing: DocTracker only renders it once at least 20
+lines have actually matched a level token; below that, it shows an honest
+"not detected in this log format" message instead of a distribution built
+from too little (or no) real signal. The Log volume chart itself (raw line
+count) doesn't depend on level detection and works regardless.
 
 ## Scaling to high traffic volumes
 

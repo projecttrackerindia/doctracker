@@ -183,6 +183,78 @@ function renderAgentHealth(health){
   </div>`;
 }
 
+// Buckets the agent's logVolumeSamples - [epochSeconds, cumulativeLinesProcessed]
+// pairs, one per push (~15 min apart by default) - into a fixed number of
+// time buckets by taking the delta between consecutive cumulative samples.
+// This is raw LOG LINES read by the agent (always available, both capture
+// modes), not real per-request records - a different, always-on source from
+// renderVolumeChart() above, which needs CAPTURE_MODE=full.
+function bucketLogVolumeSamples(samples, buckets){
+  if(!samples || samples.length < 2) return null;
+  const sorted = samples.slice().sort((a,b)=>a[0]-b[0]);
+  const minTs = sorted[0][0]*1000, maxTs = sorted[sorted.length-1][0]*1000;
+  const span = Math.max(1, maxTs - minTs);
+  const bucketMs = span / buckets;
+  const counts = new Array(buckets).fill(0);
+  let totalLines = 0;
+  for(let i=1;i<sorted.length;i++){
+    const [tsSec, cum] = sorted[i];
+    const [prevTsSec, prevCum] = sorted[i-1];
+    const delta = Math.max(0, cum - prevCum);
+    if(!delta) continue;
+    totalLines += delta;
+    const midTs = ((tsSec + prevTsSec) / 2) * 1000;
+    let idx = Math.floor((midTs - minTs) / bucketMs);
+    if(idx >= buckets) idx = buckets - 1;
+    if(idx < 0) idx = 0;
+    counts[idx] += delta;
+  }
+  return { counts, minTs, maxTs, totalLines };
+}
+
+const LOG_LEVEL_META = [
+  ['ERROR', '--st-5'], ['FATAL', '--st-5'], ['WARN', '--st-4'],
+  ['INFO', '--st-3'], ['DEBUG', '--text-faint'], ['TRACE', '--border'],
+];
+// Below this many real matched lines, a "distribution" would be built from
+// too little (or zero) real signal to mean anything - see
+// classify_log_level()'s docstring in mule_doc_agent.py for why matches
+// aren't guaranteed for every deployment's log format.
+const LOG_LEVEL_MIN_MATCHES = 20;
+
+function renderLogVolumeAndLevelsSection(agentHealth){
+  const samples = (agentHealth && agentHealth.logVolumeSamples) || [];
+  const bucketed = bucketLogVolumeSamples(samples, 14);
+
+  const volumeHtml = (bucketed && bucketed.totalLines > 0) ? (()=>{
+    const max = Math.max(...bucketed.counts, 1);
+    const bars = bucketed.counts.map((c,i)=>`<div class="obs-vol-bar${i>=bucketed.counts.length-3?' hot':''}" style="height:${Math.max(3, Math.round(c/max*100))}%;" title="${Math.round(c).toLocaleString()} log line(s)"></div>`).join('');
+    return `<div class="obs-vol-chart">${bars}</div>
+      <div class="obs-vol-axis"><span>${formatDateTime(new Date(bucketed.minTs).toISOString())}</span><span>${formatDateTime(new Date(bucketed.maxTs).toISOString())}</span></div>`;
+  })() : `<div class="empty-field" style="padding:6px 0;">Not enough samples yet — one is taken per push, so this fills in once the agent has pushed at least twice.</div>`;
+
+  const counts = (agentHealth && agentHealth.logLevelCounts) || {};
+  const matchedTotal = (agentHealth && agentHealth.logLevelMatchedTotal) || 0;
+  let levelsHtml;
+  if(matchedTotal < LOG_LEVEL_MIN_MATCHES){
+    levelsHtml = `<div class="empty-field" style="padding:6px 0;">Level tags (ERROR/WARN/INFO/DEBUG) aren't reliably detected in this log file's line format yet — this needs a standard level token near the start of each raw line, which isn't confirmed for this deployment's log format. Shown only once real matches exist, never guessed.</div>`;
+  } else {
+    const present = LOG_LEVEL_META.filter(([lvl])=>(counts[lvl]||0) > 0);
+    const segTotal = present.reduce((sum,[lvl])=>sum+(counts[lvl]||0), 0) || 1;
+    levelsHtml = `<div class="obs-statusbar">${present.map(([lvl,cssVar])=>`<span style="width:${((counts[lvl]||0)/segTotal*100)}%;background:var(${cssVar});"></span>`).join('')}</div>
+      <div class="obs-status-legend">${present.map(([lvl,cssVar])=>`<span class="k"><i style="background:var(${cssVar});"></i>${lvl} ${(counts[lvl]||0).toLocaleString()}</span>`).join('')}</div>`;
+  }
+
+  return `<div class="obs-panel">
+    <div class="section-title">Log volume</div>
+    <div class="hint" style="margin-top:-4px;">${bucketed && bucketed.totalLines>0 ? Math.round(bucketed.totalLines).toLocaleString()+' raw log line(s) over the sampled range' : 'Raw lines read by the agent, sampled once per push'}</div>
+    ${volumeHtml}
+    <div class="section-title" style="margin-top:18px;">Log level distribution</div>
+    <div class="hint" style="margin-top:-4px;">${matchedTotal>=LOG_LEVEL_MIN_MATCHES ? matchedTotal.toLocaleString()+' log line(s) with a detected level tag' : 'Best-effort — only shown once reliably detected in this log format'}</div>
+    ${levelsHtml}
+  </div>`;
+}
+
 // Shared by both views - one row per metrics key. `keys` is whatever subset
 // the caller wants shown (all of them for Overview, the current scope's
 // subset for Console).
@@ -562,7 +634,10 @@ function renderConsole(main, metrics, agentHealth, logRecords){
       ${renderAlertsSection(alerts)}
     </div>
 
-    ${renderAgentHealth(agentHealth)}
+    <div class="grid2">
+      ${renderAgentHealth(agentHealth)}
+      ${renderLogVolumeAndLevelsSection(agentHealth)}
+    </div>
 
     ${renderVolumeChart(scopedRecords)}
 

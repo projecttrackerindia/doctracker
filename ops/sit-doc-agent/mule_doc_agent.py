@@ -136,6 +136,13 @@ if CAPTURE_MODE not in ("aggregate", "full"):
 MAX_LOG_RECORDS_PER_ENDPOINT = int(os.environ.get("MAX_LOG_RECORDS_PER_ENDPOINT", "200"))
 MAX_LOG_RECORDS_TOTAL = int(os.environ.get("MAX_LOG_RECORDS_TOTAL", "3000"))
 
+# One sample appended per push (every PUSH_INTERVAL_SECONDS, ~15 min by
+# default) rather than per poll cycle - this is what the Observability
+# page's "Log volume" chart is built from, and a ~15-min cadence keeps a
+# week of real history (700 samples) in a small, cheap-to-push array instead
+# of needing per-cycle (60s) resolution nobody's asking to see.
+MAX_LOG_VOLUME_SAMPLES = int(os.environ.get("MAX_LOG_VOLUME_SAMPLES", "700"))
+
 USER_AGENT = "DocTracker-SIT-Agent/1.0 (svc-doc-agent; see AGENT_README.md)"
 
 # ============================================================================
@@ -203,6 +210,31 @@ FLOWNAME_KEY_PATTERN = re.compile(r'flowname', re.IGNORECASE)
 # real jwt-token-api.log, which contained real user/password field values -
 # any field whose NAME matches this is redacted regardless of CAPTURE_MODE.
 SENSITIVE_FIELD_PATTERN = re.compile(r'password|passwd|secret|apikey|api_key|token|pin$|^otp', re.IGNORECASE)
+
+# --- Log level classification (best-effort, self-diagnosing) ---------------
+# Standard log4j2 output (Mule's default runtime logger) puts the level as a
+# standalone word right after the timestamp/thread, near the start of the
+# line, e.g. "2024-06-01 10:15:22,123 [thread] INFO  org.mule.Foo - message".
+# This deployment's own confirmed format (Style C above) is a CUSTOM
+# pretty-printed one, and it isn't confirmed whether its lines carry a level
+# token at all, or where. So this is never trusted blindly: only the first
+# LOG_LEVEL_SEARCH_PREFIX_CHARS of each line are searched (so a JSON body
+# value that happens to spell one of these words deep in a request/response
+# payload is never mistaken for the line's own level), and the caller tracks
+# matched vs. unmatched line counts - see build_agent_health()'s
+# logLevelMatchedTotal/logLevelUnmatchedTotal. The client only renders a "Log
+# level distribution" panel once enough real matches exist; otherwise it
+# shows an honest "not detected in this log format" state rather than a
+# distribution built from too little (or no) real signal.
+LOG_LEVEL_PATTERN = re.compile(r'(?<![A-Za-z0-9_])(FATAL|ERROR|WARN|INFO|DEBUG|TRACE)(?![A-Za-z0-9_])')
+LOG_LEVEL_SEARCH_PREFIX_CHARS = 200
+
+
+def classify_log_level(line):
+    """Returns one of FATAL/ERROR/WARN/INFO/DEBUG/TRACE, or None if no level
+    token was found near the start of the line."""
+    m = LOG_LEVEL_PATTERN.search(line[:LOG_LEVEL_SEARCH_PREFIX_CHARS])
+    return m.group(1) if m else None
 
 
 def _parse_timestamp_ms(raw):
@@ -871,6 +903,14 @@ def build_agent_health(state):
         "linesProcessedTotal": health.get("linesProcessedTotal", 0),
         "requestsProcessedTotal": health.get("requestsProcessedTotal", 0),
         "requestsPerMinute": requests_per_minute,
+        # Real per-line log-level tally + the samples the "Log volume" chart
+        # is bucketed from - see classify_log_level()'s docstring for why
+        # matched/unmatched are kept separate (self-diagnosing: the client
+        # only renders a level-distribution panel once real matches exist).
+        "logLevelCounts": health.get("logLevelCounts", {}),
+        "logLevelMatchedTotal": health.get("logLevelMatchedTotal", 0),
+        "logLevelUnmatchedTotal": health.get("logLevelUnmatchedTotal", 0),
+        "logVolumeSamples": health.get("logVolumeSamples", []),
         "lastCycleAt": health.get("lastCycleAt"),
         "lastCycleDurationMs": health.get("lastCycleDurationMs"),
         "lastCycleLinesRead": health.get("lastCycleLinesRead"),
@@ -1233,6 +1273,20 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
             print(f"[info] parsed {len(observations)} HTTP-shaped line(s) this cycle "
                   f"({len([k for k in state['endpoints'] if k != OVERFLOW_KEY])} distinct endpoint(s) known so far)")
 
+        # Best-effort log-level tally, independent of the HTTP-request
+        # parsing above - see classify_log_level()'s docstring for why
+        # matched/unmatched are tracked separately rather than assumed.
+        if lines:
+            level_counts = health.setdefault("logLevelCounts", {})
+            matched_this_cycle = 0
+            for raw_line in lines:
+                level = classify_log_level(raw_line)
+                if level:
+                    level_counts[level] = level_counts.get(level, 0) + 1
+                    matched_this_cycle += 1
+            health["logLevelMatchedTotal"] = health.get("logLevelMatchedTotal", 0) + matched_this_cycle
+            health["logLevelUnmatchedTotal"] = health.get("logLevelUnmatchedTotal", 0) + (len(lines) - matched_this_cycle)
+
         cycle_duration_ms = round((time.time() - cycle_start) * 1000, 1)
         health["cyclesRun"] = health.get("cyclesRun", 0) + 1
         health["linesProcessedTotal"] = health.get("linesProcessedTotal", 0) + len(lines)
@@ -1256,6 +1310,15 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
         save_state(state)
 
         if time.time() - state.get("last_push", 0) >= PUSH_INTERVAL_SECONDS and state.get("endpoints"):
+            # One "Log volume" sample per push (see MAX_LOG_VOLUME_SAMPLES) -
+            # cumulative lines-processed-so-far, same shape as
+            # throughputSamples above; the client derives a per-interval
+            # count from consecutive samples' deltas.
+            volume_samples = health.setdefault("logVolumeSamples", [])
+            volume_samples.append([time.time(), health.get("linesProcessedTotal", 0)])
+            if len(volume_samples) > MAX_LOG_VOLUME_SAMPLES:
+                del volume_samples[0]
+
             metrics_payload = {
                 "endpoints": build_endpoint_metrics(state),
                 "agentHealth": build_agent_health(state),
