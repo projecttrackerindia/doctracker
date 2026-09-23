@@ -29,6 +29,24 @@ is exactly what a SOC should flag. Before running this for real:
 4. **Its traffic self-identifies** — every request carries the User-Agent
    `DocTracker-SIT-Agent/1.0 (svc-doc-agent; see AGENT_README.md)`.
 
+### Whitelisting: use the hostname, not an IP
+
+Whitelist the FQDN, not a resolved IP address:
+
+```
+doctracker-production-7ecc.up.railway.app  (HTTPS / 443)
+```
+
+DocTracker is hosted on Railway, which sits behind a shared, dynamic edge
+network — the IP this hostname resolves to can change at any time, with no
+deploy or change on our side. Most enterprise egress firewalls (Palo Alto,
+Fortinet, Zscaler, corporate proxies, etc.) support FQDN-based allow rules
+for exactly this reason. If your SOC's firewall genuinely only accepts
+IP-based rules, treat any IP you whitelist as temporary and re-verify it
+periodically (`nslookup doctracker-production-7ecc.up.railway.app`) rather
+than assuming it's permanent — pinning to a point-in-time IP on a shared
+Railway domain will eventually break silently when it rotates.
+
 ## What it does NOT do
 
 - Does not capture anything beyond what Mule **already wrote to its own log
