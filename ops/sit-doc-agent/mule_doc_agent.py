@@ -57,9 +57,11 @@ import hashlib
 import argparse
 import http.client
 import http.server
+import socketserver
 import threading
+import posixpath
 import ssl
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 
 def stable_id(*parts):
@@ -516,21 +518,35 @@ def start_local_server(html_path, port):
     report is reachable from a browser ON THIS SERVER ONLY, not the network.
     If you need to view it from your own laptop, use an SSH tunnel
     (ssh -L 8877:127.0.0.1:8877 user@sit-server) rather than opening this
-    port up - don't change the bind address to make it reachable directly."""
+    port up - don't change the bind address to make it reachable directly.
+
+    Deliberately does NOT use http.server.ThreadingHTTPServer or
+    SimpleHTTPRequestHandler's `directory=` kwarg - both were only added in
+    Python 3.7, and this needs to run on Python 3.6 (confirmed present on
+    the target SIT server). ThreadingMixIn + a hand-rolled translate_path
+    override work identically back to 3.6's stdlib."""
     directory = os.path.dirname(os.path.abspath(html_path)) or "."
-    filename = os.path.basename(html_path)
 
     class Handler(http.server.SimpleHTTPRequestHandler):
-        def __init__(self, *a, **kw):
-            super().__init__(*a, directory=directory, **kw)
+        def translate_path(self, path):
+            path = path.split("?", 1)[0].split("#", 1)[0]
+            path = posixpath.normpath(unquote(path))
+            words = [w for w in path.split("/") if w and w not in (os.curdir, os.pardir)]
+            result = directory
+            for w in words:
+                result = os.path.join(result, w)
+            return result
 
         def log_message(self, fmt, *args):
             pass  # keep stdout to this agent's own [info]/[warn]/[error] lines
 
-    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    class ThreadingServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        daemon_threads = True
+
+    httpd = ThreadingServer(("127.0.0.1", port), Handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
-    url = f"http://127.0.0.1:{port}/{filename}"
+    url = f"http://127.0.0.1:{port}/{os.path.basename(html_path)}"
     print(f"[info] serving local report at {url} (bound to 127.0.0.1 only - not reachable off this server)")
     return httpd
 
