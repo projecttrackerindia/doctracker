@@ -128,7 +128,7 @@ STATUS_CODE_PATTERN = re.compile(r'\b(?:status(?:Code)?)["\s:=]+(\d{3})\b', re.I
 HEADER_METHOD_PATTERN = re.compile(r'\.(GET|POST|PUT|PATCH|DELETE):', re.IGNORECASE)
 REQUEST_URI_KEY_PATTERN = re.compile(r'requesturi|^path$|^uri$', re.IGNORECASE)
 CORR_ID_KEY_PATTERN = re.compile(r'correlationid', re.IGNORECASE)
-STATUS_KEY_PATTERN = re.compile(r'statuscode|^status$', re.IGNORECASE)
+STATUS_KEY_PATTERN = re.compile(r'httpstatus|statuscode|^status$', re.IGNORECASE)
 REQUEST_PAYLOAD_KEY_PATTERN = re.compile(r'^requestpayload$', re.IGNORECASE)
 RESPONSE_PAYLOAD_KEY_PATTERN = re.compile(r'^responsepayload$', re.IGNORECASE)
 
@@ -189,7 +189,15 @@ def assemble_multiline_observations(lines, carry):
     STATE_FILE) so a block split across two poll cycles still reconstructs,
     at the cost of losing one in-flight block if the agent restarts mid-block
     - an acceptable trade-off for a best-effort discovery tool, and it means
-    no partially-parsed raw payload ever touches disk."""
+    no partially-parsed raw payload ever touches disk.
+
+    CONFIRMED against this deployment's real jwt-token-api.log: the opening
+    "{" is NOT on its own line - it's the last character of the same request-
+    start line as the method (e.g. "...LoggerMessageProcessor: {"). Only the
+    trailing "{" itself is kept as the start of the buffer; the log-prefix
+    text before it is never valid JSON and is discarded. A standalone-"{"-
+    line style is also still handled, in case a different app on this server
+    logs it that way."""
     observations = []
     for line in lines:
         stripped = line.rstrip()
@@ -198,7 +206,14 @@ def assemble_multiline_observations(lines, carry):
             m = HEADER_METHOD_PATTERN.search(stripped)
             if m:
                 carry["method"] = m.group(1).upper()
-            if stripped.lstrip().startswith("{"):
+            if stripped.endswith("{"):
+                # Real format: header text + trailing "{" on the same line -
+                # only the brace itself starts the JSON buffer.
+                carry["in_json"] = True
+                carry["buffer"] = "{"
+                carry["depth"] = 1
+            elif stripped.lstrip().startswith("{"):
+                # Fallback: a "{" alone (or starting) its own line.
                 carry["in_json"] = True
                 carry["buffer"] = stripped
                 carry["depth"] = stripped.count("{") - stripped.count("}")
