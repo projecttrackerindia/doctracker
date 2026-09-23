@@ -74,9 +74,25 @@ pushing to DocTracker it renders a single self-contained HTML file (inline
 CSS only, no external fonts/scripts/CDN — works with no internet access)
 and writes it to the path you give it. **No network call is made at all in
 this mode** — `DOCTRACKER_BASE_URL`/`DOCTRACKER_USERNAME`/`DOCTRACKER_PASSWORD`
-aren't even read. Open the file directly in a browser on the SIT server
-(`file://...`) or copy it out through whatever channel your data-handling
-rules already allow for that server.
+aren't even read.
+
+**To get an actual URL instead of a `file://` path**, add `--serve-port`:
+
+```bash
+python3 mule_doc_agent.py --local-html /opt/doctracker-agent/report.html --serve-port 8877
+```
+
+This starts a tiny built-in HTTP server bound **only to `127.0.0.1`** — never
+`0.0.0.0` — so the report is reachable at `http://127.0.0.1:8877/report.html`
+from a browser running *on the SIT server itself*, and nowhere else on the
+network. If you want to view it from your own laptop instead of RDP/console
+on the server, don't open the port up — use an SSH tunnel, which never
+exposes it externally either:
+
+```bash
+ssh -L 8877:127.0.0.1:8877 youruser@sit-server
+# then open http://127.0.0.1:8877/report.html in your own browser
+```
 
 Trade-off: you lose DocTracker's shared/searchable project view, its
 history, and its audit trail of who reviewed what — this is purely a local
@@ -85,6 +101,22 @@ acceptable either, the fallback is a manual one: run `--sample-lines`/
 `--dry-run` to eyeball what the agent *would* discover, then only push data
 you've personally reviewed as acceptable to leave the server, rather than
 running the agent unattended in its normal push mode.
+
+## Where to install it
+
+Anywhere you control on the SIT server that has read access to the Mule
+logs — following the systemd layout used later in this doc:
+
+| What | Path |
+|---|---|
+| The script itself | `/opt/doctracker-agent/mule_doc_agent.py` |
+| Its env/config file | `/etc/doctracker-agent/env` (`chmod 600`) |
+| Its state file (read position, discovered data) | `/var/lib/doctracker-agent/state.json` |
+| Local HTML report (if using `--local-html`) | `/opt/doctracker-agent/report.html` |
+
+Run it as its own dedicated OS user (`doctracker-agent`), never as root and
+never as the Mule runtime's own user — it only ever needs **read-only**
+access to the log directory.
 
 ## Requirements
 
@@ -168,6 +200,15 @@ RestartSec=30
 [Install]
 WantedBy=multi-user.target
 ```
+
+For the offline/local-URL mode instead, replace the `ExecStart` line with:
+
+```ini
+ExecStart=/usr/bin/python3 /opt/doctracker-agent/mule_doc_agent.py --local-html /opt/doctracker-agent/report.html --serve-port 8877
+```
+
+No `DOCTRACKER_PASSWORD` is needed in `/etc/doctracker-agent/env` in this
+mode — just `MULE_LOG_PATH`.
 
 ```bash
 # /etc/doctracker-agent/env  (chmod 600, owned by doctracker-agent)

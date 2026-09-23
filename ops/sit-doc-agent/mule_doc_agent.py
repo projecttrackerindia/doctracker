@@ -56,6 +56,8 @@ import time
 import hashlib
 import argparse
 import http.client
+import http.server
+import threading
 import ssl
 from urllib.parse import urlparse
 
@@ -508,10 +510,35 @@ def write_local_html(state, path):
           f"no network call was made")
 
 
+def start_local_server(html_path, port):
+    """Serves ONLY the directory containing html_path, bound to 127.0.0.1 -
+    never 0.0.0.0. This keeps the offline mode's guarantee intact: the
+    report is reachable from a browser ON THIS SERVER ONLY, not the network.
+    If you need to view it from your own laptop, use an SSH tunnel
+    (ssh -L 8877:127.0.0.1:8877 user@sit-server) rather than opening this
+    port up - don't change the bind address to make it reachable directly."""
+    directory = os.path.dirname(os.path.abspath(html_path)) or "."
+    filename = os.path.basename(html_path)
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=directory, **kw)
+
+        def log_message(self, fmt, *args):
+            pass  # keep stdout to this agent's own [info]/[warn]/[error] lines
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{port}/{filename}"
+    print(f"[info] serving local report at {url} (bound to 127.0.0.1 only - not reachable off this server)")
+    return httpd
+
+
 # ============================================================================
 # Main loop
 # ============================================================================
-def run(dry_run=False, sample_lines=None, local_html=None):
+def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
     state = load_state()
 
     if sample_lines:
@@ -546,6 +573,14 @@ def run(dry_run=False, sample_lines=None, local_html=None):
     mode = f"writing local HTML to {local_html} (offline, no network)" if local_html else \
            ("DRY RUN - no network writes" if dry_run else "pushing to DocTracker")
     print(f"[info] tailing {MULE_LOG_PATH} every {POLL_INTERVAL_SECONDS}s, {mode}")
+
+    if serve_port:
+        if not local_html:
+            print("[error] --serve-port requires --local-html (nothing to serve otherwise).", file=sys.stderr)
+            sys.exit(1)
+        if not os.path.exists(local_html):
+            write_local_html(state, local_html)  # so the URL is live immediately, not 404 until the first push
+        start_local_server(local_html, serve_port)
 
     while True:
         lines = tail_new_lines(MULE_LOG_PATH, state)
@@ -589,5 +624,8 @@ if __name__ == "__main__":
     ap.add_argument("--local-html", metavar="PATH", default=None,
                      help="Write a self-contained local HTML report to PATH instead of pushing to DocTracker. "
                           "No network call is ever made in this mode - see the data-residency note at the top of this file.")
+    ap.add_argument("--serve-port", type=int, default=None,
+                     help="With --local-html, also serve the report over http://127.0.0.1:PORT (localhost-only, "
+                          "never externally reachable). View from your own machine via an SSH tunnel.")
     args = ap.parse_args()
-    run(dry_run=args.dry_run, sample_lines=args.sample_lines, local_html=args.local_html)
+    run(dry_run=args.dry_run, sample_lines=args.sample_lines, local_html=args.local_html, serve_port=args.serve_port)
