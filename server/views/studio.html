@@ -1341,8 +1341,12 @@ pre.code-block{
 .obs-log-fields-inner{ padding:10px 14px; background:var(--surface-2); border-radius:8px; margin:6px 0; }
 .obs-log-filters{ display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px; margin:10px 0 14px; }
 .obs-log-filters label{ display:flex; flex-direction:column; gap:4px; font-size:10.5px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.4px; font-weight:700; }
-.obs-log-filters input[type="datetime-local"]{ background:var(--surface); border:1px solid var(--border); color:var(--text); padding:6px 8px; border-radius:7px; font-size:12px; font-family:var(--sans); color-scheme:light dark; }
-.obs-log-filters input[type="datetime-local"]:focus{ outline:none; border-color:var(--accent); }
+.obs-log-filters input[type="datetime-local"], .obs-log-filters input[type="text"], .obs-log-filters select{
+  background:var(--surface); border:1px solid var(--border); color:var(--text);
+  padding:6px 8px; border-radius:7px; font-size:12px; font-family:var(--sans); color-scheme:light dark;
+}
+.obs-log-filters input[type="text"]{ width:100%; }
+.obs-log-filters input:focus, .obs-log-filters select:focus{ outline:none; border-color:var(--accent); }
 .obs-log-btn{ background:var(--surface); border:1px solid var(--border); color:var(--text); padding:6px 13px; border-radius:6px; font-size:11.5px; font-weight:700; cursor:pointer; white-space:nowrap; }
 .obs-log-btn:hover:not(:disabled){ background:var(--surface-hover); }
 .obs-log-btn:disabled{ opacity:.4; cursor:not-allowed; }

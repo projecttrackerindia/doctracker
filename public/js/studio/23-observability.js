@@ -505,16 +505,33 @@ function renderLogExplorerSection(records){
     </div>`;
   }
 
-  if(!state.obsLogExplorer) state.obsLogExplorer = { from:'', to:'', page:1 };
+  if(!state.obsLogExplorer) state.obsLogExplorer = { from:'', to:'', page:1, level:'all', q:'' };
   const ex = state.obsLogExplorer;
   const fromMs = fromDatetimeLocalValue(ex.from);
   const toMs = fromDatetimeLocalValue(ex.to);
+  const q = (ex.q || '').trim().toLowerCase();
 
-  const sorted = records.slice().sort((a,b)=> new Date(b.ts) - new Date(a.ts));
-  const filtered = (fromMs === null && toMs === null) ? sorted : sorted.filter(r=>{
+  // Level here is derived from the real HTTP status code (500+/400+/else),
+  // not a captured raw log-level tag - individual per-request records don't
+  // carry one (see mule_doc_agent.py's classify_log_level(), which tallies
+  // levels per LINE for the Log volume panel, never tied back to a specific
+  // request). Deriving from status is the honest per-request equivalent.
+  const withLevel = records.map(r=>{
+    const sc = r.statusCode || 0;
+    const lvl = sc >= 500 ? 'err' : sc >= 400 ? 'warn' : 'ok';
+    return Object.assign({ _lvl: lvl }, r);
+  });
+
+  const sorted = withLevel.sort((a,b)=> new Date(b.ts) - new Date(a.ts));
+  const filtered = sorted.filter(r=>{
     const t = new Date(r.ts).getTime();
     if(fromMs !== null && t < fromMs) return false;
     if(toMs !== null && t > toMs) return false;
+    if(ex.level !== 'all' && r._lvl !== ex.level) return false;
+    if(q){
+      const hay = `${r.method||''} ${r.path||''} ${r.clientIp||''} ${r.correlationId||''} ${r.flowName||''}`.toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
     return true;
   });
 
@@ -525,9 +542,8 @@ function renderLogExplorerSection(records){
   const pageRows = filtered.slice(startIdx, startIdx + OBS_LOG_PAGE_SIZE);
 
   const rows = pageRows.map((r, i)=>{
-    const sc = r.statusCode || 0;
-    const lvl = sc >= 500 ? 'err' : sc >= 400 ? 'warn' : 'ok';
-    const lvlLabel = sc >= 500 ? 'ERROR' : sc >= 400 ? 'WARN' : 'OK';
+    const lvl = r._lvl;
+    const lvlLabel = lvl === 'err' ? 'ERROR' : lvl === 'warn' ? 'WARN' : 'OK';
     const hasFields = (r.requestFields && Object.keys(r.requestFields).length) || (r.responseFields && Object.keys(r.responseFields).length);
     const ipCls = classifyIp(r.clientIp);
     const ipColor = ipCls === 'internal' ? 'var(--accent)' : 'var(--put)';
@@ -536,7 +552,7 @@ function renderLogExplorerSection(records){
         <td><span class="obs-lvl-pill ${lvl}">${lvlLabel}</span></td>
         <td><span class="badge" style="font-size:9px;padding:1.5px 5px;">${escapeHtml(r.method||'')}</span></td>
         <td class="mono" style="font-size:11px;">${escapeHtml(r.path||'')}</td>
-        <td class="mono">${sc || '—'}</td>
+        <td class="mono">${r.statusCode || '—'}</td>
         <td class="mono">${typeof r.latencyMs === 'number' ? r.latencyMs + 'ms' : '—'}</td>
         <td class="mono" style="font-size:10.5px;"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;background:${ipColor};"></span>${escapeHtml(r.clientIp||'—')}</td>
         <td class="mono" style="font-size:10.5px;color:var(--text-faint);">${escapeHtml(r.flowName||'—')}</td>
@@ -553,7 +569,8 @@ function renderLogExplorerSection(records){
       </td></tr>`;
   }).join('');
 
-  const rangeNote = (fromMs !== null || toMs !== null) ? ' in the selected range' : '';
+  const filtersActive = fromMs !== null || toMs !== null || ex.level !== 'all' || !!q;
+  const rangeNote = filtersActive ? ' matching the current filters' : '';
   const rangeSummary = filtered.length
     ? `${(startIdx+1).toLocaleString()}–${(startIdx+pageRows.length).toLocaleString()} of ${filtered.length.toLocaleString()}${rangeNote}`
     : `0 matching record(s)${rangeNote}`;
@@ -567,13 +584,22 @@ function renderLogExplorerSection(records){
     <div class="section-title">Log explorer</div>
     <div class="hint" style="margin-top:-4px;">Real per-request records, most recent first — click a row to view its captured fields. Any field named like a credential is always shown redacted, enforced by the agent before this ever reaches DocTracker.</div>
     <div class="obs-log-filters">
+      <label>Level
+        <select id="obsLogLevel">
+          <option value="all"${ex.level==='all'?' selected':''}>All</option>
+          <option value="ok"${ex.level==='ok'?' selected':''}>OK</option>
+          <option value="warn"${ex.level==='warn'?' selected':''}>WARN</option>
+          <option value="err"${ex.level==='err'?' selected':''}>ERROR</option>
+        </select>
+      </label>
+      <label style="flex:1;min-width:180px;">Search<input type="text" id="obsLogSearch" value="${escapeHtml(ex.q)}" placeholder="method, path, IP or trace id"></label>
       <label>From<input type="datetime-local" id="obsLogFrom" value="${escapeHtml(ex.from)}" min="${oldestVal}" max="${newestVal}"></label>
       <label>To<input type="datetime-local" id="obsLogTo" value="${escapeHtml(ex.to)}" min="${oldestVal}" max="${newestVal}"></label>
-      ${(ex.from || ex.to) ? `<button type="button" class="obs-log-btn" id="obsLogClearRange" style="align-self:flex-end;">Clear range</button>` : ''}
+      ${filtersActive ? `<button type="button" class="obs-log-btn" id="obsLogClearRange" style="align-self:flex-end;">Clear filters</button>` : ''}
     </div>
     <div class="table-scroll"><table class="data-table cc-proj-table">
       <thead><tr><th>Time</th><th>Level</th><th>Method</th><th>Path</th><th>Status</th><th>Latency</th><th>Source IP</th><th>Flow</th><th>Fields</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="9"><div class="empty-field" style="padding:10px 0;">No records in the selected range.</div></td></tr>`}</tbody>
+      <tbody>${rows || `<tr><td colspan="9"><div class="empty-field" style="padding:10px 0;">No records${rangeNote}.</div></td></tr>`}</tbody>
     </table></div>
     <div class="obs-log-pagination">
       <span>Showing ${rangeSummary}</span>
@@ -728,10 +754,31 @@ function renderConsole(main, metrics, agentHealth, logRecords){
     state.obsLogExplorer.page = 1;
     renderMain();
   });
+  const logLevel = main.querySelector('#obsLogLevel');
+  if(logLevel) logLevel.addEventListener('change', ()=>{
+    state.obsLogExplorer.level = logLevel.value;
+    state.obsLogExplorer.page = 1;
+    renderMain();
+  });
+  const logSearch = main.querySelector('#obsLogSearch');
+  if(logSearch){
+    // 'change'/Enter, not 'input' - a per-keystroke re-render would replace
+    // this input's own DOM node (it lives inside the innerHTML this
+    // function rebuilds) and drop focus after the very first character.
+    const applySearch = ()=>{
+      state.obsLogExplorer.q = logSearch.value;
+      state.obsLogExplorer.page = 1;
+      renderMain();
+    };
+    logSearch.addEventListener('change', applySearch);
+    logSearch.addEventListener('keydown', (e)=>{ if(e.key === 'Enter') applySearch(); });
+  }
   const logClearRange = main.querySelector('#obsLogClearRange');
   if(logClearRange) logClearRange.addEventListener('click', ()=>{
     state.obsLogExplorer.from = '';
     state.obsLogExplorer.to = '';
+    state.obsLogExplorer.level = 'all';
+    state.obsLogExplorer.q = '';
     state.obsLogExplorer.page = 1;
     renderMain();
   });
