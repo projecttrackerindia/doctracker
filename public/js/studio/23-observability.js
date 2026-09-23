@@ -235,6 +235,7 @@ function wireEndpointsTable(main){
       if(e.target.closest('[data-obs-ip-toggle]')) return;
       const epId = row.getAttribute('data-obs-ep');
       state.selected = { type:'endpoint', id: epId };
+      renderSidebar();
       renderMain();
     });
   });
@@ -495,13 +496,25 @@ function obsScopeInfo(scope, metrics){
   return { title:'All traffic', sub: `${Object.keys(metrics).filter(k=>k!==OBS_OVERFLOW_KEY).length} endpoint(s) tracked` };
 }
 
+// Changes the current drill-down scope and re-renders BOTH the sidebar
+// (so the active row/expansion state stays in sync) and the main content -
+// the single entry point every scope-changing control in this page goes
+// through, whether the control lives in the sidebar tree or here in the
+// content (Service health row, an alert, "Clear scope").
+function obsSetScope(scope, openProjectId){
+  state.obsScope = scope;
+  if(openProjectId){
+    state.obsOpenProjects = state.obsOpenProjects || {};
+    state.obsOpenProjects[openProjectId] = true;
+  }
+  renderSidebar();
+  renderMain();
+}
+
 function renderConsole(main, metrics, agentHealth, logRecords){
   if(!state.obsScope) state.obsScope = { type:'all' };
-  if(!state.obsOpenProjects) state.obsOpenProjects = {};
-  if(state.obsSearch === undefined) state.obsSearch = '';
 
   const groups = groupMetricsByProject(metrics);
-  const q = state.obsSearch.trim().toLowerCase();
 
   let scopedKeys;
   if(state.obsScope.type === 'project'){
@@ -520,48 +533,7 @@ function renderConsole(main, metrics, agentHealth, logRecords){
   const scopedRecords = (logRecords || []).filter(r => scopedKeys.includes(r.key));
   const latency = computeLatencyStats(scopedRecords);
 
-  // ---- scope panel ----
-  let panelHtml = `<div class="obs-scope-search">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-      <input type="text" id="obsScopeSearch" placeholder="Filter projects / endpoints…" value="${escapeHtml(state.obsSearch)}" autocomplete="off">
-    </div>
-    <div class="obs-all-row${state.obsScope.type==='all'?' active':''}" data-obs-scope-all="1">All traffic</div>`;
-
-  const visibleGroups = groups.filter(g=>{
-    if(!q) return true;
-    return g.name.toLowerCase().includes(q) || g.keys.some(k=>k.toLowerCase().includes(q));
-  });
-  if(!visibleGroups.length){
-    panelHtml += `<div class="obs-scope-empty">No projects match "${escapeHtml(q)}".</div>`;
-  }
-  visibleGroups.forEach(g=>{
-    const isOpen = state.obsOpenProjects[g.id] || (q && g.keys.length);
-    const agg1 = aggregateKeys(g.keys, metrics);
-    const dotColor = agg1.errorRate>=0.25?'var(--delete)':agg1.errorRate>=0.05?'var(--put)':'var(--post)';
-    const groupActive = state.obsScope.type==='project' && state.obsScope.id===g.id;
-    const visKeys = q ? g.keys.filter(k=>k.toLowerCase().includes(q) || g.name.toLowerCase().includes(q)) : g.keys;
-    panelHtml += `<div class="obs-proj-group${isOpen?' open':''}" data-obs-proj-group="${g.id}">
-      <div class="obs-proj-row${groupActive?' active':''}" data-obs-proj="${g.id}">
-        <svg class="obs-proj-caret" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l8 7-8 7z"></path></svg>
-        <span class="obs-proj-dot" style="background:${dotColor};"></span>
-        <span class="obs-proj-name">${escapeHtml(g.name)}</span>
-        <span class="obs-proj-count mono">${g.keys.length}</span>
-      </div>
-      <div class="obs-ep-list">
-        ${visKeys.map(k=>{
-          const [method, ...pathParts] = k.split(' ');
-          const active = state.obsScope.type==='key' && state.obsScope.key===k;
-          return `<div class="obs-scope-ep-row${active?' active':''}" data-obs-key="${escapeHtml(k)}">
-            <span class="badge ${methodClass(method)}" style="font-size:8.5px;padding:1.5px 5px;">${escapeHtml(method)}</span>
-            <span class="obs-scope-ep-path">${escapeHtml(pathParts.join(' '))}</span>
-          </div>`;
-        }).join('')}
-      </div>
-    </div>`;
-  });
-
-  // ---- main content ----
-  const contentHtml = `
+  main.innerHTML = `
     <div class="crumb">Observability / Console${state.obsScope.type!=='all' ? ' / ' + escapeHtml(info.title) : ''}</div>
     <div class="section-head" style="margin-bottom:14px;">
       <div>
@@ -602,11 +574,6 @@ function renderConsole(main, metrics, agentHealth, logRecords){
     ${renderEndpointsTable(scopedKeys, metrics)}
   `;
 
-  main.innerHTML = `<div class="obs-console">
-    <div class="obs-scope-panel">${panelHtml}</div>
-    <div>${contentHtml}</div>
-  </div>`;
-
   main.querySelectorAll('[data-obs-log-toggle]').forEach(row=>{
     row.addEventListener('click', ()=>{
       const target = document.getElementById(row.getAttribute('data-obs-log-toggle'));
@@ -614,41 +581,95 @@ function renderConsole(main, metrics, agentHealth, logRecords){
     });
   });
 
-  main.querySelector('#obsScopeSearch').addEventListener('input', (e)=>{ state.obsSearch = e.target.value; renderConsole(main, metrics, agentHealth, logRecords); });
-  const allRow = main.querySelector('[data-obs-scope-all]');
-  if(allRow) allRow.addEventListener('click', ()=>{ state.obsScope = { type:'all' }; renderConsole(main, metrics, agentHealth, logRecords); });
-  main.querySelectorAll('[data-obs-proj]').forEach(el=>{
-    el.addEventListener('click', ()=>{
-      const id = el.getAttribute('data-obs-proj');
-      state.obsOpenProjects[id] = !state.obsOpenProjects[id];
-      state.obsScope = { type:'project', id, name: groups.find(g=>g.id===id).name, keys: groups.find(g=>g.id===id).keys };
-      renderConsole(main, metrics, agentHealth, logRecords);
-    });
-  });
-  main.querySelectorAll('[data-obs-key]').forEach(el=>{
-    el.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      state.obsScope = { type:'key', key: el.getAttribute('data-obs-key') };
-      renderConsole(main, metrics, agentHealth, logRecords);
-    });
-  });
   const clearBtn = main.querySelector('#obsClearScope');
-  if(clearBtn) clearBtn.addEventListener('click', ()=>{ state.obsScope = { type:'all' }; renderConsole(main, metrics, agentHealth, logRecords); });
+  if(clearBtn) clearBtn.addEventListener('click', ()=> obsSetScope({ type:'all' }));
   main.querySelectorAll('[data-obs-alert-key]').forEach(el=>{
-    el.addEventListener('click', ()=>{ state.obsScope = { type:'key', key: el.getAttribute('data-obs-alert-key') }; renderConsole(main, metrics, agentHealth, logRecords); });
+    el.addEventListener('click', ()=> obsSetScope({ type:'key', key: el.getAttribute('data-obs-alert-key') }));
   });
   main.querySelectorAll('[data-obs-jump-proj]').forEach(el=>{
     el.addEventListener('click', ()=>{
       const id = el.getAttribute('data-obs-jump-proj');
       const g = groups.find(g => g.id === id);
       if(!g) return;
-      state.obsOpenProjects[id] = true;
-      state.obsScope = { type:'project', id, name: g.name, keys: g.keys };
-      renderConsole(main, metrics, agentHealth, logRecords);
+      obsSetScope({ type:'project', id, name: g.name, keys: g.keys }, id);
     });
   });
 
   wireEndpointsTable(main);
+}
+
+// Renders into the app's OWN left sidebar (#projectList) instead of the
+// normal project tree, while state.selected.type === 'observability' - see
+// 09-render-sidebar.js's branch at the top of renderSidebar(). This is the
+// only scope picker now (no second nested one inside the page content);
+// the sidebar's existing #searchBox filters it the same way it filters the
+// normal project tree.
+function renderObservabilitySidebar(list, filter){
+  const { endpoints: metrics } = observabilityData();
+  if(!state.obsScope) state.obsScope = { type:'all' };
+  if(!state.obsOpenProjects) state.obsOpenProjects = {};
+
+  const groups = groupMetricsByProject(metrics);
+  const q = filter.trim().toLowerCase();
+
+  let html = `<div style="padding:8px;">
+    <div class="obs-all-row${state.obsScope.type==='all'?' active':''}" data-obs-scope-all="1">All traffic</div>`;
+
+  const visibleGroups = groups.filter(g=>{
+    if(!q) return true;
+    return g.name.toLowerCase().includes(q) || g.keys.some(k=>k.toLowerCase().includes(q));
+  });
+  if(!groups.length){
+    html += `<div class="obs-scope-empty">No traffic discovered yet — this fills in once ops/sit-doc-agent has pushed at least one batch.</div>`;
+  } else if(!visibleGroups.length){
+    html += `<div class="obs-scope-empty">No projects match "${escapeHtml(q)}".</div>`;
+  }
+  visibleGroups.forEach(g=>{
+    const isOpen = state.obsOpenProjects[g.id] || (q && g.keys.length);
+    const agg = aggregateKeys(g.keys, metrics);
+    const dotColor = agg.errorRate>=0.25?'var(--delete)':agg.errorRate>=0.05?'var(--put)':'var(--post)';
+    const groupActive = state.obsScope.type==='project' && state.obsScope.id===g.id;
+    const visKeys = q ? g.keys.filter(k=>k.toLowerCase().includes(q) || g.name.toLowerCase().includes(q)) : g.keys;
+    html += `<div class="obs-proj-group${isOpen?' open':''}" data-obs-proj-group="${g.id}">
+      <div class="obs-proj-row${groupActive?' active':''}" data-obs-proj="${g.id}">
+        <svg class="obs-proj-caret" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l8 7-8 7z"></path></svg>
+        <span class="obs-proj-dot" style="background:${dotColor};"></span>
+        <span class="obs-proj-name">${escapeHtml(g.name)}</span>
+        <span class="obs-proj-count mono">${g.keys.length}</span>
+      </div>
+      <div class="obs-ep-list">
+        ${visKeys.map(k=>{
+          const [method, ...pathParts] = k.split(' ');
+          const active = state.obsScope.type==='key' && state.obsScope.key===k;
+          return `<div class="obs-scope-ep-row${active?' active':''}" data-obs-key="${escapeHtml(k)}">
+            <span class="badge ${methodClass(method)}" style="font-size:8.5px;padding:1.5px 5px;">${escapeHtml(method)}</span>
+            <span class="obs-scope-ep-path">${escapeHtml(pathParts.join(' '))}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+
+  list.innerHTML = html;
+
+  const allRow = list.querySelector('[data-obs-scope-all]');
+  if(allRow) allRow.addEventListener('click', ()=> obsSetScope({ type:'all' }));
+  list.querySelectorAll('[data-obs-proj]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const id = el.getAttribute('data-obs-proj');
+      const g = groups.find(g => g.id === id);
+      if(!g) return;
+      state.obsOpenProjects[id] = !state.obsOpenProjects[id];
+      obsSetScope({ type:'project', id, name: g.name, keys: g.keys });
+    });
+  });
+  list.querySelectorAll('[data-obs-key]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      obsSetScope({ type:'key', key: el.getAttribute('data-obs-key') });
+    });
+  });
 }
 
 /* ==================== Page entry point ==================== */

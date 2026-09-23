@@ -1238,27 +1238,23 @@ pre.code-block{
 }
 .obs-ip-more:hover{ background:var(--accent-soft-strong); }
 
-/* Observability — Console mode (23-observability.js): a scope panel
-   (grouped by project → endpoint, same drill-down idea as the app's own
-   project sidebar) plus alerts/status-breakdown, all built from the exact
-   same real state.endpointMetrics/state.projects data the Overview table
-   uses — this is a different arrangement of real data, not a second data
-   source. */
-.obs-console{ display:grid; grid-template-columns:230px 1fr; gap:16px; align-items:start; }
-@media (max-width:860px){ .obs-console{ grid-template-columns:1fr; } }
-.obs-scope-panel{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:10px; max-height:640px; overflow-y:auto; }
-/* DocTracker's app-wide .section class (studio.html - see server.js/other
+/* Observability (23-observability.js). The scope picker (All traffic ->
+   project -> endpoint) lives in the app's OWN left sidebar while
+   state.selected.type === 'observability' (see renderObservabilitySidebar()
+   and 09-render-sidebar.js's branch) - these .obs-all-row/.obs-proj-*/
+   .obs-scope-ep-row classes style rows THERE, inside #projectList, not in
+   a second nested panel in the page content. Everything is built from the
+   exact same real state.endpointMetrics/state.projects data the old flat
+   table used - a different arrangement of real data, not a second source.
+   DocTracker's app-wide .section class (studio.html - see server.js/other
    pages) is only a spacing utility (margin-bottom:30px), not a card style -
    it relies on the table/kpi-grid content inside it to provide its own
-   visual boundary. Observability's own panels (status breakdown, source
-   IPs, alerts, agent health, log explorer...) have no such inner border on
-   their own, so they need a REAL card treatment here - this is
-   Observability-scoped on purpose, not a change to the shared .section
-   class every other page already depends on rendering bare. */
+   visual boundary. Observability's own content panels (status breakdown,
+   source IPs, alerts, agent health, log explorer...) have no such inner
+   border on their own, so they get a real card treatment via .obs-panel
+   instead - scoped to this page on purpose, not a change to the shared
+   .section class every other page already depends on rendering bare. */
 .obs-panel{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px 18px; margin-bottom:16px; }
-.obs-scope-search{ position:relative; margin-bottom:8px; }
-.obs-scope-search svg{ position:absolute; left:8px; top:50%; transform:translateY(-50%); width:11px; height:11px; color:var(--text-faint); pointer-events:none; }
-.obs-scope-search input{ width:100%; background:var(--bg-elevated); border:1px solid var(--border); color:var(--text); border-radius:7px; padding:6px 8px 6px 24px; font-size:11.5px; font-family:inherit; }
 .obs-all-row{ display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:7px; cursor:pointer; font-size:12px; font-weight:700; margin-bottom:4px; }
 .obs-all-row:hover{ background:var(--surface-hover); }
 .obs-all-row.active{ background:var(--accent-soft); color:var(--accent); }

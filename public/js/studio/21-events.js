@@ -18,6 +18,7 @@ document.getElementById('btnReleasePipeline').addEventListener('click', ()=>{
 });
 document.getElementById('btnObservability').addEventListener('click', ()=>{
   state.selected = { type:'observability' };
+  renderSidebar();
   renderMain();
 });
 // The FAB used to always call openEditorTab(currentProjectForEnvContext(), null) —

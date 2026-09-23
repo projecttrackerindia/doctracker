@@ -8,8 +8,23 @@ function updatePinnedNavActive(){
 function renderSidebar(){
   updatePinnedNavActive();
   const list = document.getElementById('projectList');
-  const projects = allProjects();
   const filter = document.getElementById('searchBox').value.trim().toLowerCase();
+
+  // Observability takes over this same sidebar slot with its own API/
+  // endpoint drill-down tree (see 23-observability.js) instead of the
+  // normal project list - one sidebar, contextual to the page you're on,
+  // rather than the app's project navigator PLUS a second nested picker
+  // inside the page content. The search box above is reused as-is (same
+  // #searchBox, same input listener) - typing into it filters whichever
+  // tree is currently showing.
+  if(state.selected && state.selected.type === 'observability'){
+    document.getElementById('searchBox').placeholder = 'Filter APIs / endpoints…';
+    renderObservabilitySidebar(list, filter);
+    return;
+  }
+  document.getElementById('searchBox').placeholder = 'Filter endpoints…';
+
+  const projects = allProjects();
 
   const dl = document.getElementById('projectNames');
   dl.innerHTML = projects.map(p=>`<option value="${escapeHtml(p.name)}">`).join('');
