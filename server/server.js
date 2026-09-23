@@ -34,7 +34,28 @@ if (!process.env.JWT_SECRET) {
   process.exit(1);
 }
 
-app.set('trust proxy', 1); // Railway sits behind a proxy — needed for secure cookies + rate limiting
+// SECURITY (Finding F-02 — login rate limiter didn't block 22 consecutive
+// failed attempts on production): this was `1`, meaning "trust exactly one
+// proxy hop in front of the app." Live evidence (the x-hikari-trace response
+// header, consistent across many separate requests) shows Railway's edge
+// routes every request through TWO hops — an edge node (e.g. sin1) then an
+// internal regional hop (e.g. hnd1) — not one. With trust-proxy set to 1,
+// Express derives req.ip from the wrong position in X-Forwarded-For: the
+// internal hop's own address, which can rotate across Railway's edge/LB
+// machines, instead of the real client IP. Since express-rate-limit's
+// default keyGenerator buckets by req.ip, the limiter's counter never
+// accumulated against one stable key — each request looked like a
+// different client.
+//
+// Deliberately NOT `true` here: trusting the whole X-Forwarded-For chain
+// unconditionally lets a client prepend their own fake entries ahead of
+// Railway's real ones, shifting what Express reads as "the client IP" and
+// defeating IP-based rate limiting a different way (this is exactly what
+// express-rate-limit's own validator warns about). `2` trusts precisely the
+// number of real hops measured above — Railway's edge and its internal
+// regional hop — so req.ip resolves to the one thing before them that a
+// public HTTPS client can't forge past those two trusted hops.
+app.set('trust proxy', 2);
 
 // The studio page (server/views/studio.html) ships one inline <script> and one
 // script loaded from cdnjs. Everything else in that file is wired up with
@@ -63,6 +84,14 @@ app.use(
         connectSrc: ["'self'"],
       },
     },
+    // SECURITY (Finding F-05): Helmet's default HSTS omits `preload`, so a
+    // browser that has never visited this host before can still be
+    // downgraded to plain HTTP by an active network attacker on that first
+    // request — every later visit was already protected once the header had
+    // been seen once. `preload` closes that first-visit gap (once the
+    // domain is submitted to hstspreload.org, browsers enforce HTTPS before
+    // ever making a first request to it).
+    hsts: { maxAge: 15552000, includeSubDomains: true, preload: true },
   })
 );
 // CORS: previously `origin: true` reflected whatever Origin header a request

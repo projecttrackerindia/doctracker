@@ -23,6 +23,12 @@ const authLimiter = createRateLimiter({
   message: { error: 'Too many attempts. Try again in a few minutes.' },
 });
 
+// Fixed bcrypt hash of an unguessable, never-used password — used only to
+// give the "no such user" login path the same bcrypt.compare() cost as the
+// real one (see Finding F-03 below). Generated once, offline; not a secret,
+// not tied to any real account.
+const DUMMY_HASH_FOR_TIMING_PARITY = '$2b$12$6wvuJdwgOPzlbxVZa5R93.M5JOgFnGT/.1MxqwKGOT9TdwjGCw1hG';
+
 const COOKIE_NAME = 'as_session';
 const COOKIE_OPTS = {
   httpOnly: true,
@@ -166,7 +172,20 @@ router.post('/login', authLimiter, async (req, res) => {
     );
 
     const genericError = { error: 'Incorrect email/username or password.' };
-    if (result.rows.length === 0) return res.status(401).json(genericError);
+    if (result.rows.length === 0) {
+      // SECURITY (Finding F-03 — login timing side-channel): a nonexistent
+      // identifier used to return here immediately, while a real username
+      // with a wrong password went on to run bcrypt.compare() below — at
+      // cost factor 12 that's a multi-second difference, live-measured at
+      // ~0.45s vs ~3.84s. Both responses already carry the identical generic
+      // error text, but that timing gap alone let an attacker enumerate
+      // valid usernames/emails without ever seeing a different message. This
+      // dummy comparison against a fixed, precomputed hash costs the same
+      // ~3s regardless of whether the account exists, so the two code paths
+      // are no longer distinguishable by response time.
+      await bcrypt.compare(password, DUMMY_HASH_FOR_TIMING_PARITY);
+      return res.status(401).json(genericError);
+    }
 
     const user = result.rows[0];
     const ok = await bcrypt.compare(password, user.password_hash);
@@ -195,7 +214,34 @@ router.post('/login', authLimiter, async (req, res) => {
 });
 
 // ---- POST /api/auth/logout ----
-router.post('/logout', (req, res) => {
+// SECURITY (Finding F-01 — logout didn't revoke the session server-side):
+// this used to only call res.clearCookie(), which removes the cookie from
+// the browser that called it but leaves the JWT itself fully valid — a
+// copied/cached/leaked token kept working for the rest of its 7-day expiry
+// even after the user had "logged out." Live-confirmed: the exact cookie
+// value from a session was replayed against GET /api/auth/me *after*
+// calling this endpoint and still returned 200 with full admin identity.
+//
+// Fixed the same way password-reset and role-change already revoke old
+// sessions (routes/users.js): bump token_version, which makes the tokenVersion
+// claim baked into every previously-issued JWT stale, so authGuard.js's
+// verifySession() rejects them on their very next use — instantly, not just
+// in the browser that clicked Logout. Note this is a *global* sign-out for
+// the account (every device/session), the same tradeoff password-reset and
+// role-change already make with this same token_version mechanism — there's
+// no per-session revocation in this scheme, only per-account.
+router.post('/logout', async (req, res) => {
+  const token = req.cookies?.[COOKIE_NAME];
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET, { ignoreExpiration: true });
+      if (decoded?.sub) {
+        await pool.query('UPDATE users SET token_version = token_version + 1 WHERE id = $1', [decoded.sub]);
+      }
+    } catch {
+      // Malformed/already-invalid token — nothing to revoke, just clear the cookie below.
+    }
+  }
   res.clearCookie(COOKIE_NAME, { ...COOKIE_OPTS, maxAge: undefined });
   res.json({ ok: true });
 });
