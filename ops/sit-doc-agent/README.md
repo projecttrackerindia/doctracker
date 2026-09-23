@@ -187,6 +187,8 @@ access to the log directory.
 | `MAX_LOG_RECORDS_PER_ENDPOINT` | No | `200` | Only applies when `CAPTURE_MODE=full`. Per-endpoint ring-buffer cap on stored per-request records, oldest dropped first |
 | `MAX_LOG_RECORDS_TOTAL` | No | `3000` | Only applies when `CAPTURE_MODE=full`. Global ring-buffer cap across all endpoints, oldest dropped first |
 | `MAX_LOG_VOLUME_SAMPLES` | No | `700` | Caps how many "log volume" samples (one per push, so ~700 ≈ a week at the default 15-min push interval) are kept for the Observability page's Log volume chart |
+| `HOST_METRICS_ENABLED` | No | `true` | Sample host CPU/memory/disk (see "Host health"). Set to `false` if the agent does **not** run on the same machine as the Mule runtime — otherwise it reports the wrong host's numbers |
+| `MAX_HOST_SAMPLES` | No | `720` | Caps retained host-health samples (one per **poll** cycle, so ~720 ≈ 12 hours at the default 60s poll interval) |
 
 ## Log volume & level distribution
 
@@ -206,6 +208,48 @@ lines have actually matched a level token; below that, it shows an honest
 "not detected in this log format" message instead of a distribution built
 from too little (or no) real signal. The Log volume chart itself (raw line
 count) doesn't depend on level detection and works regardless.
+
+## Host health (CPU, memory, disk)
+
+Once per **poll** cycle (`POLL_INTERVAL_SECONDS`, ~60s — not once per push,
+because CPU spikes are short-lived and a 15-minute sample would miss them),
+the agent records a host-pressure sample that drives the "Host health" panel
+on the Observability page:
+
+| Metric | Source | Why it's here |
+|---|---|---|
+| CPU % | `/proc/stat` delta between consecutive reads | Saturation that shows up as latency before it shows up as 5xx |
+| Memory % | `/proc/meminfo` `MemTotal` / `MemAvailable` | The usual cause of a JVM getting OOM-killed |
+| Log disk % used | `os.statvfs()` on the log directory | A full log partition stops Mule *and* this agent dead — it fails hard, not gracefully |
+| Load average (1/5/15, per core) | `os.getloadavg()` | Distinguishes "busy and coping" from "saturated and queueing" |
+| Agent's own RSS | `/proc/self/status` | So the agent can be ruled in or out as the cause of the memory figure it's reporting |
+
+Everything above is standard library only and world-readable, so this still
+works as the unprivileged `doctracker-agent` user with read-only access —
+consistent with the no-`pip install` constraint in **Requirements**. Nothing
+here needs root and nothing new is read from Mule's own files.
+
+**These describe the host the *agent* runs on.** That is the Mule runtime's
+host only because this agent is deployed onto the SIT server to tail Mule's
+log locally (see "Where to install it"). If you ever run it elsewhere and
+ship logs to it instead, set `HOST_METRICS_ENABLED=false` — the panel then
+says so explicitly rather than reporting the wrong machine's CPU.
+
+Memory uses `MemAvailable`, not `MemFree`. On Linux `MemFree` looks
+alarmingly low on every healthy machine because the page cache is doing its
+job; `MemAvailable` is the kernel's own estimate of what a new workload
+could actually claim. Likewise `iowait` is counted as **idle** in the CPU
+figure — the CPU genuinely had nothing to run, it was waiting on disk, and
+counting it as busy would make a slow disk look like a CPU shortage.
+
+Anything unreadable (a non-Linux host has no `/proc`) is reported as "not
+readable on this host" rather than defaulted to zero — a reassuring flat
+line that means nothing is worse than no line.
+
+**Not included, deliberately:** JVM heap, GC pressure, and per-endpoint CPU
+attribution. The agent sits outside the JVM and outside the request path, so
+it cannot measure any of them; a guessed heap number displayed next to real
+CPU numbers would undermine the real ones.
 
 ## Scaling to high traffic volumes
 

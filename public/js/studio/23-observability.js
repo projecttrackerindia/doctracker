@@ -258,6 +258,124 @@ function renderLogVolumeAndLevelsSection(agentHealth){
   </div>`;
 }
 
+// --- Host health -----------------------------------------------------------
+// CPU / memory / disk pressure on the machine the agent runs on, sampled once
+// per poll cycle (~60s) by sample_host_metrics() in mule_doc_agent.py.
+//
+// These are HOST numbers, not per-endpoint ones, and they are only the Mule
+// runtime's host because the agent is deployed onto the SIT server to tail
+// Mule's log locally. The agent reports hostMetricsEnabled so this panel can
+// say so honestly rather than implying an attribution it can't make.
+//
+// Deliberately NOT shown: JVM heap, GC pressure, or per-endpoint CPU. Nothing
+// the agent can read from outside the JVM supports them, and a guessed heap
+// number next to real CPU numbers would poison the real ones.
+function formatBytes(n){
+  if(n === null || n === undefined) return '—';
+  const units = ['B','KB','MB','GB','TB'];
+  let v = n, i = 0;
+  while(v >= 1024 && i < units.length-1){ v /= 1024; i++; }
+  return (v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)) + ' ' + units[i];
+}
+
+// Thresholds are the conventional ops ones, and are about sustained pressure,
+// not a single spiky sample - which is why the gauge reads from the latest
+// sample but the panel also shows peak/mean across the retained window.
+function pressureVar(pct){
+  if(pct === null || pct === undefined) return '--text-faint';
+  if(pct >= 90) return '--st-5';
+  if(pct >= 75) return '--st-4';
+  return '--st-3';
+}
+
+function obsGauge(label, pct, detail){
+  if(pct === null || pct === undefined){
+    return `<div class="obs-gauge"><div class="obs-gauge-head"><span class="l">${label}</span><span class="v">—</span></div>
+      <div class="obs-statusbar"><span style="width:100%;background:var(--surface-2);"></span></div>
+      <div class="obs-gauge-detail">Not readable on this host</div></div>`;
+  }
+  const cssVar = pressureVar(pct);
+  return `<div class="obs-gauge"><div class="obs-gauge-head"><span class="l">${label}</span><span class="v" style="color:var(${cssVar});">${pct}%</span></div>
+    <div class="obs-statusbar"><span style="width:${Math.max(1, Math.min(100, pct))}%;background:var(${cssVar});"></span></div>
+    <div class="obs-gauge-detail">${detail || ''}</div></div>`;
+}
+
+function renderHostHealthSection(agentHealth){
+  const samples = (agentHealth && agentHealth.hostSamples) || [];
+  const enabled = !agentHealth || agentHealth.hostMetricsEnabled !== false;
+
+  if(!enabled){
+    return `<div class="obs-panel">
+      <div class="section-title">Host health</div>
+      <div class="empty-field" style="padding:6px 0;">Host metrics are switched off for this agent (<code>HOST_METRICS_ENABLED=false</code>). That's the correct setting when the agent doesn't run on the same machine as the Mule runtime — CPU and memory would describe the wrong host.</div>
+    </div>`;
+  }
+  if(!samples.length){
+    return `<div class="obs-panel">
+      <div class="section-title">Host health</div>
+      <div class="empty-field" style="padding:6px 0;">No host samples yet. The agent reads these from <code>/proc</code> and <code>statvfs</code> once per poll cycle, so they appear after its next push — and stay empty on a host without <code>/proc</code> (non-Linux), where they're reported as unavailable rather than guessed.</div>
+    </div>`;
+  }
+
+  const latest = samples[samples.length - 1];
+  const intervalSec = (agentHealth && agentHealth.hostSampleIntervalSeconds) || 60;
+  const cpuSeries = samples.map(s=>s.cpuPct).filter(v=>typeof v === 'number');
+  const memSeries = samples.map(s=>s.memPct).filter(v=>typeof v === 'number');
+
+  const peak = arr => arr.length ? Math.max(...arr) : null;
+  const mean = arr => arr.length ? Math.round(arr.reduce((a,b)=>a+b,0)/arr.length*10)/10 : null;
+
+  const memDetail = (latest.memUsedBytes !== undefined && latest.memTotalBytes !== undefined)
+    ? `${formatBytes(latest.memUsedBytes)} of ${formatBytes(latest.memTotalBytes)} in use`
+    : '';
+  const diskDetail = (latest.diskFreeBytes !== undefined)
+    ? `${formatBytes(latest.diskFreeBytes)} free on the log filesystem`
+    : '';
+  const cpuDetail = cpuSeries.length > 1
+    ? `peak ${peak(cpuSeries)}% · mean ${mean(cpuSeries)}% over ${cpuSeries.length} sample(s)`
+    : 'first sample — needs two reads for a rate';
+
+  // Load average is the one number that says whether the CPU figure means
+  // "busy and coping" or "saturated and queueing". Normalised per core so it
+  // reads the same on a 2-core box and a 32-core one.
+  const loadDetail = (latest.loadPerCore !== undefined)
+    ? `${latest.load1} / ${latest.load5} / ${latest.load15} over ${latest.cpuCores} core(s)`
+    : '';
+  const loadPct = (latest.loadPerCore !== undefined) ? Math.min(100, Math.round(latest.loadPerCore * 100)) : null;
+
+  // CPU sparkline over the retained window, on the same left-to-right time
+  // axis as the Log volume chart below it - that alignment is the point:
+  // a 5xx cluster sitting under a CPU plateau is a different diagnosis from
+  // one sitting under a flat line.
+  const spark = cpuSeries.length > 1 ? (()=>{
+    const maxV = Math.max(...cpuSeries, 1);
+    const trimmed = cpuSeries.slice(-48);
+    const bars = trimmed.map((v,i)=>`<div class="obs-vol-bar${i>=trimmed.length-3?' hot':''}" style="height:${Math.max(3, Math.round(v/maxV*100))}%;background:var(${pressureVar(v)});" title="${v}% CPU"></div>`).join('');
+    const firstAt = samples[Math.max(0, samples.length - trimmed.length)].at;
+    return `<div class="section-title" style="margin-top:18px;">CPU over time</div>
+      <div class="hint" style="margin-top:-4px;">One sample per poll cycle (~${intervalSec}s), newest at the right</div>
+      <div class="obs-vol-chart" style="height:64px;">${bars}</div>
+      <div class="obs-vol-axis"><span>${formatDateTime(new Date(firstAt*1000).toISOString())}</span><span>${formatDateTime(new Date(latest.at*1000).toISOString())}</span></div>`;
+  })() : '';
+
+  const agentFootprint = (latest.agentRssBytes !== undefined)
+    ? `<div class="hint" style="margin-top:10px;">This agent's own resident memory: <strong>${formatBytes(latest.agentRssBytes)}</strong> — shown so it can be ruled in or out as a cause of the memory figure above it.</div>`
+    : '';
+
+  return `<div class="obs-panel">
+    <div class="section-title">Host health</div>
+    <div class="hint" style="margin-top:-4px;">Machine running the log agent, sampled ${formatDateTime(new Date(latest.at*1000).toISOString())}${memSeries.length>1?` · memory peak ${peak(memSeries)}%`:''}</div>
+    <div class="obs-gauge-grid">
+      ${obsGauge('CPU', latest.cpuPct === undefined ? null : latest.cpuPct, cpuDetail)}
+      ${obsGauge('Memory', latest.memPct === undefined ? null : latest.memPct, memDetail)}
+      ${obsGauge('Log disk', latest.diskUsedPct === undefined ? null : latest.diskUsedPct, diskDetail)}
+      ${obsGauge('Load per core', loadPct, loadDetail)}
+    </div>
+    ${spark}
+    ${agentFootprint}
+  </div>`;
+}
+
 // Shared by both views - one row per metrics key. `keys` is whatever subset
 // the caller wants shown (all of them for Overview, the current scope's
 // subset for Console).
@@ -1077,6 +1195,8 @@ function renderConsole(main, metrics, agentHealth, logRecords){
         ? `<div class="grid2">${renderAlertsSection(alerts)}${clustering}</div>`
         : renderAlertsSection(alerts);
     })()}
+
+    ${renderHostHealthSection(agentHealth)}
 
     <div class="grid2">
       <div class="obs-panel"><div class="section-title">Top source IPs</div><div class="hint" style="margin-top:-4px;">Current scope, ranked by request count</div>${renderIpBreakdown(agg.topIps, agg.total, 'console')}</div>

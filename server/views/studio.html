@@ -1331,6 +1331,14 @@ pre.code-block{
 .obs-vol-bar{ flex:1; background:var(--accent); border-radius:2px 2px 0 0; opacity:.55; min-height:2px; }
 .obs-vol-bar.hot{ opacity:1; }
 .obs-vol-axis{ display:flex; justify-content:space-between; font-size:9.5px; color:var(--text-faint); margin-bottom:4px; }
+/* Host health gauges (CPU / memory / disk / load). Auto-fit rather than a
+   fixed column count so the row collapses cleanly on narrow screens instead
+   of squeezing four unreadable gauges side by side. */
+.obs-gauge-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:16px; margin-top:12px; }
+.obs-gauge-head{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; gap:8px; }
+.obs-gauge-head .l{ font-size:11px; color:var(--text-dim); font-weight:600; letter-spacing:.2px; }
+.obs-gauge-head .v{ font-size:17px; font-weight:800; font-family:var(--mono); font-variant-numeric:tabular-nums; }
+.obs-gauge-detail{ font-size:10px; color:var(--text-faint); line-height:1.45; }
 .obs-lvl-pill{ font-size:9px; font-weight:800; padding:2px 6px; border-radius:5px; letter-spacing:.2px; white-space:nowrap; }
 .obs-lvl-pill.err{ background:var(--delete-bg); color:var(--delete); }
 .obs-lvl-pill.warn{ background:var(--put-bg); color:var(--put); }

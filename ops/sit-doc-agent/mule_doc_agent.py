@@ -143,6 +143,22 @@ MAX_LOG_RECORDS_TOTAL = int(os.environ.get("MAX_LOG_RECORDS_TOTAL", "3000"))
 # of needing per-cycle (60s) resolution nobody's asking to see.
 MAX_LOG_VOLUME_SAMPLES = int(os.environ.get("MAX_LOG_VOLUME_SAMPLES", "700"))
 
+# --- Host health sampling ---------------------------------------------------
+# Unlike the log-volume samples above, these are taken once per POLL cycle
+# (~60s), not once per push. CPU pressure is a spiky, short-lived signal -
+# a 15-minute sample would miss the exact spike you're looking for and would
+# be up to 15 minutes stale by the time it's read. 720 samples at 60s is
+# ~12 hours of real history in a few tens of KB.
+#
+# These describe THE HOST THE AGENT RUNS ON. That is only the same machine
+# as the Mule runtime because this agent is deployed onto the SIT server to
+# tail Mule's own log file (see "Where to install it" in AGENT_README.md).
+# If you ever run the agent somewhere else - shipping logs to it rather than
+# tailing them locally - these numbers describe the wrong machine and you
+# should set HOST_METRICS_ENABLED=false.
+HOST_METRICS_ENABLED = os.environ.get("HOST_METRICS_ENABLED", "true").strip().lower() not in ("false", "0", "no")
+MAX_HOST_SAMPLES = int(os.environ.get("MAX_HOST_SAMPLES", "720"))
+
 USER_AGENT = "DocTracker-SIT-Agent/1.0 (svc-doc-agent; see AGENT_README.md)"
 
 # ============================================================================
@@ -869,6 +885,150 @@ class DocTrackerClient:
 # on purpose (this is what the observability view is for), unlike request/
 # response field VALUES, which are never kept anywhere in this agent.
 # ============================================================================
+def _read_proc_stat_cpu():
+    """Cumulative (total, idle) CPU jiffies from /proc/stat's aggregate line.
+
+    These are counters since boot, so a single read says nothing about
+    current load - utilisation is only meaningful as a delta between two
+    reads. Returns None on any platform that isn't Linux-like."""
+    try:
+        with open("/proc/stat", "r") as fh:
+            parts = fh.readline().split()
+    except OSError:
+        return None
+    if not parts or parts[0] != "cpu":
+        return None
+    try:
+        values = [int(v) for v in parts[1:]]
+    except ValueError:
+        return None
+    if len(values) < 5:
+        return None
+    # Fields: user nice system idle iowait irq softirq steal guest guest_nice
+    # iowait counts as idle here: the CPU genuinely had nothing to run, it
+    # was waiting on disk. Counting it as busy would make a slow disk look
+    # like a CPU shortage and send you after the wrong bottleneck.
+    idle = values[3] + values[4]
+    return sum(values), idle
+
+
+def _read_meminfo():
+    """(total_bytes, available_bytes) from /proc/meminfo, or None."""
+    try:
+        with open("/proc/meminfo", "r") as fh:
+            fields = {}
+            for line in fh:
+                key, _, rest = line.partition(":")
+                value = rest.strip().split(" ")[0]
+                if value.isdigit():
+                    fields[key] = int(value) * 1024  # kB -> bytes
+    except OSError:
+        return None
+    total = fields.get("MemTotal")
+    if not total:
+        return None
+    # MemAvailable is the kernel's own estimate of what a new workload could
+    # actually claim, and is the only honest "free memory" number on Linux -
+    # MemFree alone looks alarmingly low on every healthy box because the
+    # page cache is doing its job. Fall back only on kernels < 3.14.
+    available = fields.get("MemAvailable")
+    if available is None:
+        available = fields.get("MemFree", 0) + fields.get("Buffers", 0) + fields.get("Cached", 0)
+    return total, available
+
+
+def _read_self_rss():
+    """The agent's own resident memory in bytes, so a reviewer can rule the
+    agent itself out as the cause of memory pressure it is reporting."""
+    try:
+        with open("/proc/self/status", "r") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    value = line.split()[1]
+                    return int(value) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def _read_log_disk():
+    """(total_bytes, free_bytes) for the filesystem holding the Mule log.
+
+    Arguably the most operationally important number here: a full log
+    partition takes the Mule runtime down and stops this agent dead, and
+    unlike CPU or memory it fails hard rather than degrading."""
+    try:
+        target = os.path.dirname(MULE_LOG_PATH) or "/"
+        st = os.statvfs(target)
+    except (OSError, AttributeError):
+        return None
+    return st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+
+
+def sample_host_metrics(health, now):
+    """One host-pressure sample, from stdlib only.
+
+    This agent is deliberately dependency-free (see the module docstring) so
+    psutil is not an option; everything here comes from /proc and os.statvfs,
+    all world-readable, so it still works as the unprivileged
+    `doctracker-agent` user with read-only access.
+
+    Returns a dict of what could actually be read. Anything unreadable is
+    simply absent rather than defaulted to zero - the Observability page
+    renders "not available on this host" for missing keys instead of drawing
+    a reassuring flat line that means nothing."""
+    sample = {}
+
+    cpu_now = _read_proc_stat_cpu()
+    if cpu_now:
+        prev = health.get("cpuPrevSample")
+        # Only trust a delta against a recent read. State survives restarts,
+        # so a stale previous sample would otherwise average CPU across the
+        # entire downtime and report it as "current".
+        if prev and len(prev) == 3 and (now - prev[2]) <= POLL_INTERVAL_SECONDS * 5:
+            total_delta = cpu_now[0] - prev[0]
+            idle_delta = cpu_now[1] - prev[1]
+            if total_delta > 0 and idle_delta >= 0:
+                sample["cpuPct"] = round(max(0.0, min(100.0, (1 - idle_delta / total_delta) * 100)), 1)
+        health["cpuPrevSample"] = [cpu_now[0], cpu_now[1], now]
+
+    mem = _read_meminfo()
+    if mem:
+        total, available = mem
+        sample["memTotalBytes"] = total
+        sample["memUsedBytes"] = total - available
+        sample["memPct"] = round((total - available) / total * 100, 1)
+
+    try:
+        load1, load5, load15 = os.getloadavg()
+        cores = os.cpu_count() or 1
+        sample["load1"] = round(load1, 2)
+        sample["load5"] = round(load5, 2)
+        sample["load15"] = round(load15, 2)
+        # Load normalised per core is the number that is comparable across
+        # machines: >1.0 means more runnable work than CPUs to run it.
+        sample["loadPerCore"] = round(load1 / cores, 2)
+        sample["cpuCores"] = cores
+    except (OSError, AttributeError):
+        pass
+
+    disk = _read_log_disk()
+    if disk:
+        total, free = disk
+        sample["diskTotalBytes"] = total
+        sample["diskFreeBytes"] = free
+        sample["diskUsedPct"] = round((total - free) / total * 100, 1) if total else None
+
+    rss = _read_self_rss()
+    if rss is not None:
+        sample["agentRssBytes"] = rss
+
+    if not sample:
+        return None
+    sample["at"] = round(now)
+    return sample
+
+
 def build_agent_health(state):
     """Self-monitoring for the agent itself - throughput, backlog, and how
     close it is to the scale safeguards' caps. This is what answers "is this
@@ -911,6 +1071,13 @@ def build_agent_health(state):
         "logLevelMatchedTotal": health.get("logLevelMatchedTotal", 0),
         "logLevelUnmatchedTotal": health.get("logLevelUnmatchedTotal", 0),
         "logVolumeSamples": health.get("logVolumeSamples", []),
+        # Host CPU/memory/disk pressure on the machine tailing the log. See
+        # sample_host_metrics() for why absent keys are left absent rather
+        # than zeroed, and HOST_METRICS_ENABLED for when these describe the
+        # wrong machine.
+        "hostMetricsEnabled": HOST_METRICS_ENABLED,
+        "hostSamples": health.get("hostSamples", []),
+        "hostSampleIntervalSeconds": POLL_INTERVAL_SECONDS,
         "lastCycleAt": health.get("lastCycleAt"),
         "lastCycleDurationMs": health.get("lastCycleDurationMs"),
         "lastCycleLinesRead": health.get("lastCycleLinesRead"),
@@ -1303,6 +1470,17 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
         samples.append([time.time(), health["requestsProcessedTotal"]])
         if len(samples) > 30:
             del samples[0]
+        # Host pressure, sampled per cycle rather than per push - see
+        # MAX_HOST_SAMPLES for why CPU needs the finer cadence. Kept even
+        # when a cycle read no lines at all: "the box was pegged while
+        # nothing was being logged" is itself a finding.
+        if HOST_METRICS_ENABLED:
+            host_sample = sample_host_metrics(health, time.time())
+            if host_sample:
+                host_samples = health.setdefault("hostSamples", [])
+                host_samples.append(host_sample)
+                if len(host_samples) > MAX_HOST_SAMPLES:
+                    del host_samples[0:len(host_samples) - MAX_HOST_SAMPLES]
         if not caught_up:
             print(f"[warn] backlog: read the full {MAX_LINES_PER_CYCLE}-line chunk this cycle "
                   f"({cycle_duration_ms}ms) and more remains - continuing immediately without sleeping "
