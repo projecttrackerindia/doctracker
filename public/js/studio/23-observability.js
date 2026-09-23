@@ -186,9 +186,12 @@ function renderAgentHealth(health){
 // Buckets the agent's logVolumeSamples - [epochSeconds, cumulativeLinesProcessed]
 // pairs, one per push (~15 min apart by default) - into a fixed number of
 // time buckets by taking the delta between consecutive cumulative samples.
-// This is raw LOG LINES read by the agent (always available, both capture
-// modes), not real per-request records - a different, always-on source from
-// renderVolumeChart() above, which needs CAPTURE_MODE=full.
+// This is raw LOG LINES read by the agent (always available in both capture
+// modes), not per-request records. It's the ONE volume-over-time chart on
+// this page on purpose - there used to be a second, near-identical
+// "Request volume" chart built from per-request records, which read as a
+// duplicate of this one; per-request timing now lives in the p50/p95/p99
+// KPI at the top instead.
 function bucketLogVolumeSamples(samples, buckets){
   if(!samples || samples.length < 2) return null;
   const sorted = samples.slice().sort((a,b)=>a[0]-b[0]);
@@ -447,30 +450,6 @@ function computeLatencyStats(records){
   return { p50: percentile(nums, 0.50), p95: percentile(nums, 0.95), p99: percentile(nums, 0.99), count: nums.length };
 }
 
-function renderVolumeChart(records){
-  if(!records.length) return '';
-  const buckets = 14;
-  const times = records.map(r=>new Date(r.ts).getTime()).filter(t=>!isNaN(t));
-  if(!times.length) return '';
-  const minTs = Math.min(...times), maxTs = Math.max(...times);
-  const span = Math.max(1, maxTs - minTs);
-  const bucketMs = span / buckets;
-  const counts = new Array(buckets).fill(0);
-  times.forEach(t=>{
-    let idx = Math.floor((t - minTs) / bucketMs);
-    if(idx >= buckets) idx = buckets - 1;
-    if(idx < 0) idx = 0;
-    counts[idx]++;
-  });
-  const max = Math.max(...counts, 1);
-  const bars = counts.map((c, i)=> `<div class="obs-vol-bar${i>=buckets-3?' hot':''}" style="height:${Math.max(3, Math.round(c/max*100))}%;" title="${c.toLocaleString()} request(s)"></div>`).join('');
-  return `<div class="obs-panel">
-    <div class="section-title">Request volume</div>
-    <div class="hint" style="margin-top:-4px;">${records.length.toLocaleString()} real per-request record(s) in scope, bucketed across the range captured so far</div>
-    <div class="obs-vol-chart">${bars}</div>
-    <div class="obs-vol-axis"><span>${formatDateTime(new Date(minTs).toISOString())}</span><span>${formatDateTime(new Date(maxTs).toISOString())}</span></div>
-  </div>`;
-}
 
 function fieldKvHtml(fields){
   if(!fields || !Object.keys(fields).length) return '<div class="empty-field">None observed.</div>';
@@ -715,24 +694,27 @@ function renderConsole(main, metrics, agentHealth, logRecords){
       ${renderStatusBreakdown(agg.statusBreakdown, agg.total)}
     </div>` : renderStatusBreakdown(agg.statusBreakdown, agg.total)}
 
-    <div class="grid2">
-      <div class="obs-panel"><div class="section-title">Top source IPs</div><div class="hint" style="margin-top:-4px;">Current scope, ranked by request count</div>${renderIpBreakdown(agg.topIps, agg.total, 'console')}</div>
-      ${renderAlertsSection(alerts)}
-    </div>
+    ${(()=>{
+      // Alerts and error clustering are both "what's going wrong" - paired
+      // when both have something to show, full-width when clustering is
+      // empty (aggregate mode) so Alerts isn't left at half width beside
+      // dead space.
+      const clustering = renderClusteringSection(scopedRecords);
+      return clustering
+        ? `<div class="grid2">${renderAlertsSection(alerts)}${clustering}</div>`
+        : renderAlertsSection(alerts);
+    })()}
 
     <div class="grid2">
-      ${renderAgentHealth(agentHealth)}
+      <div class="obs-panel"><div class="section-title">Top source IPs</div><div class="hint" style="margin-top:-4px;">Current scope, ranked by request count</div>${renderIpBreakdown(agg.topIps, agg.total, 'console')}</div>
       ${renderLogVolumeAndLevelsSection(agentHealth)}
     </div>
 
-    ${renderVolumeChart(scopedRecords)}
-
-    <div class="grid2">
-      ${renderLogExplorerSection(scopedRecords)}
-      ${renderClusteringSection(scopedRecords)}
-    </div>
+    ${renderLogExplorerSection(scopedRecords)}
 
     ${renderEndpointsTable(scopedKeys, metrics)}
+
+    ${renderAgentHealth(agentHealth)}
   `;
 
   main.querySelectorAll('[data-obs-log-toggle]').forEach(row=>{
