@@ -36,6 +36,12 @@ function navigateToNotifLink(link){
     state.selected = { type:'security' };
     state.securityTab = link.tab || (isAdmin() ? 'summary' : 'docaccess');
     renderMain();
+  } else if(link.view === 'profile'){
+    // Team Members (and, since Finding F-04, the account-lockout/reset-
+    // requested badges and MFA section) live on the Profile page, not
+    // Security — see renderProfilePage() in 12-security-center.js.
+    state.selected = { type:'profile' };
+    renderMain();
   } else if(link.view === 'endpoint' && link.endpointId){
     state.selected = { type:'endpoint', id: link.endpointId };
     renderMain();

@@ -839,6 +839,15 @@ function renderProfilePage(main){
     </div>
     `}
 
+    ${AUTH_USER ? `
+    <div class="section">
+      <div class="section-title">
+        <span style="flex:1;">Two-factor authentication <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— require a 6-digit code from an authenticator app in addition to your password (Finding F-04). Strongly recommended for Admin accounts.</span></span>
+      </div>
+      <div id="mfaSection"><div class="empty-field" style="padding:16px 0;">Loading…</div></div>
+    </div>
+    ` : ''}
+
     ${AUTH_USER && AUTH_USER.role === 'admin' ? `
     <div class="section">
       <div class="section-title">
@@ -856,6 +865,9 @@ function renderProfilePage(main){
     renderUsersTableSection(); // paint from whatever we already have (loading/ready/error)
     ensureUsersLoaded(); // fetches only if not already loaded; re-renders when it resolves
     wireBrandingSection(main);
+  }
+  if(AUTH_USER){
+    renderMfaSection();
   }
 
   if(!AUTH_USER){
@@ -892,6 +904,122 @@ function renderProfilePage(main){
     });
   });
 
+}
+
+/* ---------- Two-factor authentication (Your Profile ▸ self-service) ----------
+   TOTP (RFC 6238), server-side in server/totp.js using only Node's built-in
+   crypto module — no otplib/qrcode dependency (see that file for why: no
+   Node/npm available to safely regenerate package-lock.json in this
+   deployment). No QR image either, for the same reason — every mainstream
+   authenticator app accepts pasting the otpauth:// URI or typing the raw
+   secret by hand just as well as scanning a code. (Finding F-04.) */
+let mfaSetupPending = null; // { secret, otpauthUri } while a setup is in progress, not yet confirmed
+
+async function mfaApi(method, path, body){
+  const res = await fetch(`/api/auth/mfa${path}`, {
+    method, credentials:'include',
+    headers: body ? { 'Content-Type':'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || 'Request failed.');
+  return data;
+}
+
+async function renderMfaSection(){
+  const el = document.getElementById('mfaSection');
+  if(!el) return;
+  let status;
+  try{ status = await mfaApi('GET', '/status'); }
+  catch(err){ el.innerHTML = `<div class="empty-field" style="padding:16px 0;color:var(--delete);">Could not load MFA status — ${escapeHtml(err.message)}</div>`; return; }
+
+  if(mfaSetupPending){
+    el.innerHTML = mfaSetupHtml(mfaSetupPending);
+    wireMfaSetup(el);
+    return;
+  }
+
+  if(status.enabled){
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span class="access-badge" style="background:var(--post-bg);color:var(--post);">🛡 Enabled</span>
+        <span style="color:var(--text-faint);font-size:12.5px;">A 6-digit code from your authenticator app is required on every sign-in.</span>
+      </div>
+      <div style="margin-top:12px;">
+        <button type="button" class="" id="mfaDisableToggle">Disable two-factor authentication</button>
+        <div id="mfaDisableForm" style="display:none;margin-top:10px;max-width:340px;">
+          <div class="field">
+            <label for="mfaDisablePassword">Confirm your password to disable</label>
+            <div class="input-wrap"><input type="password" id="mfaDisablePassword" autocomplete="current-password"></div>
+          </div>
+          <button type="button" class="danger" id="mfaDisableConfirm">Disable MFA</button>
+        </div>
+      </div>`;
+    document.getElementById('mfaDisableToggle').addEventListener('click', ()=>{
+      document.getElementById('mfaDisableForm').style.display = 'block';
+    });
+    document.getElementById('mfaDisableConfirm').addEventListener('click', async ()=>{
+      const password = document.getElementById('mfaDisablePassword').value;
+      if(!password){ toast('Enter your password to confirm.'); return; }
+      try{
+        await mfaApi('POST', '/disable', { password });
+        toast('Two-factor authentication disabled');
+        renderMfaSection();
+      }catch(err){ toast(err.message); }
+    });
+  } else {
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span class="access-badge access-user" style="background:var(--surface-hover);">Not enabled</span>
+        <span style="color:var(--text-faint);font-size:12.5px;">Sign-in only requires your password today.</span>
+      </div>
+      <button type="button" class="primary" id="mfaEnableBtn" style="margin-top:12px;">Enable two-factor authentication</button>`;
+    document.getElementById('mfaEnableBtn').addEventListener('click', async ()=>{
+      try{
+        const data = await mfaApi('POST', '/setup');
+        mfaSetupPending = { secret: data.secret, otpauthUri: data.otpauthUri };
+        renderMfaSection();
+      }catch(err){ toast(err.message); }
+    });
+  }
+}
+
+function mfaSetupHtml({ secret, otpauthUri }){
+  return `
+    <div style="max-width:440px;">
+      <p style="font-size:12.5px;color:var(--text-faint);margin:0 0 10px;">Add this to your authenticator app (Google Authenticator, Authy, 1Password, Microsoft Authenticator, ...), then enter the 6-digit code it shows to finish setup.</p>
+      <div class="field">
+        <label>Secret key (paste into your app, or type it in by hand)</label>
+        <div class="input-wrap"><input type="text" readonly value="${escapeHtml(secret)}" class="mono" onclick="this.select()"></div>
+      </div>
+      <div class="field">
+        <label>Setup URI (some apps let you paste this directly)</label>
+        <div class="input-wrap"><input type="text" readonly value="${escapeHtml(otpauthUri)}" class="mono" style="font-size:10.5px;" onclick="this.select()"></div>
+      </div>
+      <div class="field">
+        <label for="mfaConfirmCode">6-digit code from your app</label>
+        <div class="input-wrap"><input type="text" id="mfaConfirmCode" inputmode="numeric" maxlength="6" placeholder="123456"></div>
+      </div>
+      <button type="button" class="primary" id="mfaConfirmBtn">Activate</button>
+      <button type="button" class="" id="mfaCancelBtn" style="margin-left:8px;">Cancel</button>
+    </div>`;
+}
+
+function wireMfaSetup(el){
+  document.getElementById('mfaCancelBtn').addEventListener('click', ()=>{
+    mfaSetupPending = null;
+    renderMfaSection();
+  });
+  document.getElementById('mfaConfirmBtn').addEventListener('click', async ()=>{
+    const code = document.getElementById('mfaConfirmCode').value.trim();
+    if(!/^\d{6}$/.test(code)){ toast('Enter the 6-digit code from your app.'); return; }
+    try{
+      await mfaApi('POST', '/confirm', { code });
+      mfaSetupPending = null;
+      toast('Two-factor authentication enabled — you’ll be asked for a code next time you sign in.');
+      renderMfaSection();
+    }catch(err){ toast(err.message); }
+  });
 }
 
 /* ---------- Organisation branding (Your Profile ▸ Admin-only) ----------

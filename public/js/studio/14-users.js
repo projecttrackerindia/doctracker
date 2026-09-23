@@ -117,8 +117,16 @@ function userRowHtml(u){
     <td>
       <span class="role-pill role-${rMeta.id}"${customTitle}>${rMeta.label}</span>
       ${u.access_schedule && u.access_schedule.enabled ? `<span class="mono" style="display:block;margin-top:4px;font-size:10.5px;color:var(--text-faint);" title="Access restricted to this window">🕒 ${escapeHtml(describeAccessScheduleClient(u.access_schedule))}</span>` : ''}
+      ${u.mfa_enabled ? `<span class="mono" style="display:inline-block;margin-top:4px;font-size:10.5px;color:var(--post);" title="Two-factor authentication is enabled on this account">🛡 MFA on</span>` : ''}
     </td>
-    <td><span class="access-badge access-user">Active</span></td>
+    <td>
+      ${u.locked
+        ? `<span class="access-badge" style="background:var(--danger-soft);color:var(--danger);" title="Locked after repeated failed sign-in attempts (Finding F-04) — resolves itself, or use Reset password to clear it now">🔒 Locked</span>`
+        : `<span class="access-badge access-user">Active</span>`}
+      ${u.password_reset_requested_at
+        ? `<span class="mono" style="display:block;margin-top:4px;font-size:10.5px;color:var(--put);" title="This user requested a password reset — verify their identity, then use Reset password">🔔 Reset requested</span>`
+        : ''}
+    </td>
     <td class="mono" style="font-size:11px;color:var(--text-faint);">${u.last_login_at ? formatDateTime(u.last_login_at) : 'Never signed in'}</td>
     <td>
       <div class="row-actions-dd${menuOpen?' open':''}" data-urow-dd="${u.id}">

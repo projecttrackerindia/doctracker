@@ -8,6 +8,20 @@
   const passwordInput = document.getElementById('password');
   const submitBtnLabel = document.getElementById('submitBtnLabel');
 
+  const mfaForm = document.getElementById('mfaForm');
+  const mfaCodeInput = document.getElementById('mfaCode');
+  const mfaSubmitBtn = document.getElementById('mfaSubmitBtn');
+  const mfaSubmitBtnLabel = document.getElementById('mfaSubmitBtnLabel');
+  const mfaBackLink = document.getElementById('mfaBackLink');
+  let pendingChallengeToken = null;
+
+  const forgotForm = document.getElementById('forgotForm');
+  const forgotPasswordLink = document.getElementById('forgotPasswordLink');
+  const forgotIdentifierInput = document.getElementById('forgotIdentifier');
+  const forgotSubmitBtn = document.getElementById('forgotSubmitBtn');
+  const forgotSubmitBtnLabel = document.getElementById('forgotSubmitBtnLabel');
+  const forgotBackLink = document.getElementById('forgotBackLink');
+
   function escapeHtml(str) {
     return str.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
@@ -92,10 +106,29 @@
 
       if (!res.ok) {
         setStatus('fail', String(res.status));
-        showAlert(data.error || 'Sign in failed. Please try again.');
+        // A 423 (account locked, Finding F-04) carries a friendly `message`
+        // alongside a machine-readable `error` code — prefer the message,
+        // same as every other error shape falls back to `error` for.
+        showAlert(data.message || data.error || 'Sign in failed. Please try again.');
         submitBtn.disabled = false;
         submitBtn.classList.remove('is-loading');
         submitBtnLabel.textContent = 'Sign in';
+        return;
+      }
+
+      // MFA enabled on this account (Finding F-04) — password was correct,
+      // but the session isn't issued yet. Swap to the code-entry step
+      // instead of treating this 200 as "signed in."
+      if (data.mfaRequired) {
+        pendingChallengeToken = data.challengeToken;
+        setStatus('warn', 'MFA required');
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('is-loading');
+        submitBtnLabel.textContent = 'Sign in';
+        form.hidden = true;
+        mfaForm.hidden = false;
+        mfaCodeInput.value = '';
+        mfaCodeInput.focus();
         return;
       }
 
@@ -118,6 +151,107 @@
       submitBtn.disabled = false;
       submitBtn.classList.remove('is-loading');
       submitBtnLabel.textContent = 'Sign in';
+    }
+  });
+
+  mfaBackLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    pendingChallengeToken = null;
+    mfaForm.hidden = true;
+    form.hidden = false;
+    passwordInput.value = '';
+    hideAlert();
+    setStatus('idle', 'idle');
+  });
+
+  mfaForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    hideAlert();
+    if (!pendingChallengeToken) {
+      showAlert('This sign-in attempt has expired. Please log in again.');
+      mfaForm.hidden = true;
+      form.hidden = false;
+      return;
+    }
+    setStatus('warn', 'sending…');
+    mfaSubmitBtn.disabled = true;
+    mfaSubmitBtn.classList.add('is-loading');
+    mfaSubmitBtnLabel.textContent = 'Verifying…';
+
+    try {
+      const res = await fetch('/api/auth/mfa/challenge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ challengeToken: pendingChallengeToken, code: mfaCodeInput.value.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setStatus('fail', String(res.status));
+        showAlert(data.message || data.error || 'Could not verify that code. Please try again.');
+        mfaSubmitBtn.disabled = false;
+        mfaSubmitBtn.classList.remove('is-loading');
+        mfaSubmitBtnLabel.textContent = 'Verify';
+        return;
+      }
+
+      setStatus('ok', '200 OK');
+      mfaSubmitBtn.classList.remove('is-loading');
+      mfaSubmitBtn.classList.add('is-success');
+      mfaSubmitBtnLabel.textContent = 'Signed in';
+      const dest = data.orgToken ? `/${data.orgToken}/dashboard.html` : '/dashboard.html';
+      setTimeout(() => { window.location.href = dest; }, 450);
+    } catch (err) {
+      setStatus('fail', 'network');
+      showAlert('Could not reach the server. Check your connection and try again.');
+      mfaSubmitBtn.disabled = false;
+      mfaSubmitBtn.classList.remove('is-loading');
+      mfaSubmitBtnLabel.textContent = 'Verify';
+    }
+  });
+
+  forgotPasswordLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    hideAlert();
+    form.hidden = true;
+    forgotForm.hidden = false;
+    forgotIdentifierInput.value = identifierInput.value.trim();
+    forgotIdentifierInput.focus();
+  });
+  forgotBackLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    forgotForm.hidden = true;
+    form.hidden = false;
+    hideAlert();
+  });
+
+  forgotForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    hideAlert();
+    forgotSubmitBtn.disabled = true;
+    forgotSubmitBtn.classList.add('is-loading');
+    forgotSubmitBtnLabel.textContent = 'Sending…';
+
+    try {
+      const res = await fetch('/api/auth/request-password-reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: forgotIdentifierInput.value.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      // Response is deliberately identical whether or not the account
+      // exists (see server/routes/auth.js) — always show it as success.
+      forgotSubmitBtn.classList.remove('is-loading');
+      forgotSubmitBtn.classList.add('is-success');
+      forgotSubmitBtnLabel.textContent = 'Sent';
+      alertBox.className = 'form-alert success';
+      alertBox.textContent = data.message || "If that account exists, your organisation's Admin has been notified.";
+    } catch (err) {
+      forgotSubmitBtn.disabled = false;
+      forgotSubmitBtn.classList.remove('is-loading');
+      forgotSubmitBtnLabel.textContent = 'Notify Admin';
+      showAlert('Could not reach the server. Check your connection and try again.');
     }
   });
 

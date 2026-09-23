@@ -84,6 +84,50 @@ async function initDb() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS tryit_personal_enc TEXT;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS tryit_personal_key_version INTEGER;`);
 
+  // SECURITY (Finding F-04 — no account lockout, no MFA, no self-service
+  // password reset): all three land here.
+  //
+  // Per-account lockout — a backstop independent of the IP-based rate
+  // limiter (server/rateLimitStore.js), since that limiter only throttles a
+  // given source IP, not a given account: an attacker spreading guesses
+  // across many IPs (or hitting the account from residential proxies) would
+  // otherwise face no account-specific slowdown at all. failed_login_count
+  // resets to 0 on any successful login; locked_until is null unless the
+  // account is presently locked.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_count INTEGER NOT NULL DEFAULT 0;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;`);
+
+  // TOTP MFA (RFC 6238), implemented with only Node's built-in crypto module
+  // (see server/totp.js) — no otplib/qrcode dependency, since this
+  // deployment has no way to safely regenerate package-lock.json for a new
+  // npm dependency. mfa_secret_enc is the base32 TOTP seed, encrypted with
+  // the same envelope scheme as everything else (server/crypto.js), bound to
+  // this user id as AAD. mfa_enabled only flips to true once the user has
+  // proven they can produce a valid code (mfa_pending_secret_enc holds the
+  // secret during setup, before that proof, so a setup flow abandoned
+  // halfway never silently enables MFA with a secret only the server saw).
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT false;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_secret_enc TEXT;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_secret_key_version INTEGER;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_pending_secret_enc TEXT;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_pending_secret_key_version INTEGER;`);
+
+  // Self-service password reset. No outbound-email provider is configured in
+  // this deployment (no SMTP_* env vars, no email-sending dependency), so a
+  // homemade "emailed reset link" would actually be a raw single-use token
+  // handed back over plain HTTP responses with no channel to prove the
+  // requester owns that account — new, hard-to-verify-without-testing attack
+  // surface for little real benefit. Instead: a user can now SELF-INITIATE a
+  // request (POST /api/auth/request-password-reset), which timestamps it
+  // here and notifies every Admin in the org in-app — Admins then complete it
+  // with the existing, already-battle-tested POST /api/users/:id/reset-password
+  // action after verifying the requester's identity out-of-band. Real
+  // improvement over today (previously an Admin had to already know/notice a
+  // user was locked out; now the user can flag it themselves), without
+  // inventing a new token-based auth surface this deployment can't email out
+  // securely anyway.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_requested_at TIMESTAMPTZ;`);
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(email));
   `);

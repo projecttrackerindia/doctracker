@@ -79,6 +79,48 @@
           <svg class="btn-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
           <span id="submitBtnLabel">Sign in</span>
         </button>
+
+        <p class="fine-print" style="margin-top:10px;"><a href="#" id="forgotPasswordLink">Forgot your password?</a></p>
+      </form>
+
+      <!-- MFA step — hidden until POST /api/auth/login responds with mfaRequired: true.
+           Swapped in for the password form rather than a separate page, so the
+           challengeToken (short-lived, see server/routes/auth.js) never has to
+           round-trip through a URL. -->
+      <form id="mfaForm" novalidate hidden>
+        <p class="fine-print" style="margin-top:0;">Enter the 6-digit code from your authenticator app.</p>
+        <div class="field">
+          <label for="mfaCode">Authentication code</label>
+          <div class="input-wrap">
+            <input id="mfaCode" name="mfaCode" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="123456" required>
+          </div>
+        </div>
+        <button type="submit" class="btn-primary" id="mfaSubmitBtn">
+          <span class="btn-spinner"></span>
+          <svg class="btn-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+          <span id="mfaSubmitBtnLabel">Verify</span>
+        </button>
+        <p class="fine-print"><a href="#" id="mfaBackLink">Back to sign in</a></p>
+      </form>
+
+      <!-- Forgot-password request — hidden until "Forgot your password?" is
+           clicked. No email is sent (no SMTP provider configured); this
+           notifies the organisation's Admins in-app, who complete the reset
+           after verifying the requester out-of-band (see Finding F-04). -->
+      <form id="forgotForm" novalidate hidden>
+        <p class="fine-print" style="margin-top:0;">Your organisation's Admin will be notified and can help you regain access.</p>
+        <div class="field">
+          <label for="forgotIdentifier">Email or username</label>
+          <div class="input-wrap">
+            <input id="forgotIdentifier" name="forgotIdentifier" type="text" autocomplete="username" placeholder="you@company.com" required>
+          </div>
+        </div>
+        <button type="submit" class="btn-primary" id="forgotSubmitBtn">
+          <span class="btn-spinner"></span>
+          <svg class="btn-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+          <span id="forgotSubmitBtnLabel">Notify Admin</span>
+        </button>
+        <p class="fine-print"><a href="#" id="forgotBackLink">Back to sign in</a></p>
       </form>
 
       <div class="divider-fine"></div>

@@ -4,7 +4,9 @@ const jwt = require('jsonwebtoken');
 const { createRateLimiter } = require('../rateLimitStore');
 const { pool } = require('../db');
 const dataCrypto = require('../crypto');
-const { verifySession, IdleTimeoutError } = require('../middleware/authGuard');
+const totp = require('../totp');
+const { verifySession, IdleTimeoutError, authenticate } = require('../middleware/authGuard');
+const { notifyUsers, adminUserIds } = require('../notifications');
 const {
   validateEmail,
   validateUsername,
@@ -22,6 +24,21 @@ const authLimiter = createRateLimiter({
   legacyHeaders: false,
   message: { error: 'Too many attempts. Try again in a few minutes.' },
 });
+
+// SECURITY (Finding F-04 — per-account lockout): independent of the
+// IP-based authLimiter above, which only throttles a given source IP. An
+// attacker spreading guesses across many IPs would face no account-specific
+// slowdown without this — 5 wrong passwords in a row locks the ACCOUNT
+// itself for 15 minutes, regardless of which IP the attempts came from.
+const LOCKOUT_THRESHOLD = 5;
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
+
+// SECURITY (Finding F-04 — MFA): the second factor is only required once a
+// password has already been verified correct, so the challenge token below
+// deliberately can't be used to skip the password step — it's issued FROM a
+// successful password check, not instead of one. Short-lived (5 minutes) so
+// an abandoned login attempt's challenge token can't be replayed later.
+const MFA_CHALLENGE_EXPIRES = '5m';
 
 // Fixed bcrypt hash of an unguessable, never-used password — used only to
 // give the "no such user" login path the same bcrypt.compare() cost as the
@@ -157,6 +174,32 @@ router.post('/register', authLimiter, async (req, res) => {
   }
 });
 
+const LOGIN_COLUMNS = `id, username, email, password_hash, organisation, role, custom_permissions, token_version,
+       failed_login_count, locked_until, mfa_enabled, mfa_secret_enc, mfa_secret_key_version`;
+
+// Finishes a login that has already cleared password (and, if enabled, MFA)
+// checks — issues the real session cookie. Shared by POST /login (no MFA)
+// and POST /mfa/challenge (the second step when MFA is enabled), so both
+// paths end up in exactly the same place rather than two hand-maintained
+// copies of "what a successful login does."
+async function finalizeLogin(user, res) {
+  // Reset last_activity_at here too, not just last_login_at — verifySession()
+  // (authGuard.js) checks last_activity_at on every subsequent request to
+  // decide idle-timeout, and it doesn't know or care that a fresh login just
+  // happened. Without this, anyone who was ever idle-logged-out would log
+  // back in successfully but get bounced straight back to /login.html?reason=idle
+  // on the very next page load, since the DB column would still be ~30+
+  // minutes stale from the session that just timed out.
+  await pool.query('UPDATE users SET last_login_at = now(), last_activity_at = now() WHERE id = $1', [user.id]);
+  const safeUser = {
+    id: user.id, username: user.username, email: user.email, organisation: user.organisation, role: user.role,
+    ...(user.role === 'custom' ? { customPermissions: user.custom_permissions } : {}),
+  };
+  const token = signSession(user);
+  res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
+  res.json({ user: safeUser, orgToken: dataCrypto.encryptOrgToken(user.organisation) });
+}
+
 // ---- POST /api/auth/login ----
 router.post('/login', authLimiter, async (req, res) => {
   try {
@@ -166,8 +209,7 @@ router.post('/login', authLimiter, async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT id, username, email, password_hash, organisation, role, custom_permissions, token_version
-       FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)`,
+      `SELECT ${LOGIN_COLUMNS} FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)`,
       [identifier.trim()]
     );
 
@@ -188,29 +230,209 @@ router.post('/login', authLimiter, async (req, res) => {
     }
 
     const user = result.rows[0];
+
+    // SECURITY (Finding F-04 — account lockout): the bcrypt.compare() below
+    // always runs, even for an already-locked account, so a locked account's
+    // response takes the same time as a wrong-password response on an
+    // unlocked one — the lockout check itself doesn't reopen the timing
+    // side-channel F-03 just closed.
     const ok = await bcrypt.compare(password, user.password_hash);
-    if (!ok) return res.status(401).json(genericError);
 
-    // Reset last_activity_at here too, not just last_login_at — verifySession()
-    // (authGuard.js) checks last_activity_at on every subsequent request to
-    // decide idle-timeout, and it doesn't know or care that a fresh login just
-    // happened. Without this, anyone who was ever idle-logged-out would log
-    // back in successfully but get bounced straight back to /login.html?reason=idle
-    // on the very next page load, since the DB column would still be ~30+
-    // minutes stale from the session that just timed out.
-    await pool.query('UPDATE users SET last_login_at = now(), last_activity_at = now() WHERE id = $1', [user.id]);
+    const now = Date.now();
+    const isLocked = user.locked_until && new Date(user.locked_until).getTime() > now;
+    if (isLocked) {
+      const minutesLeft = Math.max(1, Math.ceil((new Date(user.locked_until).getTime() - now) / 60000));
+      return res.status(423).json({
+        error: 'account_locked',
+        message: `Too many failed sign-in attempts. This account is temporarily locked — try again in about ${minutesLeft} minute${minutesLeft === 1 ? '' : 's'}.`,
+      });
+    }
 
-    const safeUser = {
-      id: user.id, username: user.username, email: user.email, organisation: user.organisation, role: user.role,
-      ...(user.role === 'custom' ? { customPermissions: user.custom_permissions } : {}),
-    };
-    const token = signSession(user);
-    res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
-    res.json({ user: safeUser, orgToken: dataCrypto.encryptOrgToken(user.organisation) });
+    if (!ok) {
+      const nextCount = user.failed_login_count + 1;
+      if (nextCount >= LOCKOUT_THRESHOLD) {
+        await pool.query(
+          'UPDATE users SET failed_login_count = 0, locked_until = now() + ($1 * interval \'1 millisecond\') WHERE id = $2',
+          [LOCKOUT_DURATION_MS, user.id]
+        );
+      } else {
+        await pool.query('UPDATE users SET failed_login_count = $1 WHERE id = $2', [nextCount, user.id]);
+      }
+      return res.status(401).json(genericError);
+    }
+
+    // Correct password — clear any accumulated failed-attempt count.
+    if (user.failed_login_count > 0 || user.locked_until) {
+      await pool.query('UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE id = $1', [user.id]);
+    }
+
+    // SECURITY (Finding F-04 — MFA): password alone isn't enough for an
+    // account with MFA enabled. Issue a short-lived challenge token instead
+    // of a real session — it carries no role/organisation claims an
+    // authenticated route would trust, only "this specific account cleared
+    // the password step," so it's useless for anything except completing
+    // POST /mfa/challenge for this same account within the next 5 minutes.
+    if (user.mfa_enabled) {
+      const challengeToken = jwt.sign({ sub: user.id, mfaPending: true }, process.env.JWT_SECRET, { expiresIn: MFA_CHALLENGE_EXPIRES });
+      return res.json({ mfaRequired: true, challengeToken });
+    }
+
+    await finalizeLogin(user, res);
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Something went wrong signing you in. Please try again.' });
   }
+});
+
+// ---- POST /api/auth/mfa/challenge — second step of login when MFA is enabled ----
+router.post('/mfa/challenge', authLimiter, async (req, res) => {
+  try {
+    const { challengeToken, code } = req.body || {};
+    if (!challengeToken || !code) return res.status(400).json({ error: 'Enter the 6-digit code from your authenticator app.' });
+
+    let decoded;
+    try {
+      decoded = jwt.verify(challengeToken, process.env.JWT_SECRET);
+    } catch {
+      return res.status(401).json({ error: 'This sign-in attempt has expired. Please log in again.' });
+    }
+    if (!decoded?.mfaPending || !decoded.sub) return res.status(401).json({ error: 'This sign-in attempt has expired. Please log in again.' });
+
+    const result = await pool.query(`SELECT ${LOGIN_COLUMNS} FROM users WHERE id = $1`, [decoded.sub]);
+    if (!result.rows.length) return res.status(401).json({ error: 'This sign-in attempt has expired. Please log in again.' });
+    const user = result.rows[0];
+    if (!user.mfa_enabled || !user.mfa_secret_enc) return res.status(401).json({ error: 'This sign-in attempt has expired. Please log in again.' });
+
+    const secret = dataCrypto.decryptField(user.mfa_secret_enc, `user:${user.id}:mfa`);
+    if (!totp.verifyToken(secret, code)) {
+      return res.status(401).json({ error: 'Incorrect code. Please try again.' });
+    }
+
+    await finalizeLogin(user, res);
+  } catch (err) {
+    console.error('MFA challenge error:', err);
+    res.status(500).json({ error: 'Something went wrong verifying your code. Please try again.' });
+  }
+});
+
+// ---- MFA enrollment/management (self-service, for the logged-in user's own account) ----
+
+// GET /api/auth/mfa/status
+router.get('/mfa/status', authenticate, async (req, res) => {
+  const { rows } = await pool.query('SELECT mfa_enabled FROM users WHERE id = $1', [req.authUser.sub]);
+  res.json({ enabled: Boolean(rows[0]?.mfa_enabled) });
+});
+
+// POST /api/auth/mfa/setup — generates a new pending secret (not yet active).
+router.post('/mfa/setup', authenticate, async (req, res) => {
+  try {
+    const secret = totp.generateSecret();
+    const enc = dataCrypto.encryptField(secret, `user:${req.authUser.sub}:mfa`);
+    await pool.query(
+      'UPDATE users SET mfa_pending_secret_enc = $1, mfa_pending_secret_key_version = $2 WHERE id = $3',
+      [enc, dataCrypto.currentKeyVersion(), req.authUser.sub]
+    );
+    const otpauthUri = totp.buildOtpauthUri({ secret, accountLabel: req.authUser.username, issuer: 'DocTracker' });
+    res.json({ secret, otpauthUri });
+  } catch (err) {
+    console.error('MFA setup error:', err);
+    res.status(500).json({ error: 'Could not start MFA setup. Please try again.' });
+  }
+});
+
+// POST /api/auth/mfa/confirm — proves the pending secret works, then activates it.
+router.post('/mfa/confirm', authenticate, async (req, res) => {
+  try {
+    const { code } = req.body || {};
+    const { rows } = await pool.query('SELECT mfa_pending_secret_enc FROM users WHERE id = $1', [req.authUser.sub]);
+    const pendingEnc = rows[0]?.mfa_pending_secret_enc;
+    if (!pendingEnc) return res.status(400).json({ error: 'Start MFA setup first.' });
+
+    const secret = dataCrypto.decryptField(pendingEnc, `user:${req.authUser.sub}:mfa`);
+    if (!totp.verifyToken(secret, code)) {
+      return res.status(400).json({ error: 'Incorrect code. Check your authenticator app and try again.' });
+    }
+
+    // Deliberately does NOT bump token_version — unlike password-reset/
+    // role-change/logout, there's no leaked-credential concern to force a
+    // global sign-out over here, and this request comes from the user's own
+    // already-authenticated session: bumping it here would invalidate that
+    // very session mid-setup and kick them straight back to the login
+    // screen right after they finished enabling MFA.
+    await pool.query(
+      `UPDATE users SET mfa_enabled = true, mfa_secret_enc = mfa_pending_secret_enc, mfa_secret_key_version = mfa_pending_secret_key_version,
+       mfa_pending_secret_enc = NULL, mfa_pending_secret_key_version = NULL WHERE id = $1`,
+      [req.authUser.sub]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('MFA confirm error:', err);
+    res.status(500).json({ error: 'Could not confirm MFA setup. Please try again.' });
+  }
+});
+
+// POST /api/auth/mfa/disable — requires re-entering the current password, so
+// a hijacked-but-still-unlocked browser session can't silently strip MFA off
+// the account by itself.
+router.post('/mfa/disable', authenticate, async (req, res) => {
+  try {
+    const { password } = req.body || {};
+    const { rows } = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.authUser.sub]);
+    if (!rows.length) return res.status(401).json({ error: 'Session expired. Please sign in again.' });
+    const ok = password && (await bcrypt.compare(password, rows[0].password_hash));
+    if (!ok) return res.status(401).json({ error: 'Incorrect password.' });
+
+    await pool.query(
+      `UPDATE users SET mfa_enabled = false, mfa_secret_enc = NULL, mfa_secret_key_version = NULL,
+       mfa_pending_secret_enc = NULL, mfa_pending_secret_key_version = NULL WHERE id = $1`,
+      [req.authUser.sub]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('MFA disable error:', err);
+    res.status(500).json({ error: 'Could not disable MFA. Please try again.' });
+  }
+});
+
+// ---- POST /api/auth/request-password-reset ----
+// SECURITY (Finding F-04 — self-service password reset): previously ONLY an
+// Admin could initiate a reset, which meant a locked-out user was fully
+// dependent on an Admin noticing. This lets the user flag it themselves. No
+// outbound-email provider is configured in this deployment, so this
+// notifies every Admin in the organisation in-app (server/notifications.js)
+// rather than emailing a reset link — an Admin completes it with the
+// existing POST /api/users/:id/reset-password action after verifying the
+// requester's identity out-of-band. The response is deliberately IDENTICAL
+// regardless of whether the account exists, so this can't be used to
+// enumerate valid usernames/emails — only a real account actually triggers
+// the Admin notification below.
+router.post('/request-password-reset', authLimiter, async (req, res) => {
+  const { identifier } = req.body || {};
+  const genericResponse = { message: "If that account exists, your organisation's Admin has been notified and will help you regain access." };
+  try {
+    if (!identifier) return res.json(genericResponse);
+    const result = await pool.query(
+      'SELECT id, username, organisation FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)',
+      [String(identifier).trim()]
+    );
+    if (result.rows.length) {
+      const user = result.rows[0];
+      await pool.query('UPDATE users SET password_reset_requested_at = now() WHERE id = $1', [user.id]);
+      const adminIds = await adminUserIds(user.organisation);
+      await notifyUsers(adminIds, {
+        organisation: user.organisation,
+        type: 'password_reset_requested',
+        title: `${user.username} requested a password reset`,
+        body: 'Verify their identity out-of-band, then use Reset Password on their account.',
+        link: { view: 'profile' },
+      });
+    }
+  } catch (err) {
+    console.error('Request password reset error:', err);
+    // Still return the generic response — never let this leak account
+    // existence or internal error detail through a different response shape.
+  }
+  res.json(genericResponse);
 });
 
 // ---- POST /api/auth/logout ----

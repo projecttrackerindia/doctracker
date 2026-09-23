@@ -28,7 +28,10 @@ const adminActionLimiter = createRateLimiter({
 
 router.use(authenticate, requireAdmin, adminActionLimiter);
 
-const SAFE_COLUMNS = 'id, username, email, organisation, role, custom_permissions, access_schedule, created_at, last_login_at';
+const SAFE_COLUMNS = `id, username, email, organisation, role, custom_permissions, access_schedule, created_at, last_login_at,
+  mfa_enabled, password_reset_requested_at,
+  (locked_until IS NOT NULL AND locked_until > now()) AS locked,
+  locked_until`;
 
 // ---- GET /api/users — everyone in the admin's organisation ----
 router.get('/', async (req, res) => {
@@ -212,8 +215,15 @@ router.post('/:id/reset-password', async (req, res) => {
     const passwordHash = await bcrypt.hash(temporaryPassword, 12);
     // Also bumps token_version — a password reset should sign the user out
     // of any existing session everywhere, not just require the new password
-    // on their next un-forced request.
-    await pool.query('UPDATE users SET password_hash = $1, token_version = token_version + 1 WHERE id = $2', [passwordHash, user.id]);
+    // on their next un-forced request. Also clears any lockout (Finding
+    // F-04) and marks a pending self-service request (if any) resolved,
+    // since an Admin completing this action is exactly what that request
+    // was asking for.
+    await pool.query(
+      `UPDATE users SET password_hash = $1, token_version = token_version + 1,
+       failed_login_count = 0, locked_until = NULL, password_reset_requested_at = NULL WHERE id = $2`,
+      [passwordHash, user.id]
+    );
 
     res.json({ user, temporaryPassword });
   } catch (err) {
