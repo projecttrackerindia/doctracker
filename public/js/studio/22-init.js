@@ -25,6 +25,10 @@
   // project short of an Admin doing it for them, which is exactly the
   // bottleneck item #2 removes.
   document.getElementById('btnSecurityCenter').style.display = (isAdmin() || ownsAnyProject()) ? '' : 'none';
+  // Release Pipeline overview surfaces org-wide pending promotion requests
+  // (approve/cancel authority is Admin-only server-side — see the
+  // /promotion-requests org-wide route) — same visibility gate as Security.
+  document.getElementById('btnReleasePipeline').style.display = (isAdmin() || ownsAnyProject()) ? '' : 'none';
 
   // Access-schedule banner/lock state — rendered immediately from the
   // server-injected AUTH_USER (so it's correct on first paint, before any

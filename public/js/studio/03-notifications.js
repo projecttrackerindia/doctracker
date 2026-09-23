@@ -74,6 +74,18 @@ async function refreshSecurityBadge(){
   }catch(e){ /* best-effort */ }
 }
 
+async function refreshReleasePipelineBadge(){
+  const el = document.getElementById('releasePipelineBadge');
+  if(!el) return;
+  if(!isAdmin()){ el.style.display = 'none'; return; } // org-wide pending count is Admin-only server-side
+  try{
+    const { requests } = await apiGet('/promotion-requests?status=pending');
+    const count = (requests||[]).length;
+    if(count > 0){ el.textContent = count > 99 ? '99+' : String(count); el.style.display = ''; }
+    else el.style.display = 'none';
+  }catch(e){ /* best-effort */ }
+}
+
 function renderNotifList(notifications, { append } = {}){
   const list = document.getElementById('notifList');
   if(!list) return;
@@ -154,8 +166,10 @@ document.addEventListener('click', (e)=>{
 function initNotifications(){
   refreshNotifBadge();
   refreshSecurityBadge();
+  refreshReleasePipelineBadge();
   setInterval(refreshNotifBadge, NOTIF_POLL_MS);
   setInterval(refreshSecurityBadge, NOTIF_POLL_MS);
+  setInterval(refreshReleasePipelineBadge, NOTIF_POLL_MS);
 }
 
 // One-time: if this browser still has the old localStorage workspace, ship it

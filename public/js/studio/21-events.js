@@ -12,6 +12,10 @@ document.getElementById('btnSecurityCenter').addEventListener('click', ()=>{
   state.securityTab = state.securityTab || (isAdmin() ? 'summary' : 'docaccess');
   renderMain();
 });
+document.getElementById('btnReleasePipeline').addEventListener('click', ()=>{
+  state.selected = { type:'releasepipeline' };
+  renderMain();
+});
 // The FAB used to always call openEditorTab(currentProjectForEnvContext(), null) —
 // meaning if you'd last viewed (or were viewing) some project, EVERY field shared
 // across that project (name, owner, team, auth type, auth params, everything under

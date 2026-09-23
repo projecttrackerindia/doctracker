@@ -2137,6 +2137,58 @@ router.get('/projects/:id/promotion-requests', async (req, res) => {
   }
 });
 
+// GET /api/workspace/promotion-requests?status=pending — org-wide list, for
+// the top-level Release Pipeline nav page. Admin-only (a non-admin only ever
+// sees requests through a project they can already reach, via the per-project
+// route above); joins back to projects for a name/id to link into
+// openReleasePipelineTab from a single cross-project view.
+router.get('/promotion-requests', async (req, res) => {
+  try {
+    if (!isAdminUser(req)) return res.status(403).json({ error: 'Admin access required.' });
+
+    const status = ['pending', 'approved', 'rejected', 'cancelled'].includes(req.query.status) ? req.query.status : 'pending';
+    const allEnvs = await getOrgEnvironments(req.authUser.organisation);
+    const labelById = new Map(allEnvs.map((e) => [e.id, e.label]));
+
+    const { rows } = await pool.query(
+      `SELECT r.id, r.project_id, p.name AS project_name, r.from_environment_id, r.to_environment_id,
+              r.breaking_changes, r.ack_breaking_changes, r.release_note,
+              r.status, r.requested_by, r.requested_by_username, r.decided_by_username, r.decision_note,
+              r.decided_at, r.created_at
+       FROM project_promotion_requests r
+       JOIN projects p ON p.id = r.project_id
+       WHERE p.organisation = $1 AND r.status = $2
+       ORDER BY r.created_at DESC LIMIT 100`,
+      [req.authUser.organisation, status]
+    );
+    res.json({
+      requests: rows.map((r) => ({
+        id: r.id,
+        projectId: r.project_id,
+        projectName: r.project_name,
+        fromEnvironmentId: r.from_environment_id,
+        fromEnvironmentLabel: labelById.get(r.from_environment_id) || r.from_environment_id,
+        toEnvironmentId: r.to_environment_id,
+        toEnvironmentLabel: labelById.get(r.to_environment_id) || r.to_environment_id,
+        breakingChanges: Array.isArray(r.breaking_changes) ? r.breaking_changes : [],
+        ackBreakingChanges: r.ack_breaking_changes,
+        releaseNote: r.release_note,
+        status: r.status,
+        requestedBy: r.requested_by,
+        requestedByUsername: r.requested_by_username,
+        decidedByUsername: r.decided_by_username,
+        decisionNote: r.decision_note,
+        decidedAt: r.decided_at,
+        createdAt: r.created_at,
+        canApprove: r.requested_by !== req.authUser.sub,
+      })),
+    });
+  } catch (err) {
+    console.error('GET org-wide promotion-requests failed:', err);
+    res.status(500).json({ error: 'Could not load promotion requests.' });
+  }
+});
+
 // POST /api/workspace/projects/:id/promotion-requests/:reqId/approve —
 // Admin-only, and NOT the Admin who opened the request (GitHub's "you can't
 // approve your own PR"). Recomputes the live diff for the same from/to pair

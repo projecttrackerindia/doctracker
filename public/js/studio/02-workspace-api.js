@@ -25,7 +25,7 @@ async function loadEnvironmentMetrics(){
     console.error('Failed to load environment metrics:', err);
     state.envMetricsStatus = 'error';
   }
-  if(state.selected.type === 'home'){
+  if(state.selected.type === 'home' || state.selected.type === 'releasepipeline'){
     renderMain();
   }
 }

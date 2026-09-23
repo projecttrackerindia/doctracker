@@ -69,6 +69,12 @@ function renderMain(){
     return;
   }
 
+  if(state.selected.type === 'releasepipeline'){
+    if(!isAdmin() && !ownsAnyProject()){ state.selected = { type:'home' }; renderControlCenter(main); return; }
+    renderReleasePipelineOverview(main);
+    return;
+  }
+
   if(state.selected.type === 'overview'){
     renderProjectOverview(main, state.selected.projectId);
     return;
@@ -115,6 +121,129 @@ function renderMain(){
     // instead of the "request access" page already rendered above.
     if(!found.ep._docLocked) openTryItModal(found.proj, found.ep);
   }
+}
+
+// Cross-project Release Pipeline overview — a real top-level nav destination
+// instead of the old "Open Release Pipeline" being buried in each project's
+// "…" actions menu (see openReleasePipelineTab). Shows every API's current
+// furthest stage plus every org-wide pending Production request in one
+// place; approving/cancelling/rolling back still happens on the existing
+// per-project pipeline page (openReleasePipelineTab) — this is the missing
+// map of "what needs my attention across all of them," not a rebuild of the
+// per-project page itself.
+async function loadReleasePipelineRequests(){
+  if(!isAdmin()){ state.rpRequestsStatus = 'not-admin'; return; }
+  state.rpRequestsStatus = 'loading';
+  try{
+    const res = await apiGet('/promotion-requests?status=pending');
+    state.rpRequests = res.requests || [];
+    state.rpRequestsStatus = 'ready';
+  }catch(err){
+    console.error('Failed to load org-wide promotion requests:', err);
+    state.rpRequestsStatus = 'error';
+  }
+  if(state.selected && state.selected.type === 'releasepipeline') renderMain();
+}
+
+function renderReleasePipelineOverview(main){
+  if(state.envMetricsStatus === 'idle') loadEnvironmentMetrics();
+  if(!state.rpRequestsStatus) loadReleasePipelineRequests();
+
+  const em = state.envMetrics;
+  const emLoading = state.envMetricsStatus === 'loading' && !em;
+  const perProjectById = new Map((em && em.perProject || []).map(p=>[p.projectId, p]));
+  const lastStage = em && em.stages && em.stages.length ? em.stages[em.stages.length-1] : null;
+  const projects = allProjects().slice().sort((a,b)=> (a.name||'').localeCompare(b.name||''));
+
+  const pendingCount = state.rpRequestsStatus === 'ready' ? state.rpRequests.length : 0;
+
+  const projRows = projects.length ? projects.map(p=>{
+    const pp = perProjectById.get(p.id);
+    const readyTotal = pp ? pp.readyTotal : 0;
+    const inLastStage = pp && lastStage ? (pp.byEnvironment[lastStage.id]||0) : 0;
+    const fullyPromoted = pp && pp.fullyPromoted;
+    let stageLabel, stageColor;
+    if(emLoading){ stageLabel = 'Loading…'; stageColor = 'var(--text-faint)'; }
+    else if(!readyTotal){ stageLabel = 'Nothing release-ready yet'; stageColor = 'var(--text-faint)'; }
+    else if(fullyPromoted){ stageLabel = `All ${readyTotal} ready endpoint${readyTotal===1?'':'s'} in ${lastStage.label}`; stageColor = 'var(--post)'; }
+    else if(inLastStage){ stageLabel = `${inLastStage}/${readyTotal} ready endpoints in ${lastStage.label}`; stageColor = 'var(--put)'; }
+    else { stageLabel = `${readyTotal} endpoint${readyTotal===1?'':'s'} ready, none in ${lastStage?lastStage.label:'the last stage'} yet`; stageColor = 'var(--put)'; }
+    return `<tr class="cc-proj-row" data-rp-proj="${p.id}">
+      <td><span class="cc-proj-name">${escapeHtml(p.name)}</span></td>
+      <td><span class="lc-badge lc-${p.lifecycle.toLowerCase().replace(/[^a-z]/g,'')}">${p.lifecycle}</span></td>
+      <td style="color:${stageColor};">${stageLabel}</td>
+      <td class="mono">${p.owner ? escapeHtml(p.owner) : '<span class="empty-field">—</span>'}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="4" class="empty-field" style="padding:16px;">No APIs yet.</td></tr>`;
+
+  let reqRows;
+  if(state.rpRequestsStatus === 'not-admin'){
+    reqRows = `<tr><td colspan="6" class="empty-field" style="padding:16px;">Only Admins can see pending requests across every API — you can still see requests for projects you own from that project's own Release Pipeline.</td></tr>`;
+  } else if(state.rpRequestsStatus === 'loading' || !state.rpRequestsStatus){
+    reqRows = `<tr><td colspan="6" class="empty-field" style="padding:16px;">Loading pending requests…</td></tr>`;
+  } else if(state.rpRequestsStatus === 'error'){
+    reqRows = `<tr><td colspan="6" class="empty-field" style="padding:16px;">Couldn't load pending requests. <button type="button" id="rpRequestsRetry" style="background:none;border:none;color:var(--accent);cursor:pointer;text-decoration:underline;padding:0;font:inherit;">Retry</button></td></tr>`;
+  } else if(!state.rpRequests.length){
+    reqRows = `<tr><td colspan="6" class="empty-field" style="padding:16px;">No pending promotion requests right now.</td></tr>`;
+  } else {
+    reqRows = state.rpRequests.map(r=>`
+      <tr class="cc-proj-row" data-rp-proj="${r.projectId}">
+        <td><span class="cc-proj-name">${escapeHtml(r.projectName)}</span></td>
+        <td>${escapeHtml(r.fromEnvironmentLabel)} → ${escapeHtml(r.toEnvironmentLabel)}</td>
+        <td>${escapeHtml(r.requestedByUsername||'—')}</td>
+        <td class="mono" style="font-size:10.5px;color:var(--text-faint);">${formatDateTime(r.createdAt)}</td>
+        <td>${r.breakingChanges && r.breakingChanges.length ? `<span style="color:var(--delete);">${r.breakingChanges.length} breaking</span>` : '<span class="empty-field">—</span>'}</td>
+        <td>${r.canApprove ? '<span style="color:var(--post);">You can approve this</span>' : '<span class="empty-field">Requested by you — needs another Admin</span>'}</td>
+      </tr>`).join('');
+  }
+
+  main.innerHTML = `
+    <div class="crumb">Release Pipeline</div>
+    <div class="ctrl-hero" style="--ctrl-glow-bg:var(${pendingCount?'--put-bg':'--post-bg'});">
+      <div class="ctrl-hero-icon" style="--ctrl-icon-color:var(${pendingCount?'--put':'--post'});--ctrl-icon-bg:var(${pendingCount?'--put-bg':'--post-bg'});">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2.5"></circle><circle cx="5" cy="18" r="2.5"></circle><circle cx="19" cy="12" r="2.5"></circle><path d="M5 8.5v7M7.2 6.8L16.8 10.8M7.2 17.2L16.8 13.2"></path></svg>
+      </div>
+      <div class="ctrl-hero-copy">
+        <h1>Where every API stands in the pipeline</h1>
+        <p>A cross-project view of stage progress and pending Production requests. Approving, cancelling, or rolling back still happens on each API's own Release Pipeline — click any row to open it.</p>
+      </div>
+      <div class="ctrl-hero-stat">
+        <div class="n">${state.rpRequestsStatus==='ready' ? pendingCount : '…'}</div>
+        <div class="l">pending requests</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Pending promotion requests</div>
+      <div class="table-scroll">
+      <table class="data-table">
+        <thead><tr><th>API</th><th>Stage move</th><th>Requested by</th><th>Opened</th><th>Breaking changes</th><th>Approval</th></tr></thead>
+        <tbody>${reqRows}</tbody>
+      </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Stage status by API</div>
+      <div class="hint" style="margin-top:-4px;">"Ready" endpoints are the ones that pass the Production gate (SecOps + VAPT + Log Mgmt signed off) — see each API's Review sign-off status for what's holding the rest back.</div>
+      <div class="table-scroll">
+      <table class="data-table cc-proj-table">
+        <thead><tr><th>Name</th><th>Lifecycle</th><th>Current stage</th><th>Owner</th></tr></thead>
+        <tbody>${projRows}</tbody>
+      </table>
+      </div>
+    </div>
+  `;
+
+  const retryBtn = document.getElementById('rpRequestsRetry');
+  if(retryBtn) retryBtn.addEventListener('click', ()=>{ state.rpRequestsStatus = null; renderMain(); });
+
+  main.querySelectorAll('[data-rp-proj]').forEach(row=>{
+    row.addEventListener('click', ()=>{
+      const proj = state.projects[row.getAttribute('data-rp-proj')];
+      if(proj) openReleasePipelineTab(proj);
+    });
+  });
 }
 
 // `filterId` (Control Center only — see CC_KPI_FILTERS) makes the card a
