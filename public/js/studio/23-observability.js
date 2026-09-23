@@ -480,6 +480,23 @@ function fieldKvHtml(fields){
   }).join('');
 }
 
+const OBS_LOG_PAGE_SIZE = 50;
+
+// datetime-local inputs want/give "YYYY-MM-DDTHH:mm" in the viewer's own
+// local time (no timezone suffix) - these two convert to/from that, kept
+// next to the explorer function since nothing else in this file needs them.
+function toDatetimeLocalValue(ts){
+  const d = new Date(ts);
+  if(isNaN(d.getTime())) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fromDatetimeLocalValue(str){
+  if(!str) return null;
+  const ms = new Date(str).getTime();
+  return isNaN(ms) ? null : ms;
+}
+
 function renderLogExplorerSection(records){
   if(!records.length){
     return `<div class="obs-panel">
@@ -487,8 +504,27 @@ function renderLogExplorerSection(records){
       <div class="hint" style="margin-top:-4px;">Real per-request records aren't available yet. This requires the agent running with <code>CAPTURE_MODE=full</code> (opt-in - captures real field values, with credential-named fields always redacted; see the "Capture mode" section of AGENT_README.md before turning it on). In the default aggregate mode, this section stays empty by design - nothing here is sample data.</div>
     </div>`;
   }
-  const sorted = records.slice().sort((a,b)=> new Date(b.ts) - new Date(a.ts)).slice(0, 200);
-  const rows = sorted.map((r, i)=>{
+
+  if(!state.obsLogExplorer) state.obsLogExplorer = { from:'', to:'', page:1 };
+  const ex = state.obsLogExplorer;
+  const fromMs = fromDatetimeLocalValue(ex.from);
+  const toMs = fromDatetimeLocalValue(ex.to);
+
+  const sorted = records.slice().sort((a,b)=> new Date(b.ts) - new Date(a.ts));
+  const filtered = (fromMs === null && toMs === null) ? sorted : sorted.filter(r=>{
+    const t = new Date(r.ts).getTime();
+    if(fromMs !== null && t < fromMs) return false;
+    if(toMs !== null && t > toMs) return false;
+    return true;
+  });
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / OBS_LOG_PAGE_SIZE));
+  if(ex.page > totalPages) ex.page = totalPages;
+  if(ex.page < 1) ex.page = 1;
+  const startIdx = (ex.page - 1) * OBS_LOG_PAGE_SIZE;
+  const pageRows = filtered.slice(startIdx, startIdx + OBS_LOG_PAGE_SIZE);
+
+  const rows = pageRows.map((r, i)=>{
     const sc = r.statusCode || 0;
     const lvl = sc >= 500 ? 'err' : sc >= 400 ? 'warn' : 'ok';
     const lvlLabel = sc >= 500 ? 'ERROR' : sc >= 400 ? 'WARN' : 'OK';
@@ -516,13 +552,37 @@ function renderLogExplorerSection(records){
         </div>
       </td></tr>`;
   }).join('');
+
+  const rangeNote = (fromMs !== null || toMs !== null) ? ' in the selected range' : '';
+  const rangeSummary = filtered.length
+    ? `${(startIdx+1).toLocaleString()}–${(startIdx+pageRows.length).toLocaleString()} of ${filtered.length.toLocaleString()}${rangeNote}`
+    : `0 matching record(s)${rangeNote}`;
+  // sorted[0] is the newest record (see the sort above), sorted[last] the
+  // oldest - used as the pickers' min/max so the range they offer matches
+  // what's actually available instead of an unbounded native picker.
+  const oldestVal = toDatetimeLocalValue(sorted[sorted.length-1].ts);
+  const newestVal = toDatetimeLocalValue(sorted[0].ts);
+
   return `<div class="obs-panel">
     <div class="section-title">Log explorer</div>
-    <div class="hint" style="margin-top:-4px;">Real per-request records, most recent first (showing up to 200 of ${records.length.toLocaleString()}) — click a row to view its captured fields. Any field named like a credential is always shown redacted, enforced by the agent before this ever reaches DocTracker.</div>
+    <div class="hint" style="margin-top:-4px;">Real per-request records, most recent first — click a row to view its captured fields. Any field named like a credential is always shown redacted, enforced by the agent before this ever reaches DocTracker.</div>
+    <div class="obs-log-filters">
+      <label>From<input type="datetime-local" id="obsLogFrom" value="${escapeHtml(ex.from)}" min="${oldestVal}" max="${newestVal}"></label>
+      <label>To<input type="datetime-local" id="obsLogTo" value="${escapeHtml(ex.to)}" min="${oldestVal}" max="${newestVal}"></label>
+      ${(ex.from || ex.to) ? `<button type="button" class="obs-log-btn" id="obsLogClearRange" style="align-self:flex-end;">Clear range</button>` : ''}
+    </div>
     <div class="table-scroll"><table class="data-table cc-proj-table">
       <thead><tr><th>Time</th><th>Level</th><th>Method</th><th>Path</th><th>Status</th><th>Latency</th><th>Source IP</th><th>Flow</th><th>Fields</th></tr></thead>
-      <tbody>${rows}</tbody>
+      <tbody>${rows || `<tr><td colspan="9"><div class="empty-field" style="padding:10px 0;">No records in the selected range.</div></td></tr>`}</tbody>
     </table></div>
+    <div class="obs-log-pagination">
+      <span>Showing ${rangeSummary}</span>
+      <div class="obs-log-page-controls">
+        <button type="button" class="obs-log-btn" id="obsLogPrevPage" ${ex.page<=1?'disabled':''}>← Prev</button>
+        <span>Page ${ex.page} of ${totalPages}</span>
+        <button type="button" class="obs-log-btn" id="obsLogNextPage" ${ex.page>=totalPages?'disabled':''}>Next →</button>
+      </div>
+    </div>
   </div>`;
 }
 
@@ -654,6 +714,36 @@ function renderConsole(main, metrics, agentHealth, logRecords){
       const target = document.getElementById(row.getAttribute('data-obs-log-toggle'));
       if(target) target.classList.toggle('open');
     });
+  });
+
+  const logFrom = main.querySelector('#obsLogFrom');
+  const logTo = main.querySelector('#obsLogTo');
+  if(logFrom) logFrom.addEventListener('change', ()=>{
+    state.obsLogExplorer.from = logFrom.value;
+    state.obsLogExplorer.page = 1;
+    renderMain();
+  });
+  if(logTo) logTo.addEventListener('change', ()=>{
+    state.obsLogExplorer.to = logTo.value;
+    state.obsLogExplorer.page = 1;
+    renderMain();
+  });
+  const logClearRange = main.querySelector('#obsLogClearRange');
+  if(logClearRange) logClearRange.addEventListener('click', ()=>{
+    state.obsLogExplorer.from = '';
+    state.obsLogExplorer.to = '';
+    state.obsLogExplorer.page = 1;
+    renderMain();
+  });
+  const logPrev = main.querySelector('#obsLogPrevPage');
+  if(logPrev) logPrev.addEventListener('click', ()=>{
+    state.obsLogExplorer.page = Math.max(1, state.obsLogExplorer.page - 1);
+    renderMain();
+  });
+  const logNext = main.querySelector('#obsLogNextPage');
+  if(logNext) logNext.addEventListener('click', ()=>{
+    state.obsLogExplorer.page = state.obsLogExplorer.page + 1;
+    renderMain();
   });
 
   const clearBtn = main.querySelector('#obsClearScope');
