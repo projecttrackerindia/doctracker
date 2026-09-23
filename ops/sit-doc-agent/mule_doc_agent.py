@@ -965,6 +965,24 @@ def _read_log_disk():
     return st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
 
 
+# Each host sample is a fixed-position ARRAY, not an object, and carries only
+# the values that actually change. Repeating eleven JSON keys plus three
+# never-changing values (total RAM, disk size, core count) across 720 samples
+# cost ~210 KB on every push; this form is ~5x smaller for the same
+# information. Anything that couldn't be read is null in its slot rather than
+# 0 - the client renders "not readable on this host", never a flat line that
+# looks like a real measurement.
+#
+# The static three live in build_agent_health()'s "hostInfo" instead, and the
+# client derives used-bytes / free-bytes / load-per-core from the two together.
+# Same trade already made by logVolumeSamples' [epochSeconds, cumulativeLines].
+#
+# APPEND-ONLY: adding a column is safe, reordering or removing one silently
+# misreads every retained sample. The client mirrors this list in
+# HOST_SAMPLE_COLS (23-observability.js) and must be changed with it.
+HOST_SAMPLE_COLUMNS = ["at", "cpuPct", "memPct", "diskUsedPct", "load1", "load5", "load15", "agentRssBytes"]
+
+
 def sample_host_metrics(health, now):
     """One host-pressure sample, from stdlib only.
 
@@ -973,12 +991,9 @@ def sample_host_metrics(health, now):
     all world-readable, so it still works as the unprivileged
     `doctracker-agent` user with read-only access.
 
-    Returns a dict of what could actually be read. Anything unreadable is
-    simply absent rather than defaulted to zero - the Observability page
-    renders "not available on this host" for missing keys instead of drawing
-    a reassuring flat line that means nothing."""
-    sample = {}
-
+    Returns (sample_array, static_info) - see HOST_SAMPLE_COLUMNS - or
+    (None, None) when nothing at all could be read (e.g. no /proc)."""
+    cpu_pct = None
     cpu_now = _read_proc_stat_cpu()
     if cpu_now:
         prev = health.get("cpuPrevSample")
@@ -989,44 +1004,39 @@ def sample_host_metrics(health, now):
             total_delta = cpu_now[0] - prev[0]
             idle_delta = cpu_now[1] - prev[1]
             if total_delta > 0 and idle_delta >= 0:
-                sample["cpuPct"] = round(max(0.0, min(100.0, (1 - idle_delta / total_delta) * 100)), 1)
+                cpu_pct = round(max(0.0, min(100.0, (1 - idle_delta / total_delta) * 100)), 1)
         health["cpuPrevSample"] = [cpu_now[0], cpu_now[1], now]
 
+    static = {}
+    mem_pct = None
     mem = _read_meminfo()
     if mem:
         total, available = mem
-        sample["memTotalBytes"] = total
-        sample["memUsedBytes"] = total - available
-        sample["memPct"] = round((total - available) / total * 100, 1)
+        static["memTotalBytes"] = total
+        mem_pct = round((total - available) / total * 100, 1)
 
+    load1 = load5 = load15 = None
     try:
         load1, load5, load15 = os.getloadavg()
-        cores = os.cpu_count() or 1
-        sample["load1"] = round(load1, 2)
-        sample["load5"] = round(load5, 2)
-        sample["load15"] = round(load15, 2)
-        # Load normalised per core is the number that is comparable across
-        # machines: >1.0 means more runnable work than CPUs to run it.
-        sample["loadPerCore"] = round(load1 / cores, 2)
-        sample["cpuCores"] = cores
+        load1, load5, load15 = round(load1, 2), round(load5, 2), round(load15, 2)
+        static["cpuCores"] = os.cpu_count() or 1
     except (OSError, AttributeError):
         pass
 
+    disk_used_pct = None
     disk = _read_log_disk()
     if disk:
         total, free = disk
-        sample["diskTotalBytes"] = total
-        sample["diskFreeBytes"] = free
-        sample["diskUsedPct"] = round((total - free) / total * 100, 1) if total else None
+        if total:
+            static["diskTotalBytes"] = total
+            disk_used_pct = round((total - free) / total * 100, 1)
 
     rss = _read_self_rss()
-    if rss is not None:
-        sample["agentRssBytes"] = rss
 
-    if not sample:
-        return None
-    sample["at"] = round(now)
-    return sample
+    values = [cpu_pct, mem_pct, disk_used_pct, load1, load5, load15, rss]
+    if all(v is None for v in values):
+        return None, None
+    return [round(now)] + values, static
 
 
 def build_agent_health(state):
@@ -1076,7 +1086,9 @@ def build_agent_health(state):
         # than zeroed, and HOST_METRICS_ENABLED for when these describe the
         # wrong machine.
         "hostMetricsEnabled": HOST_METRICS_ENABLED,
+        "hostSampleColumns": HOST_SAMPLE_COLUMNS,
         "hostSamples": health.get("hostSamples", []),
+        "hostInfo": health.get("hostInfo", {}),
         "hostSampleIntervalSeconds": POLL_INTERVAL_SECONDS,
         "lastCycleAt": health.get("lastCycleAt"),
         "lastCycleDurationMs": health.get("lastCycleDurationMs"),
@@ -1475,12 +1487,19 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
         # when a cycle read no lines at all: "the box was pegged while
         # nothing was being logged" is itself a finding.
         if HOST_METRICS_ENABLED:
-            host_sample = sample_host_metrics(health, time.time())
+            host_sample, host_static = sample_host_metrics(health, time.time())
             if host_sample:
                 host_samples = health.setdefault("hostSamples", [])
+                # Discard anything not in the current fixed-position array
+                # form (e.g. a state.json written by an older build) rather
+                # than feeding mixed shapes to the client.
+                if host_samples and not isinstance(host_samples[0], list):
+                    del host_samples[:]
                 host_samples.append(host_sample)
                 if len(host_samples) > MAX_HOST_SAMPLES:
                     del host_samples[0:len(host_samples) - MAX_HOST_SAMPLES]
+                if host_static:
+                    health["hostInfo"] = host_static
         if not caught_up:
             print(f"[warn] backlog: read the full {MAX_LINES_PER_CYCLE}-line chunk this cycle "
                   f"({cycle_duration_ms}ms) and more remains - continuing immediately without sleeping "

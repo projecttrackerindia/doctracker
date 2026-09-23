@@ -188,7 +188,7 @@ access to the log directory.
 | `MAX_LOG_RECORDS_TOTAL` | No | `3000` | Only applies when `CAPTURE_MODE=full`. Global ring-buffer cap across all endpoints, oldest dropped first |
 | `MAX_LOG_VOLUME_SAMPLES` | No | `700` | Caps how many "log volume" samples (one per push, so ~700 ≈ a week at the default 15-min push interval) are kept for the Observability page's Log volume chart |
 | `HOST_METRICS_ENABLED` | No | `true` | Sample host CPU/memory/disk (see "Host health"). Set to `false` if the agent does **not** run on the same machine as the Mule runtime — otherwise it reports the wrong host's numbers |
-| `MAX_HOST_SAMPLES` | No | `720` | Caps retained host-health samples (one per **poll** cycle, so ~720 ≈ 12 hours at the default 60s poll interval) |
+| `MAX_HOST_SAMPLES` | No | `720` | Caps retained host-health samples (one per **poll** cycle, so ~720 ≈ 12 hours at the default 60s poll interval). At the cap these add ~40 KB to each push |
 
 ## Log volume & level distribution
 
@@ -244,7 +244,27 @@ counting it as busy would make a slow disk look like a CPU shortage.
 
 Anything unreadable (a non-Linux host has no `/proc`) is reported as "not
 readable on this host" rather than defaulted to zero — a reassuring flat
-line that means nothing is worse than no line.
+line that means nothing is worse than no line. The same applies to the
+*first* CPU reading after a start or restart: `/proc/stat` is cumulative
+since boot, so utilisation only exists as a delta between two reads, and a
+delta against a pre-restart sample would average CPU across the downtime.
+Both cases report null rather than a number.
+
+### Wire format
+
+Each sample is a fixed-position **array**, not an object, carrying only the
+values that change — the column order is `HOST_SAMPLE_COLUMNS` in
+`mule_doc_agent.py`, mirrored as `HOST_SAMPLE_COLS` in
+`public/js/studio/23-observability.js`. **Changing one without the other
+silently misreads every retained sample**; adding a column to the end is
+safe, reordering or removing one is not.
+
+The three values that never change — total RAM, log filesystem size, core
+count — are sent once in `hostInfo`, and used-bytes / free-bytes /
+load-per-core are derived client-side. This is the same trade
+`logVolumeSamples` already makes with `[epochSeconds, cumulativeLines]`, and
+it keeps a full 720-sample window at ~40 KB per push instead of ~210 KB
+(~3.8 MB/day rather than ~19.6 MB/day).
 
 **Not included, deliberately:** JVM heap, GC pressure, and per-endpoint CPU
 attribution. The agent sits outside the JVM and outside the request path, so

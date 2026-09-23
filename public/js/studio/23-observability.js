@@ -300,8 +300,30 @@ function obsGauge(label, pct, detail){
     <div class="obs-gauge-detail">${detail || ''}</div></div>`;
 }
 
+// Mirrors HOST_SAMPLE_COLUMNS in mule_doc_agent.py - each sample is a
+// fixed-position array of only the values that change, so 720 of them cost
+// ~40KB on the wire instead of ~210KB as objects. The never-changing values
+// (total RAM, disk size, core count) arrive once in agentHealth.hostInfo,
+// and used-bytes / free-bytes / load-per-core are derived from the two.
+// A null slot means "couldn't be read", never zero.
+const HOST_SAMPLE_COLS = ['at','cpuPct','memPct','diskUsedPct','load1','load5','load15','agentRssBytes'];
+
+function hostSampleToObj(arr){
+  if(!Array.isArray(arr)) return null;
+  const o = {};
+  HOST_SAMPLE_COLS.forEach((col, i)=>{
+    o[col] = (arr[i] === null || arr[i] === undefined) ? null : arr[i];
+  });
+  return o;
+}
+
 function renderHostHealthSection(agentHealth){
-  const samples = (agentHealth && agentHealth.hostSamples) || [];
+  // Older agent builds sent objects; ignore anything not in the current
+  // array form rather than rendering half a panel from a shape we can't
+  // read positionally.
+  const samples = (((agentHealth && agentHealth.hostSamples) || [])
+    .filter(Array.isArray).map(hostSampleToObj));
+  const info = (agentHealth && agentHealth.hostInfo) || {};
   const enabled = !agentHealth || agentHealth.hostMetricsEnabled !== false;
 
   if(!enabled){
@@ -325,11 +347,13 @@ function renderHostHealthSection(agentHealth){
   const peak = arr => arr.length ? Math.max(...arr) : null;
   const mean = arr => arr.length ? Math.round(arr.reduce((a,b)=>a+b,0)/arr.length*10)/10 : null;
 
-  const memDetail = (latest.memUsedBytes !== undefined && latest.memTotalBytes !== undefined)
-    ? `${formatBytes(latest.memUsedBytes)} of ${formatBytes(latest.memTotalBytes)} in use`
+  // Used/free bytes are derived from the percentage plus the one-off totals
+  // in hostInfo, rather than being repeated in all 720 samples.
+  const memDetail = (latest.memPct !== null && info.memTotalBytes)
+    ? `${formatBytes(info.memTotalBytes * latest.memPct / 100)} of ${formatBytes(info.memTotalBytes)} in use`
     : '';
-  const diskDetail = (latest.diskFreeBytes !== undefined)
-    ? `${formatBytes(latest.diskFreeBytes)} free on the log filesystem`
+  const diskDetail = (latest.diskUsedPct !== null && info.diskTotalBytes)
+    ? `${formatBytes(info.diskTotalBytes * (1 - latest.diskUsedPct / 100))} free on the log filesystem`
     : '';
   const cpuDetail = cpuSeries.length > 1
     ? `peak ${peak(cpuSeries)}% · mean ${mean(cpuSeries)}% over ${cpuSeries.length} sample(s)`
@@ -338,10 +362,12 @@ function renderHostHealthSection(agentHealth){
   // Load average is the one number that says whether the CPU figure means
   // "busy and coping" or "saturated and queueing". Normalised per core so it
   // reads the same on a 2-core box and a 32-core one.
-  const loadDetail = (latest.loadPerCore !== undefined)
-    ? `${latest.load1} / ${latest.load5} / ${latest.load15} over ${latest.cpuCores} core(s)`
+  const cores = info.cpuCores || null;
+  const loadPerCore = (latest.load1 !== null && cores) ? latest.load1 / cores : null;
+  const loadDetail = (latest.load1 !== null)
+    ? `${latest.load1} / ${latest.load5} / ${latest.load15}${cores ? ` over ${cores} core(s)` : ''}`
     : '';
-  const loadPct = (latest.loadPerCore !== undefined) ? Math.min(100, Math.round(latest.loadPerCore * 100)) : null;
+  const loadPct = (loadPerCore !== null) ? Math.min(100, Math.round(loadPerCore * 100)) : null;
 
   // CPU sparkline over the retained window, on the same left-to-right time
   // axis as the Log volume chart below it - that alignment is the point:
@@ -358,7 +384,7 @@ function renderHostHealthSection(agentHealth){
       <div class="obs-vol-axis"><span>${formatDateTime(new Date(firstAt*1000).toISOString())}</span><span>${formatDateTime(new Date(latest.at*1000).toISOString())}</span></div>`;
   })() : '';
 
-  const agentFootprint = (latest.agentRssBytes !== undefined)
+  const agentFootprint = (latest.agentRssBytes !== null)
     ? `<div class="hint" style="margin-top:10px;">This agent's own resident memory: <strong>${formatBytes(latest.agentRssBytes)}</strong> — shown so it can be ruled in or out as a cause of the memory figure above it.</div>`
     : '';
 
@@ -366,9 +392,9 @@ function renderHostHealthSection(agentHealth){
     <div class="section-title">Host health</div>
     <div class="hint" style="margin-top:-4px;">Machine running the log agent, sampled ${formatDateTime(new Date(latest.at*1000).toISOString())}${memSeries.length>1?` · memory peak ${peak(memSeries)}%`:''}</div>
     <div class="obs-gauge-grid">
-      ${obsGauge('CPU', latest.cpuPct === undefined ? null : latest.cpuPct, cpuDetail)}
-      ${obsGauge('Memory', latest.memPct === undefined ? null : latest.memPct, memDetail)}
-      ${obsGauge('Log disk', latest.diskUsedPct === undefined ? null : latest.diskUsedPct, diskDetail)}
+      ${obsGauge('CPU', latest.cpuPct, cpuDetail)}
+      ${obsGauge('Memory', latest.memPct, memDetail)}
+      ${obsGauge('Log disk', latest.diskUsedPct, diskDetail)}
       ${obsGauge('Load per core', loadPct, loadDetail)}
     </div>
     ${spark}
