@@ -1238,6 +1238,59 @@ pre.code-block{
 }
 .obs-ip-more:hover{ background:var(--accent-soft-strong); }
 
+/* Observability — Console mode (23-observability.js): a scope panel
+   (grouped by project → endpoint, same drill-down idea as the app's own
+   project sidebar) plus alerts/status-breakdown, all built from the exact
+   same real state.endpointMetrics/state.projects data the Overview table
+   uses — this is a different arrangement of real data, not a second data
+   source. */
+.obs-console{ display:grid; grid-template-columns:230px 1fr; gap:16px; align-items:start; }
+@media (max-width:860px){ .obs-console{ grid-template-columns:1fr; } }
+.obs-scope-panel{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:10px; max-height:640px; overflow-y:auto; }
+.obs-scope-search{ position:relative; margin-bottom:8px; }
+.obs-scope-search svg{ position:absolute; left:8px; top:50%; transform:translateY(-50%); width:11px; height:11px; color:var(--text-faint); pointer-events:none; }
+.obs-scope-search input{ width:100%; background:var(--bg-elevated); border:1px solid var(--border); color:var(--text); border-radius:7px; padding:6px 8px 6px 24px; font-size:11.5px; font-family:inherit; }
+.obs-all-row{ display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:7px; cursor:pointer; font-size:12px; font-weight:700; margin-bottom:4px; }
+.obs-all-row:hover{ background:var(--surface-hover); }
+.obs-all-row.active{ background:var(--accent-soft); color:var(--accent); }
+.obs-proj-row{ display:flex; align-items:center; gap:7px; padding:6px 8px; border-radius:7px; cursor:pointer; }
+.obs-proj-row:hover{ background:var(--surface-hover); }
+.obs-proj-row.active{ background:var(--accent-soft); }
+.obs-proj-caret{ width:8px; height:8px; color:var(--text-faint); flex-shrink:0; transition:transform .15s ease; }
+.obs-proj-group.open .obs-proj-caret{ transform:rotate(90deg); }
+.obs-proj-dot{ width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.obs-proj-name{ font-size:11.5px; font-weight:650; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.obs-proj-count{ font-size:9.5px; color:var(--text-faint); font-family:var(--mono); flex-shrink:0; }
+.obs-ep-list{ display:none; padding:2px 0 4px 18px; }
+.obs-proj-group.open .obs-ep-list{ display:block; }
+.obs-scope-ep-row{ display:flex; align-items:center; gap:6px; padding:4px 6px; border-radius:6px; cursor:pointer; }
+.obs-scope-ep-row:hover{ background:var(--surface-hover); }
+.obs-scope-ep-row.active{ background:var(--accent-soft); }
+.obs-scope-ep-row.active .obs-scope-ep-path{ color:var(--accent); }
+.obs-scope-ep-path{ font-family:var(--mono); font-size:10.3px; color:var(--text-dim); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.obs-scope-empty{ padding:14px 8px; font-size:11px; color:var(--text-faint); text-align:center; }
+
+.obs-statusbar{ height:9px; border-radius:5px; overflow:hidden; display:flex; background:var(--surface-2); margin-bottom:8px; }
+.obs-statusbar span{ height:100%; }
+.obs-status-legend{ display:flex; gap:14px; flex-wrap:wrap; font-size:11px; color:var(--text-faint); }
+.obs-status-legend .k{ display:inline-flex; align-items:center; gap:5px; }
+.obs-status-legend i{ width:8px; height:8px; border-radius:2px; display:inline-block; }
+
+.obs-alert-row{ display:flex; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); font-size:12px; align-items:flex-start; cursor:pointer; }
+.obs-alert-row:last-child{ border-bottom:none; }
+.obs-alert-row:hover{ background:var(--surface-hover); margin:0 -8px; padding-left:8px; padding-right:8px; border-radius:6px; }
+.obs-sev-bar{ width:4px; align-self:stretch; border-radius:3px; flex-shrink:0; min-height:30px; }
+.obs-sev-bar.crit{ background:var(--delete); } .obs-sev-bar.warn{ background:var(--put); }
+.obs-alert-title{ font-weight:650; }
+.obs-alert-meta{ color:var(--text-faint); font-size:10.5px; margin-top:3px; font-family:var(--mono); }
+
+/* Generic two-column section layout + a section's own header row (title +
+   an action on the right) - used by Observability Console and reusable
+   anywhere else a page needs the same shape. */
+.grid2{ display:grid; grid-template-columns:1.3fr 1fr; gap:14px; margin-bottom:16px; }
+@media (max-width:1050px){ .grid2{ grid-template-columns:1fr; } }
+.section-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+
 .kpi-grid{
   display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; margin-bottom:30px;
 }

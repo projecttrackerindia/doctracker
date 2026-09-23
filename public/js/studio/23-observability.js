@@ -7,6 +7,18 @@
 // the only place it's shown, cross-referenced against real endpoints purely
 // by matching method+path text, never by mutating a project's stored JSON.
 //
+// Two views over the exact same real data (no second/fake data source):
+//  - Overview: the flat table, every discovered endpoint at once.
+//  - Console: the same metrics grouped by project with a drill-down scope
+//    panel, KPIs, a status-code breakdown and threshold-based alerts - closer
+//    to a traditional observability dashboard's layout. There is no raw
+//    log-line explorer or request tracing here, on purpose: the agent never
+//    stores individual log lines or field values (see mule_doc_agent.py's
+//    security notes), only these aggregate counts - so unlike a real APM
+//    tool, per-request trace waterfalls aren't something this data can
+//    honestly show. Everything shown in Console is a real aggregate,
+//    nothing here is sample/placeholder data.
+//
 // state.endpointMetrics is pushed whole-blob by the agent as
 // {endpoints:{...}, agentHealth:{...}} (see build_endpoint_metrics()/
 // build_agent_health() in mule_doc_agent.py). Older pushes (before the
@@ -59,12 +71,9 @@ function classifyIp(ip){
   return 'external';
 }
 
-// Structured per-IP breakdown for one endpoint's traffic: a small bar per
-// IP (relative to that endpoint's own busiest source), a private/public
-// classification dot, and the exact hit count + share of total requests -
-// replacing the old flat "ip (n), ip (n), ip (n)" comma string, which had
-// no visual way to compare magnitudes or spot an internal vs external
-// source at a glance.
+// Structured per-IP breakdown: a small bar per IP (relative to the busiest
+// source IN THIS SET), a private/public classification dot, and the exact
+// hit count + share of total requests.
 function renderIpBreakdown(topIps, totalRequests, rowIdx){
   if(!topIps.length) return '<span class="empty-field">—</span>';
   const max = Math.max(...topIps.map(x=>x.count));
@@ -167,10 +176,10 @@ function renderAgentHealth(health){
   </div>`;
 }
 
-function renderObservability(main){
-  const { endpoints: metrics, agentHealth } = observabilityData();
-  const keys = Object.keys(metrics).sort((a,b)=> (a===OBS_OVERFLOW_KEY) - (b===OBS_OVERFLOW_KEY) || a.localeCompare(b));
-
+// Shared by both views - one row per metrics key. `keys` is whatever subset
+// the caller wants shown (all of them for Overview, the current scope's
+// subset for Console).
+function renderEndpointsTable(keys, metrics){
   const rows = keys.length ? keys.map((key, idx)=>{
     const m = metrics[key] || {};
     const total = m.totalRequests || 0;
@@ -198,34 +207,21 @@ function renderObservability(main){
     </tr>`;
   }).join('') : `<tr><td colspan="8" class="empty-field" style="padding:16px;">No traffic discovered yet. This fills in once the SIT log auto-discovery agent (ops/sit-doc-agent) has pushed at least one batch — see AGENT_README.md.</td></tr>`;
 
-  main.innerHTML = `
-    <div class="crumb">Observability</div>
-    <div class="ctrl-hero" style="--ctrl-glow-bg:var(--accent-soft);">
-      <div class="ctrl-hero-icon" style="--ctrl-icon-color:var(--accent);--ctrl-icon-bg:var(--accent-soft);">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 6"></polyline><polyline points="15 6 21 6 21 12"></polyline></svg>
-      </div>
-      <div class="ctrl-hero-copy">
-        <h1>Real traffic, straight from server logs</h1>
-        <p>Hit counts, status breakdown, error rate, and source IPs auto-discovered by the SIT log agent — never written into your documented endpoints, only shown here, cross-referenced by method + path. Field <em>values</em> from requests are never captured by the agent, only counts and structure. Path segments that look like per-request ids are templated to <code>{id}</code> so one busy endpoint doesn't fragment into thousands of rows.</p>
-      </div>
+  return `<div class="section">
+    <div class="section-title">Endpoints${keys.length ? ` (${keys.length})` : ''}</div>
+    <div class="table-scroll">
+    <table class="data-table cc-proj-table">
+      <thead><tr>
+        <th>Method</th><th>Path</th><th>Total requests</th><th>Error rate</th>
+        <th>Status breakdown</th><th>Source IPs</th><th>Last seen</th><th>Documentation</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
     </div>
+  </div>`;
+}
 
-    ${renderAgentHealth(agentHealth)}
-
-    <div class="section">
-      <div class="section-title">Endpoints seen in traffic</div>
-      <div class="table-scroll">
-      <table class="data-table cc-proj-table">
-        <thead><tr>
-          <th>Method</th><th>Path</th><th>Total requests</th><th>Error rate</th>
-          <th>Status breakdown</th><th>Source IPs</th><th>Last seen</th><th>Documentation</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      </div>
-    </div>
-  `;
-
+function wireEndpointsTable(main){
   main.querySelectorAll('[data-obs-ep]').forEach(row=>{
     row.style.cursor = 'pointer';
     row.addEventListener('click', (e)=>{
@@ -235,7 +231,6 @@ function renderObservability(main){
       renderMain();
     });
   });
-
   main.querySelectorAll('[data-obs-ip-toggle]').forEach(btn=>{
     btn.addEventListener('click', (e)=>{
       e.stopPropagation();
@@ -246,4 +241,265 @@ function renderObservability(main){
       btn.textContent = showing ? btn.getAttribute('data-more-label') : 'Hide';
     });
   });
+}
+
+/* ==================== Console mode ==================== */
+
+// Groups metrics keys by the real project they belong to (via the same
+// method+path match the table uses for its "Documentation" column), so the
+// scope panel mirrors the app's own project structure instead of a flat
+// key list. Keys with no documented match land in one "Undocumented
+// traffic" bucket rather than being hidden.
+function groupMetricsByProject(metrics){
+  const groups = new Map(); // projectId -> {name, keys:[]}
+  const undocumented = [];
+  Object.keys(metrics).forEach(key=>{
+    if(key === OBS_OVERFLOW_KEY){ undocumented.push(key); return; }
+    const found = findDocumentedEndpointForMetricsKey(key);
+    if(found){
+      if(!groups.has(found.proj.id)) groups.set(found.proj.id, { id: found.proj.id, name: found.proj.name, keys: [] });
+      groups.get(found.proj.id).keys.push(key);
+    } else {
+      undocumented.push(key);
+    }
+  });
+  const list = Array.from(groups.values()).sort((a,b)=> a.name.localeCompare(b.name));
+  if(undocumented.length) list.push({ id:'__undocumented', name:'Undocumented traffic', keys: undocumented });
+  return list;
+}
+
+function aggregateKeys(keys, metrics){
+  let total = 0, errCount = 0, lastSeenAt = null;
+  const statusBreakdown = {};
+  const ipCounts = {};
+  keys.forEach(key=>{
+    const m = metrics[key] || {};
+    const t = m.totalRequests || 0;
+    total += t;
+    Object.entries(m.statusBreakdown || {}).forEach(([fam, c])=>{
+      statusBreakdown[fam] = (statusBreakdown[fam] || 0) + c;
+      if(fam === '4xx' || fam === '5xx') errCount += c;
+    });
+    (m.topSourceIps || []).forEach(({ip, count})=>{ ipCounts[ip] = (ipCounts[ip] || 0) + count; });
+    if(m.lastSeenAt && (!lastSeenAt || m.lastSeenAt > lastSeenAt)) lastSeenAt = m.lastSeenAt;
+  });
+  const topIps = Object.entries(ipCounts).map(([ip,count])=>({ip,count})).sort((a,b)=>b.count-a.count).slice(0,10);
+  return { total, errCount, errorRate: total ? errCount/total : 0, statusBreakdown, topIps, lastSeenAt, endpointCount: keys.length };
+}
+
+// Same anomaly thresholds anomaly_notes() in mule_doc_agent.py already
+// flags server-side (>=25% over >=5 requests) plus a lower "watch" tier -
+// not a new definition of "alert," the same one the agent's own notes use.
+function computeConsoleAlerts(metrics){
+  const alerts = [];
+  Object.keys(metrics).forEach(key=>{
+    if(key === OBS_OVERFLOW_KEY) return;
+    const m = metrics[key] || {};
+    const total = m.totalRequests || 0;
+    const rate = typeof m.errorRate === 'number' ? m.errorRate : 0;
+    if(total < 5) return;
+    if(rate >= 0.25) alerts.push({ key, sev:'crit', rate, total, title:`${key} — error rate ${(rate*100).toFixed(1)}%`, meta:`${total.toLocaleString()} request(s) observed` });
+    else if(rate >= 0.05) alerts.push({ key, sev:'warn', rate, total, title:`${key} — error rate ${(rate*100).toFixed(1)}%`, meta:`${total.toLocaleString()} request(s) observed` });
+  });
+  return alerts.sort((a,b)=> (a.sev==='crit'?0:1) - (b.sev==='crit'?0:1) || b.rate - a.rate);
+}
+
+function renderStatusBreakdown(breakdown, total){
+  const t = total || 1;
+  const fams = ['2xx','3xx','4xx','5xx'];
+  const colorFor = { '2xx':'var(--st-2)', '3xx':'var(--st-3)', '4xx':'var(--st-4)', '5xx':'var(--st-5)' };
+  return `<div class="section">
+    <div class="section-title">Status code breakdown</div>
+    <div class="obs-statusbar">${fams.map(f=>`<span style="width:${((breakdown[f]||0)/t*100)}%;background:${colorFor[f]};"></span>`).join('')}</div>
+    <div class="obs-status-legend">${fams.map(f=>`<span class="k"><i style="background:${colorFor[f]};"></i>${f} ${(breakdown[f]||0).toLocaleString()}</span>`).join('')}</div>
+  </div>`;
+}
+
+function renderAlertsSection(alerts){
+  const rows = alerts.length ? alerts.map(a=>`
+    <div class="obs-alert-row" data-obs-alert-key="${escapeHtml(a.key)}">
+      <span class="obs-sev-bar ${a.sev}"></span>
+      <div><div class="obs-alert-title">${escapeHtml(a.title)}</div><div class="obs-alert-meta">${escapeHtml(a.meta)}</div></div>
+    </div>`).join('') : `<div class="empty-field" style="padding:6px 0;">No endpoints above the error-rate threshold right now.</div>`;
+  return `<div class="section">
+    <div class="section-title">Alerts</div>
+    <div class="hint" style="margin-top:-4px;">Endpoints with ≥5 observed requests and an error rate of 5% (warn) or 25% (critical) or higher — the same threshold ops/sit-doc-agent's own anomaly notes use.</div>
+    ${rows}
+  </div>`;
+}
+
+function obsScopeInfo(scope, metrics){
+  if(scope.type === 'project'){
+    return { title: scope.name, sub: `${scope.keys.length} endpoint(s) in traffic` };
+  }
+  if(scope.type === 'key'){
+    const found = findDocumentedEndpointForMetricsKey(scope.key);
+    return { title: scope.key, sub: found ? `Documented in ${found.proj.name}` : 'Not yet documented', badge: scope.key.split(' ')[0] };
+  }
+  return { title:'All traffic', sub: `${Object.keys(metrics).filter(k=>k!==OBS_OVERFLOW_KEY).length} endpoint(s) tracked` };
+}
+
+function renderConsole(main, metrics, agentHealth){
+  if(!state.obsScope) state.obsScope = { type:'all' };
+  if(!state.obsOpenProjects) state.obsOpenProjects = {};
+  if(state.obsSearch === undefined) state.obsSearch = '';
+
+  const groups = groupMetricsByProject(metrics);
+  const q = state.obsSearch.trim().toLowerCase();
+
+  let scopedKeys;
+  if(state.obsScope.type === 'project'){
+    const g = groups.find(g => g.id === state.obsScope.id);
+    scopedKeys = g ? g.keys : [];
+    state.obsScope.keys = scopedKeys; // used by obsScopeInfo()
+  } else if(state.obsScope.type === 'key'){
+    scopedKeys = metrics[state.obsScope.key] ? [state.obsScope.key] : [];
+  } else {
+    scopedKeys = Object.keys(metrics);
+  }
+
+  const agg = aggregateKeys(scopedKeys, metrics);
+  const alerts = computeConsoleAlerts(metrics).filter(a => scopedKeys.includes(a.key));
+  const info = obsScopeInfo(state.obsScope, metrics);
+
+  // ---- scope panel ----
+  let panelHtml = `<div class="obs-scope-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      <input type="text" id="obsScopeSearch" placeholder="Filter projects / endpoints…" value="${escapeHtml(state.obsSearch)}" autocomplete="off">
+    </div>
+    <div class="obs-all-row${state.obsScope.type==='all'?' active':''}" data-obs-scope-all="1">All traffic</div>`;
+
+  const visibleGroups = groups.filter(g=>{
+    if(!q) return true;
+    return g.name.toLowerCase().includes(q) || g.keys.some(k=>k.toLowerCase().includes(q));
+  });
+  if(!visibleGroups.length){
+    panelHtml += `<div class="obs-scope-empty">No projects match "${escapeHtml(q)}".</div>`;
+  }
+  visibleGroups.forEach(g=>{
+    const isOpen = state.obsOpenProjects[g.id] || (q && g.keys.length);
+    const agg1 = aggregateKeys(g.keys, metrics);
+    const dotColor = agg1.errorRate>=0.25?'var(--delete)':agg1.errorRate>=0.05?'var(--put)':'var(--post)';
+    const groupActive = state.obsScope.type==='project' && state.obsScope.id===g.id;
+    const visKeys = q ? g.keys.filter(k=>k.toLowerCase().includes(q) || g.name.toLowerCase().includes(q)) : g.keys;
+    panelHtml += `<div class="obs-proj-group${isOpen?' open':''}" data-obs-proj-group="${g.id}">
+      <div class="obs-proj-row${groupActive?' active':''}" data-obs-proj="${g.id}">
+        <svg class="obs-proj-caret" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l8 7-8 7z"></path></svg>
+        <span class="obs-proj-dot" style="background:${dotColor};"></span>
+        <span class="obs-proj-name">${escapeHtml(g.name)}</span>
+        <span class="obs-proj-count mono">${g.keys.length}</span>
+      </div>
+      <div class="obs-ep-list">
+        ${visKeys.map(k=>{
+          const [method, ...pathParts] = k.split(' ');
+          const active = state.obsScope.type==='key' && state.obsScope.key===k;
+          return `<div class="obs-scope-ep-row${active?' active':''}" data-obs-key="${escapeHtml(k)}">
+            <span class="badge ${methodClass(method)}" style="font-size:8.5px;padding:1.5px 5px;">${escapeHtml(method)}</span>
+            <span class="obs-scope-ep-path">${escapeHtml(pathParts.join(' '))}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  });
+
+  // ---- main content ----
+  const contentHtml = `
+    <div class="crumb">Observability / Console${state.obsScope.type!=='all' ? ' / ' + escapeHtml(info.title) : ''}</div>
+    <div class="section-head" style="margin-bottom:14px;">
+      <div>
+        <div style="font-size:18px;font-weight:800;letter-spacing:-.2px;">${escapeHtml(info.title)}</div>
+        <div class="hint" style="margin:2px 0 0;">${escapeHtml(info.sub)}</div>
+      </div>
+      ${state.obsScope.type!=='all' ? `<button type="button" class="obs-ip-more" id="obsClearScope">Clear scope</button>` : ''}
+    </div>
+
+    <div class="kpi-grid">
+      ${healthKpi('Total requests', agg.total.toLocaleString(), `${agg.endpointCount} endpoint(s) in scope`)}
+      ${healthKpi('Error rate', (agg.errorRate*100).toFixed(1)+'%', agg.errCount.toLocaleString()+' error(s)', agg.errorRate>=0.25?'--delete':agg.errorRate>=0.05?'--put':'--post')}
+      ${healthKpi('Alerts', String(alerts.length), alerts.filter(a=>a.sev==='crit').length + ' critical', alerts.length ? (alerts.some(a=>a.sev==='crit')?'--delete':'--put') : '--post')}
+      ${healthKpi('Distinct source IPs', String(agg.topIps.length) + (agg.topIps.length>=10?'+':''), 'top 10 shown below')}
+      ${healthKpi('Last seen', agg.lastSeenAt ? formatDateTime(agg.lastSeenAt) : '—', '')}
+    </div>
+
+    <div class="grid2">
+      ${renderStatusBreakdown(agg.statusBreakdown, agg.total)}
+      <div class="section"><div class="section-title">Top source IPs</div><div class="hint" style="margin-top:-4px;">Current scope, ranked by request count</div>${renderIpBreakdown(agg.topIps, agg.total, 'console')}</div>
+    </div>
+
+    <div class="grid2">
+      ${renderAlertsSection(alerts)}
+      ${renderAgentHealth(agentHealth)}
+    </div>
+
+    ${renderEndpointsTable(scopedKeys, metrics)}
+  `;
+
+  main.innerHTML = `<div class="obs-console">
+    <div class="obs-scope-panel">${panelHtml}</div>
+    <div>${contentHtml}</div>
+  </div>`;
+
+  main.querySelector('#obsScopeSearch').addEventListener('input', (e)=>{ state.obsSearch = e.target.value; renderConsole(main, metrics, agentHealth); });
+  const allRow = main.querySelector('[data-obs-scope-all]');
+  if(allRow) allRow.addEventListener('click', ()=>{ state.obsScope = { type:'all' }; renderConsole(main, metrics, agentHealth); });
+  main.querySelectorAll('[data-obs-proj]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const id = el.getAttribute('data-obs-proj');
+      state.obsOpenProjects[id] = !state.obsOpenProjects[id];
+      state.obsScope = { type:'project', id, name: groups.find(g=>g.id===id).name, keys: groups.find(g=>g.id===id).keys };
+      renderConsole(main, metrics, agentHealth);
+    });
+  });
+  main.querySelectorAll('[data-obs-key]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      state.obsScope = { type:'key', key: el.getAttribute('data-obs-key') };
+      renderConsole(main, metrics, agentHealth);
+    });
+  });
+  const clearBtn = main.querySelector('#obsClearScope');
+  if(clearBtn) clearBtn.addEventListener('click', ()=>{ state.obsScope = { type:'all' }; renderConsole(main, metrics, agentHealth); });
+  main.querySelectorAll('[data-obs-alert-key]').forEach(el=>{
+    el.addEventListener('click', ()=>{ state.obsScope = { type:'key', key: el.getAttribute('data-obs-alert-key') }; renderConsole(main, metrics, agentHealth); });
+  });
+
+  wireEndpointsTable(main);
+}
+
+/* ==================== Page entry point ==================== */
+
+function renderObservability(main){
+  const { endpoints: metrics, agentHealth } = observabilityData();
+  if(!state.obsView) state.obsView = 'overview';
+
+  const toggleHtml = `<div class="view-toggle" style="margin-left:auto;flex-shrink:0;position:relative;z-index:1;">
+    <button type="button" class="vt-btn${state.obsView==='overview'?' active':''}" id="obsViewOverview">Overview</button>
+    <button type="button" class="vt-btn${state.obsView==='console'?' active':''}" id="obsViewConsole">Console</button>
+  </div>`;
+
+  main.innerHTML = `
+    <div class="crumb">Observability</div>
+    <div class="ctrl-hero" style="--ctrl-glow-bg:var(--accent-soft);">
+      <div class="ctrl-hero-icon" style="--ctrl-icon-color:var(--accent);--ctrl-icon-bg:var(--accent-soft);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 6"></polyline><polyline points="15 6 21 6 21 12"></polyline></svg>
+      </div>
+      <div class="ctrl-hero-copy">
+        <h1>Real traffic, straight from server logs</h1>
+        <p>Hit counts, status breakdown, error rate, and source IPs auto-discovered by the SIT log agent — never written into your documented endpoints, only shown here, cross-referenced by method + path. Field <em>values</em> from requests are never captured by the agent, only counts and structure. Path segments that look like per-request ids are templated to <code>{id}</code> so one busy endpoint doesn't fragment into thousands of rows.</p>
+      </div>
+      ${toggleHtml}
+    </div>
+    <div id="obsBody"></div>
+  `;
+
+  const body = document.getElementById('obsBody');
+  if(state.obsView === 'console'){
+    renderConsole(body, metrics, agentHealth);
+  } else {
+    body.innerHTML = renderAgentHealth(agentHealth) + renderEndpointsTable(Object.keys(metrics).sort((a,b)=> (a===OBS_OVERFLOW_KEY) - (b===OBS_OVERFLOW_KEY) || a.localeCompare(b)), metrics);
+    wireEndpointsTable(body);
+  }
+
+  document.getElementById('obsViewOverview').addEventListener('click', ()=>{ state.obsView = 'overview'; renderObservability(main); });
+  document.getElementById('obsViewConsole').addEventListener('click', ()=>{ state.obsView = 'console'; renderObservability(main); });
 }
