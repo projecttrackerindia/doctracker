@@ -87,7 +87,6 @@ PROJECT_NAME = "SIT Auto-Discovery - unreviewed"
 
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "60"))
 PUSH_INTERVAL_SECONDS = int(os.environ.get("PUSH_INTERVAL_SECONDS", "900"))  # 15 min batches, not per-line
-MAX_EXAMPLES_PER_STATUS = 3
 
 USER_AGENT = "DocTracker-SIT-Agent/1.0 (svc-doc-agent; see AGENT_README.md)"
 
@@ -116,11 +115,135 @@ CORRELATION_ID_PATTERN = re.compile(r'(?:correlationId|X-Correlation-ID|CORRELAT
 STATUS_CODE_PATTERN = re.compile(r'\b(?:status(?:Code)?)["\s:=]+(\d{3})\b', re.IGNORECASE)
 
 # ============================================================================
+# Style C - CONFIRMED against this deployment's real logs on 2026-09-23:
+# a request-start line naming the HTTP method (e.g.
+# "...[common-jwt-auth].post:\token:application\json:jwt-token-api-config/...")
+# followed by a PRETTY-PRINTED multi-line JSON object - one key per physical
+# log line, not one JSON object per line like Style A assumed. Reassembled
+# below by brace-counting across lines, then the HTTP path/status/correlation
+# id/payload-field-names are found by searching the parsed object's keys
+# rather than assuming an exact schema, since different apps on this server
+# may nest things differently.
+# ============================================================================
+HEADER_METHOD_PATTERN = re.compile(r'\.(GET|POST|PUT|PATCH|DELETE):', re.IGNORECASE)
+REQUEST_URI_KEY_PATTERN = re.compile(r'requesturi|^path$|^uri$', re.IGNORECASE)
+CORR_ID_KEY_PATTERN = re.compile(r'correlationid', re.IGNORECASE)
+STATUS_KEY_PATTERN = re.compile(r'statuscode|^status$', re.IGNORECASE)
+REQUEST_PAYLOAD_KEY_PATTERN = re.compile(r'^requestpayload$', re.IGNORECASE)
+RESPONSE_PAYLOAD_KEY_PATTERN = re.compile(r'^responsepayload$', re.IGNORECASE)
+
+
+def _find_key_dict(obj, pattern):
+    """DFS: first dict VALUE whose own key matches `pattern`. Used to locate
+    the RequestPayload/ResponsePayload sub-object without assuming exactly
+    where it's nested."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if pattern.search(k) and isinstance(v, dict):
+                return v
+        for v in obj.values():
+            found = _find_key_dict(v, pattern)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _find_key_dict(item, pattern)
+            if found is not None:
+                return found
+    return None
+
+
+def _find_key_value(obj, pattern):
+    """DFS: first SCALAR value whose own key matches `pattern` (e.g. a path,
+    a status code, a correlation id). Never returns a dict/list - this is
+    only for small identifying values, never for payload content."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if pattern.search(k) and not isinstance(v, (dict, list)):
+                return v
+        for v in obj.values():
+            found = _find_key_value(v, pattern)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _find_key_value(item, pattern)
+            if found is not None:
+                return found
+    return None
+
+
+def assemble_multiline_observations(lines, carry):
+    """Reconstructs Style C's pretty-printed multi-line JSON blocks into
+    single objects, paired with the method parsed off the request-start line
+    that precedes each block.
+
+    SECURITY: only field NAMES and inferred TYPES are ever kept from a parsed
+    payload (via infer_type() at the call site) - the literal captured
+    VALUES (which may be credentials, even ones that look pre-encrypted, as
+    seen in this deployment's own jwt-token-api RequestPayload) are discarded
+    the moment this function returns. Nothing here stores or prints a real
+    field value.
+
+    `carry` is kept IN-MEMORY ONLY by the caller (never written to
+    STATE_FILE) so a block split across two poll cycles still reconstructs,
+    at the cost of losing one in-flight block if the agent restarts mid-block
+    - an acceptable trade-off for a best-effort discovery tool, and it means
+    no partially-parsed raw payload ever touches disk."""
+    observations = []
+    for line in lines:
+        stripped = line.rstrip()
+
+        if not carry["in_json"]:
+            m = HEADER_METHOD_PATTERN.search(stripped)
+            if m:
+                carry["method"] = m.group(1).upper()
+            if stripped.lstrip().startswith("{"):
+                carry["in_json"] = True
+                carry["buffer"] = stripped
+                carry["depth"] = stripped.count("{") - stripped.count("}")
+                if carry["depth"] <= 0 and carry["buffer"].strip() not in ("", "{"):
+                    carry["in_json"] = False  # single-line { ... } - handled here too
+                    _finish_block(carry, observations)
+            continue
+
+        carry["buffer"] += "\n" + stripped
+        carry["depth"] += stripped.count("{") - stripped.count("}")
+        if carry["depth"] <= 0:
+            carry["in_json"] = False
+            _finish_block(carry, observations)
+    return observations
+
+
+def _finish_block(carry, observations):
+    try:
+        obj = json.loads(carry["buffer"])
+    except (ValueError, TypeError):
+        obj = None
+    carry["buffer"] = ""
+    if isinstance(obj, dict) and carry["method"]:
+        path = _find_key_value(obj, REQUEST_URI_KEY_PATTERN)
+        if path:
+            req_payload = _find_key_dict(obj, REQUEST_PAYLOAD_KEY_PATTERN)
+            resp_payload = _find_key_dict(obj, RESPONSE_PAYLOAD_KEY_PATTERN)
+            observations.append({
+                "method": carry["method"],
+                "path": str(path).split("?")[0],
+                "statusCode": _find_key_value(obj, STATUS_KEY_PATTERN),
+                "correlationId": _find_key_value(obj, CORR_ID_KEY_PATTERN),
+                "body": req_payload if isinstance(req_payload, dict) else None,
+                "responseBody": resp_payload if isinstance(resp_payload, dict) else None,
+            })
+    carry["method"] = None
+
+# ============================================================================
 # Naming-heuristic description generator - same approach used to backfill
 # field descriptions in DocTracker earlier in this engagement. No LLM: a
 # small dictionary of regexes matched against the field's own name.
 # ============================================================================
 DESC_HEURISTICS = [
+    (re.compile(r'password|passwd|secret|apikey|api_key|token|pin$|^otp', re.I),
+     "Sensitive credential/secret field. This agent never captures or stores the actual value - field name and type only."),
     (re.compile(r'statuscode|statusCode$', re.I), "Status code."),
     (re.compile(r'errortype', re.I), "Machine-readable error category."),
     (re.compile(r'errorcode', re.I), "Machine-readable error code."),
@@ -256,6 +379,14 @@ def parse_line(line):
 
 # ============================================================================
 # Aggregation - builds up one record per distinct (method, path)
+#
+# SECURITY: only field NAMES and inferred TYPES are ever retained here, via
+# infer_type() - never a literal captured value. Confirmed necessary against
+# this deployment's own real logs: a jwt-token-api request body included
+# `user`/`password` fields, which must never be echoed anywhere this agent
+# writes (local HTML report or a DocTracker push), even though they looked
+# pre-encrypted - the agent has no way to know that's true for every field
+# on every endpoint, so field values are dropped unconditionally.
 # ============================================================================
 def aggregate(state, observations):
     endpoints = state.setdefault("endpoints", {})
@@ -264,12 +395,18 @@ def aggregate(state, observations):
         ep = endpoints.setdefault(key, {
             "method": obs["method"], "path": obs["path"],
             "statusCodes": {}, "correlationIds": [], "fieldShapes": {},
+            "responseFieldShapes": {}, "statusesWithErrorLikeFields": [],
         })
         if obs.get("statusCode"):
             sc = str(obs["statusCode"])
-            examples = ep["statusCodes"].setdefault(sc, [])
-            if obs.get("body") and len(examples) < MAX_EXAMPLES_PER_STATUS:
-                examples.append(obs["body"])
+            ep["statusCodes"][sc] = ep["statusCodes"].get(sc, 0) + 1
+            resp_body = obs.get("responseBody")
+            if isinstance(resp_body, dict):
+                for k, v in resp_body.items():
+                    ep["responseFieldShapes"][k] = infer_type(v)
+                if any(re.search(r'^error|errorcode|errormessage', k, re.I) for k in resp_body) \
+                        and sc == "200" and sc not in ep["statusesWithErrorLikeFields"]:
+                    ep["statusesWithErrorLikeFields"].append(sc)
         if obs.get("correlationId") and obs["correlationId"] not in ep["correlationIds"]:
             if len(ep["correlationIds"]) < 20:  # cap - this is just a discovery sample, not an audit trail
                 ep["correlationIds"].append(obs["correlationId"])
@@ -280,18 +417,16 @@ def aggregate(state, observations):
 
 
 # ============================================================================
-# Anomaly flags - mechanical only, no semantic guessing
+# Anomaly flags - mechanical only, no semantic guessing. Works off field
+# NAMES observed in response shapes, never captured values (see note above).
 # ============================================================================
 def anomaly_notes(ep):
     notes = []
     codes = list(ep["statusCodes"].keys())
-    if "200" in ep["statusCodes"]:
-        for body in ep["statusCodes"]["200"]:
-            if isinstance(body, dict) and any(k in body for k in ("error", "errorCode", "errorMessage")):
-                notes.append("A 200 response was observed containing an error/errorCode/errorMessage key - "
-                              "possible business-error-returned-as-200 pattern (see this engagement's earlier "
-                              "F-04-style findings). Needs human review, not auto-flagged as broken.")
-                break
+    if ep.get("statusesWithErrorLikeFields"):
+        notes.append("A 200 response was observed with a field named error/errorCode/errorMessage - "
+                      "possible business-error-returned-as-200 pattern (see this engagement's earlier "
+                      "F-04-style findings). Needs human review, not auto-flagged as broken.")
     if len(codes) >= 4:
         notes.append(f"{len(codes)} distinct status codes observed ({', '.join(sorted(codes))}) - "
                       "worth confirming which are documented, expected outcomes vs. undocumented edge cases.")
@@ -372,10 +507,22 @@ def build_project(state, existing_project=None):
             }
             for k, t in ep["fieldShapes"].items()
         ]
+        response_fields = [
+            {
+                "id": f"auto-{stable_id(key, 'resp', k)}",
+                "name": k, "type": t, "description": guess_description(k),
+            }
+            for k, t in ep.get("responseFieldShapes", {}).items()
+        ]
         responses = [
-            {"code": int(sc) if sc.isdigit() else 0, "description": f"Observed {len(examples)} time(s) in SIT logs.",
-             "fields": [], "example": json.dumps(examples[0]) if examples else "", "examples": []}
-            for sc, examples in ep["statusCodes"].items()
+            # No "example" is ever populated here - only counts and field
+            # names/types. A captured field value could be a real credential
+            # (see the aggregate() docstring), so it is never copied into a
+            # response example, in local reports or DocTracker pushes alike.
+            {"code": int(sc) if sc.isdigit() else 0, "description": f"Observed {count} time(s) in SIT logs. "
+             "No response body content is captured - field names/types only, see below.",
+             "fields": response_fields, "example": "", "examples": []}
+            for sc, count in ep["statusCodes"].items()
         ]
         notes = anomaly_notes(ep)
         endpoints.append({
@@ -447,10 +594,15 @@ def render_html(project):
         ) or "<tr><td colspan='3'><em>No request-body fields observed in logs.</em></td></tr>"
 
         resp_html = "".join(
-            f"<tr><td>{_esc(r['code'])}</td><td>{_esc(r['description'])}</td>"
-            f"<td><code>{_esc(r['example'])[:300]}</code></td></tr>"
+            f"<tr><td>{_esc(r['code'])}</td><td>{_esc(r['description'])}</td></tr>"
             for r in ep["responses"]
-        ) or "<tr><td colspan='3'><em>No responses observed.</em></td></tr>"
+        ) or "<tr><td colspan='2'><em>No responses observed.</em></td></tr>"
+
+        resp_fields_html = "".join(
+            f"<tr><td><code>{_esc(f['name'])}</code></td><td>{_esc(f['type'])}</td>"
+            f"<td>{_esc(f['description'])}</td></tr>"
+            for f in (ep["responses"][0]["fields"] if ep["responses"] else [])
+        ) or "<tr><td colspan='3'><em>No response-body fields observed in logs.</em></td></tr>"
 
         rows.append(f"""
         <section class="ep">
@@ -458,11 +610,16 @@ def render_html(project):
               <code>{_esc(ep['path'])}</code></h2>
           <p class="desc">{_esc(ep['description']).replace(chr(10), '<br>')}</p>
           <h3>Request body fields (observed)</h3>
+          <p class="fieldnote">Field names and types only - no captured values are ever stored or shown, since a
+          field (even one that looks pre-encrypted) could be a real credential.</p>
           <table><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
           <tbody>{fields_html}</tbody></table>
           <h3>Responses (observed)</h3>
-          <table><thead><tr><th>Status</th><th>Notes</th><th>Example (truncated)</th></tr></thead>
+          <table><thead><tr><th>Status</th><th>Notes</th></tr></thead>
           <tbody>{resp_html}</tbody></table>
+          <h3>Response body fields (observed, all statuses combined)</h3>
+          <table><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+          <tbody>{resp_fields_html}</tbody></table>
         </section>""")
 
     endpoints_html = "".join(rows) or "<p><em>No endpoints discovered yet - keep the agent running and re-check.</em></p>"
@@ -480,6 +637,7 @@ def render_html(project):
   .ep {{ border: 1px solid #d0d7de; border-radius: 8px; padding: 14px 18px; margin-bottom: 18px; }}
   .ep h2 {{ font-size: 1.05rem; margin: 0 0 6px; }}
   .desc {{ color: #57606a; font-size: 0.88rem; }}
+  .fieldnote {{ color: #57606a; font-size: 0.8rem; font-style: italic; margin: 0 0 4px; }}
   .method {{ display: inline-block; font-weight: 700; font-size: 0.75rem; padding: 2px 8px; border-radius: 4px;
              color: #fff; margin-right: 6px; }}
   .method.get {{ background: #0969da; }} .method.post {{ background: #1a7f37; }}
@@ -560,20 +718,34 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
     if sample_lines:
         print(f"[info] sample mode: reading up to {sample_lines} NEW lines from {MULE_LOG_PATH}\n")
         lines = tail_new_lines(MULE_LOG_PATH, dict(state))[:sample_lines]
-        matched, unmatched = 0, 0
+        carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+        multi_obs = assemble_multiline_observations(lines, carry)
+
+        matched_single, unmatched = 0, 0
         for line in lines:
             obs = parse_line(line)
             if obs:
-                matched += 1
-                print(f"MATCHED   {obs['method']} {obs['path']}  status={obs.get('statusCode')}  corr={obs.get('correlationId')}")
+                matched_single += 1
+                print(f"MATCHED (single-line)   {obs['method']} {obs['path']}  status={obs.get('statusCode')}  corr={obs.get('correlationId')}")
             else:
                 unmatched += 1
                 print(f"UNMATCHED {line[:160]}")
-        print(f"\n[info] {matched} matched, {unmatched} unmatched out of {len(lines)} lines.")
-        if matched == 0 and lines:
-            print("[warn] Nothing matched at all - LINE_PATTERNS almost certainly needs tuning to your real log "
-                  "format. Paste a few real (redacted) log lines and adjust the regex/JSON-key list at the top "
-                  "of this file before relying on this for real.")
+
+        for obs in multi_obs:
+            req_fields = sorted(obs["body"].keys()) if isinstance(obs.get("body"), dict) else []
+            print(f"MATCHED (multi-line JSON block)   {obs['method']} {obs['path']}  status={obs.get('statusCode')}  "
+                  f"corr={obs.get('correlationId')}  request-field-names={req_fields}   [values never captured]")
+
+        total_matched = matched_single + len(multi_obs)
+        print(f"\n[info] {total_matched} matched ({matched_single} single-line style, {len(multi_obs)} reconstructed "
+              f"multi-line JSON block(s)), {unmatched} lines not matched by the single-line patterns, "
+              f"out of {len(lines)} lines total.")
+        print("[info] note: lines that are PART OF a successfully reconstructed multi-line JSON block will still "
+              "show as UNMATCHED above one-by-one - that's expected, they're not meant to match individually.")
+        if total_matched == 0 and lines:
+            print("[warn] Nothing matched at all - LINE_PATTERNS/HEADER_METHOD_PATTERN almost certainly need "
+                  "tuning to your real log format. Paste a few real (redacted) log lines here so they can be "
+                  "adjusted before relying on this for real.")
         return
 
     client = None
@@ -598,9 +770,14 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
             write_local_html(state, local_html)  # so the URL is live immediately, not 404 until the first push
         start_local_server(local_html, serve_port)
 
+    # In-memory only (never persisted to STATE_FILE) - see assemble_multiline_observations()'s
+    # docstring for why a partially-read JSON block should never touch disk.
+    multiline_carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+
     while True:
         lines = tail_new_lines(MULE_LOG_PATH, state)
         observations = [o for o in (parse_line(l) for l in lines) if o]
+        observations += assemble_multiline_observations(lines, multiline_carry)
         if observations:
             aggregate(state, observations)
             print(f"[info] parsed {len(observations)} HTTP-shaped line(s) this cycle "
