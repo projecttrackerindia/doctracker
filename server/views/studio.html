@@ -1247,6 +1247,15 @@ pre.code-block{
 .obs-console{ display:grid; grid-template-columns:230px 1fr; gap:16px; align-items:start; }
 @media (max-width:860px){ .obs-console{ grid-template-columns:1fr; } }
 .obs-scope-panel{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:10px; max-height:640px; overflow-y:auto; }
+/* DocTracker's app-wide .section class (studio.html - see server.js/other
+   pages) is only a spacing utility (margin-bottom:30px), not a card style -
+   it relies on the table/kpi-grid content inside it to provide its own
+   visual boundary. Observability's own panels (status breakdown, source
+   IPs, alerts, agent health, log explorer...) have no such inner border on
+   their own, so they need a REAL card treatment here - this is
+   Observability-scoped on purpose, not a change to the shared .section
+   class every other page already depends on rendering bare. */
+.obs-panel{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px 18px; margin-bottom:16px; }
 .obs-scope-search{ position:relative; margin-bottom:8px; }
 .obs-scope-search svg{ position:absolute; left:8px; top:50%; transform:translateY(-50%); width:11px; height:11px; color:var(--text-faint); pointer-events:none; }
 .obs-scope-search input{ width:100%; background:var(--bg-elevated); border:1px solid var(--border); color:var(--text); border-radius:7px; padding:6px 8px 6px 24px; font-size:11.5px; font-family:inherit; }

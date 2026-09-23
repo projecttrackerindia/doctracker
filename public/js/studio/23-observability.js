@@ -145,7 +145,7 @@ function formatDuration(seconds){
 // living in stdout on a server most reviewers aren't logged into.
 function renderAgentHealth(health){
   if(!health){
-    return `<div class="section">
+    return `<div class="obs-panel">
       <div class="section-title">Agent health</div>
       <div class="hint" style="margin-top:-4px;">Not available yet - this fills in once the agent has been updated to a version that reports its own throughput/backlog (re-pull ops/sit-doc-agent and restart it). Endpoint traffic below still works either way.</div>
     </div>`;
@@ -173,7 +173,7 @@ function renderAgentHealth(health){
     healthKpi('Last push', health.lastPushAt ? formatDateTime(health.lastPushAt) : '—', health.lastPushOk === false ? 'Failed - retrying' : (health.lastPushOk ? 'Succeeded' : ''), health.lastPushOk === false ? '--delete' : (health.lastPushOk ? '--post' : undefined)),
   ];
 
-  return `<div class="section">
+  return `<div class="obs-panel">
     <div class="section-title">Agent health</div>
     <div class="hint" style="margin-top:-4px;">
       Self-monitoring for the discovery agent itself (${escapeHtml(health.sourceLog || '')}, Python ${escapeHtml(health.pythonVersion || '?')}, polling every ${health.pollIntervalSeconds ?? '?'}s). The agent never sits in the request path - it only tails an already-written log file - so it cannot slow down or hang the real API server regardless of traffic volume; what it CAN do under enough volume is fall behind reading its own input or grow its own memory/storage, which is what this card tracks. Generated ${health.generatedAt ? formatDateTime(health.generatedAt) : '—'}.
@@ -214,7 +214,7 @@ function renderEndpointsTable(keys, metrics){
     </tr>`;
   }).join('') : `<tr><td colspan="8" class="empty-field" style="padding:16px;">No traffic discovered yet. This fills in once the SIT log auto-discovery agent (ops/sit-doc-agent) has pushed at least one batch — see AGENT_README.md.</td></tr>`;
 
-  return `<div class="section">
+  return `<div class="obs-panel">
     <div class="section-title">Endpoints${keys.length ? ` (${keys.length})` : ''}</div>
     <div class="table-scroll">
     <table class="data-table cc-proj-table">
@@ -315,7 +315,7 @@ function renderStatusBreakdown(breakdown, total){
   const t = total || 1;
   const fams = ['2xx','3xx','4xx','5xx'];
   const colorFor = { '2xx':'var(--st-2)', '3xx':'var(--st-3)', '4xx':'var(--st-4)', '5xx':'var(--st-5)' };
-  return `<div class="section">
+  return `<div class="obs-panel">
     <div class="section-title">Status code breakdown</div>
     <div class="obs-statusbar">${fams.map(f=>`<span style="width:${((breakdown[f]||0)/t*100)}%;background:${colorFor[f]};"></span>`).join('')}</div>
     <div class="obs-status-legend">${fams.map(f=>`<span class="k"><i style="background:${colorFor[f]};"></i>${f} ${(breakdown[f]||0).toLocaleString()}</span>`).join('')}</div>
@@ -340,7 +340,7 @@ function renderServiceHealth(groups, metrics){
     </div>`;
   }).join('') : `<div class="empty-field" style="padding:6px 0;">No traffic discovered yet.</div>`;
 
-  return `<div class="section">
+  return `<div class="obs-panel">
     <div class="section-title">Service health — API status</div>
     <div class="hint" style="margin-top:-4px;">Sorted by error rate, current time range — click to drill in</div>
     ${body}
@@ -353,7 +353,7 @@ function renderAlertsSection(alerts){
       <span class="obs-sev-bar ${a.sev}"></span>
       <div><div class="obs-alert-title">${escapeHtml(a.title)}</div><div class="obs-alert-meta">${escapeHtml(a.meta)}</div></div>
     </div>`).join('') : `<div class="empty-field" style="padding:6px 0;">No endpoints above the error-rate threshold right now.</div>`;
-  return `<div class="section">
+  return `<div class="obs-panel">
     <div class="section-title">Alerts</div>
     <div class="hint" style="margin-top:-4px;">Endpoints with ≥5 observed requests and an error rate of 5% (warn) or 25% (critical) or higher — the same threshold ops/sit-doc-agent's own anomaly notes use.</div>
     ${rows}
@@ -391,7 +391,7 @@ function renderVolumeChart(records){
   });
   const max = Math.max(...counts, 1);
   const bars = counts.map((c, i)=> `<div class="obs-vol-bar${i>=buckets-3?' hot':''}" style="height:${Math.max(3, Math.round(c/max*100))}%;" title="${c.toLocaleString()} request(s)"></div>`).join('');
-  return `<div class="section">
+  return `<div class="obs-panel">
     <div class="section-title">Request volume</div>
     <div class="hint" style="margin-top:-4px;">${records.length.toLocaleString()} real per-request record(s) in scope, bucketed across the range captured so far</div>
     <div class="obs-vol-chart">${bars}</div>
@@ -409,7 +409,7 @@ function fieldKvHtml(fields){
 
 function renderLogExplorerSection(records){
   if(!records.length){
-    return `<div class="section">
+    return `<div class="obs-panel">
       <div class="section-title">Log explorer</div>
       <div class="hint" style="margin-top:-4px;">Real per-request records aren't available yet. This requires the agent running with <code>CAPTURE_MODE=full</code> (opt-in - captures real field values, with credential-named fields always redacted; see the "Capture mode" section of AGENT_README.md before turning it on). In the default aggregate mode, this section stays empty by design - nothing here is sample data.</div>
     </div>`;
@@ -443,7 +443,7 @@ function renderLogExplorerSection(records){
         </div>
       </td></tr>`;
   }).join('');
-  return `<div class="section">
+  return `<div class="obs-panel">
     <div class="section-title">Log explorer</div>
     <div class="hint" style="margin-top:-4px;">Real per-request records, most recent first (showing up to 200 of ${records.length.toLocaleString()}) — click a row to view its captured fields. Any field named like a credential is always shown redacted, enforced by the agent before this ever reaches DocTracker.</div>
     <div class="table-scroll"><table class="data-table cc-proj-table">
@@ -461,7 +461,7 @@ function renderClusteringSection(records){
   if(!records.length) return '';
   const errRecords = records.filter(r => (r.statusCode||0) >= 400);
   if(!errRecords.length){
-    return `<div class="section"><div class="section-title">Error clustering</div><div class="empty-field" style="padding:6px 0;">No 4xx/5xx records in the current scope.</div></div>`;
+    return `<div class="obs-panel"><div class="section-title">Error clustering</div><div class="empty-field" style="padding:6px 0;">No 4xx/5xx records in the current scope.</div></div>`;
   }
   const map = new Map();
   errRecords.forEach(r=>{
@@ -477,7 +477,7 @@ function renderClusteringSection(records){
       <div><div>${escapeHtml(sig)}</div><div class="obs-cluster-meta">last seen ${formatDateTime(d.last)}</div></div>
       <span class="obs-cluster-count">${d.count.toLocaleString()}</span>
     </div>`).join('');
-  return `<div class="section">
+  return `<div class="obs-panel">
     <div class="section-title">Error clustering</div>
     <div class="hint" style="margin-top:-4px;">4xx/5xx records grouped by method + path + status + flow (real values, not a fabricated message)</div>
     ${rows}
@@ -586,7 +586,7 @@ function renderConsole(main, metrics, agentHealth, logRecords){
     </div>` : renderStatusBreakdown(agg.statusBreakdown, agg.total)}
 
     <div class="grid2">
-      <div class="section"><div class="section-title">Top source IPs</div><div class="hint" style="margin-top:-4px;">Current scope, ranked by request count</div>${renderIpBreakdown(agg.topIps, agg.total, 'console')}</div>
+      <div class="obs-panel"><div class="section-title">Top source IPs</div><div class="hint" style="margin-top:-4px;">Current scope, ranked by request count</div>${renderIpBreakdown(agg.topIps, agg.total, 'console')}</div>
       ${renderAlertsSection(alerts)}
     </div>
 
