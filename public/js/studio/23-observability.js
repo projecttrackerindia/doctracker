@@ -77,7 +77,7 @@ function renderIpBreakdown(topIps, totalRequests, rowIdx){
     const dotColor = cls === 'internal' ? 'var(--accent)' : cls === 'external' ? 'var(--put)' : 'var(--text-faint)';
     return `<div class="obs-ip-row">
       <span class="obs-ip-dot" style="background:${dotColor};" title="${cls} address"></span>
-      <span class="obs-ip-addr mono">${escapeHtml(x.ip)}</span>
+      <span class="obs-ip-addr mono" title="${escapeHtml(x.ip)} (${cls})">${escapeHtml(x.ip)}</span>
       <span class="obs-ip-bar-track"><span class="obs-ip-bar" style="width:${barPct}%;background:${dotColor};"></span></span>
       <span class="obs-ip-count mono">${x.count} <span style="opacity:.7;">(${share}%)</span></span>
     </div>`;

@@ -1218,16 +1218,25 @@ pre.code-block{
 /* Observability (23-observability.js) — structured per-IP breakdown. Each
    bar is relative to that endpoint's own busiest source, not an absolute
    scale, since what matters per row is "which of THIS endpoint's callers
-   dominates," not a cross-endpoint comparison. */
-.obs-ip-list{ display:flex; flex-direction:column; gap:3px; min-width:160px; }
-.obs-ip-row{ display:flex; align-items:center; gap:6px; }
-.obs-ip-dot{ width:6px; height:6px; border-radius:50%; flex-shrink:0; }
-.obs-ip-addr{ font-size:10.5px; color:var(--text-dim); white-space:nowrap; }
-.obs-ip-bar-track{ flex:1; height:4px; background:var(--surface-2); border-radius:3px; overflow:hidden; min-width:26px; }
-.obs-ip-bar{ height:100%; border-radius:3px; }
-.obs-ip-count{ font-size:10px; color:var(--text-faint); flex-shrink:0; white-space:nowrap; }
-.obs-ip-more{ font-size:10px; color:var(--accent); cursor:pointer; background:none; border:none; padding:0; text-align:left; font-family:inherit; }
-.obs-ip-more:hover{ text-decoration:underline; }
+   dominates," not a cross-endpoint comparison. Rows are a GRID, not a flex
+   row: an IPv4 address ("49.207.186.65") and an IPv6 one
+   ("2401:4900:2345:46fb:fc0a:d604:164d:f390") differ wildly in length, and
+   a flex layout would start each row's bar at a different x position (and
+   squash the bar to nothing on long-address rows) - the fixed-width address
+   column here keeps every bar starting at the same x and a legible minimum
+   width, with overflow truncated + the full value in a tooltip. */
+.obs-ip-list{ display:flex; flex-direction:column; gap:5px; min-width:230px; max-width:280px; padding:2px 0; }
+.obs-ip-row{ display:grid; grid-template-columns:7px 96px 1fr auto; align-items:center; gap:8px; }
+.obs-ip-dot{ width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+.obs-ip-addr{ font-size:10.5px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.obs-ip-bar-track{ height:6px; background:var(--surface-2); border-radius:3px; overflow:hidden; }
+.obs-ip-bar{ height:100%; border-radius:3px; min-width:3px; }
+.obs-ip-count{ font-size:10.5px; color:var(--text-faint); white-space:nowrap; text-align:right; font-variant-numeric:tabular-nums; }
+.obs-ip-more{
+  font-size:10px; font-weight:700; color:var(--accent); cursor:pointer; background:var(--accent-soft);
+  border:none; padding:4px 9px; border-radius:999px; text-align:center; width:fit-content; margin-top:1px;
+}
+.obs-ip-more:hover{ background:var(--accent-soft-strong); }
 
 .kpi-grid{
   display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; margin-bottom:30px;
