@@ -54,10 +54,55 @@ Railway domain will eventually break silently when it rotates.
   for compliance reasons), this agent won't see them either — it'll still
   discover endpoints/methods/paths/status-codes, just without field-level
   detail.
+- In the default `CAPTURE_MODE=aggregate`, never keeps a real captured field
+  VALUE anywhere (only field names and inferred types) and never keeps a
+  per-request record — only running counts. `CAPTURE_MODE=full` is a
+  separate, explicit opt-in that changes this; see "Capture mode" below
+  before turning it on.
 - Does not call any LLM or external AI service.
 - Does not modify, delete, or truncate the log file it reads.
 - Does not touch any of your existing, reviewed DocTracker projects — it
   only ever writes to its own dedicated `sitautodisc1` project.
+
+## Capture mode
+
+By default (`CAPTURE_MODE=aggregate`, and every version of this agent before
+this option existed) the agent keeps **only counts and field names/types** —
+never a captured field value, never an individual log line or per-request
+record. This is what makes the earlier security review of this agent hold:
+a real login request in this deployment's own `jwt-token-api.log` contained
+`user`/`password` field values, and none of that was ever stored anywhere.
+
+Setting `CAPTURE_MODE=full` changes that. In this mode the agent additionally
+builds and pushes real **per-request log records** — real timestamp, real
+latency (computed from Mule's own `entry`/`exit` `TimestampIST` fields),
+status code, correlation id, source IP, flow name, and **real
+request/response field values** — to power a proper log explorer, a
+request-volume-over-time chart, and real p50/p95/p99 latency in DocTracker's
+Observability Console. These records are written to DocTracker's database
+and shown in its UI to anyone with access to the project.
+
+**The one thing that does NOT change, in either mode:** any field whose
+*name* matches a credential-shaped pattern (`password`, `passwd`, `secret`,
+`apikey`, `api_key`, anything containing `token`, a name ending in `pin`, or
+starting with `otp` — see `SENSITIVE_FIELD_PATTERN` in
+`mule_doc_agent.py`) is always replaced with
+`"[redacted - sensitive field name]"` before it leaves this server, even in
+full-capture mode. This is enforced in the agent itself, not in DocTracker —
+by the time a record reaches the DocTracker UI, a matching field's real value
+was never in the payload to begin with. This is a name-based heuristic, not
+a guarantee — a credential logged under an unrelated field name (e.g. a raw
+token logged as `value` or `data`) would NOT be caught by it. Don't turn on
+`CAPTURE_MODE=full` on a log stream you haven't reviewed for that.
+
+**Turn this on only as a deliberate, informed decision** — not a default to
+leave on because it unlocks a nicer dashboard. Two more caps apply only in
+this mode: `MAX_LOG_RECORDS_PER_ENDPOINT` (default `200`) and
+`MAX_LOG_RECORDS_TOTAL` (default `3000`) bound how many per-request records
+are kept at once (oldest dropped first, per endpoint and then globally) —
+raise them if you need a longer window, at the cost of a larger push payload.
+The agent prints a loud `[warn]` banner on every start while this mode is on,
+so it's visible in this server's own logs, not just in DocTracker.
 
 ## Data residency: an offline mode that never contacts DocTracker
 
@@ -138,6 +183,9 @@ access to the log directory.
 | `PUSH_INTERVAL_SECONDS` | No | `900` (15 min) | How often it batches everything discovered and pushes to DocTracker — deliberately NOT per-line, to keep write volume low |
 | `MAX_LINES_PER_CYCLE` | No | `20000` | Caps how many new log lines one poll cycle reads. If a backlog is bigger than this, the agent processes it in back-to-back bounded chunks (no sleep between them) instead of one unbounded blocking read — see "Scaling to high traffic volumes" below |
 | `MAX_TRACKED_ENDPOINTS` | No | `500` | Caps how many distinct method+path combinations are tracked. Past this cap, further new combinations are folded into one shared "OVERFLOW" bucket (still counted, just not broken out individually) instead of growing memory/state.json without bound |
+| `CAPTURE_MODE` | No | `aggregate` | `aggregate` (default): counts/types only, never a real field value. `full`: also captures real per-request records including real field values (credential-named fields always redacted) — see "Capture mode" below, this is a deliberate opt-in, not a default to leave on |
+| `MAX_LOG_RECORDS_PER_ENDPOINT` | No | `200` | Only applies when `CAPTURE_MODE=full`. Per-endpoint ring-buffer cap on stored per-request records, oldest dropped first |
+| `MAX_LOG_RECORDS_TOTAL` | No | `3000` | Only applies when `CAPTURE_MODE=full`. Global ring-buffer cap across all endpoints, oldest dropped first |
 
 ## Scaling to high traffic volumes
 

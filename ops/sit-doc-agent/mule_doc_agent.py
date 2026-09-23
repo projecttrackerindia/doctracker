@@ -46,6 +46,18 @@ discovered from the logs leaves this machine.
 
 Configuration is via environment variables (see CONFIG section below) so no
 secrets live in this file or in source control.
+
+--- Capture mode: aggregate (default) vs full ---------------------------------
+By default this agent NEVER keeps a real captured field value - only field
+names/types and running counts (CAPTURE_MODE=aggregate). Setting
+CAPTURE_MODE=full is a separate, explicit opt-in that additionally captures
+real per-request records (real timestamps, real latency, real field values)
+to power a real log explorer/volume chart/latency KPIs in DocTracker's
+Observability Console - fields named like a credential are always redacted
+regardless of this setting (see SENSITIVE_FIELD_PATTERN), but every other
+field value becomes real production data once this is on. See the "Capture
+mode" section of AGENT_README.md before setting this to "full".
+-------------------------------------------------------------------------------
 """
 
 import os
@@ -55,6 +67,7 @@ import json
 import time
 import platform
 import hashlib
+import datetime
 import argparse
 import http.client
 import http.server
@@ -100,6 +113,28 @@ PUSH_INTERVAL_SECONDS = int(os.environ.get("PUSH_INTERVAL_SECONDS", "900"))  # 1
 # input or grow unbounded state - these two caps stop both:
 MAX_LINES_PER_CYCLE = int(os.environ.get("MAX_LINES_PER_CYCLE", "20000"))
 MAX_TRACKED_ENDPOINTS = int(os.environ.get("MAX_TRACKED_ENDPOINTS", "500"))
+
+# --- Capture mode ------------------------------------------------------------
+# "aggregate" (the default, and what every earlier version of this agent
+# did) keeps ONLY counts/types - never a real captured value, never a raw
+# log line, never a per-request record. "full" additionally builds and
+# pushes real per-request log records (real timestamp, real latency, and -
+# unless the field's NAME matches SENSITIVE_FIELD_PATTERN, which is always
+# redacted regardless of this setting - real request/response field
+# VALUES). This is an explicit, informed, opt-in choice: those values get
+# written into DocTracker's database and shown in its UI to anyone with
+# access to this project. Do not set this to "full" unless that's a
+# decision your organisation has actually made, not a default to leave on.
+# See the "Capture mode" section of AGENT_README.md before changing this.
+CAPTURE_MODE = os.environ.get("CAPTURE_MODE", "aggregate").strip().lower()
+if CAPTURE_MODE not in ("aggregate", "full"):
+    print(f"[warn] CAPTURE_MODE={CAPTURE_MODE!r} not recognized, falling back to 'aggregate' (the safe default).", file=sys.stderr)
+    CAPTURE_MODE = "aggregate"
+# Ring-buffer caps for CAPTURE_MODE=full - oldest records are dropped first,
+# so this never grows without bound the way MAX_TRACKED_ENDPOINTS prevents
+# for the aggregate side.
+MAX_LOG_RECORDS_PER_ENDPOINT = int(os.environ.get("MAX_LOG_RECORDS_PER_ENDPOINT", "200"))
+MAX_LOG_RECORDS_TOTAL = int(os.environ.get("MAX_LOG_RECORDS_TOTAL", "3000"))
 
 USER_AGENT = "DocTracker-SIT-Agent/1.0 (svc-doc-agent; see AGENT_README.md)"
 
@@ -151,6 +186,75 @@ RESPONSE_PAYLOAD_KEY_PATTERN = re.compile(r'^responsepayload$', re.IGNORECASE)
 # hops) is possible; only the first (left-most, closest to the real client)
 # hop is used - see extract_client_ip().
 CLIENT_IP_KEY_PATTERN = re.compile(r'x-forwarded-for|clientip|remoteaddr|^ip$', re.IGNORECASE)
+# entry/exit blocks (CONFIRMED in this deployment's real logs) each carry
+# their own TimestampIST and FlowName - used for real per-request latency
+# (exit minus entry) and for grouping in the log explorer, when
+# CAPTURE_MODE=full. Never used in default (aggregate-only) mode.
+ENTRY_BLOCK_PATTERN = re.compile(r'^entry$', re.IGNORECASE)
+EXIT_BLOCK_PATTERN = re.compile(r'^exit$', re.IGNORECASE)
+TIMESTAMP_KEY_PATTERN = re.compile(r'timestamp', re.IGNORECASE)
+FLOWNAME_KEY_PATTERN = re.compile(r'flowname', re.IGNORECASE)
+
+# Same pattern DESC_HEURISTICS (below) uses to describe a field as sensitive -
+# duplicated here as its own standalone regex because it's used for a
+# different purpose: HARD REDACTION of the field's VALUE in CAPTURE_MODE=full
+# (see redact_value()), not just a description string. This is a
+# non-optional safety net: CONFIRMED necessary against this deployment's own
+# real jwt-token-api.log, which contained real user/password field values -
+# any field whose NAME matches this is redacted regardless of CAPTURE_MODE.
+SENSITIVE_FIELD_PATTERN = re.compile(r'password|passwd|secret|apikey|api_key|token|pin$|^otp', re.IGNORECASE)
+
+
+def _parse_timestamp_ms(raw):
+    """Best-effort parse of a Mule TimestampIST value into epoch
+    milliseconds. Format isn't confirmed for every deployment, so this tries
+    a few common shapes and gives up cleanly (returns None) rather than
+    guessing wrong - a missing latency number is far better than a wrong
+    one."""
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        # Already epoch millis (or seconds - heuristically disambiguate by
+        # magnitude: a seconds value here would be ~10 digits, millis ~13).
+        return raw if raw > 10**12 else raw * 1000
+    s = str(raw).strip()
+    if not s:
+        return None
+    if s.isdigit():
+        n = int(s)
+        return n if n > 10**12 else n * 1000
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%fZ",
+        "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
+        "%d/%m/%Y %H:%M:%S.%f", "%d-%m-%Y %H:%M:%S.%f",
+    ):
+        try:
+            dt = datetime.datetime.strptime(s, fmt)
+            return dt.timestamp() * 1000
+        except ValueError:
+            continue
+    return None
+
+
+def redact_value(name, value):
+    """The one non-optional safety net in CAPTURE_MODE=full: a field whose
+    NAME matches SENSITIVE_FIELD_PATTERN always comes back as a fixed
+    placeholder, never its real value, regardless of any other setting.
+    Every other value is kept but bounded in size/shape so a single huge or
+    deeply-nested field can't blow up the payload: nested objects/arrays
+    become a type marker (their structure is already captured separately by
+    the aggregate-only field-shape tracking) and long strings are
+    truncated."""
+    if SENSITIVE_FIELD_PATTERN.search(name):
+        return "[redacted - sensitive field name]"
+    if isinstance(value, dict):
+        return "[object]"
+    if isinstance(value, list):
+        return "[array]"
+    if value is None:
+        return None
+    s = str(value)
+    return s if len(s) <= 300 else s[:300] + "…[truncated]"
 
 
 # A path segment that looks like a per-request identifier: pure numeric,
@@ -327,6 +431,13 @@ def _finish_block(carry, observations):
         if path:
             req_payload = _find_key_dict(obj, REQUEST_PAYLOAD_KEY_PATTERN)
             resp_payload = _find_key_dict(obj, RESPONSE_PAYLOAD_KEY_PATTERN)
+            entry_block = _find_key_dict(obj, ENTRY_BLOCK_PATTERN)
+            exit_block = _find_key_dict(obj, EXIT_BLOCK_PATTERN)
+            entry_ts = _parse_timestamp_ms(_find_key_value(entry_block, TIMESTAMP_KEY_PATTERN)) if entry_block else None
+            exit_ts = _parse_timestamp_ms(_find_key_value(exit_block, TIMESTAMP_KEY_PATTERN)) if exit_block else None
+            latency_ms = round(exit_ts - entry_ts) if (entry_ts is not None and exit_ts is not None and exit_ts >= entry_ts) else None
+            flow_name = (exit_block and _find_key_value(exit_block, FLOWNAME_KEY_PATTERN)) or \
+                        (entry_block and _find_key_value(entry_block, FLOWNAME_KEY_PATTERN))
             observations.append({
                 "method": carry["method"],
                 "path": str(path).split("?")[0],
@@ -335,6 +446,9 @@ def _finish_block(carry, observations):
                 "body": req_payload if isinstance(req_payload, dict) else None,
                 "responseBody": resp_payload if isinstance(resp_payload, dict) else None,
                 "clientIp": extract_client_ip(obj),
+                "latencyMs": latency_ms,
+                "flowName": str(flow_name) if flow_name else None,
+                "exitTsMs": exit_ts,
             })
     carry["method"] = None
 
@@ -577,6 +691,50 @@ def aggregate(state, observations):
             shapes = ep["fieldShapes"]
             for k, v in obs["body"].items():
                 shapes[k] = infer_type(v)
+
+        if CAPTURE_MODE == "full" and key != OVERFLOW_KEY:
+            capture_log_record(state, key, obs)
+
+
+# ============================================================================
+# CAPTURE_MODE=full only: real per-request records (real timestamp, real
+# latency where entry/exit timestamps parsed, real field VALUES except for
+# anything SENSITIVE_FIELD_PATTERN matches by name, which is ALWAYS
+# redacted - see redact_value()). Two ring-buffer caps (per-endpoint and
+# global) keep this bounded; oldest records are dropped first, same
+# trade-off the aggregate side already makes for correlationIds/sourceIps.
+# ============================================================================
+def capture_log_record(state, key, obs):
+    records = state.setdefault("logRecords", [])
+    record = {
+        "key": key,
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(obs["exitTsMs"] / 1000)) if obs.get("exitTsMs") else time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+        "method": obs["method"], "path": templatize_path(obs["path"]),
+        "statusCode": obs.get("statusCode"),
+        "correlationId": obs.get("correlationId"),
+        "clientIp": obs.get("clientIp"),
+        "latencyMs": obs.get("latencyMs"),
+        "flowName": obs.get("flowName"),
+    }
+    if isinstance(obs.get("body"), dict):
+        record["requestFields"] = {k: redact_value(k, v) for k, v in obs["body"].items()}
+    if isinstance(obs.get("responseBody"), dict):
+        record["responseFields"] = {k: redact_value(k, v) for k, v in obs["responseBody"].items()}
+    records.append(record)
+
+    # Per-endpoint cap: drop the oldest record for THIS key once it's over
+    # the limit, rather than letting one busy endpoint crowd out every
+    # other endpoint's records from the global list.
+    same_key_indices = [i for i, r in enumerate(records) if r["key"] == key]
+    if len(same_key_indices) > MAX_LOG_RECORDS_PER_ENDPOINT:
+        del records[same_key_indices[0]]
+    # Global cap, oldest-first, applied last so it's the final backstop.
+    if len(records) > MAX_LOG_RECORDS_TOTAL:
+        del records[0: len(records) - MAX_LOG_RECORDS_TOTAL]
+
+
+def build_log_records(state):
+    return state.get("logRecords", []) if CAPTURE_MODE == "full" else []
 
 
 # ============================================================================
@@ -1032,6 +1190,14 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
            ("DRY RUN - no network writes" if dry_run else "pushing to DocTracker")
     print(f"[info] tailing {MULE_LOG_PATH} every {POLL_INTERVAL_SECONDS}s, {mode}")
 
+    if CAPTURE_MODE == "full":
+        print("[warn] CAPTURE_MODE=full is ON: this agent will capture real per-request log records, "
+              "including real request/response field VALUES (except fields whose name matches "
+              f"{SENSITIVE_FIELD_PATTERN.pattern!r}, which are always redacted). These are written to "
+              "DocTracker's database and shown in its UI to anyone with access to this project's "
+              "Observability Console. This should only be on because your organisation made that "
+              "decision deliberately - see the Capture mode section of AGENT_README.md.", file=sys.stderr)
+
     if serve_port:
         if not local_html:
             print("[error] --serve-port requires --local-html (nothing to serve otherwise).", file=sys.stderr)
@@ -1090,7 +1256,11 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
         save_state(state)
 
         if time.time() - state.get("last_push", 0) >= PUSH_INTERVAL_SECONDS and state.get("endpoints"):
-            metrics_payload = {"endpoints": build_endpoint_metrics(state), "agentHealth": build_agent_health(state)}
+            metrics_payload = {
+                "endpoints": build_endpoint_metrics(state),
+                "agentHealth": build_agent_health(state),
+                "logRecords": build_log_records(state),
+            }
             if local_html:
                 try:
                     write_local_html(state, local_html)

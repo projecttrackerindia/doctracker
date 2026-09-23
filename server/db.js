@@ -346,12 +346,20 @@ async function initDb() {
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS tryit_collections_enc TEXT;`);
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS tryit_collections_key_version INTEGER;`);
   // Endpoint traffic metrics (hit counts, status breakdown, error rate,
-  // client IPs, last-seen) pushed by the SIT log auto-discovery agent
-  // (ops/sit-doc-agent). Keyed by "METHOD /path", cross-referenced against
-  // real endpoints by the UI for display only - deliberately never written
-  // INTO a project's own endpoint data, so it can never conflict with a
-  // human editing that project concurrently. Encrypted at rest like
-  // request_history: client IPs are PII, same sensitivity class.
+  // client IPs, last-seen, agent self-health) pushed by the SIT log
+  // auto-discovery agent (ops/sit-doc-agent). Keyed by "METHOD /path",
+  // cross-referenced against real endpoints by the UI for display only -
+  // deliberately never written INTO a project's own endpoint data, so it
+  // can never conflict with a human editing that project concurrently.
+  // Encrypted at rest like request_history: client IPs are PII on their
+  // own. IMPORTANT: since the agent's CAPTURE_MODE=full opt-in (see
+  // AGENT_README.md's "Capture mode" section), this same blob can also
+  // hold a `logRecords` array of REAL per-request records, including real
+  // request/response field VALUES - the agent redacts anything named like
+  // a credential before ever sending it, but every other field value is
+  // real production data once that mode is on. CAPTURE_MODE defaults to
+  // "aggregate" (counts/types only, no field values) - full capture is an
+  // explicit, informed choice made per deployment, not this app's default.
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS endpoint_metrics_enc TEXT;`);
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS endpoint_metrics_key_version INTEGER;`);
 

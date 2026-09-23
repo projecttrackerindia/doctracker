@@ -10,27 +10,34 @@
 // Two views over the exact same real data (no second/fake data source):
 //  - Overview: the flat table, every discovered endpoint at once.
 //  - Console: the same metrics grouped by project with a drill-down scope
-//    panel, KPIs, a status-code breakdown and threshold-based alerts - closer
-//    to a traditional observability dashboard's layout. There is no raw
-//    log-line explorer or request tracing here, on purpose: the agent never
-//    stores individual log lines or field values (see mule_doc_agent.py's
-//    security notes), only these aggregate counts - so unlike a real APM
-//    tool, per-request trace waterfalls aren't something this data can
-//    honestly show. Everything shown in Console is a real aggregate,
-//    nothing here is sample/placeholder data.
+//    panel, KPIs, a status-code breakdown and threshold-based alerts, plus
+//    - ONLY when the agent is running with CAPTURE_MODE=full (opt-in, see
+//    AGENT_README.md's "Capture mode" section) - a real log explorer,
+//    volume-over-time chart and latency KPIs built from real per-request
+//    records (state.endpointMetrics.logRecords). In the default
+//    CAPTURE_MODE=aggregate, logRecords is empty and those panels don't
+//    render - there is no fabricated/sample data standing in for them.
+//    Even in full-capture mode, any field named like a credential
+//    (password/secret/token/etc.) is always shown as "[redacted - sensitive
+//    field name]" - the agent enforces that server-side, not this page.
 //
 // state.endpointMetrics is pushed whole-blob by the agent as
-// {endpoints:{...}, agentHealth:{...}} (see build_endpoint_metrics()/
-// build_agent_health() in mule_doc_agent.py). Older pushes (before the
-// agent tracked its own health) sent just the endpoints map directly with
-// no wrapper - observabilityData() below normalizes both so a server that
-// hasn't re-pushed since upgrading the agent doesn't render as broken.
+// {endpoints:{...}, agentHealth:{...}, logRecords:[...]} (see
+// build_endpoint_metrics()/build_agent_health()/build_log_records() in
+// mule_doc_agent.py). Older pushes (before the agent tracked its own health
+// or supported capture mode) sent just the endpoints map directly with no
+// wrapper - observabilityData() below normalizes all of these so a server
+// that hasn't re-pushed since upgrading the agent doesn't render as broken.
 function observabilityData(){
   const raw = state.endpointMetrics;
   if(raw && typeof raw === 'object' && raw.endpoints && typeof raw.endpoints === 'object'){
-    return { endpoints: raw.endpoints, agentHealth: (raw.agentHealth && typeof raw.agentHealth === 'object') ? raw.agentHealth : null };
+    return {
+      endpoints: raw.endpoints,
+      agentHealth: (raw.agentHealth && typeof raw.agentHealth === 'object') ? raw.agentHealth : null,
+      logRecords: Array.isArray(raw.logRecords) ? raw.logRecords : [],
+    };
   }
-  return { endpoints: (raw && typeof raw === 'object') ? raw : {}, agentHealth: null };
+  return { endpoints: (raw && typeof raw === 'object') ? raw : {}, agentHealth: null, logRecords: [] };
 }
 
 const OBS_OVERFLOW_KEY = '* OVERFLOW - too many distinct endpoints';
@@ -328,6 +335,130 @@ function renderAlertsSection(alerts){
   </div>`;
 }
 
+/* ---- Real per-request panels (CAPTURE_MODE=full only) ---- */
+
+function percentile(sortedNums, p){
+  if(!sortedNums.length) return null;
+  const idx = Math.min(sortedNums.length - 1, Math.floor(p * sortedNums.length));
+  return sortedNums[idx];
+}
+
+function computeLatencyStats(records){
+  const nums = records.map(r=>r.latencyMs).filter(n=>typeof n === 'number').sort((a,b)=>a-b);
+  if(!nums.length) return null;
+  return { p50: percentile(nums, 0.50), p95: percentile(nums, 0.95), p99: percentile(nums, 0.99), count: nums.length };
+}
+
+function renderVolumeChart(records){
+  if(!records.length) return '';
+  const buckets = 14;
+  const times = records.map(r=>new Date(r.ts).getTime()).filter(t=>!isNaN(t));
+  if(!times.length) return '';
+  const minTs = Math.min(...times), maxTs = Math.max(...times);
+  const span = Math.max(1, maxTs - minTs);
+  const bucketMs = span / buckets;
+  const counts = new Array(buckets).fill(0);
+  times.forEach(t=>{
+    let idx = Math.floor((t - minTs) / bucketMs);
+    if(idx >= buckets) idx = buckets - 1;
+    if(idx < 0) idx = 0;
+    counts[idx]++;
+  });
+  const max = Math.max(...counts, 1);
+  const bars = counts.map((c, i)=> `<div class="obs-vol-bar${i>=buckets-3?' hot':''}" style="height:${Math.max(3, Math.round(c/max*100))}%;" title="${c.toLocaleString()} request(s)"></div>`).join('');
+  return `<div class="section">
+    <div class="section-title">Request volume</div>
+    <div class="hint" style="margin-top:-4px;">${records.length.toLocaleString()} real per-request record(s) in scope, bucketed across the range captured so far</div>
+    <div class="obs-vol-chart">${bars}</div>
+    <div class="obs-vol-axis"><span>${formatDateTime(new Date(minTs).toISOString())}</span><span>${formatDateTime(new Date(maxTs).toISOString())}</span></div>
+  </div>`;
+}
+
+function fieldKvHtml(fields){
+  if(!fields || !Object.keys(fields).length) return '<div class="empty-field">None observed.</div>';
+  return Object.entries(fields).map(([k,v])=>{
+    const isRedacted = typeof v === 'string' && v.startsWith('[redacted');
+    return `<div class="obs-field-kv"><span class="k mono">${escapeHtml(k)}</span><span class="v mono${isRedacted?' redacted':''}">${v===null?'<span class="empty-field">null</span>':escapeHtml(String(v))}</span></div>`;
+  }).join('');
+}
+
+function renderLogExplorerSection(records){
+  if(!records.length){
+    return `<div class="section">
+      <div class="section-title">Log explorer</div>
+      <div class="hint" style="margin-top:-4px;">Real per-request records aren't available yet. This requires the agent running with <code>CAPTURE_MODE=full</code> (opt-in - captures real field values, with credential-named fields always redacted; see the "Capture mode" section of AGENT_README.md before turning it on). In the default aggregate mode, this section stays empty by design - nothing here is sample data.</div>
+    </div>`;
+  }
+  const sorted = records.slice().sort((a,b)=> new Date(b.ts) - new Date(a.ts)).slice(0, 200);
+  const rows = sorted.map((r, i)=>{
+    const sc = r.statusCode || 0;
+    const lvl = sc >= 500 ? 'err' : sc >= 400 ? 'warn' : 'ok';
+    const lvlLabel = sc >= 500 ? 'ERROR' : sc >= 400 ? 'WARN' : 'OK';
+    const hasFields = (r.requestFields && Object.keys(r.requestFields).length) || (r.responseFields && Object.keys(r.responseFields).length);
+    const ipCls = classifyIp(r.clientIp);
+    const ipColor = ipCls === 'internal' ? 'var(--accent)' : 'var(--put)';
+    return `<tr class="obs-log-row" data-obs-log-toggle="obsLogFields${i}">
+        <td class="mono" style="font-size:10.5px;color:var(--text-faint);">${formatDateTime(r.ts)}</td>
+        <td><span class="obs-lvl-pill ${lvl}">${lvlLabel}</span></td>
+        <td><span class="badge" style="font-size:9px;padding:1.5px 5px;">${escapeHtml(r.method||'')}</span></td>
+        <td class="mono" style="font-size:11px;">${escapeHtml(r.path||'')}</td>
+        <td class="mono">${sc || '—'}</td>
+        <td class="mono">${typeof r.latencyMs === 'number' ? r.latencyMs + 'ms' : '—'}</td>
+        <td class="mono" style="font-size:10.5px;"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;background:${ipColor};"></span>${escapeHtml(r.clientIp||'—')}</td>
+        <td class="mono" style="font-size:10.5px;color:var(--text-faint);">${escapeHtml(r.flowName||'—')}</td>
+        <td>${hasFields ? '<span style="color:var(--accent);">View fields</span>' : '<span class="empty-field">—</span>'}</td>
+      </tr>
+      <tr class="obs-log-fields" id="obsLogFields${i}"><td colspan="9">
+        <div class="obs-log-fields-inner">
+          <div style="font-weight:700;font-size:11px;margin-bottom:6px;">Request fields</div>
+          ${fieldKvHtml(r.requestFields)}
+          <div style="font-weight:700;font-size:11px;margin:10px 0 6px;">Response fields</div>
+          ${fieldKvHtml(r.responseFields)}
+          <div class="hint" style="margin-top:8px;">Correlation ID: <span class="mono">${escapeHtml(r.correlationId||'—')}</span></div>
+        </div>
+      </td></tr>`;
+  }).join('');
+  return `<div class="section">
+    <div class="section-title">Log explorer</div>
+    <div class="hint" style="margin-top:-4px;">Real per-request records, most recent first (showing up to 200 of ${records.length.toLocaleString()}) — click a row to view its captured fields. Any field named like a credential is always shown redacted, enforced by the agent before this ever reaches DocTracker.</div>
+    <div class="table-scroll"><table class="data-table cc-proj-table">
+      <thead><tr><th>Time</th><th>Level</th><th>Method</th><th>Path</th><th>Status</th><th>Latency</th><th>Source IP</th><th>Flow</th><th>Fields</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  </div>`;
+}
+
+// Real clustering by (method, path, status, flow) signature - never by
+// fabricated message text, since the log format this agent parses has no
+// free-text "message" field to cluster on (see mule_doc_agent.py's real,
+// confirmed JSON schema).
+function renderClusteringSection(records){
+  if(!records.length) return '';
+  const errRecords = records.filter(r => (r.statusCode||0) >= 400);
+  if(!errRecords.length){
+    return `<div class="section"><div class="section-title">Error clustering</div><div class="empty-field" style="padding:6px 0;">No 4xx/5xx records in the current scope.</div></div>`;
+  }
+  const map = new Map();
+  errRecords.forEach(r=>{
+    const sig = `${r.method} ${r.path} → ${r.statusCode}${r.flowName ? ' (' + r.flowName + ')' : ''}`;
+    if(!map.has(sig)) map.set(sig, { count:0, last:r.ts });
+    const e = map.get(sig);
+    e.count++;
+    if(r.ts > e.last) e.last = r.ts;
+  });
+  const list = Array.from(map.entries()).sort((a,b)=>b[1].count-a[1].count).slice(0,8);
+  const rows = list.map(([sig, d])=>`
+    <div class="obs-cluster-row">
+      <div><div>${escapeHtml(sig)}</div><div class="obs-cluster-meta">last seen ${formatDateTime(d.last)}</div></div>
+      <span class="obs-cluster-count">${d.count.toLocaleString()}</span>
+    </div>`).join('');
+  return `<div class="section">
+    <div class="section-title">Error clustering</div>
+    <div class="hint" style="margin-top:-4px;">4xx/5xx records grouped by method + path + status + flow (real values, not a fabricated message)</div>
+    ${rows}
+  </div>`;
+}
+
 function obsScopeInfo(scope, metrics){
   if(scope.type === 'project'){
     return { title: scope.name, sub: `${scope.keys.length} endpoint(s) in traffic` };
@@ -339,7 +470,7 @@ function obsScopeInfo(scope, metrics){
   return { title:'All traffic', sub: `${Object.keys(metrics).filter(k=>k!==OBS_OVERFLOW_KEY).length} endpoint(s) tracked` };
 }
 
-function renderConsole(main, metrics, agentHealth){
+function renderConsole(main, metrics, agentHealth, logRecords){
   if(!state.obsScope) state.obsScope = { type:'all' };
   if(!state.obsOpenProjects) state.obsOpenProjects = {};
   if(state.obsSearch === undefined) state.obsSearch = '';
@@ -361,6 +492,8 @@ function renderConsole(main, metrics, agentHealth){
   const agg = aggregateKeys(scopedKeys, metrics);
   const alerts = computeConsoleAlerts(metrics).filter(a => scopedKeys.includes(a.key));
   const info = obsScopeInfo(state.obsScope, metrics);
+  const scopedRecords = (logRecords || []).filter(r => scopedKeys.includes(r.key));
+  const latency = computeLatencyStats(scopedRecords);
 
   // ---- scope panel ----
   let panelHtml = `<div class="obs-scope-search">
@@ -419,6 +552,7 @@ function renderConsole(main, metrics, agentHealth){
       ${healthKpi('Alerts', String(alerts.length), alerts.filter(a=>a.sev==='crit').length + ' critical', alerts.length ? (alerts.some(a=>a.sev==='crit')?'--delete':'--put') : '--post')}
       ${healthKpi('Distinct source IPs', String(agg.topIps.length) + (agg.topIps.length>=10?'+':''), 'top 10 shown below')}
       ${healthKpi('Last seen', agg.lastSeenAt ? formatDateTime(agg.lastSeenAt) : '—', '')}
+      ${latency ? healthKpi('Latency p95 (real)', latency.p95 + 'ms', `p50 ${latency.p50}ms · p99 ${latency.p99}ms · from ${latency.count.toLocaleString()} record(s)`) : ''}
     </div>
 
     <div class="grid2">
@@ -431,6 +565,13 @@ function renderConsole(main, metrics, agentHealth){
       ${renderAgentHealth(agentHealth)}
     </div>
 
+    ${renderVolumeChart(scopedRecords)}
+
+    <div class="grid2">
+      ${renderLogExplorerSection(scopedRecords)}
+      ${renderClusteringSection(scopedRecords)}
+    </div>
+
     ${renderEndpointsTable(scopedKeys, metrics)}
   `;
 
@@ -439,28 +580,35 @@ function renderConsole(main, metrics, agentHealth){
     <div>${contentHtml}</div>
   </div>`;
 
-  main.querySelector('#obsScopeSearch').addEventListener('input', (e)=>{ state.obsSearch = e.target.value; renderConsole(main, metrics, agentHealth); });
+  main.querySelectorAll('[data-obs-log-toggle]').forEach(row=>{
+    row.addEventListener('click', ()=>{
+      const target = document.getElementById(row.getAttribute('data-obs-log-toggle'));
+      if(target) target.classList.toggle('open');
+    });
+  });
+
+  main.querySelector('#obsScopeSearch').addEventListener('input', (e)=>{ state.obsSearch = e.target.value; renderConsole(main, metrics, agentHealth, logRecords); });
   const allRow = main.querySelector('[data-obs-scope-all]');
-  if(allRow) allRow.addEventListener('click', ()=>{ state.obsScope = { type:'all' }; renderConsole(main, metrics, agentHealth); });
+  if(allRow) allRow.addEventListener('click', ()=>{ state.obsScope = { type:'all' }; renderConsole(main, metrics, agentHealth, logRecords); });
   main.querySelectorAll('[data-obs-proj]').forEach(el=>{
     el.addEventListener('click', ()=>{
       const id = el.getAttribute('data-obs-proj');
       state.obsOpenProjects[id] = !state.obsOpenProjects[id];
       state.obsScope = { type:'project', id, name: groups.find(g=>g.id===id).name, keys: groups.find(g=>g.id===id).keys };
-      renderConsole(main, metrics, agentHealth);
+      renderConsole(main, metrics, agentHealth, logRecords);
     });
   });
   main.querySelectorAll('[data-obs-key]').forEach(el=>{
     el.addEventListener('click', (e)=>{
       e.stopPropagation();
       state.obsScope = { type:'key', key: el.getAttribute('data-obs-key') };
-      renderConsole(main, metrics, agentHealth);
+      renderConsole(main, metrics, agentHealth, logRecords);
     });
   });
   const clearBtn = main.querySelector('#obsClearScope');
-  if(clearBtn) clearBtn.addEventListener('click', ()=>{ state.obsScope = { type:'all' }; renderConsole(main, metrics, agentHealth); });
+  if(clearBtn) clearBtn.addEventListener('click', ()=>{ state.obsScope = { type:'all' }; renderConsole(main, metrics, agentHealth, logRecords); });
   main.querySelectorAll('[data-obs-alert-key]').forEach(el=>{
-    el.addEventListener('click', ()=>{ state.obsScope = { type:'key', key: el.getAttribute('data-obs-alert-key') }; renderConsole(main, metrics, agentHealth); });
+    el.addEventListener('click', ()=>{ state.obsScope = { type:'key', key: el.getAttribute('data-obs-alert-key') }; renderConsole(main, metrics, agentHealth, logRecords); });
   });
 
   wireEndpointsTable(main);
@@ -469,13 +617,18 @@ function renderConsole(main, metrics, agentHealth){
 /* ==================== Page entry point ==================== */
 
 function renderObservability(main){
-  const { endpoints: metrics, agentHealth } = observabilityData();
+  const { endpoints: metrics, agentHealth, logRecords } = observabilityData();
   if(!state.obsView) state.obsView = 'overview';
+  const fullCapture = logRecords && logRecords.length > 0;
 
   const toggleHtml = `<div class="view-toggle" style="margin-left:auto;flex-shrink:0;position:relative;z-index:1;">
     <button type="button" class="vt-btn${state.obsView==='overview'?' active':''}" id="obsViewOverview">Overview</button>
     <button type="button" class="vt-btn${state.obsView==='console'?' active':''}" id="obsViewConsole">Console</button>
   </div>`;
+
+  const heroDesc = fullCapture
+    ? `Hit counts, status breakdown, error rate, source IPs, and (this agent is running in full-capture mode) real per-request records — timestamps, latency, and field values — auto-discovered by the SIT log agent, never written into your documented endpoints. Any field named like a credential is always shown redacted, enforced by the agent before it ever reaches DocTracker.`
+    : `Hit counts, status breakdown, error rate, and source IPs auto-discovered by the SIT log agent — never written into your documented endpoints, only shown here, cross-referenced by method + path. Field <em>values</em> from requests are never captured in this mode, only counts and structure. Path segments that look like per-request ids are templated to <code>{id}</code> so one busy endpoint doesn't fragment into thousands of rows.`;
 
   main.innerHTML = `
     <div class="crumb">Observability</div>
@@ -485,7 +638,7 @@ function renderObservability(main){
       </div>
       <div class="ctrl-hero-copy">
         <h1>Real traffic, straight from server logs</h1>
-        <p>Hit counts, status breakdown, error rate, and source IPs auto-discovered by the SIT log agent — never written into your documented endpoints, only shown here, cross-referenced by method + path. Field <em>values</em> from requests are never captured by the agent, only counts and structure. Path segments that look like per-request ids are templated to <code>{id}</code> so one busy endpoint doesn't fragment into thousands of rows.</p>
+        <p>${heroDesc}</p>
       </div>
       ${toggleHtml}
     </div>
@@ -494,7 +647,7 @@ function renderObservability(main){
 
   const body = document.getElementById('obsBody');
   if(state.obsView === 'console'){
-    renderConsole(body, metrics, agentHealth);
+    renderConsole(body, metrics, agentHealth, logRecords);
   } else {
     body.innerHTML = renderAgentHealth(agentHealth) + renderEndpointsTable(Object.keys(metrics).sort((a,b)=> (a===OBS_OVERFLOW_KEY) - (b===OBS_OVERFLOW_KEY) || a.localeCompare(b)), metrics);
     wireEndpointsTable(body);
