@@ -322,6 +322,31 @@ function renderStatusBreakdown(breakdown, total){
   </div>`;
 }
 
+// Per-project ranked-by-error-rate list, org-wide - only shown at "All
+// traffic" scope (once you've scoped into one project/endpoint, its own
+// stats are already the KPI row above, this list would be redundant).
+function renderServiceHealth(groups, metrics){
+  const rows = groups.map(g=>{
+    const agg = aggregateKeys(g.keys, metrics);
+    return { id: g.id, name: g.name, agg };
+  }).sort((a,b)=> b.agg.errorRate - a.agg.errorRate);
+
+  const body = rows.length ? rows.map(r=>{
+    const dot = r.agg.errorRate>=0.25 ? 'var(--delete)' : r.agg.errorRate>=0.05 ? 'var(--put)' : 'var(--post)';
+    return `<div class="obs-health-row" data-obs-jump-proj="${r.id}">
+      <span class="obs-health-dot" style="background:${dot};"></span>
+      <span class="obs-health-name">${escapeHtml(r.name)}</span>
+      <span class="obs-health-meta">${(r.agg.errorRate*100).toFixed(1)}% err · ${r.agg.total.toLocaleString()} req · ${r.agg.endpointCount} endpoint(s)</span>
+    </div>`;
+  }).join('') : `<div class="empty-field" style="padding:6px 0;">No traffic discovered yet.</div>`;
+
+  return `<div class="section">
+    <div class="section-title">Service health — API status</div>
+    <div class="hint" style="margin-top:-4px;">Sorted by error rate, current time range — click to drill in</div>
+    ${body}
+  </div>`;
+}
+
 function renderAlertsSection(alerts){
   const rows = alerts.length ? alerts.map(a=>`
     <div class="obs-alert-row" data-obs-alert-key="${escapeHtml(a.key)}">
@@ -555,15 +580,17 @@ function renderConsole(main, metrics, agentHealth, logRecords){
       ${latency ? healthKpi('Latency p95 (real)', latency.p95 + 'ms', `p50 ${latency.p50}ms · p99 ${latency.p99}ms · from ${latency.count.toLocaleString()} record(s)`) : ''}
     </div>
 
-    <div class="grid2">
+    ${state.obsScope.type === 'all' ? `<div class="grid2">
+      ${renderServiceHealth(groups, metrics)}
       ${renderStatusBreakdown(agg.statusBreakdown, agg.total)}
-      <div class="section"><div class="section-title">Top source IPs</div><div class="hint" style="margin-top:-4px;">Current scope, ranked by request count</div>${renderIpBreakdown(agg.topIps, agg.total, 'console')}</div>
-    </div>
+    </div>` : renderStatusBreakdown(agg.statusBreakdown, agg.total)}
 
     <div class="grid2">
+      <div class="section"><div class="section-title">Top source IPs</div><div class="hint" style="margin-top:-4px;">Current scope, ranked by request count</div>${renderIpBreakdown(agg.topIps, agg.total, 'console')}</div>
       ${renderAlertsSection(alerts)}
-      ${renderAgentHealth(agentHealth)}
     </div>
+
+    ${renderAgentHealth(agentHealth)}
 
     ${renderVolumeChart(scopedRecords)}
 
@@ -609,6 +636,16 @@ function renderConsole(main, metrics, agentHealth, logRecords){
   if(clearBtn) clearBtn.addEventListener('click', ()=>{ state.obsScope = { type:'all' }; renderConsole(main, metrics, agentHealth, logRecords); });
   main.querySelectorAll('[data-obs-alert-key]').forEach(el=>{
     el.addEventListener('click', ()=>{ state.obsScope = { type:'key', key: el.getAttribute('data-obs-alert-key') }; renderConsole(main, metrics, agentHealth, logRecords); });
+  });
+  main.querySelectorAll('[data-obs-jump-proj]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const id = el.getAttribute('data-obs-jump-proj');
+      const g = groups.find(g => g.id === id);
+      if(!g) return;
+      state.obsOpenProjects[id] = true;
+      state.obsScope = { type:'project', id, name: g.name, keys: g.keys };
+      renderConsole(main, metrics, agentHealth, logRecords);
+    });
   });
 
   wireEndpointsTable(main);
