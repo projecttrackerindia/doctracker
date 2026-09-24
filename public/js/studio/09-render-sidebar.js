@@ -48,7 +48,13 @@ function renderProjectNode(proj, filter){
   }).join('') || (!isViewingDraftEnv() && !filter ? `<div class="tag-group open"><div class="empty-sidebar" style="padding:10px 8px;font-size:11.5px;">${snapshotEntry(proj.id).status==='loading' ? 'Loading…' : `Nothing promoted to ${escapeHtml(envMeta(state.env).label)} yet.`}</div></div>` : '');
 
   const initials = (proj.name||'?').trim().split(/\s+/).slice(0,2).map(w=>w[0]).join('').toUpperCase() || '?';
-  const accent = PROFILE_COLORS[hashStr(proj.name||'') % PROFILE_COLORS.length];
+  // A random hash-derived color per project reads fine across a handful of
+  // hand-authored, visually-distinct projects, but across ~100 near-
+  // identical auto-discovered app rows it's a wall of unrelated colour
+  // that reads as noise rather than signal. Those rows get one flat
+  // neutral tone instead - still an avatar to anchor the row, just not
+  // pretending each app is meaningfully color-coded.
+  const accent = proj.discoveryEnvironment ? '#8a93a6' : PROFILE_COLORS[hashStr(proj.name||'') % PROFILE_COLORS.length];
   const { r:ar, g:ag, b:ab } = hexToRgb(accent);
   const accentBg = `rgba(${ar},${ag},${ab},${state.theme==='light'?0.12:0.18})`;
 
