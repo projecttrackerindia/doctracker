@@ -1114,11 +1114,18 @@ function renderWindowSelector(stats){
 }
 
 function renderStatusBreakdown(breakdown, total){
-  const t = total || 1;
   const fams = ['2xx','3xx','4xx','5xx'];
   const colorFor = { '2xx':'var(--st-2)', '3xx':'var(--st-3)', '4xx':'var(--st-4)', '5xx':'var(--st-5)' };
   const counts = fams.map(f => breakdown[f] || 0);
   const maxCount = Math.max(...counts, 1);
+  // `total` (requests overall) can run ahead of the classified counts below -
+  // some requests never got a status code logged (dropped connection, agent
+  // sampling gap, etc). Percentages and the subtitle use the classified sum
+  // so they always foot to 100%, instead of silently implying an unaccounted
+  // gap is "0%" of something bigger.
+  const classifiedTotal = counts.reduce((a,b)=>a+b, 0);
+  const t = classifiedTotal || 1;
+  const unclassified = Math.max(0, (total || 0) - classifiedTotal);
 
   // One row per family, scaled to the BUSIEST family (not the total) - the
   // same convention Top source IPs already uses (renderIpBreakdown), so a
@@ -1144,7 +1151,7 @@ function renderStatusBreakdown(breakdown, total){
   // still align without the shorter card looking stranded.
   return `<div class="obs-panel obs-panel-fill">
     <div class="section-title">Status code breakdown</div>
-    <div class="hint" style="margin-top:-4px;">${total>0 ? Math.round(total).toLocaleString()+' response(s) over the sampled range' : 'Responses observed by the agent, sampled once per push'}</div>
+    <div class="hint" style="margin-top:-4px;">${classifiedTotal>0 ? classifiedTotal.toLocaleString()+' response(s) over the sampled range' + (unclassified>0 ? ` · ${unclassified.toLocaleString()} without a recorded status code` : '') : 'Responses observed by the agent, sampled once per push'}</div>
     <div class="obs-statusbreakdown-body">
       <div class="obs-statusbar">${fams.map(f=>`<span style="width:${((breakdown[f]||0)/t*100)}%;background:${colorFor[f]};"></span>`).join('')}</div>
       <div class="obs-statusfam-bars">${rows}</div>
