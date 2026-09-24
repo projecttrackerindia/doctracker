@@ -169,6 +169,8 @@ function renderAgentHealth(health){
     healthKpi('Log backlog unread', formatBytes(health.backlogBytes), health.catchingUp ? 'Catching up now' : 'Fully caught up', health.catchingUp ? '--put' : '--post'),
     healthKpi('Tracked endpoints', `${health.trackedEndpointCount ?? '—'} / ${health.maxTrackedEndpoints ?? '—'}`, 'Distinct method+path keys (ids templated out)'),
     healthKpi('Last cycle', health.lastCycleDurationMs !== null && health.lastCycleDurationMs !== undefined ? `${health.lastCycleDurationMs} ms` : '—', health.lastCycleLinesRead !== null && health.lastCycleLinesRead !== undefined ? `${health.lastCycleLinesRead.toLocaleString()} line(s) read` : ''),
+    healthKpi('Logs tailed', health.tailedLogCount ? String(health.tailedLogCount) : '—',
+      health.tailedLogCount ? `${health.maxLinesPerCycle ? Math.floor(health.maxLinesPerCycle / health.tailedLogCount).toLocaleString() : '—'} line(s) of budget each per cycle` : 'Single file, or an older agent build'),
     healthKpi('Agent uptime', formatDuration(health.uptimeSeconds), health.cyclesRun ? `${health.cyclesRun.toLocaleString()} poll cycle(s) run` : ''),
     healthKpi('Last push', health.lastPushAt ? formatDateTime(health.lastPushAt) : '—', health.lastPushOk === false ? 'Failed - retrying' : (health.lastPushOk ? 'Succeeded' : ''), health.lastPushOk === false ? '--delete' : (health.lastPushOk ? '--post' : undefined)),
   ];
@@ -180,6 +182,10 @@ function renderAgentHealth(health){
     </div>
     ${warnings.length ? `<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;">${warnings.map(w=>`<div style="font-size:11.5px;color:var(--put);background:var(--put-bg);border:1px solid color-mix(in srgb, var(--put) 35%, transparent);border-radius:8px;padding:8px 12px;">${w}</div>`).join('')}</div>` : ''}
     <div class="kpi-grid">${kpis.join('')}</div>
+    ${Array.isArray(health.tailedLogs) && health.tailedLogs.length > 1 ? `
+      <div class="hint" style="margin-top:12px;">Tailing ${health.tailedLogs.length} log file(s): ${health.tailedLogs.slice(0, 12).map(n=>`<code>${escapeHtml(n)}</code>`).join(' ')}${health.tailedLogs.length > 12 ? ` <span style="color:var(--text-faint);">+${health.tailedLogs.length - 12} more</span>` : ''}</div>` : ''}
+    ${Array.isArray(health.writers) && health.writers.length > 1 ? `
+      <div class="hint" style="margin-top:8px;">${health.writers.length} agents reporting: ${health.writers.map(w=>`<code>${escapeHtml(w.writerId || '?')}</code>`).join(' ')} — the figures above are from the most recently reporting one.</div>` : ''}
   </div>`;
 }
 
@@ -792,6 +798,22 @@ function computeAlertsFromRecords(records){
   return alerts.sort((a,b)=> (a.sev==='crit'?0:1) - (b.sev==='crit'?0:1) || b.rate - a.rate);
 }
 
+// How much wall-clock time the retained records actually span. Used to tell
+// the difference between "this window is quiet" and "this window is longer
+// than anything the agent still holds".
+function obsRetainedSpanMs(records){
+  if(!records || records.length < 2) return null;
+  let min = Infinity, max = -Infinity;
+  for(const r of records){
+    const t = new Date(r.ts).getTime();
+    if(!Number.isFinite(t)) continue;
+    if(t < min) min = t;
+    if(t > max) max = t;
+  }
+  if(!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
+  return max - min;
+}
+
 function renderWindowSelector(stats){
   const active = obsActiveWindow();
   const locked = !stats.canWindow;
@@ -799,16 +821,28 @@ function renderWindowSelector(stats){
     <button type="button" class="obs-win-pill${w.key===active.key?' active':''}" data-obs-window="${w.key}"${locked && w.key!=='all' ? ' disabled' : ''} title="${locked && w.key!=='all' ? 'Needs per-request records (CAPTURE_MODE=full) to filter by time' : escapeHtml(w.label)}">${escapeHtml(w.label)}</button>
   `).join('');
   let note;
+  let truncationWarning = '';
   if(locked){
     note = 'Cumulative totals since the agent started — time filtering needs per-request records (CAPTURE_MODE=full)';
   } else if(stats.source === 'aggregate'){
     note = 'Complete cumulative totals from the agent’s counters — pick a window above to analyse recent per-request records instead';
   } else {
     note = `Computed from ${stats.total.toLocaleString()} per-request record(s) in this window — covers endpoints that have records, as far back as the agent retains them`;
+
+    // logRecords is a CAPPED ring buffer. On a busy deployment it can hold
+    // far less than the selected window - 3,000 records at 800 req/sec is
+    // under four seconds - and without this the page would answer "Last 24
+    // hours" from a few seconds of data, confidently and wrongly. Compare
+    // the window against the span actually retained and say so.
+    const span = obsRetainedSpanMs(stats.records);
+    if(active.ms && span !== null && span < active.ms * 0.9){
+      truncationWarning = `Only the last ${formatDuration(Math.round(span / 1000))} of records are retained (the agent keeps a capped ring buffer), so this is <strong>${escapeHtml(active.label.toLowerCase())}</strong> in name only — it covers that shorter span. Use All time for complete totals, or reduce traffic per agent / raise MAX_LOG_RECORDS_TOTAL for a longer window.`;
+    }
   }
   return `<div class="obs-window-bar">
     <div class="obs-win-pills">${pills}</div>
     <span class="obs-win-note">${note}</span>
+    ${truncationWarning ? `<div class="obs-win-truncated">${truncationWarning}</div>` : ''}
   </div>`;
 }
 

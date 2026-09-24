@@ -112,6 +112,14 @@ try:
           all(got.get("app%d.log" % n) == 50 for n in range(1, 5)), "got %s" % got)
     check("the line budget is respected", sum(got.values()) <= 1000, "read %d" % sum(got.values()))
 
+    # A caller may legitimately pass a fresh state dict for a file it has
+    # never read - --sample-lines does exactly this, per file, so it can
+    # report a parse rate without advancing the real read offsets. Indexing
+    # state["offset"] directly raised KeyError and crashed that whole mode.
+    probe = agent.tail_new_lines(paths[3], {}, max_lines=5)
+    check("tail_new_lines accepts an empty state dict", isinstance(probe, list),
+          "returned %r" % type(probe))
+
     # State for a file that disappears must not accumulate forever.
     os.remove(paths[4])
     remaining = agent.resolve_log_paths(agent.MULE_LOG_PATH)

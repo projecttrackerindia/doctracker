@@ -660,6 +660,10 @@ def tail_new_lines(path, state, max_lines=None):
         state["offset"] = 0  # truncated/rotated in place
 
     state["inode"] = inode
+    # setdefault, not state["offset"]: callers legitimately pass a fresh dict
+    # for a file they've never read (--sample-lines does, per file), and
+    # indexing directly raised KeyError for them.
+    state.setdefault("offset", 0)
     lines = []
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         f.seek(state["offset"])
@@ -1635,42 +1639,81 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
               f"{len(sample_paths)} file(s): "
               f"{', '.join(os.path.basename(p) for p in sample_paths[:8])}"
               f"{' …' if len(sample_paths) > 8 else ''}\n")
-        # dict(state) so sampling never advances the real read offsets.
-        lines = []
+        # Sampled PER FILE, not from one merged stream. With 70 apps in a log
+        # directory, taking the first N lines overall would only ever show the
+        # alphabetically-first app and say nothing about the other 69 - and
+        # "which of my apps does the parser actually understand" is the whole
+        # question this mode exists to answer.
+        #
+        # Each file also gets its OWN multi-line carry, for the same reason the
+        # main loop does: a JSON block spans lines within one file.
+        per_file = max(1, sample_lines // max(1, len(sample_paths)))
+        totals = {"matched": 0, "unmatched": 0, "lines": 0}
+        per_file_report = []
+
         for _p in sample_paths:
-            if len(lines) >= sample_lines:
-                break
-            lines.extend(tail_new_lines(_p, dict((state.get("files") or {}).get(_p, {})),
-                                        max_lines=sample_lines - len(lines)))
-        lines = lines[:sample_lines]
-        carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
-        multi_obs = assemble_multiline_observations(lines, carry)
+            fstate = dict((state.get("files") or {}).get(_p, {}))  # copy: never advances the real offsets
+            flines = tail_new_lines(_p, fstate, max_lines=per_file)
+            if not flines:
+                per_file_report.append((os.path.basename(_p), 0, 0, 0))
+                continue
+            carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+            fmulti = assemble_multiline_observations(flines, carry)
+            fmatched, funmatched = 0, 0
+            shown = 0
+            print(f"--- {os.path.basename(_p)} ({len(flines)} line(s) sampled) ---")
+            for line in flines:
+                obs = parse_line(line)
+                if obs:
+                    fmatched += 1
+                    if shown < 3:
+                        print(f"  MATCHED (single-line)   {obs['method']} {obs['path']}  status={obs.get('statusCode')}")
+                        shown += 1
+                else:
+                    funmatched += 1
+                    if shown < 3:
+                        print(f"  UNMATCHED {line[:150]}")
+                        shown += 1
+            for obs in fmulti:
+                req_fields = sorted(obs["body"].keys()) if isinstance(obs.get("body"), dict) else []
+                print(f"  MATCHED (multi-line JSON block)   {obs['method']} {obs['path']}  "
+                      f"status={obs.get('statusCode')}  request-field-names={req_fields}   [values never captured]")
+            total_f = fmatched + len(fmulti)
+            per_file_report.append((os.path.basename(_p), len(flines), total_f, funmatched))
+            totals["matched"] += total_f
+            totals["unmatched"] += funmatched
+            totals["lines"] += len(flines)
+            print()
 
-        matched_single, unmatched = 0, 0
-        for line in lines:
-            obs = parse_line(line)
-            if obs:
-                matched_single += 1
-                print(f"MATCHED (single-line)   {obs['method']} {obs['path']}  status={obs.get('statusCode')}  corr={obs.get('correlationId')}")
-            else:
-                unmatched += 1
-                print(f"UNMATCHED {line[:160]}")
+        print("=" * 78)
+        print("PER-FILE PARSE RATE  (this is the number that matters)")
+        print("=" * 78)
+        print("  %-46s %8s %8s %7s" % ("log file", "sampled", "matched", "rate"))
+        silent = []
+        for name, nlines, nmatched, _unm in sorted(per_file_report, key=lambda r: (r[2] / r[1] if r[1] else -1)):
+            rate = ("%.0f%%" % (nmatched / nlines * 100)) if nlines else "no data"
+            print("  %-46s %8d %8d %7s" % (name[:46], nlines, nmatched, rate))
+            if nlines and nmatched == 0:
+                silent.append(name)
 
-        for obs in multi_obs:
-            req_fields = sorted(obs["body"].keys()) if isinstance(obs.get("body"), dict) else []
-            print(f"MATCHED (multi-line JSON block)   {obs['method']} {obs['path']}  status={obs.get('statusCode')}  "
-                  f"corr={obs.get('correlationId')}  request-field-names={req_fields}   [values never captured]")
-
-        total_matched = matched_single + len(multi_obs)
-        print(f"\n[info] {total_matched} matched ({matched_single} single-line style, {len(multi_obs)} reconstructed "
-              f"multi-line JSON block(s)), {unmatched} lines not matched by the single-line patterns, "
-              f"out of {len(lines)} lines total.")
-        print("[info] note: lines that are PART OF a successfully reconstructed multi-line JSON block will still "
-              "show as UNMATCHED above one-by-one - that's expected, they're not meant to match individually.")
-        if total_matched == 0 and lines:
-            print("[warn] Nothing matched at all - LINE_PATTERNS/HEADER_METHOD_PATTERN almost certainly need "
-                  "tuning to your real log format. Paste a few real (redacted) log lines here so they can be "
-                  "adjusted before relying on this for real.")
+        print()
+        print(f"[info] {totals['matched']} matched, {totals['unmatched']} lines not matched by the "
+              f"single-line patterns, out of {totals['lines']} lines sampled across "
+              f"{len(sample_paths)} file(s).")
+        print("[info] note: lines that are PART OF a successfully reconstructed multi-line JSON block still "
+              "show as UNMATCHED individually - that's expected, they aren't meant to match on their own.")
+        if silent:
+            print(f"\n[warn] {len(silent)} file(s) produced NO matches at all. Traffic in these apps is "
+                  f"invisible to the agent - their counters will never move:")
+            for name in silent[:20]:
+                print(f"          {name}")
+            if len(silent) > 20:
+                print(f"          ... and {len(silent) - 20} more")
+            print("       If these apps genuinely serve HTTP traffic, LINE_PATTERNS needs tuning to their "
+                  "log format. Paste a few real (redacted) lines from one of them.")
+        if totals["matched"] == 0 and totals["lines"]:
+            print("[warn] NOTHING matched in any file - LINE_PATTERNS/HEADER_METHOD_PATTERN almost certainly "
+                  "need tuning to your real log format before relying on any of this.")
         return
 
     client = None
