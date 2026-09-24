@@ -99,13 +99,43 @@ function observabilityData(){
 // background: this re-fetches the whole workspace (there is one GET for it),
 // which is not something to do every minute behind someone's back.
 let obsRefreshTimer = null;
+// What was on screen as of the last render, so a poll can say what's NEW
+// instead of just replacing the numbers silently. Reset to null whenever
+// Observability is (re)opened, so opening the page never itself announces
+// "5 new endpoints" for things that were already there.
+let obsKnownKeys = null;
+let obsKnownIps = null;
 
 function stopObsAutoRefresh(){
   if(obsRefreshTimer){ clearInterval(obsRefreshTimer); obsRefreshTimer = null; }
 }
 
+// Every distinct endpoint key and source IP currently in view, for diffing
+// against the previous poll. Cheap: it's the same data the page already
+// rendered, just walked once more.
+function obsCurrentKeysAndIps(){
+  const { endpoints } = observabilityData();
+  const keys = new Set(Object.keys(endpoints || {}));
+  const ips = new Set();
+  Object.values(endpoints || {}).forEach(ep=>{
+    (ep.topSourceIps || []).forEach(row=>{ if(row && row.ip) ips.add(row.ip); });
+  });
+  return { keys, ips };
+}
+
 function startObsAutoRefresh(){
-  stopObsAutoRefresh();
+  // Idempotent, not "stop then start": renderObservability() runs on every
+  // in-page interaction too (changing scope, expanding a project, switching
+  // the time window all call the global renderMain()), and those don't
+  // touch endpointMetrics at all. Unconditionally restarting here would mean
+  // someone actively clicking around never actually gets polled - the timer
+  // would keep getting pushed back by their own clicks. The interval's own
+  // callback already nulls obsRefreshTimer on navigating away, so a fresh
+  // start still re-arms correctly the next time this view is opened.
+  if(obsRefreshTimer) return;
+  const initial = obsCurrentKeysAndIps();
+  obsKnownKeys = initial.keys;
+  obsKnownIps = initial.ips;
   obsRefreshTimer = setInterval(async ()=>{
     if(!state.selected || state.selected.type !== 'observability'){ stopObsAutoRefresh(); return; }
     if(document.hidden) return;
@@ -115,7 +145,25 @@ function startObsAutoRefresh(){
       // Re-check: the fetch is async, and the user may have navigated away
       // while it was in flight. Rendering then would replace whatever they
       // just opened with this page's content.
-      if(state.selected && state.selected.type === 'observability') renderMain();
+      if(!state.selected || state.selected.type !== 'observability') return;
+
+      const now = obsCurrentKeysAndIps();
+      const newKeys = obsKnownKeys ? [...now.keys].filter(k=>!obsKnownKeys.has(k)) : [];
+      const newIps = obsKnownIps ? [...now.ips].filter(ip=>!obsKnownIps.has(ip)) : [];
+      obsKnownKeys = now.keys;
+      obsKnownIps = now.ips;
+
+      renderMain();
+      // Announced AFTER the render, and only for a poll that found something
+      // genuinely new - not the routine 60s refresh, which would otherwise
+      // toast every single minute for no reason. One combined toast: the
+      // toast overlay is a single element, so two calls back to back would
+      // just have the second silently replace the first before anyone
+      // could read it.
+      const parts = [];
+      if(newKeys.length) parts.push(`${newKeys.length} new endpoint${newKeys.length===1?'':'s'} (${newKeys.slice(0,2).join(', ')}${newKeys.length>2?', …':''})`);
+      if(newIps.length) parts.push(`${newIps.length} new source IP${newIps.length===1?'':'s'} (${newIps.slice(0,3).join(', ')}${newIps.length>3?', …':''})`);
+      if(parts.length) toast(`Discovered: ${parts.join(' · ')}`);
     }catch(e){
       // A failed poll is not worth interrupting anyone over - the badge
       // will age into DELAYED/STALE on its own if this keeps failing.

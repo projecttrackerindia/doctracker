@@ -260,14 +260,36 @@ function environments(){
   return (state.environments && state.environments.length) ? state.environments : DEFAULT_ENVIRONMENTS;
 }
 function envIds(){ return environments().map(e=>e.id); }
-// Migrates envs saved before `access`/`url` existed so old localStorage data keeps working.
+// Migrates envs saved before `access`/`url`/`hostIps` existed so old data keeps working.
 function migrateEnvironment(e){
   return {
     ...e,
     access: e.access || (e.restricted ? 'restricted' : 'user'),
     url: e.url || '',
+    hostIps: Array.isArray(e.hostIps) ? e.hostIps.filter(x=>typeof x==='string' && x.trim()).slice(0,20) : [],
   };
 }
+
+// A loose IPv4 / IPv4-CIDR / IPv6 shape check - this is a REFERENCE field for
+// humans (and for matching a server to an environment when installing an
+// agent), not a security boundary, so it rejects obvious junk without being
+// a strict validator. See ENV_HOST_IPS_NOTE for why this is never used to
+// auto-route data.
+const HOST_IP_PATTERN = /^[0-9a-fA-F.:]+(\/[0-9]{1,3})?$/;
+function sanitizeHostIpsInput(raw){
+  const tokens = String(raw||'').split(/[,\n]/).map(s=>s.trim()).filter(Boolean);
+  const bad = tokens.find(t=>!HOST_IP_PATTERN.test(t) || t.length > 43);
+  if(bad) return { ok:false, error:`"${bad}" doesn't look like an IP address or CIDR range.` };
+  const deduped = [...new Set(tokens)];
+  if(deduped.length > 20) return { ok:false, error:'Up to 20 host IPs per environment.' };
+  return { ok:true, ips: deduped };
+}
+// Shown next to every Host IPs field in the UI - see require_environment() in
+// mule_doc_agent.py, which deliberately has no default and no hostname
+// inference. Pooling SIT and PROD data because an agent's IP "looked right"
+// was the exact failure mode that guard exists to prevent, so this list
+// stays documentation, not a routing input.
+const ENV_HOST_IPS_NOTE = 'Reference only, for you and whoever installs an agent - never used to auto-route data. A discovery agent must still declare its own environment explicitly.';
 // Environments are shared across the whole organisation (see server/routes/workspace.js
 // GET/PUT /api/workspace/environments) — populated into state.environments by loadState().
 function saveEnvironments(){
@@ -277,7 +299,7 @@ function saveEnvironments(){
 function envIdFromLabel(label){
   return String(label||'').trim().toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/^_+|_+$/g,'') || uid().toUpperCase();
 }
-function addEnvironment(label, color, access, url){
+function addEnvironment(label, color, access, url, hostIps){
   const trimmed = (label||'').trim();
   if(!trimmed) return { ok:false, error:'Environment name is required.' };
   let id = envIdFromLabel(trimmed);
@@ -290,6 +312,7 @@ function addEnvironment(label, color, access, url){
     access: accessId,
     restricted: accessId === 'restricted',
     url: (url||'').trim(),
+    hostIps: Array.isArray(hostIps) ? hostIps : [],
   };
   state.environments = environments().slice();
   state.environments.push(env);

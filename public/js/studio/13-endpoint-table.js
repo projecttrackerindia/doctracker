@@ -109,6 +109,7 @@ function envTableHtml(){
         <th style="width:24px;"></th>
         <th data-sort="label">Environment ${sortArrow('label')}</th>
         <th data-sort="url">Endpoint ${sortArrow('url')}</th>
+        <th title="${escapeHtml(ENV_HOST_IPS_NOTE)}">Host IPs</th>
         <th data-sort="access">Access ${sortArrow('access')}</th>
         <th data-sort="color">Color ${sortArrow('color')}</th>
         <th title="Whether promoting into this stage in the Release Pipeline needs a second Admin's approval">Approval</th>
@@ -125,6 +126,9 @@ function envAddFormHtml(){
   <div class="row-actions-edit-form" id="envAddForm" style="max-width:360px;margin-bottom:12px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:10px;padding:12px;">
     <div><label>Environment name</label><input type="text" id="envAddLabelInput" placeholder="e.g. QA" maxlength="40"></div>
     <div><label>Endpoint URL <span style="text-transform:none;font-weight:500;">— optional, sensitive, masked by default</span></label><input type="text" id="envAddUrlInput" placeholder="https://api.example.com"></div>
+    <div><label>Host IPs <span style="text-transform:none;font-weight:500;">— optional, comma-separated</span></label>
+      <input type="text" id="envAddHostIpsInput" placeholder="10.2.7.209, 10.2.7.211">
+    </div>
     <div><label>Access</label><select id="envAddAccessInput">${ENV_ACCESS_LEVELS.map(a=>`<option value="${a.id}"${a.id==='user'?' selected':''}>${a.label}</option>`).join('')}</select></div>
     <div><label>Color</label>
       <div class="row-actions-swatch-grid" id="envAddColorSwatches">
@@ -136,6 +140,20 @@ function envAddFormHtml(){
       <button type="button" class="primary" id="envAddSave">Add environment</button>
     </div>
   </div>`;
+}
+
+// Which server(s) an admin has told DocTracker belong to this environment.
+// Purely a lookup aid - see ENV_HOST_IPS_NOTE (03-notifications.js) for why
+// this never drives which environment a push of live data is filed under.
+function envHostIpsCellHtml(e){
+  const ips = e.hostIps || [];
+  if(!ips.length) return `<span class="empty-field" style="font-size:11px;">—</span>`;
+  const shown = ips.slice(0, 2);
+  const rest = ips.length - shown.length;
+  return `<span class="env-ip-list" title="${escapeHtml(ips.join(', '))}">
+    ${shown.map(ip=>`<code class="env-ip-chip">${escapeHtml(ip)}</code>`).join('')}
+    ${rest > 0 ? `<span class="env-ip-more">+${rest} more</span>` : ''}
+  </span>`;
 }
 
 function envRowHtml(e, dragEnabled, canReveal){
@@ -154,6 +172,7 @@ function envRowHtml(e, dragEnabled, canReveal){
         ${hasUrl ? `<button type="button" class="icon-btn env-reveal-btn${canReveal?'':' locked'}" data-env-reveal="${e.id}" title="${canReveal ? (revealed?'Hide value':'Reveal value') : 'Only the Admin role can reveal this value'}">${canReveal ? (revealed?ICON_EYE_OFF:ICON_EYE) : ICON_LOCK}</button>` : ''}
       </div>
     </td>
+    <td>${envHostIpsCellHtml(e)}</td>
     <td><span class="access-badge access-${e.access}">${accessMeta(e.access).label}</span></td>
     <td><span class="env-color-dot" style="background:${e.color};" title="${colorName(e.color)}"></span></td>
     <td>${e.requiresApproval
@@ -173,6 +192,10 @@ function rowActionsPanelHtml(e, mode){
     return `<div class="row-actions-edit-form">
       <div><label>Label</label><input type="text" id="rafLabel" value="${escapeHtml(e.label)}" maxlength="40"></div>
       <div><label>Endpoint URL</label><input type="text" id="rafUrl" value="${escapeHtml(e.url)}" placeholder="https://api.example.com"></div>
+      <div><label>Host IPs <span style="text-transform:none;font-weight:500;">— optional, comma-separated</span></label>
+        <input type="text" id="rafHostIps" value="${escapeHtml((e.hostIps||[]).join(', '))}" placeholder="10.2.7.209, 10.2.7.211">
+        <div class="raf-hint">${escapeHtml(ENV_HOST_IPS_NOTE)}</div>
+      </div>
       <div class="raf-actions">
         <button type="button" class="row-actions-item" data-act="cancel" data-id="${e.id}">Cancel</button>
         <button type="button" class="row-actions-item" style="color:var(--accent);" data-act="save-edit" data-id="${e.id}">Save</button>
@@ -253,7 +276,9 @@ function bindEnvTableEvents(container){
     const url = document.getElementById('envAddUrlInput').value.trim();
     const access = document.getElementById('envAddAccessInput').value;
     if(url){ try{ new URL(url); }catch(e){ toast('Enter a valid URL, e.g. https://api.example.com'); return; } }
-    const result = addEnvironment(label, envAddColorChoice, access, url);
+    const ipCheck = sanitizeHostIpsInput(document.getElementById('envAddHostIpsInput').value);
+    if(!ipCheck.ok){ toast(ipCheck.error); return; }
+    const result = addEnvironment(label, envAddColorChoice, access, url, ipCheck.ips);
     if(!result.ok){ toast(result.error); return; }
     envAddFormOpen = false;
     toast(`Added "${result.env.label}" environment`);
@@ -348,7 +373,9 @@ async function handleEnvRowAction(act, id, el){
     const url = document.getElementById('rafUrl').value.trim();
     if(!label){ toast('Environment name is required'); return; }
     if(url){ try{ new URL(url); }catch(e){ toast('Enter a valid URL, e.g. https://api.example.com'); return; } }
-    const result = updateEnvironment(id, { label, url });
+    const ipCheck = sanitizeHostIpsInput(document.getElementById('rafHostIps').value);
+    if(!ipCheck.ok){ toast(ipCheck.error); return; }
+    const result = updateEnvironment(id, { label, url, hostIps: ipCheck.ips });
     if(!result.ok){ toast(result.error); return; }
     envRowMenu = { id:null, mode:'menu' };
     toast('Environment updated');
