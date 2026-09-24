@@ -2541,6 +2541,14 @@ body.tryit-standalone #tryItClose{ display:none; }
   color:var(--text-dim); font-size:12px; cursor:pointer;
 }
 .env-table-toolbar .spacer{ flex:1; }
+.obs-ep-toolbar{ margin-bottom:10px; }
+.obs-ep-toolbar .obs-ep-search{ max-width:320px; }
+.obs-ep-pager{ display:flex; align-items:center; gap:8px; margin-left:auto; font-size:11px; color:var(--text-faint); white-space:nowrap; }
+.obs-ep-pager-page{ min-width:74px; text-align:center; }
+.obs-ep-pager .icon-btn{ width:22px; height:22px; display:inline-flex; align-items:center; justify-content:center;
+  border:1px solid var(--border); border-radius:6px; font-size:14px; line-height:1; }
+.obs-ep-pager .icon-btn:disabled{ opacity:.35; cursor:not-allowed; }
+.obs-ep-pager .icon-btn:not(:disabled):hover{ background:var(--surface-hover); color:var(--text); }
 table.env-data-table th[data-sort]{ cursor:pointer; user-select:none; }
 table.env-data-table th[data-sort]:hover{ color:var(--text); }
 table.env-data-table th .sort-arrow{ font-size:9px; margin-left:3px; color:var(--accent); }

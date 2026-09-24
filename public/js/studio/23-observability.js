@@ -608,9 +608,23 @@ const OBS_EP_SORTS = {
 // `basis` mirrors whatever obsComputeStats decided for the page as a whole
 // ('aggregate' for the complete all-time counters, 'records' for a bounded
 // window) so this table can never disagree with the KPIs above it.
+// 50 rows/page keeps a table of hundreds of auto-discovered endpoints
+// scannable without an extra network round trip - everything needed is
+// already in `keys`, so this is a pure client-side slice, not a fetch.
+const OBS_EP_PAGE_SIZE = 50;
+
 function renderEndpointsTable(keys, metrics, records, basis){
   if(!state.obsEpSort) state.obsEpSort = { col:'total', dir:'desc' };
+  if(typeof state.obsEpFilter !== 'string') state.obsEpFilter = '';
+  if(!state.obsEpPage) state.obsEpPage = 1;
   const sort = state.obsEpSort;
+
+  // Search narrows BEFORE sort/paging, on method+path text - the same two
+  // things every row visibly shows, so what someone types always explains
+  // what disappeared.
+  const q = state.obsEpFilter.trim().toLowerCase();
+  const allKeys = keys;
+  keys = q ? keys.filter(k=>k.toLowerCase().includes(q)) : keys;
 
   // Per-endpoint stats follow the same rule as the rest of the page: when
   // windowed per-request records exist for a key, everything about that row
@@ -663,7 +677,16 @@ function renderEndpointsTable(keys, metrics, records, basis){
     return sort.dir === 'asc' ? d : -d;
   });
 
-  const rows = rowData.length ? rowData.map((r, idx)=>{
+  const totalPages = Math.max(1, Math.ceil(rowData.length / OBS_EP_PAGE_SIZE));
+  // Clamped rather than reset here: a filter/scope change can shrink the
+  // result set out from under whatever page someone was on, and landing on
+  // the nearest valid page beats silently showing an empty table.
+  if(state.obsEpPage > totalPages) state.obsEpPage = totalPages;
+  if(state.obsEpPage < 1) state.obsEpPage = 1;
+  const pageStart = (state.obsEpPage - 1) * OBS_EP_PAGE_SIZE;
+  const pageRows = rowData.slice(pageStart, pageStart + OBS_EP_PAGE_SIZE);
+
+  const rows = pageRows.length ? pageRows.map((r, idx)=>{
     const breakdownLabel = Object.keys(r.breakdown).sort().map(fam=>`${fam}: ${r.breakdown[fam]}`).join(', ') || '—';
     const isOverflow = r.key === OBS_OVERFLOW_KEY;
     const found = isOverflow ? null : findDocumentedEndpointForMetricsKey(r.key);
@@ -687,7 +710,11 @@ function renderEndpointsTable(keys, metrics, records, basis){
       <td class="mono" style="font-size:10.5px;color:var(--text-faint);">${r.lastSeenAt ? formatDateTime(r.lastSeenAt) : '—'}</td>
       <td>${isOverflow ? '<span class="empty-field">Not an endpoint</span>' : (found ? '<span style="color:var(--post);">Documented</span>' : '<span class="empty-field">Not yet documented</span>')}</td>
     </tr>`;
-  }).join('') : `<tr><td colspan="9" class="empty-field" style="padding:16px;">No traffic discovered yet. This fills in once the SIT log auto-discovery agent (ops/sit-doc-agent) has pushed at least one batch — see AGENT_README.md.</td></tr>`;
+  }).join('') : `<tr><td colspan="9" class="empty-field" style="padding:16px;">${
+    allKeys.length && q
+      ? `No endpoint matches "${escapeHtml(state.obsEpFilter.trim())}".`
+      : `No traffic discovered yet. This fills in once the SIT log auto-discovery agent (ops/sit-doc-agent) has pushed at least one batch — see AGENT_README.md.`
+  }</td></tr>`;
 
   const sortableTh = (col, label)=>{
     const active = sort.col === col;
@@ -695,9 +722,26 @@ function renderEndpointsTable(keys, metrics, records, basis){
     return `<th class="obs-sort-th${active?' active':''}" data-obs-sort="${col}" title="Sort by ${escapeHtml(label)}">${escapeHtml(label)}${arrow}</th>`;
   };
 
+  const countLabel = q ? `${rowData.length} of ${allKeys.length}` : `${allKeys.length}`;
+  const pagerLabel = rowData.length
+    ? `${(pageStart+1).toLocaleString()}–${Math.min(pageStart+OBS_EP_PAGE_SIZE, rowData.length).toLocaleString()} of ${rowData.length.toLocaleString()}`
+    : '0 of 0';
+
   return `<div class="obs-panel">
-    <div class="section-title">Endpoints${keys.length ? ` (${keys.length})` : ''}</div>
+    <div class="section-title">Endpoints${allKeys.length ? ` (${countLabel})` : ''}</div>
     <div class="hint" style="margin-top:-4px;">Every discovered method + path in the current scope — click a sortable column to reorder, or a documented row to open its docs.</div>
+    <div class="env-table-toolbar obs-ep-toolbar">
+      <div class="env-table-search obs-ep-search">
+        <span class="env-table-search-ic"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.2" y2="16.2"></line></svg></span>
+        <input type="text" id="obsEpSearchInput" placeholder="Search method or path…" value="${escapeHtml(state.obsEpFilter)}">
+      </div>
+      <div class="obs-ep-pager">
+        <span class="obs-ep-pager-label">${pagerLabel}</span>
+        <button type="button" class="icon-btn" id="obsEpPagePrev" ${state.obsEpPage<=1?'disabled':''} title="Previous page">‹</button>
+        <span class="obs-ep-pager-page">Page ${state.obsEpPage} of ${totalPages}</span>
+        <button type="button" class="icon-btn" id="obsEpPageNext" ${state.obsEpPage>=totalPages?'disabled':''} title="Next page">›</button>
+      </div>
+    </div>
     <div class="table-scroll">
     <table class="data-table cc-proj-table">
       <thead><tr>
@@ -726,9 +770,27 @@ function wireEndpointsTable(main){
       state.obsEpSort = (cur.col === col)
         ? { col, dir: cur.dir === 'desc' ? 'asc' : 'desc' }
         : { col, dir: 'desc' };
+      state.obsEpPage = 1; // a re-sort re-orders everything, so "page 3" means something different now
       renderMain();
     });
   });
+  const epSearch = main.querySelector('#obsEpSearchInput');
+  if(epSearch){
+    epSearch.addEventListener('input', ()=>{
+      state.obsEpFilter = epSearch.value;
+      state.obsEpPage = 1; // a new filter is a new result set - stay on page 1 of it
+      renderMain();
+      // renderMain() rebuilds this input from scratch, so focus/cursor
+      // position are gone unless restored - same pattern as the env table's
+      // own search box (13-endpoint-table.js).
+      const el = document.getElementById('obsEpSearchInput');
+      if(el){ el.focus(); const v = el.value; el.setSelectionRange(v.length, v.length); }
+    });
+  }
+  const epPrev = main.querySelector('#obsEpPagePrev');
+  if(epPrev) epPrev.addEventListener('click', ()=>{ state.obsEpPage = Math.max(1, state.obsEpPage - 1); renderMain(); });
+  const epNext = main.querySelector('#obsEpPageNext');
+  if(epNext) epNext.addEventListener('click', ()=>{ state.obsEpPage += 1; renderMain(); });
   main.querySelectorAll('[data-obs-ep]').forEach(row=>{
     row.style.cursor = 'pointer';
     row.addEventListener('click', (e)=>{
