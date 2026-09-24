@@ -969,9 +969,15 @@ def tail_all_logs(paths, state, total_budget):
             "inode": getattr(st, "st_ino", None),
         }
         if stale:
-            print(f"[info] {os.path.basename(path)}: last written "
-                  f"{int((time.time() - st.st_mtime) / 60)} min ago, treating as a rotated archive - "
-                  f"skipping its {st.st_size / 1048576:.1f} MB of history, will read anything appended from now on")
+            # Says "not recently written" rather than "rotated archive": a
+            # file untouched for an hour is usually just an idle app, and
+            # calling that an archive misreads a normal quiet period as a
+            # rotation. The HANDLING is the same either way - start at the
+            # end - so only the wording was wrong.
+            print(f"[info] {os.path.basename(path)}: not written for "
+                  f"{int((time.time() - st.st_mtime) / 60)} min (idle app or rotated archive) - "
+                  f"starting at the end, skipping its {st.st_size / 1048576:.1f} MB of history. "
+                  f"Anything appended from now on is read.")
 
     per_file = max(1, total_budget // len(paths))
     out = {}
@@ -1935,7 +1941,59 @@ def start_local_server(html_path, port):
 # ============================================================================
 # Main loop
 # ============================================================================
-def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
+def seed_state_from_history(state, log_paths, max_lines):
+    """One-time backfill of the endpoint INVENTORY from existing log history.
+
+    Tailing starts at end-of-file, which is right for counting traffic - it
+    is the only way to avoid re-ingesting gigabytes on every restart. But it
+    means a fresh agent knows about no endpoints at all and only learns one
+    when it next sees live traffic for it. On this deployment that is a real
+    loss rather than a brief warm-up: most of the inventory comes from
+    "Starting flow:" lines, which Mule emits only at application startup, so
+    an endpoint belonging to an app that is deployed but momentarily idle
+    would stay invisible until the next restart - potentially weeks.
+
+    So this reads the LAST `max_lines` lines of each file once, feeding them
+    through the same parse/aggregate path as live tailing. Requests seen here
+    are real and counted (event-id dedup in aggregate() stops a later live
+    read of the same lines from double-counting). It runs only when the state
+    file has no `seededFromHistory` marker, so a restart never repeats it.
+    """
+    if not log_paths:
+        return
+    per_file = max(1, max_lines // max(1, len(log_paths)))
+    print(f"[info] seeding inventory from history: up to {per_file} line(s) from the END of each of "
+          f"{len(log_paths)} file(s). One time only - subsequent restarts resume from where this left off.")
+    total_lines = 0
+    total_obs = 0
+    failed = 0
+    for path in log_paths:
+        try:
+            lines = read_last_lines(path, per_file)
+        except Exception as e:
+            failed += 1
+            print(f"[warn] could not seed from {os.path.basename(path)}: {e}", file=sys.stderr)
+            continue
+        if not lines:
+            continue
+        # A fresh carry per file, exactly as the live tailer keeps one per
+        # file - a JSON block must never be assembled across two apps' logs.
+        carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+        observations = assemble_multiline_observations(lines, carry)
+        for raw in lines:
+            obs = parse_line(raw.strip())
+            if obs:
+                observations.append(obs)
+        aggregate(state, observations)
+        total_lines += len(lines)
+        total_obs += len(observations)
+    eps = len(state.get("endpoints") or {})
+    print(f"[info] seeded from {total_lines} historical line(s): {total_obs} observation(s), "
+          f"{eps} endpoint(s) now known."
+          + (f" {failed} file(s) unreadable." if failed else ""))
+
+
+def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed_from_history=None):
     state = load_state()
 
     if sample_lines:
@@ -2114,6 +2172,11 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
     health.setdefault("startedAt", time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()))
     health.setdefault("startedAtEpoch", time.time())
 
+    if seed_from_history and not state.get("seededFromHistory"):
+        seed_state_from_history(state, log_paths, seed_from_history)
+        state["seededFromHistory"] = True
+        save_state(state)
+
     while True:
         cycle_start = time.time()
         # Bounded read: at most MAX_LINES_PER_CYCLE lines per call, so one
@@ -2267,6 +2330,11 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="Parse and aggregate, but never call DocTracker.")
     ap.add_argument("--sample-lines", type=int, default=None, help="Print N parsed lines and exit (for validating the log parser).")
+    ap.add_argument("--seed-from-history", type=int, default=None, metavar="N",
+                    help="On first start only, backfill the endpoint inventory by reading the last N "
+                         "lines (total, split across files) of existing logs before tailing. Without "
+                         "this the agent starts at end-of-file and only learns an endpoint when it "
+                         "next sees live traffic for it.")
     ap.add_argument("--local-html", metavar="PATH", default=None,
                      help="Write a self-contained local HTML report to PATH instead of pushing to DocTracker. "
                           "No network call is ever made in this mode - see the data-residency note at the top of this file.")
@@ -2274,4 +2342,5 @@ if __name__ == "__main__":
                      help="With --local-html, also serve the report over http://127.0.0.1:PORT (localhost-only, "
                           "never externally reachable). View from your own machine via an SSH tunnel.")
     args = ap.parse_args()
-    run(dry_run=args.dry_run, sample_lines=args.sample_lines, local_html=args.local_html, serve_port=args.serve_port)
+    run(dry_run=args.dry_run, sample_lines=args.sample_lines, local_html=args.local_html,
+        serve_port=args.serve_port, seed_from_history=args.seed_from_history)

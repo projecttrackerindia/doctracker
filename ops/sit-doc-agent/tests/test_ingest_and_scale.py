@@ -11,6 +11,7 @@ that stops being tailed just stops contributing counts, and a source-IP map
 that drops new entries still renders a confident-looking "Top source IPs"
 panel. Neither raises anything.
 """
+import io
 import os
 import re
 import shutil
@@ -299,8 +300,68 @@ check("it survives repeated pruning by a churning tail", "198.51.100.250" in ips
 check("the map is still bounded after churn", len(ips) <= agent.MAX_SOURCE_IPS_WATERMARK,
       "%d entries" % len(ips))
 
+# ---------------------------------------------------------------------------
+# --seed-from-history: one-time inventory backfill.
+#
+# Tailing starts at end-of-file, which is correct for counting traffic but
+# leaves a fresh agent knowing no endpoints at all. On the production node
+# most of the inventory comes from "Starting flow:" lines that Mule emits
+# only at application startup, so without a backfill an idle-but-deployed
+# app stays invisible until the next restart.
+# ---------------------------------------------------------------------------
+print("Seeding the inventory from history")
+seed_dir = tempfile.mkdtemp(prefix="seedhist-")
+try:
+    a = os.path.join(seed_dir, "orders-api.log")
+    b = os.path.join(seed_dir, "billing-api.log")
+    with io.open(a, "w", encoding="utf-8") as f:
+        for i in range(500):
+            f.write("INFO  2026-09-24 09:00:00,000 [ArtifactDeployer.start.01] noise line %d\n" % i)
+        f.write(r'INFO  2026-09-24 10:00:06,705 [ArtifactDeployer.start.01] [processor: ; event: ] '
+                r'org.mule.runtime.core.internal.construct.FlowConstructLifecycleManager: '
+                r'Starting flow: get:\orders\(orderId):application\json:orders-api-config' + "\n")
+    with io.open(b, "w", encoding="utf-8") as f:
+        f.write(r'INFO  2026-09-24 10:16:33,311 [[MuleRuntime].uber.37: [billing-api].'
+                r'post:\invoices:application\json:billing-api-config.BLOCKING @a1] '
+                r'[processor: p/processors/0; event: ea4101a1-b7d2-11f1-8e71-02783a995911] '
+                r'org.mule.runtime.core.internal.processor.LoggerMessageProcessor: start' + "\n")
+
+    st = {"endpoints": {}, "health": {}}
+    agent.seed_state_from_history(st, [a, b], 40)
+    keys = sorted(st["endpoints"].keys())
+    check("both apps' endpoints are discovered from history",
+          keys == ["GET /orders/{orderId}", "POST /invoices"], "got %r" % keys)
+    check("a startup-only endpoint is seeded with no traffic",
+          st["endpoints"]["GET /orders/{orderId}"]["totalRequests"] == 0,
+          "got %r" % st["endpoints"]["GET /orders/{orderId}"]["totalRequests"])
+    check("a real request in history is counted once",
+          st["endpoints"]["POST /invoices"]["totalRequests"] == 1,
+          "got %r" % st["endpoints"]["POST /invoices"]["totalRequests"])
+
+    # The same lines arriving again (the live tailer re-reading a boundary)
+    # must not inflate the count - event-id dedup is what protects this.
+    agent.seed_state_from_history(st, [a, b], 40)
+    check("re-seeding the same history does not double count",
+          st["endpoints"]["POST /invoices"]["totalRequests"] == 1,
+          "got %r" % st["endpoints"]["POST /invoices"]["totalRequests"])
+
+    # It reads the END, so the 500 lines of old noise are never touched.
+    check("only the tail is read, not the whole file",
+          st["endpoints"]["GET /orders/{orderId}"].get("discoveredOnly", 0) >= 1)
+
+    missing = os.path.join(seed_dir, "vanished.log")
+    st2 = {"endpoints": {}, "health": {}}
+    agent.seed_state_from_history(st2, [a, missing], 40)
+    check("a file that cannot be read does not abort the seed",
+          "GET /orders/{orderId}" in st2["endpoints"])
+finally:
+    shutil.rmtree(seed_dir, ignore_errors=True)
+
+
 print()
 if FAILURES:
     print("FAILED (%d): %s" % (len(FAILURES), ", ".join(FAILURES)))
     sys.exit(1)
 print("All ingest/scale tests passed.")
+
+
