@@ -1376,7 +1376,16 @@ def aggregate(state, observations):
 # ============================================================================
 def capture_log_record(state, key, obs):
     records = state.setdefault("logRecords", [])
+    # Monotonic, persisted across restarts (part of state.json) - lets the
+    # push loop below identify exactly which records are NEW since the last
+    # successful push, so it can send only those instead of re-transmitting
+    # the entire (up to 3000-record) ring buffer every single cycle. Not
+    # meant to be a stable public id - purely a local "have I sent this yet"
+    # marker.
+    seq = state.get("logRecordSeqCounter", 0) + 1
+    state["logRecordSeqCounter"] = seq
     record = {
+        "_seq": seq,
         "key": key,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(obs["exitTsMs"] / 1000)) if obs.get("exitTsMs") else time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
         "method": obs["method"], "path": templatize_path(obs["path"]),
@@ -2612,11 +2621,28 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
             if len(volume_samples) > MAX_LOG_VOLUME_SAMPLES:
                 del volume_samples[0]
 
+            # CAPTURE_MODE=full only: send just the records captured since the
+            # last successful push, not the whole ring buffer every cycle -
+            # endpoints/agentHealth are small counters and stay cheap to push
+            # unconditionally, but logRecords is the expensive part of this
+            # payload (real field values, up to 3000 records) and most of it
+            # is identical to what was already pushed and stored last cycle.
+            # The server (see logRecordsDelta handling in
+            # PUT /endpoint-metrics) appends these to what it already has and
+            # re-applies the same ring-buffer caps, rather than replacing its
+            # copy with this smaller list.
+            all_log_records = build_log_records(state)
+            last_pushed_seq = state.get("lastPushedLogRecordSeq", 0)
+            newly_captured = [r for r in all_log_records if r.get("_seq", 0) > last_pushed_seq]
+            # `_seq` is a purely local bookkeeping field - strip it before it
+            # goes over the wire, same as any other internal-only value.
+            new_log_records = [{k: v for k, v in r.items() if k != "_seq"} for r in newly_captured]
             metrics_payload = {
                 "environment": ENVIRONMENT or None,
                 "endpoints": build_endpoint_metrics(state),
                 "agentHealth": build_agent_health(state),
-                "logRecords": build_log_records(state),
+                "logRecords": new_log_records,
+                "logRecordsDelta": CAPTURE_MODE == "full",
             }
             if local_html:
                 try:
@@ -2709,6 +2735,13 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
                     # so the server can tell whether anything changed the blob
                     # between that read and this write.
                     client.push_endpoint_metrics(metrics_payload, existing.get("endpointMetricsRev"))
+                    # Only advance the delta marker once the server has
+                    # confirmed these records are stored - an exception above
+                    # skips this line, so a failed push retries with the same
+                    # (or a larger, if more were captured meanwhile) set of
+                    # new records next cycle rather than silently dropping them.
+                    if newly_captured:
+                        state["lastPushedLogRecordSeq"] = newly_captured[-1]["_seq"]
                 except Exception as e:
                     print(f"[error] push failed, will retry next cycle: {e}", file=sys.stderr)
                     health["lastPushOk"] = False

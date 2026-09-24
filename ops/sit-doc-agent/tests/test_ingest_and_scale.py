@@ -490,6 +490,44 @@ check("build_agent_health reports pushIntervalSeconds",
       health.get("pushIntervalSeconds") == agent.PUSH_INTERVAL_SECONDS,
       "got %r, PUSH_INTERVAL_SECONDS=%r" % (health.get("pushIntervalSeconds"), agent.PUSH_INTERVAL_SECONDS))
 
+print("CAPTURE_MODE=full - log records carry a monotonic _seq for delta pushes")
+# Each push should only re-transmit records captured since the last
+# successfully-acknowledged push, not the whole ring buffer - this is what
+# that _seq marker exists to identify (see capture_log_record()'s docstring).
+saved_capture_mode = agent.CAPTURE_MODE
+try:
+    agent.CAPTURE_MODE = "full"
+    st_cap = {}
+    for i in range(5):
+        agent.capture_log_record(st_cap, "GET /health", obs("10.0.0.%d" % i))
+    seqs = [r["_seq"] for r in st_cap["logRecords"]]
+    check("_seq is assigned and strictly increasing across captures",
+          seqs == sorted(seqs) and len(set(seqs)) == len(seqs), "got %r" % seqs)
+
+    all_records = agent.build_log_records(st_cap)
+    last_pushed_seq = 0
+    first_batch = [r for r in all_records if r.get("_seq", 0) > last_pushed_seq]
+    check("first push (no prior marker) picks up every captured record so far",
+          len(first_batch) == 5)
+    last_pushed_seq = first_batch[-1]["_seq"]
+
+    second_batch = [r for r in all_records if r.get("_seq", 0) > last_pushed_seq]
+    check("re-checking with the marker advanced finds nothing new yet",
+          second_batch == [])
+
+    for i in range(5, 8):
+        agent.capture_log_record(st_cap, "GET /health", obs("10.0.0.%d" % i))
+    all_records = agent.build_log_records(st_cap)
+    third_batch = [r for r in all_records if r.get("_seq", 0) > last_pushed_seq]
+    check("after 3 more captures, only those 3 are picked up as new",
+          len(third_batch) == 3 and all(r["_seq"] > last_pushed_seq for r in third_batch))
+
+    agent.CAPTURE_MODE = "aggregate"
+    check("build_log_records returns nothing outside CAPTURE_MODE=full even with data captured earlier",
+          agent.build_log_records(st_cap) == [])
+finally:
+    agent.CAPTURE_MODE = saved_capture_mode
+
 print()
 if FAILURES:
     print("FAILED (%d): %s" % (len(FAILURES), ", ".join(FAILURES)))

@@ -1090,6 +1090,35 @@ function metricsRev(value) {
 // know this happened.
 const MAX_METRICS_WRITERS = 50;
 
+// Mirrors the agent's own MAX_LOG_RECORDS_PER_ENDPOINT / MAX_LOG_RECORDS_TOTAL
+// defaults (mule_doc_agent.py). Only used when a writer sends
+// `logRecordsDelta: true` (CAPTURE_MODE=full) - it appends the new records
+// it sent onto whatever this writer's segment already has, instead of that
+// payload REPLACING the segment's whole logRecords list, then re-applies
+// these same caps so the stored size stays bounded exactly as it would if
+// the agent had sent (and this route had stored) the full list every time.
+// A writer that omits the flag keeps the old, simpler full-replace
+// behaviour untouched - this is purely additive.
+const MAX_LOG_RECORDS_PER_ENDPOINT = 200;
+const MAX_LOG_RECORDS_TOTAL = 3000;
+
+function capLogRecords(records) {
+  const countByKey = new Map();
+  for (const r of records) countByKey.set(r?.key, (countByKey.get(r?.key) || 0) + 1);
+  const droppedSoFar = new Map();
+  const kept = [];
+  for (const r of records) {
+    const total = countByKey.get(r?.key) || 0;
+    if (total > MAX_LOG_RECORDS_PER_ENDPOINT) {
+      const seen = (droppedSoFar.get(r?.key) || 0) + 1;
+      droppedSoFar.set(r?.key, seen);
+      if (seen <= total - MAX_LOG_RECORDS_PER_ENDPOINT) continue; // oldest-first for this key
+    }
+    kept.push(r);
+  }
+  return kept.length > MAX_LOG_RECORDS_TOTAL ? kept.slice(kept.length - MAX_LOG_RECORDS_TOTAL) : kept;
+}
+
 // Endpoint counters are summed across writers reporting the SAME endpoint,
 // which is right for two load-balanced nodes of one environment and wrong
 // across environments: the same API is deployed to SIT, UAT and PROD, so a
@@ -1230,6 +1259,12 @@ router.put('/endpoint-metrics', async (req, res) => {
         // key, so it is constrained here rather than taken as sent - an agent
         // is not a trusted source of display strings.
         const seg = { ...req.body.endpointMetrics, updatedAt: new Date().toISOString() };
+        if (seg.logRecordsDelta === true) {
+          const prevRecords = Array.isArray(writers[writerId]?.logRecords) ? writers[writerId].logRecords : [];
+          const newRecords = Array.isArray(seg.logRecords) ? seg.logRecords : [];
+          seg.logRecords = capLogRecords(prevRecords.concat(newRecords));
+        }
+        delete seg.logRecordsDelta; // transport-only flag, not part of the stored segment
         const envRaw = typeof seg.environment === 'string' ? seg.environment.trim() : '';
         seg.environment = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,31}$/.test(envRaw) ? envRaw : null;
         if (envRaw && !seg.environment) {
@@ -1263,27 +1298,38 @@ router.put('/endpoint-metrics', async (req, res) => {
     // older agent build) is never blocked - same forgiving contract the
     // projects route uses for `_rev`, so upgrading the server can't break a
     // deployed agent.
-    if (typeof req.body.ifMatchRev === 'string') {
+    const wantsDelta = req.body.endpointMetrics.logRecordsDelta === true;
+    let current = null;
+    if (typeof req.body.ifMatchRev === 'string' || wantsDelta) {
       const { rows } = await pool.query(
         `SELECT endpoint_metrics_enc FROM org_workspace WHERE organisation = $1`,
         [org]
       );
-      const current = rows.length
+      current = rows.length
         ? decryptOrgBlob(rows[0].endpoint_metrics_enc, null, org, 'endpoint_metrics', {})
         : {};
-      const actualRev = metricsRev(current);
-      if (actualRev !== req.body.ifMatchRev) {
-        // 409, NOT a silent win-by-last-write. The caller is expected to
-        // re-read and retry rather than force its stale copy through.
-        return res.status(409).json({
-          error: 'Endpoint metrics changed since you read them — another writer (a second agent?) is active. Re-read and retry.',
-          currentRev: actualRev,
-        });
+      if (typeof req.body.ifMatchRev === 'string') {
+        const actualRev = metricsRev(current);
+        if (actualRev !== req.body.ifMatchRev) {
+          // 409, NOT a silent win-by-last-write. The caller is expected to
+          // re-read and retry rather than force its stale copy through.
+          return res.status(409).json({
+            error: 'Endpoint metrics changed since you read them — another writer (a second agent?) is active. Re-read and retry.',
+            currentRev: actualRev,
+          });
+        }
       }
     }
-    await upsertEncryptedOrgWorkspace(org, 'endpoint_metrics', req.body.endpointMetrics);
+    const toStore = { ...req.body.endpointMetrics };
+    if (wantsDelta) {
+      const prevRecords = Array.isArray(current?.logRecords) ? current.logRecords : [];
+      const newRecords = Array.isArray(toStore.logRecords) ? toStore.logRecords : [];
+      toStore.logRecords = capLogRecords(prevRecords.concat(newRecords));
+    }
+    delete toStore.logRecordsDelta;
+    await upsertEncryptedOrgWorkspace(org, 'endpoint_metrics', toStore);
     await cache.invalidateOrg(org);
-    res.json({ ok: true, rev: metricsRev(req.body.endpointMetrics) });
+    res.json({ ok: true, rev: metricsRev(toStore) });
   } catch (err) {
     console.error('PUT endpoint-metrics failed:', err);
     res.status(500).json({ error: 'Could not save endpoint metrics.' });
