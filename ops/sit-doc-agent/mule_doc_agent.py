@@ -685,6 +685,39 @@ def tail_new_lines(path, state, max_lines=None):
     return lines
 
 
+def read_last_lines(path, max_lines, max_bytes=2 * 1024 * 1024):
+    """Read up to `max_lines` from the END of a file.
+
+    --sample-lines used to read from offset 0, which on a long-lived log
+    shows the first lines ever written to it - on a real deployment that is
+    the Mule startup banner from whenever the app was last deployed, possibly
+    months ago, and contains no HTTP traffic at all. Every file then reports
+    a 0% parse rate and the diagnostic says "your format is unsupported" when
+    the truth is "you looked at the wrong end of the file".
+
+    Reads the trailing `max_bytes` in binary and decodes, rather than seeking
+    in text mode (a text-mode seek to an arbitrary byte offset is not
+    supported and can raise). The first line of the window is dropped when
+    the window doesn't start at byte 0, since it is almost certainly a
+    partial line."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return []
+    start = max(0, size - max_bytes)
+    try:
+        with open(path, "rb") as f:
+            f.seek(start)
+            data = f.read()
+    except OSError as e:
+        print("[warn] cannot read %s: %s" % (path, e.__class__.__name__), file=sys.stderr)
+        return []
+    lines = data.decode("utf-8", "replace").splitlines()
+    if start and lines:
+        lines = lines[1:]
+    return lines[-max_lines:] if max_lines else lines
+
+
 def resolve_log_paths(spec):
     """Expand MULE_LOG_PATH into the concrete files to tail.
 
@@ -1648,7 +1681,8 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
         # Each file also gets its OWN multi-line carry, for the same reason the
         # main loop does: a JSON block spans lines within one file.
         per_file = max(1, sample_lines // max(1, len(sample_paths)))
-        print(f"[info] budget is split across the files: ~{per_file} line(s) sampled per file.")
+        print(f"[info] budget is split across the files: ~{per_file} line(s) sampled per file, "
+              f"taken from the END of each file (most recent traffic).")
         if per_file < 10 and len(sample_paths) > 1:
             print(f"[warn] that is too few lines per file to judge a parse rate. For {len(sample_paths)} "
                   f"file(s), use --sample-lines {len(sample_paths) * 50} or more.", file=sys.stderr)
@@ -1657,8 +1691,9 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
         per_file_report = []
 
         for _p in sample_paths:
-            fstate = dict((state.get("files") or {}).get(_p, {}))  # copy: never advances the real offsets
-            flines = tail_new_lines(_p, fstate, max_lines=per_file)
+            # From the END of the file, not the start - see read_last_lines().
+            # Reads nothing into the real state, so offsets are untouched.
+            flines = read_last_lines(_p, per_file)
             if not flines:
                 per_file_report.append((os.path.basename(_p), 0, 0, 0))
                 continue

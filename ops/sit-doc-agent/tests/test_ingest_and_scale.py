@@ -244,6 +244,36 @@ try:
 finally:
     shutil.rmtree(tmp3, ignore_errors=True)
 
+print("Sampling the END of a long-lived log")
+# A production log can be months old: the first lines in it are the Mule
+# startup banner from whenever the app was deployed, with no HTTP traffic at
+# all. Sampling from offset 0 therefore reported 0% for all 103 files on a
+# real node while the agent was demonstrably parsing that same log fine.
+tmp4 = tempfile.mkdtemp(prefix="doctracker-tailsample-test-")
+try:
+    startup = ["WARN  2026-01-21 12:06:23,641 [WrapperListener_start_runner] "
+               "org.mule.runtime.extension.internal.loader.enricher.ConfigRefDeclarationEnricher: x"] * 400
+    traffic = [req_line(i, "/api/loanacc/create") for i in range(60)]
+    p4 = os.path.join(tmp4, "p-loanacc-api.log")
+    with open(p4, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(startup + traffic) + "\n")
+
+    head = agent.tail_new_lines(p4, {}, max_lines=19)
+    tail = agent.read_last_lines(p4, 19)
+    check("sampling the head of an old log finds no traffic (the bug)",
+          sum(1 for l in head if agent.parse_line(l)) == 0,
+          "head unexpectedly matched")
+    check("sampling the tail finds the recent traffic",
+          sum(1 for l in tail if agent.parse_line(l)) == 19,
+          "tail matched %d of 19" % sum(1 for l in tail if agent.parse_line(l)))
+    check("read_last_lines respects the line cap", len(agent.read_last_lines(p4, 5)) == 5,
+          "got %d" % len(agent.read_last_lines(p4, 5)))
+    check("read_last_lines on a tiny file returns all of it",
+          len(agent.read_last_lines(p4, 100000)) == len(startup) + len(traffic),
+          "got %d" % len(agent.read_last_lines(p4, 100000)))
+finally:
+    shutil.rmtree(tmp4, ignore_errors=True)
+
 print("Bounded source-IP tracking")
 st = {"endpoints": {}, "health": {}}
 agent.aggregate(st, [obs("203.0.113.%d" % (i % 254) if i < 254 else "198.51.100.%d" % (i % 254))
