@@ -66,7 +66,12 @@ SEED=""
 if [ ! -f "${AGENT_STATE_FILE:-$DIR/state.json}" ]; then
   SEED="--seed-from-history ${SEED_LINES:-200000}"
 fi
-exec python3 "$DIR/mule_doc_agent.py" $SEED >> "$DIR/agent.log" 2>&1
+# -u is not optional here. Python block-buffers stdout when it is a file
+# rather than a terminal, so with plain `python3` the startup and seeding
+# lines sit in an 8 KB buffer and agent.log looks EMPTY for a long while -
+# indistinguishable from the agent having failed to start, which cost real
+# time to diagnose on this node.
+exec python3 -u "$DIR/mule_doc_agent.py" $SEED >> "$DIR/agent.log" 2>&1
 INNER
 chmod 700 "$DIR/start-agent.sh"
 
