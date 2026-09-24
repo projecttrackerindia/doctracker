@@ -271,6 +271,58 @@ attribution. The agent sits outside the JVM and outside the request path, so
 it cannot measure any of them; a guessed heap number displayed next to real
 CPU numbers would undermine the real ones.
 
+## Only one agent may run per organisation
+
+The endpoint-metrics blob is written as a **whole-blob overwrite**. If two
+agents run against the same DocTracker organisation — a stale systemd unit, a
+manual debug run alongside the service, a second server — whichever pushes
+last used to silently erase the other's entire history: every counter, every
+record, no error, no trace.
+
+That is now guarded. Each push sends `ifMatchRev`, the revision the agent read
+in the same cycle, and the server rejects the write with **409** if the stored
+data changed in between. On a conflict the agent **skips that push and retries
+next cycle** rather than forcing its copy through — forcing is exactly the
+data loss the check prevents.
+
+If you see this every cycle, there really are two writers:
+
+```bash
+systemctl list-units '*doctracker*'
+ps aux | grep mule_doc_agent
+```
+
+A client that omits `ifMatchRev` is never blocked, so an older agent build
+keeps working against a newer server.
+
+## Tests
+
+```bash
+python3 ops/sit-doc-agent/tests/test_host_metrics.py
+```
+
+No framework, no dependencies — these have to run on the SIT server, where
+you may not be able to `pip install pytest`. Exit code 0 = pass.
+
+They cover the host-sampling cases that are easy to get wrong and impossible
+to spot once wrong, because a bad host metric looks exactly like a real one:
+the first CPU read after a restart having no delta to report, a stale
+previous sample averaging CPU across downtime, `iowait` being counted as
+idle, and partial `/proc` readability yielding nulls rather than zeros.
+
+The most important one checks that `HOST_SAMPLE_COLUMNS` here still matches
+`HOST_SAMPLE_COLS` in `public/js/studio/23-observability.js` — it reads the
+real `.js` file rather than a copy of the list. The client decodes samples
+**positionally**, so if those two drift, every retained sample is misread
+with no error at all.
+
+For the browser modules (no build step, so a syntax error only surfaces when
+a page is loaded):
+
+```bash
+pip install esprima && python3 tools/jscheck.py
+```
+
 ## Scaling to high traffic volumes
 
 The agent never sits in the request path — it only tails a log file Mule has

@@ -1,0 +1,21 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Python bytecode — the SIT agent and its tests are run directly with
+# python3, so these are pure build artefacts of whoever last ran them and
+# differ per interpreter version.
+__pycache__/
+*.py[cod]
+
+# Environment / secrets. The agent reads its credentials from an
+# EnvironmentFile on the server (see ops/sit-doc-agent/README.md); nothing
+# of the sort belongs in source control.
+.env
+.env.*
+creds.json
+ops/sit-doc-agent/creds.json
+
+# Local scratch
+*.local.json
+.DS_Store

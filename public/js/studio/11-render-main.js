@@ -8,20 +8,34 @@
 // built here resolves the same way a hand-typed one does. replaceState (not
 // pushState): this runs on every render, and pushState here would flood
 // browser history with an entry per click instead of per actual navigation.
-// Other special views (Security, Release Pipeline, Error Catalog, Profile)
-// still fall through to the bare dashboard.html below, same gap this just
-// closed for Observability - not fixed here, only flagged.
+// Every non-project page gets its own bookmarkable URL. This list MUST match
+// SPECIAL_VIEW_ROUTES in server/server.js - the server registers these exact
+// literal segments ahead of its generic :projectSlug route, so they're
+// reserved words in the URL space.
+const SPECIAL_VIEW_SLUGS = {
+  observability: 'observability',
+  security: 'security',
+  releasepipeline: 'release-pipeline',
+  errors: 'errors',
+  profile: 'profile',
+};
+const RESERVED_PROJECT_SLUGS = new Set(Object.values(SPECIAL_VIEW_SLUGS));
+
 function syncUrlToSelection(){
   if(state.standaloneTryIt) return; // the standalone Try It tab manages its own URL — see boot()
   let path = `/${ORG_TOKEN}/dashboard.html`;
   if(state.selected && state.selected.type === 'overview'){
     const proj = state.projects[state.selected.projectId];
-    if(proj) path = `/${ORG_TOKEN}/${slugify(proj.name)}/dashboard.html`;
+    // A project named e.g. "Security" slugifies onto a reserved segment; that
+    // URL would load the Security page instead of the project, so don't mint
+    // it - leave this project on the bare dashboard URL.
+    if(proj && !RESERVED_PROJECT_SLUGS.has(slugify(proj.name))) path = `/${ORG_TOKEN}/${slugify(proj.name)}/dashboard.html`;
   } else if(state.selected && state.selected.type === 'endpoint' && !state.selected.tryIt){
     const found = findEndpointForView(state.selected.id);
-    if(found) path = `/${ORG_TOKEN}/${slugify(found.proj.name)}/${endpointSlugFor(found.ep)}/dashboard.html`;
-  } else if(state.selected && state.selected.type === 'observability'){
-    path = `/${ORG_TOKEN}/observability/dashboard.html`;
+    // Same reservation applies to the project segment of an endpoint URL.
+    if(found && !RESERVED_PROJECT_SLUGS.has(slugify(found.proj.name))) path = `/${ORG_TOKEN}/${slugify(found.proj.name)}/${endpointSlugFor(found.ep)}/dashboard.html`;
+  } else if(state.selected && SPECIAL_VIEW_SLUGS[state.selected.type]){
+    path = `/${ORG_TOKEN}/${SPECIAL_VIEW_SLUGS[state.selected.type]}/dashboard.html`;
   }
   if(location.pathname !== path) history.replaceState(null, '', path + location.search);
 }

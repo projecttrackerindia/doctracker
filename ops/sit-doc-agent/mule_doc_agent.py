@@ -864,13 +864,36 @@ class DocTrackerClient:
             raise RuntimeError("Write conflict - project was modified elsewhere since last fetch; will retry next cycle.")
         print(f"[info] pushed {PROJECT_ID}: {data}")
 
-    def push_endpoint_metrics(self, payload):
-        # `payload` is {"endpoints": {...}, "agentHealth": {...}} - whole-blob
-        # overwrite (not merged with get_workspace() first) - this agent is
-        # the ONLY writer of this data (see server/routes/workspace.js's
-        # endpoint_metrics route), so there's nothing to conflict with, unlike
-        # push_project() which competes with human edits on the same project.
-        status, data, _ = self._request("PUT", "/api/workspace/endpoint-metrics", {"endpointMetrics": payload})
+    def push_endpoint_metrics(self, payload, if_match_rev=None):
+        # `payload` is {"endpoints": {...}, "agentHealth": {...}, ...} - a
+        # WHOLE-BLOB overwrite, so if a second agent is running (a stale
+        # systemd unit, a manual debug run alongside the service, another
+        # server) whichever pushes last silently erases the other's entire
+        # history.
+        #
+        # `if_match_rev` is the revision this agent last read via
+        # get_workspace(). The server rejects the write with 409 if the blob
+        # has changed since - see PUT /endpoint-metrics in
+        # server/routes/workspace.js. Passing None keeps the old
+        # unconditional behaviour, which is what --dry-run and a first-ever
+        # push (no existing blob) use.
+        body = {"endpointMetrics": payload}
+        if if_match_rev is not None:
+            body["ifMatchRev"] = if_match_rev
+        status, data, _ = self._request("PUT", "/api/workspace/endpoint-metrics", body)
+        if status == 409:
+            # Deliberately NOT retried by force. Another writer is active and
+            # forcing this payload through is exactly the data loss the check
+            # exists to prevent. Next cycle re-reads and pushes cleanly; if
+            # this repeats, there are genuinely two agents running.
+            raise RuntimeError(
+                "Write conflict on endpoint metrics - the stored data changed since this agent "
+                "last read it, which usually means a SECOND agent is running against the same "
+                "organisation. Skipping this push rather than overwriting the other writer's "
+                "data. If this repeats every cycle, check for a duplicate service "
+                "(systemctl list-units '*doctracker*') or a manual run. Server said: "
+                f"{data.get('error')}"
+            )
         if status != 200 or not data.get("ok"):
             raise RuntimeError(f"PUT /api/workspace/endpoint-metrics failed ({status}): {data}")
         print(f"[info] pushed endpoint metrics for {len(payload.get('endpoints', {}))} endpoint(s) "
@@ -1540,7 +1563,10 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
                     if existing_project:
                         project["_rev"] = existing_project.get("_rev")
                     client.push_project(project)
-                    client.push_endpoint_metrics(metrics_payload)
+                    # The revision read in the SAME get_workspace() call above,
+                    # so the server can tell whether anything changed the blob
+                    # between that read and this write.
+                    client.push_endpoint_metrics(metrics_payload, existing.get("endpointMetricsRev"))
                     health["lastPushOk"] = True
                     health["lastError"] = None
                 except Exception as e:

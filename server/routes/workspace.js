@@ -487,12 +487,16 @@ router.get('/', async (req, res) => {
     // Audit log is no longer part of this payload — it's fetched separately
     // from GET /api/audit/events, which returns server-authoritative entries
     // from the audit_logs table instead of a client-writable JSONB blob.
+    const endpointMetrics = decryptOrgBlob(ws.endpoint_metrics_enc, null, org, 'endpoint_metrics', {});
     const payload = {
       projects,
       environments: decryptOrgBlob(ws.environments_enc, ws.environments, org, 'environments', []),
       requestHistory: decryptOrgBlob(ws.request_history_enc, ws.request_history, org, 'request_history', {}),
       tryitCollections: decryptOrgBlob(ws.tryit_collections_enc, null, org, 'tryit_collections', { variables: [], saved: [] }),
-      endpointMetrics: decryptOrgBlob(ws.endpoint_metrics_enc, null, org, 'endpoint_metrics', {}),
+      endpointMetrics,
+      // Revision token for the blob above, so a writer can prove it read the
+      // current state before overwriting it - see PUT /endpoint-metrics.
+      endpointMetricsRev: metricsRev(endpointMetrics),
       // PER-USER, not org-shared — see the users.tryit_personal_enc comment
       // in server/db.js. Safe to fold into this same cached payload because
       // the cache itself is already keyed per (org, userId) — see cache.js.
@@ -1031,12 +1035,55 @@ router.put('/request-history', async (req, res) => {
 // own metrics wholesale from its own state each push, same as the doc-discovery
 // project push - no merge-by-key needed since there's exactly one writer
 // (the service account), not multiple humans editing concurrently.
+// Optimistic-locking guard for the endpoint-metrics blob.
+//
+// This blob is written as a WHOLE-BLOB OVERWRITE by the SIT log agent, and
+// "only one writer" used to be enforced by nothing but convention. Two agents
+// running at once (a stale systemd unit, a manual debug run alongside the
+// service, a second server) meant one silently erased the other's entire
+// history - every counter, every record - with no error and no trace.
+//
+// Unlike projects, this can't key off org_workspace.updated_at: that column is
+// shared with environments / request_history / tryit_collections, so an
+// unrelated write to any of those would bump it and cause a false conflict
+// here. A content hash of the blob itself is the honest revision - it changes
+// when and only when THIS blob changes.
+function metricsRev(value) {
+  return nodeCrypto.createHash('sha256')
+    .update(JSON.stringify(value === undefined ? {} : value))
+    .digest('hex')
+    .slice(0, 16);
+}
+
 router.put('/endpoint-metrics', async (req, res) => {
   if (!isPlainObject(req.body?.endpointMetrics)) return res.status(400).json({ error: 'Expected { endpointMetrics: {} }.' });
+  const org = req.authUser.organisation;
   try {
-    await upsertEncryptedOrgWorkspace(req.authUser.organisation, 'endpoint_metrics', req.body.endpointMetrics);
-    await cache.invalidateOrg(req.authUser.organisation);
-    res.json({ ok: true });
+    // A client that sends `ifMatchRev` is held to it; one that omits it (an
+    // older agent build) is never blocked - same forgiving contract the
+    // projects route uses for `_rev`, so upgrading the server can't break a
+    // deployed agent.
+    if (typeof req.body.ifMatchRev === 'string') {
+      const { rows } = await pool.query(
+        `SELECT endpoint_metrics_enc FROM org_workspace WHERE organisation = $1`,
+        [org]
+      );
+      const current = rows.length
+        ? decryptOrgBlob(rows[0].endpoint_metrics_enc, null, org, 'endpoint_metrics', {})
+        : {};
+      const actualRev = metricsRev(current);
+      if (actualRev !== req.body.ifMatchRev) {
+        // 409, NOT a silent win-by-last-write. The caller is expected to
+        // re-read and retry rather than force its stale copy through.
+        return res.status(409).json({
+          error: 'Endpoint metrics changed since you read them — another writer (a second agent?) is active. Re-read and retry.',
+          currentRev: actualRev,
+        });
+      }
+    }
+    await upsertEncryptedOrgWorkspace(org, 'endpoint_metrics', req.body.endpointMetrics);
+    await cache.invalidateOrg(org);
+    res.json({ ok: true, rev: metricsRev(req.body.endpointMetrics) });
   } catch (err) {
     console.error('PUT endpoint-metrics failed:', err);
     res.status(500).json({ error: 'Could not save endpoint metrics.' });

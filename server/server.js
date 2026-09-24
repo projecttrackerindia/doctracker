@@ -321,19 +321,38 @@ app.get('/:orgToken/dashboard.html', requireAuth, (req, res) => {
   renderDashboard(req, res);
 });
 
-// Registered BEFORE the generic :projectSlug route below so the literal
-// "observability" segment wins - Express matches route patterns in
-// registration order, and :projectSlug would otherwise swallow this path
-// too (it matches any single segment). This gives the Observability page
-// its own bookmarkable/refreshable URL instead of falling through to the
-// same /:orgToken/dashboard.html every other unrouted view still shares -
-// see syncUrlToSelection() in 11-render-main.js for the client-side half.
-app.get('/:orgToken/observability/dashboard.html', requireAuth, (req, res) => {
-  const org = dataCrypto.decryptOrgToken(req.params.orgToken);
-  if (org !== req.user.organisation) {
-    return res.redirect(`/${tokenForUser(req.user)}/observability/dashboard.html`);
-  }
-  renderDashboard(req, res, { initialView: 'observability' });
+// The app's non-project pages, each with its own bookmarkable/refreshable
+// URL. These used to share the bare /:orgToken/dashboard.html, so refreshing
+// or sharing a link to any of them dropped you back on the Control Center.
+//
+// Registered BEFORE the generic :projectSlug route below so these literal
+// segments win - Express matches route patterns in registration order, and
+// :projectSlug matches any single segment, so it would otherwise swallow
+// them all.
+//
+// RESERVED: because these literals shadow :projectSlug, a project whose name
+// slugifies to one of them would become unreachable by URL. The client half
+// (SPECIAL_VIEW_SLUGS in 11-render-main.js) mirrors this list and keeps such
+// a project on the bare dashboard URL rather than minting a link that would
+// route here instead.
+const SPECIAL_VIEW_ROUTES = {
+  'observability': 'observability',
+  'security': 'security',
+  'release-pipeline': 'releasepipeline',
+  'errors': 'errors',
+  'profile': 'profile',
+};
+Object.entries(SPECIAL_VIEW_ROUTES).forEach(([slug, initialView]) => {
+  app.get(`/:orgToken/${slug}/dashboard.html`, requireAuth, (req, res) => {
+    const org = dataCrypto.decryptOrgToken(req.params.orgToken);
+    if (org !== req.user.organisation) {
+      return res.redirect(`/${tokenForUser(req.user)}/${slug}/dashboard.html`);
+    }
+    // Permission is enforced at render time by the client's own guard (and
+    // server-side by each feature's own API routes) - landing here only
+    // chooses the initial view, it grants nothing.
+    renderDashboard(req, res, { initialView });
+  });
 });
 
 app.get('/:orgToken/:projectSlug/dashboard.html', requireAuth, (req, res) => {

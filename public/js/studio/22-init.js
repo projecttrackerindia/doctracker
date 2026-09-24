@@ -18,11 +18,14 @@
         : null;
       state.selected = ep ? { type:'endpoint', id: ep.id } : { type:'overview', projectId: proj.id };
     }
-  } else if(INITIAL_VIEW === 'observability'){
-    // Permission check happens at render time (renderMain() already falls
-    // back to Home for a non-Admin/non-owner) - same guard a button click
-    // goes through, so it's not duplicated here.
-    state.selected = { type:'observability' };
+  } else if(INITIAL_VIEW){
+    // Permission checks happen at render time (renderMain() already falls
+    // back to Home for a non-Admin/non-owner) - the same guard a button
+    // click goes through, so it isn't duplicated here. INITIAL_VIEW is set
+    // only by the literal routes the server registers, so it can't name an
+    // arbitrary view - see SPECIAL_VIEW_ROUTES in server/server.js.
+    state.selected = { type: INITIAL_VIEW };
+    if(INITIAL_VIEW === 'security') state.securityTab = state.securityTab || (isAdmin() ? 'summary' : 'docaccess');
   }
   // A non-Admin still needs to reach Security if they own at least one
   // project (see requireAdminOrProjectOwner server-side) — otherwise they'd
