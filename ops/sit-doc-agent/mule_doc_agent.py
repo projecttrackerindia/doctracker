@@ -1478,13 +1478,19 @@ class DocTrackerClient:
             raise RuntimeError(f"GET /api/workspace failed ({status}): {data}")
         return data
 
-    def push_project(self, project):
-        status, data, _ = self._request("PUT", "/api/workspace/projects", {"projects": {PROJECT_ID: project}})
+    def push_project(self, projects_by_id):
+        # `projects_by_id` is {project_id: project} for one or more projects -
+        # one PUT call pushes every app's project in a single round trip
+        # (see build_app_projects()), rather than one HTTP request per app.
+        if not projects_by_id:
+            return
+        status, data, _ = self._request("PUT", "/api/workspace/projects", {"projects": projects_by_id})
         if status != 200 or not data.get("ok"):
             raise RuntimeError(f"PUT /api/workspace/projects failed ({status}): {data}")
-        if PROJECT_ID in data.get("conflicts", []):
-            raise RuntimeError("Write conflict - project was modified elsewhere since last fetch; will retry next cycle.")
-        print(f"[info] pushed {PROJECT_ID}: {data}")
+        bad = [pid for pid in projects_by_id if pid in data.get("conflicts", [])]
+        if bad:
+            raise RuntimeError(f"Write conflict on {bad} - modified elsewhere since last fetch; will retry next cycle.")
+        print(f"[info] pushed {len(projects_by_id)} project(s) {sorted(projects_by_id)}: {data}")
 
     def push_endpoint_metrics(self, payload, if_match_rev=None):
         # `payload` is {"endpoints": {...}, "agentHealth": {...}, ...} - a
@@ -1789,6 +1795,26 @@ def app_name_from_path(path):
     return base.strip() or None
 
 
+def project_id_for_app(app):
+    """The DocTracker project id one Mule app's endpoints are pushed under.
+
+    Splitting by app (rather than one project holding every app as internal
+    tag-groups) is what makes each app its own top-level folder in the
+    DocTracker sidebar. The id is namespaced under this agent's own
+    PROJECT_ID so two agents (different environments, or a re-pointed
+    DOCTRACKER_PROJECT_ID) can never collide on the same per-app id, and
+    ends in a short hash of the untruncated app name so two apps whose
+    slugs collide after sanitizing (e.g. "CSV/S3" and "CSV S3" both ->
+    "csv-s3") still land in different projects rather than overwriting one
+    another. An app-less endpoint (no ApplicationName in its logs and no
+    log-filename to fall back to) keeps using the bare PROJECT_ID, matching
+    the single-project behaviour this replaces."""
+    if not app:
+        return PROJECT_ID
+    slug = re.sub(r'[^a-z0-9]+', '-', app.strip().lower()).strip('-')[:40] or "app"
+    return f"{PROJECT_ID}-{slug}-{stable_id(app)[:6]}"
+
+
 def describe_log_source():
     """A readable label for where metrics came from. MULE_LOG_PATH is
     usually a glob over a directory of per-app logs, and its basename is
@@ -1832,10 +1858,13 @@ def build_endpoint_metrics(state):
 # ============================================================================
 # Build the DocTracker project payload from aggregated endpoint data
 # ============================================================================
-def build_project(state, existing_project=None):
-    now_iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+def _endpoint_docs(items, now_iso):
+    """The DocTracker endpoint objects for one group of (key, ep) pairs.
+    Factored out of build_project()/build_app_projects() so the per-endpoint
+    shape (fields, responses, notes) can't drift between "everything in one
+    project" and "one project per app"."""
     endpoints = []
-    for key, ep in state.get("endpoints", {}).items():
+    for key, ep in items:
         if key == OVERFLOW_KEY:
             continue  # not a real endpoint - only ever shown on the Observability page, never documented
         fields = [
@@ -1889,11 +1918,19 @@ def build_project(state, existing_project=None):
             "vaptStatus": "none", "vaptStatusBy": "", "vaptStatusAt": "",
             "logMgmtStatus": "none", "logMgmtStatusBy": "", "logMgmtStatusAt": "",
         })
+    return endpoints
 
+
+def _project_shell(existing_project, endpoints, proj_id, proj_name, now_iso):
+    """The DocTracker project object around a already-built endpoint list.
+    Shared by build_project() (one project, all endpoints) and
+    build_app_projects() (one project per Mule app) so the metadata -
+    auth/environments/discoveryEnvironment/etc - can't drift between the
+    two."""
     project = dict(existing_project or {})
     project.update({
-        "id": PROJECT_ID,
-        "name": f"{ENVIRONMENT} Auto-Discovery - unreviewed" if ENVIRONMENT else DEFAULT_PROJECT_NAME,
+        "id": proj_id,
+        "name": proj_name,
         "description": ("Auto-discovered from SIT server logs by an unattended agent (server/totp-style zero-LLM "
                          "design - see AGENT_README.md). Nothing here is reviewed. Treat every field/description/"
                          "requirement as a draft only, and promote individual endpoints into a real project once "
@@ -1930,6 +1967,68 @@ def build_project(state, existing_project=None):
     for junk in ("_owned", "_readonly", "_rev"):
         project.pop(junk, None)
     return project
+
+
+def build_project(state, existing_project=None):
+    """Every discovered endpoint in ONE project (the pre-split behaviour).
+    Still used for the offline HTML report and --dry-run's preview, where
+    one combined view is more useful than N separate ones; the real push in
+    run() uses build_app_projects() instead - see its docstring for why."""
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    endpoints = _endpoint_docs(state.get("endpoints", {}).items(), now_iso)
+    name = f"{ENVIRONMENT} Auto-Discovery - unreviewed" if ENVIRONMENT else DEFAULT_PROJECT_NAME
+    return _project_shell(existing_project, endpoints, PROJECT_ID, name, now_iso)
+
+
+# Server-side upsert cap (see MAX_PROJECTS_PER_SAVE in server/routes/workspace.js).
+# A node running this many distinct Mule apps at once is not expected in
+# practice; this exists so a pathological log directory degrades loudly
+# (see the [warn] below) rather than failing the whole push with a 400.
+MAX_APP_PROJECTS_PER_PUSH = 200
+
+
+def build_app_projects(state, existing_projects=None):
+    """One DocTracker project PER MULE APP, instead of one project with the
+    apps as internal tag-groups. This is what makes each app its own
+    top-level folder in the sidebar (rather than every app nested one level
+    inside a single "SIT Auto-Discovery" project) - see project_id_for_app()
+    for how each app's project id is derived.
+
+    `existing_projects` is workspace["projects"] (id -> project) from the
+    same get_workspace() call the caller uses for the conflict check, so
+    each app project can carry forward its own prior endpoints/_rev rather
+    than starting blank every cycle."""
+    existing_projects = existing_projects or {}
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    groups = {}
+    for key, ep in state.get("endpoints", {}).items():
+        if key == OVERFLOW_KEY:
+            continue
+        groups.setdefault(ep.get("app") or None, {})[key] = ep
+
+    if len(groups) > MAX_APP_PROJECTS_PER_PUSH:
+        # Keep the apps with the most observed traffic; log exactly which
+        # were dropped this cycle rather than silently truncating - a
+        # future cycle picks them back up if a busier app goes quiet.
+        by_traffic = sorted(
+            groups.items(),
+            key=lambda kv: sum(e.get("totalRequests", 0) for e in kv[1].values()),
+            reverse=True,
+        )
+        dropped = [app for app, _ in by_traffic[MAX_APP_PROJECTS_PER_PUSH:]]
+        print(f"[warn] {len(groups)} apps discovered, exceeds MAX_APP_PROJECTS_PER_PUSH="
+              f"{MAX_APP_PROJECTS_PER_PUSH}; skipping this cycle's push for: {dropped}",
+              file=sys.stderr)
+        groups = dict(by_traffic[:MAX_APP_PROJECTS_PER_PUSH])
+
+    projects = {}
+    for app, eps in groups.items():
+        proj_id = project_id_for_app(app)
+        endpoints = _endpoint_docs(eps.items(), now_iso)
+        name = f"{app} — Auto-Discovery (unreviewed)" if app else (
+            f"{ENVIRONMENT} Auto-Discovery - unreviewed" if ENVIRONMENT else DEFAULT_PROJECT_NAME)
+        projects[proj_id] = _project_shell(existing_projects.get(proj_id), endpoints, proj_id, name, now_iso)
+    return projects
 
 
 # ============================================================================
@@ -2480,30 +2579,41 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
                 try:
                     require_environment()
                     existing = client.get_workspace()
-                    existing_project = existing.get("projects", {}).get(PROJECT_ID)
-                    conflict = project_environment_conflict(existing_project, ENVIRONMENT)
-                    if conflict:
-                        # Refuse rather than silently overwrite another
-                        # environment's entire endpoint list - see
-                        # project_environment_conflict()'s docstring. Metrics
-                        # still push below: those are already writer-segmented
-                        # and safe regardless of this conflict.
-                        print(f"[error] DOCTRACKER_PROJECT_ID={PROJECT_ID!r} was last written by an agent "
-                              f"declaring environment {conflict!r}, but this agent declares "
-                              f"{ENVIRONMENT!r}. NOT pushing the project - that would overwrite "
-                              f"{conflict!r}'s endpoints. Set a distinct DOCTRACKER_PROJECT_ID for this "
-                              f"environment (e.g. append -{ENVIRONMENT.lower()}) and restart.",
-                              file=sys.stderr)
-                        health["lastPushOk"] = False
-                        health["lastError"] = (f"Project id clash: {PROJECT_ID} belongs to {conflict}, "
-                                                f"not {ENVIRONMENT}. Project push skipped.")[:500]
-                    else:
-                        project = build_project(state, existing_project)
+                    existing_projects = existing.get("projects", {}) or {}
+                    # One project per app (see build_app_projects()) rather
+                    # than one project with apps as internal tag-groups -
+                    # each app then shows as its own top-level folder in the
+                    # DocTracker sidebar instead of nested one level inside a
+                    # single "SIT Auto-Discovery" entry.
+                    candidate_projects = build_app_projects(state, existing_projects)
+                    to_push = {}
+                    conflicts_found = []
+                    for pid, proj in candidate_projects.items():
+                        existing_project = existing_projects.get(pid)
+                        conflict = project_environment_conflict(existing_project, ENVIRONMENT)
+                        if conflict:
+                            # Refuse rather than silently overwrite another
+                            # environment's endpoints for this app - see
+                            # project_environment_conflict()'s docstring.
+                            # Metrics still push below: those are already
+                            # writer-segmented and safe regardless.
+                            conflicts_found.append((pid, conflict))
+                            continue
                         if existing_project:
-                            project["_rev"] = existing_project.get("_rev")
-                        client.push_project(project)
+                            proj["_rev"] = existing_project.get("_rev")
+                        to_push[pid] = proj
+                    if conflicts_found:
+                        print(f"[error] {len(conflicts_found)} app project(s) were last written by a "
+                              f"different environment's agent, NOT pushing them this cycle: {conflicts_found}. "
+                              f"Set a distinct DOCTRACKER_PROJECT_ID for this environment (e.g. append "
+                              f"-{ENVIRONMENT.lower()}) and restart.", file=sys.stderr)
+                        health["lastPushOk"] = False
+                        health["lastError"] = (f"{len(conflicts_found)} project(s) skipped - environment "
+                                                f"clash: {conflicts_found[:5]}")[:500]
+                    else:
                         health["lastPushOk"] = True
                         health["lastError"] = None
+                    client.push_project(to_push)
                     # The revision read in the SAME get_workspace() call above,
                     # so the server can tell whether anything changed the blob
                     # between that read and this write.

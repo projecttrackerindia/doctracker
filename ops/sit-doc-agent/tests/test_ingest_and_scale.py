@@ -393,6 +393,55 @@ check("an endpoint with no known app falls back to Auto-discovered",
       proj2["endpoints"][0].get("tag") == "Auto-discovered",
       "got %r" % proj2["endpoints"][0].get("tag"))
 
+print("Splitting into one DocTracker project per app")
+# The sidebar nests every app one level inside a single "SIT
+# Auto-Discovery" project unless each app gets its OWN project - that's
+# what build_app_projects() does, and what makes each app its own
+# top-level folder instead.
+check("an app's project id is namespaced under this agent's PROJECT_ID",
+      agent.project_id_for_app("jwt-token-api").startswith(agent.PROJECT_ID + "-"))
+check("the same app name always yields the same id (stable across restarts)",
+      agent.project_id_for_app("jwt-token-api") == agent.project_id_for_app("jwt-token-api"))
+check("two different app names never collide",
+      agent.project_id_for_app("csv-s3-sync") != agent.project_id_for_app("jwt-token-api"))
+check("slugs that collide after sanitizing still land in different projects",
+      agent.project_id_for_app("CSV/S3") != agent.project_id_for_app("CSV S3"))
+check("an app-less endpoint keeps the bare PROJECT_ID",
+      agent.project_id_for_app(None) == agent.PROJECT_ID)
+
+st3 = {"endpoints": {}, "health": {}}
+agent.aggregate(st3, [
+    {"method": "POST", "path": "/token", "statusCode": 200, "correlationId": "c-3",
+     "body": None, "app": "jwt-token-api"},
+    {"method": "GET", "path": "/health", "statusCode": 200, "correlationId": "c-4",
+     "body": None, "app": "s-internal-api"},
+])
+saved_env = agent.ENVIRONMENT
+try:
+    agent.ENVIRONMENT = "SIT"
+    projects = agent.build_app_projects(st3)
+    check("one project comes back per distinct app", len(projects) == 2, "got %r" % list(projects))
+    jwt_id = agent.project_id_for_app("jwt-token-api")
+    internal_id = agent.project_id_for_app("s-internal-api")
+    check("each app's project is keyed by its own id", jwt_id in projects and internal_id in projects)
+    check("an app's project holds ONLY that app's endpoints",
+          [e["path"] for e in projects[jwt_id]["endpoints"]] == ["/token"] and
+          [e["path"] for e in projects[internal_id]["endpoints"]] == ["/health"])
+    check("the app's own name is in its project's name, not a shared generic name",
+          "jwt-token-api" in projects[jwt_id]["name"] and "s-internal-api" in projects[internal_id]["name"])
+    check("each app project still carries the discovery-environment bypass field",
+          projects[jwt_id].get("discoveryEnvironment") == "SIT" and
+          projects[internal_id].get("discoveryEnvironment") == "SIT")
+
+    # Re-running with the same existing projects (as if this were the next
+    # push cycle) must reuse each app's own id/_rev-carrying shell rather
+    # than starting blank - existing_projects is keyed by id, same as what
+    # get_workspace() returns.
+    again = agent.build_app_projects(st3, existing_projects=projects)
+    check("re-building against its own prior output keeps the same ids",
+          set(again.keys()) == set(projects.keys()))
+finally:
+    agent.ENVIRONMENT = saved_env
 
 print()
 if FAILURES:
