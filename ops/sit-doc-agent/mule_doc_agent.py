@@ -1810,19 +1810,32 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
             # Reads nothing into the real state, so offsets are untouched.
             flines = read_last_lines(_p, per_file)
             if not flines:
-                per_file_report.append((os.path.basename(_p), 0, 0, 0))
+                per_file_report.append((os.path.basename(_p), 0, 0, 0, set(), set()))
                 continue
             carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
             fmulti = assemble_multiline_observations(flines, carry)
             fmatched, funmatched = 0, 0
             shown = 0
+            # The line match RATE is a poor headline: one request logs many
+            # lines, and a startup "Starting flow:" line matches without
+            # representing any traffic at all. What actually matters is how
+            # many distinct ENDPOINTS were discovered and how many distinct
+            # REQUESTS (event ids) were seen.
+            fendpoints, fevents = set(), set()
+            finventory = 0
             print(f"--- {os.path.basename(_p)} ({len(flines)} line(s) sampled) ---")
             for line in flines:
                 obs = parse_line(line)
                 if obs:
                     fmatched += 1
+                    fendpoints.add("%s %s" % (obs["method"], templatize_path(obs["path"])))
+                    if obs.get("isInventory"):
+                        finventory += 1
+                    elif obs.get("correlationId"):
+                        fevents.add(obs["correlationId"])
                     if shown < 3:
-                        print(f"  MATCHED (single-line)   {obs['method']} {obs['path']}  status={obs.get('statusCode')}")
+                        kind = "startup inventory" if obs.get("isInventory") else "request"
+                        print(f"  MATCHED ({kind})   {obs['method']} {obs['path']}  status={obs.get('statusCode')}")
                         shown += 1
                 else:
                     funmatched += 1
@@ -1831,26 +1844,49 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
                         shown += 1
             for obs in fmulti:
                 req_fields = sorted(obs["body"].keys()) if isinstance(obs.get("body"), dict) else []
+                fendpoints.add("%s %s" % (obs["method"], templatize_path(obs["path"])))
                 print(f"  MATCHED (multi-line JSON block)   {obs['method']} {obs['path']}  "
                       f"status={obs.get('statusCode')}  request-field-names={req_fields}   [values never captured]")
             total_f = fmatched + len(fmulti)
-            per_file_report.append((os.path.basename(_p), len(flines), total_f, funmatched))
+            per_file_report.append((os.path.basename(_p), len(flines), total_f, funmatched,
+                                    fendpoints, fevents))
             totals["matched"] += total_f
             totals["unmatched"] += funmatched
             totals["lines"] += len(flines)
+            totals.setdefault("endpoints", set()).update(fendpoints)
+            totals.setdefault("events", set()).update(fevents)
+            totals["inventory"] = totals.get("inventory", 0) + finventory
             print()
 
         print("=" * 78)
-        print("PER-FILE PARSE RATE  (this is the number that matters)")
+        print("WHAT THE AGENT WOULD ACTUALLY RECORD")
         print("=" * 78)
-        print("  %-46s %8s %8s %7s" % ("log file", "sampled", "matched", "rate"))
+        print("  'endpoints' = distinct method+path discovered. 'requests' = distinct")
+        print("  Mule event ids, i.e. REAL request count - many log lines share one.")
+        print()
+        print("  %-42s %7s %7s %9s %8s" % ("log file", "sampled", "matched", "endpoints", "requests"))
         silent = []
-        for name, nlines, nmatched, _unm in sorted(per_file_report, key=lambda r: (r[2] / r[1] if r[1] else -1)):
-            rate = ("%.0f%%" % (nmatched / nlines * 100)) if nlines else "no data"
-            print("  %-46s %8d %8d %7s" % (name[:46], nlines, nmatched, rate))
+        for name, nlines, nmatched, _unm, feps, fevs in sorted(
+                per_file_report, key=lambda r: (len(r[4]), r[2])):
+            print("  %-42s %7d %7d %9d %8d" % (name[:42], nlines, nmatched, len(feps), len(fevs)))
             if nlines and nmatched == 0:
                 silent.append(name)
 
+        all_eps = totals.get("endpoints", set())
+        all_evs = totals.get("events", set())
+        print()
+        print("=" * 78)
+        print("  ENDPOINTS DISCOVERED : %d   across %d app log(s)"
+              % (len(all_eps), sum(1 for r in per_file_report if r[4])))
+        print("  REQUESTS OBSERVED    : %d   (distinct event ids in this sample)" % len(all_evs))
+        print("  startup inventory lines (prove an endpoint exists, not traffic): %d"
+              % totals.get("inventory", 0))
+        print("=" * 78)
+        if all_eps and not all_evs:
+            print("  -> Endpoint DISCOVERY works; no request traffic in the sampled window.")
+            print("     That is expected shortly after a runtime restart, or for apps whose")
+            print("     flows contain no Logger component - Mule does not log a line per")
+            print("     request by default.")
         print()
         print(f"[info] {totals['matched']} matched, {totals['unmatched']} lines not matched by the "
               f"single-line patterns, out of {totals['lines']} lines sampled across "
