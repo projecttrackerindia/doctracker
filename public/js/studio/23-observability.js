@@ -1117,44 +1117,25 @@ function renderStatusBreakdown(breakdown, total){
   const fams = ['2xx','3xx','4xx','5xx'];
   const colorFor = { '2xx':'var(--st-2)', '3xx':'var(--st-3)', '4xx':'var(--st-4)', '5xx':'var(--st-5)' };
   const counts = fams.map(f => breakdown[f] || 0);
-  const maxCount = Math.max(...counts, 1);
   // `total` (requests overall) can run ahead of the classified counts below -
   // some requests never got a status code logged (dropped connection, agent
-  // sampling gap, etc). Percentages and the subtitle use the classified sum
-  // so they always foot to 100%, instead of silently implying an unaccounted
-  // gap is "0%" of something bigger.
+  // sampling gap, etc). The subtitle and bar use the classified sum so they
+  // always foot to 100%, instead of silently implying an unaccounted gap is
+  // "0%" of something bigger.
   const classifiedTotal = counts.reduce((a,b)=>a+b, 0);
   const t = classifiedTotal || 1;
   const unclassified = Math.max(0, (total || 0) - classifiedTotal);
+  const present = fams.filter((f,i)=>counts[i] > 0);
 
-  // One row per family, scaled to the BUSIEST family (not the total) - the
-  // same convention Top source IPs already uses (renderIpBreakdown), so a
-  // reader doesn't have to learn two different bar languages on one page.
-  // Scaling to the total instead would flatten 4xx/5xx into an unreadable
-  // sliver next to a dominant 2xx count, which is exactly the information
-  // a status breakdown exists to surface.
-  const rows = fams.map((f, i)=>{
-    const c = counts[i];
-    const barPct = Math.round((c / maxCount) * 100);
-    const share = Math.round((c / t) * 100);
-    return `<div class="obs-statusfam-row">
-      <span class="obs-statusfam-label" style="color:${colorFor[f]};">${f}</span>
-      <span class="obs-ip-bar-track"><span class="obs-ip-bar" style="width:${c ? Math.max(barPct, 2) : 0}%;background:${colorFor[f]};"></span></span>
-      <span class="obs-ip-count">${c.toLocaleString()} <span style="opacity:.7;">(${share}%)</span></span>
-    </div>`;
-  }).join('');
-
-  // .obs-panel-fill + .obs-statusbreakdown-body: this card sits next to its
-  // grid2 neighbour (Service health, a paginated list several rows tall) -
-  // the title stays pinned to the top and the bars below it center in
-  // whatever height the row ends up being, so the two cards' bottom edges
-  // still align without the shorter card looking stranded.
+  // Same single-stacked-bar-plus-legend language as Log level distribution
+  // (renderLogVolumeAndLevelsSection) - one continuous bar segmented by
+  // share of the classified total, with a legend chip per family below it.
   return `<div class="obs-panel obs-panel-fill">
     <div class="section-title">Status code breakdown</div>
     <div class="hint" style="margin-top:-4px;">${classifiedTotal>0 ? classifiedTotal.toLocaleString()+' response(s) over the sampled range' + (unclassified>0 ? ` · ${unclassified.toLocaleString()} without a recorded status code` : '') : 'Responses observed by the agent, sampled once per push'}</div>
     <div class="obs-statusbreakdown-body">
-      <div class="obs-statusbar">${fams.map(f=>`<span style="width:${((breakdown[f]||0)/t*100)}%;background:${colorFor[f]};"></span>`).join('')}</div>
-      <div class="obs-statusfam-bars">${rows}</div>
+      <div class="obs-statusbar">${present.map(f=>`<span style="width:${((breakdown[f]||0)/t*100)}%;background:${colorFor[f]};"></span>`).join('')}</div>
+      <div class="obs-status-legend">${fams.map(f=>`<span class="k"><i style="background:${colorFor[f]};"></i>${f} ${(breakdown[f]||0).toLocaleString()}</span>`).join('')}</div>
     </div>
   </div>`;
 }
