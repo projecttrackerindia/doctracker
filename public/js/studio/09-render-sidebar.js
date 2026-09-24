@@ -80,6 +80,11 @@ function renderProjectNode(proj, filter){
 
 function updatePinnedNavActive(){
   const onObservability = !!state.selected && state.selected.type === 'observability';
+  // The header toggle button, not just the sidebar rows - so it visibly
+  // shows which side of the toggle you're on, the same way #btnAuthor
+  // shows an active state while its own panel is open.
+  const obsBtn = document.getElementById('btnObservability');
+  if(obsBtn) obsBtn.classList.toggle('active', onObservability);
   document.querySelectorAll('.pinned-row').forEach(row=>{
     const nav = row.getAttribute('data-nav');
     // On Observability, the "API Control Center" row doubles as "All

@@ -16,10 +16,15 @@ document.getElementById('btnReleasePipeline').addEventListener('click', ()=>{
   state.selected = { type:'releasepipeline' };
   renderMain();
 });
+// Toggle, not a one-way jump: clicking it again while already on
+// Observability returns to the API Control Center, the same place the
+// sidebar's own exit row (home-exit) lands - so the icon itself is a
+// complete way in AND out, not just a way in that leaves the sidebar's
+// exit row as the only way back.
 document.getElementById('btnObservability').addEventListener('click', ()=>{
-  state.selected = { type:'observability' };
-  renderSidebar();
-  renderMain();
+  const onObservability = !!state.selected && state.selected.type === 'observability';
+  state.selected = onObservability ? { type:'home' } : { type:'observability' };
+  renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
 });
 // The FAB used to always call openEditorTab(currentProjectForEnvContext(), null) —
 // meaning if you'd last viewed (or were viewing) some project, EVERY field shared
