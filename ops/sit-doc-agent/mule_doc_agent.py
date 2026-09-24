@@ -630,6 +630,47 @@ def remember_corrid_method(corr_id, method, path=None):
     _CORRID_METHOD[corr_id] = (method, path)
     while len(_CORRID_METHOD) > MAX_CORRID_METHODS:
         _CORRID_METHOD.popitem(last=False)
+    if path:
+        remember_path_method(path, method)
+
+
+# Which HTTP methods have been OBSERVED for a given templated path. Used as
+# the last resort for a structured JSON block that carries a path and a
+# status code but no method of its own - the shape jwt-token-api logs, where
+# FlowName is a plain business flow name and the correlation id never
+# appeared on an APIkit line.
+#
+# This is inference from what the logs actually showed, not a guess from
+# payload shape: "a body is present, so it's probably a POST" would put
+# invented methods into API documentation, which is worse than a gap. The
+# lookup therefore applies ONLY when exactly one method has ever been seen
+# for that exact path. A path served by both GET and POST stays ambiguous
+# and the record is still dropped.
+MAX_PATH_METHODS = int(os.environ.get("MAX_PATH_METHODS", "5000"))
+_PATH_METHODS = collections.OrderedDict()
+
+
+def remember_path_method(path, method):
+    if not path or not method:
+        return
+    key = templatize_path(path)
+    seen = _PATH_METHODS.get(key)
+    if seen is None:
+        seen = set()
+        _PATH_METHODS[key] = seen
+        while len(_PATH_METHODS) > MAX_PATH_METHODS:
+            _PATH_METHODS.popitem(last=False)
+    seen.add(method)
+
+
+def unambiguous_method_for_path(path):
+    """The method for `path`, only if exactly one has ever been observed."""
+    if not path:
+        return None
+    seen = _PATH_METHODS.get(templatize_path(path))
+    if seen and len(seen) == 1:
+        return next(iter(seen))
+    return None
 
 
 def _finish_block(carry, observations):
@@ -641,6 +682,16 @@ def _finish_block(carry, observations):
         print(f"[warn] found what looked like a JSON block (method={carry['method']}) but it failed to parse: "
               f"{e} (buffer length {len(carry['buffer'])} chars) - not counted as a match.", file=sys.stderr)
     carry["buffer"] = ""
+    # The path is resolved FIRST because it is one of the routes to the
+    # method: a block carrying a known path but no method of its own can
+    # borrow the method already observed for that path.
+    block_path = None
+    if isinstance(obj, dict):
+        for cand in _find_all_key_values(obj, REQUEST_URI_KEY_PATTERN):
+            block_path = _path_like(cand)
+            if block_path:
+                break
+
     if isinstance(obj, dict) and not carry["method"]:
         # The method isn't always on the preceding line. A structured JSON
         # logger - confirmed on this deployment, with keys like RequestUri /
@@ -670,23 +721,36 @@ def _finish_block(carry, observations):
         if seen:
             carry["method"] = seen[0]
 
+    if isinstance(obj, dict) and not carry["method"] and block_path:
+        # Final route: this exact path has been seen before with exactly one
+        # method. jwt-token-api logs complete per-request records - status,
+        # client IP, timings - whose FlowName is a plain business flow name,
+        # so without this its authentication traffic is discarded wholesale.
+        # Ambiguous paths are deliberately left unresolved; see
+        # unambiguous_method_for_path().
+        carry["method"] = unambiguous_method_for_path(block_path)
+
     if isinstance(obj, dict) and not carry["method"]:
+        known = _PATH_METHODS.get(templatize_path(block_path)) if block_path else None
+        why = ("that path has been seen with more than one method (%s), so it is ambiguous"
+               % ", ".join(sorted(known))) if known else \
+              "and that path has not been seen with a method elsewhere"
         print(f"[warn] parsed a JSON block successfully but no HTTP method was captured - not counted as a "
-              f"match. Looked on the preceding line (HEADER_METHOD_PATTERN), for a method-like key, and for "
-              f"an APIkit FlowName inside the block. Key names seen: "
+              f"match. Looked on the preceding line, for a method-like key, for an APIkit FlowName, for this "
+              f"block's correlation id, {why}. Key names seen: "
               f"{sorted(set(_all_keys(obj)))}", file=sys.stderr)
     if isinstance(obj, dict) and carry["method"]:
-        path = None
-        for cand in _find_all_key_values(obj, REQUEST_URI_KEY_PATTERN):
-            path = _path_like(cand)
-            if path:
-                break
+        path = block_path
         if not path:
             print(f"[warn] parsed a JSON block (method={carry['method']}) but found no path-like key "
                   f"(looked for a name matching 'requesturi'/'path'/'uri'). Top-level/nested key names seen: "
                   f"{sorted(set(_all_keys(obj)))} - adjust REQUEST_URI_KEY_PATTERN if your real key is named "
                   f"differently.", file=sys.stderr)
         if path:
+            # A block that DID establish its method teaches the path->method
+            # map, so a later block for the same path with no method of its
+            # own can be recovered.
+            remember_path_method(path, carry["method"])
             req_payload = _find_key_dict(obj, REQUEST_PAYLOAD_KEY_PATTERN)
             resp_payload = _find_key_dict(obj, RESPONSE_PAYLOAD_KEY_PATTERN)
             entry_block = _find_key_dict(obj, ENTRY_BLOCK_PATTERN)
@@ -1687,6 +1751,17 @@ def build_agent_health(state):
     }
 
 
+def describe_log_source():
+    """A readable label for where metrics came from. MULE_LOG_PATH is
+    usually a glob over a directory of per-app logs, and its basename is
+    just "*.log"."""
+    base = os.path.basename(MULE_LOG_PATH)
+    if any(ch in MULE_LOG_PATH for ch in "*?[") or "," in MULE_LOG_PATH:
+        d = os.path.basename(os.path.dirname(MULE_LOG_PATH.split(",")[0].strip())) or "logs"
+        return "%s/ (%s)" % (d, base)
+    return base
+
+
 def build_endpoint_metrics(state):
     metrics = {}
     for key, ep in state.get("endpoints", {}).items():
@@ -1708,7 +1783,10 @@ def build_endpoint_metrics(state):
             "errorRate": error_rate,
             "lastSeenAt": ep.get("lastSeenAt"),
             "topSourceIps": [{"ip": ip, "count": count} for ip, count in top_ips],
-            "sourceLog": os.path.basename(MULE_LOG_PATH),
+            # basename() of a glob renders as a bare "*.log", which tells a
+            # reader nothing. With several files the file an endpoint came
+            # from is recorded per-observation anyway, so name the directory.
+            "sourceLog": describe_log_source(),
         }
     return metrics
 

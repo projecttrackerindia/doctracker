@@ -378,6 +378,92 @@ check("seed_state_from_history parses single lines before assembling blocks",
 agent._CORRID_METHOD.clear()
 
 
+print("Path-based method recovery (jwt-token-api's shape)")
+# jwt-token-api logs a complete per-request record - status, client IP,
+# timings - whose FlowName is a plain business flow name and whose
+# correlation id never appeared on an APIkit line. Without a path lookup its
+# entire authentication traffic is discarded.
+#
+# The rule is deliberately narrow: borrow a method ONLY when exactly one has
+# ever been observed for that exact path. Inferring from payload shape
+# ("has a body, so POST") would put invented methods into API documentation,
+# which is worse than a gap.
+agent._CORRID_METHOD.clear()
+agent._PATH_METHODS.clear()
+_B = chr(92)
+
+JWT_BLOCK = {
+    "ApplicationName": "jwt-token-api", "FlowName": "common-logger-flow",
+    "RequestUri": "/auth/jwt/token", "HttpStatus": 200,
+    "X-Forwarded-For": "10.2.7.55",
+    "correlationId": "99999999-b7d2-11f1-8e71-02783a995911",
+    "RequestPayload": {"user": "svc", "password": "hunter2"},
+}
+
+
+def jwt_lines(block):
+    return ["INFO  2026-09-24 10:16:33,311 [[MuleRuntime].uber.1: [jwt-token-api].uber@x] "
+            "[processor: x/processors/0; event: 99999999-b7d2-11f1-8e71-02783a995911] "
+            "org.mule.runtime.core.internal.processor.LoggerMessageProcessor: {"
+            ] + json.dumps(block, indent=2).splitlines()[1:]
+
+
+c = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+check("with the path unknown, the record is dropped rather than guessed",
+      len(agent.assemble_multiline_observations(jwt_lines(JWT_BLOCK), c)) == 0,
+      "a method was invented from the payload")
+
+# The path becomes known from a genuine APIkit line, as it does the moment
+# any request for it passes through a flow that names it.
+APIKIT_AUTH = (
+    "INFO  2026-09-24 10:10:00,000 [[MuleRuntime].uber.2: "
+    "post:%sauth%sjwt%stoken:application%sjson:jwt-token-api-config] "
+    "[processor: p/processors/0; event: 11111111-b7d2-11f1-8e71-02783a995911] x"
+    % (_B, _B, _B, _B))
+check("the fixture APIkit line parses", agent.parse_line(APIKIT_AUTH) is not None, APIKIT_AUTH[:90])
+check("an APIkit line teaches the path -> method map",
+      agent.unambiguous_method_for_path("/auth/jwt/token") == "POST",
+      "got %r" % agent.unambiguous_method_for_path("/auth/jwt/token"))
+
+c = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+got = agent.assemble_multiline_observations(jwt_lines(JWT_BLOCK), c)
+check("the block is now recovered, with status and client IP",
+      len(got) == 1 and got[0]["method"] == "POST" and got[0]["statusCode"] == 200
+      and got[0]["clientIp"] == "10.2.7.55", "got %r" % got)
+
+# Ambiguity must WIN over recovery.
+agent.remember_path_method("/auth/jwt/token", "GET")
+check("a path with two observed methods becomes ambiguous",
+      agent.unambiguous_method_for_path("/auth/jwt/token") is None)
+c = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+check("an ambiguous path drops the record rather than picking one",
+      len(agent.assemble_multiline_observations(jwt_lines(JWT_BLOCK), c)) == 0)
+
+# /api/employee/9931/receipt and .../4412/... are one endpoint, so a method
+# learned from either applies to both.
+agent._PATH_METHODS.clear()
+agent.remember_path_method("/api/employee/9931/receipt", "PUT")
+check("the map is keyed on the TEMPLATED path, not the literal one",
+      agent.unambiguous_method_for_path("/api/employee/4412/receipt") == "PUT",
+      "got %r" % agent.unambiguous_method_for_path("/api/employee/4412/receipt"))
+
+check("the path -> method map is bounded", agent.MAX_PATH_METHODS <= 50000)
+agent._PATH_METHODS.clear()
+# Non-numeric segments, because templatize_path() collapses "/p/1/x" and
+# "/p/2/x" into one templated key - as it should, they are one endpoint.
+for i in range(agent.MAX_PATH_METHODS + 25):
+    agent.remember_path_method("/svc-%s/status" % chr(97 + i % 26) + "x" * (i // 26), "GET")
+check("the path -> method map evicts oldest once full",
+      len(agent._PATH_METHODS) == agent.MAX_PATH_METHODS,
+      "grew to %d" % len(agent._PATH_METHODS))
+agent._PATH_METHODS.clear()
+agent._CORRID_METHOD.clear()
+
+print("Source label")
+check("a glob does not render as a bare *.log", agent.describe_log_source() != "*.log",
+      agent.describe_log_source())
+
+
 print()
 if FAILURES:
     print("FAILED (%d): %s" % (len(FAILURES), ", ".join(FAILURES)))
