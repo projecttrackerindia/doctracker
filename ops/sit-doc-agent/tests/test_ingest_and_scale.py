@@ -12,6 +12,7 @@ that drops new entries still renders a confident-looking "Top source IPs"
 panel. Neither raises anything.
 """
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -176,6 +177,64 @@ try:
           "re-ingested %d line(s)" % sum(len(v) for v in out3.values()))
 finally:
     shutil.rmtree(tmp2, ignore_errors=True)
+
+print("Production-scale directory (many apps, 10 archives each)")
+# A real production node has ~70 apps x 10 rotations + a live file each -
+# 676 files in one observed case. Two things must hold: the MAX_LOG_FILES cap
+# must not throw away the LIVE files (they are what's still being written),
+# and runtime rotations (mule_ee.log.9) must be excluded by default.
+tmp3 = tempfile.mkdtemp(prefix="doctracker-prod-test-")
+try:
+    now = __import__("time").time()
+    apps = ["svc-%s-api" % chr(97 + n) for n in range(26)]
+    live_lines = 0
+    for app in apps:
+        for idx in range(1, 11):
+            p = os.path.join(tmp3, "%s-%d.log" % (app, idx))
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(req_line(i, "/api/%s/op" % app) for i in range(50)) + "\n")
+            old = now - 86400 - idx * 3600
+            os.utime(p, (old, old))
+        p = os.path.join(tmp3, "%s.log" % app)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(req_line(i, "/api/%s/op" % app) for i in range(40)) + "\n")
+        live_lines += 40
+        os.utime(p, (now - 60, now - 60))
+    for n in (9, 10):
+        with open(os.path.join(tmp3, "mule_ee.log.%d" % n), "w", encoding="utf-8") as fh:
+            fh.write("runtime\n")
+
+    agent.MULE_LOG_PATH = os.path.join(tmp3, "*.log")
+    agent.LOG_EXCLUDE_PATTERN = re.compile(r"\.(gz|zip|bz2|xz|tar)$|\.log\.\d")
+    resolved = agent.resolve_log_paths(agent.MULE_LOG_PATH)
+    check("runtime rotations (mule_ee.log.N) are excluded by default",
+          not any("mule_ee.log." in p for p in resolved),
+          "got %s" % [os.path.basename(p) for p in resolved if "mule_ee" in p])
+
+    # Even over the cap, every LIVE file must survive truncation.
+    saved_cap = agent.MAX_LOG_FILES
+    agent.MAX_LOG_FILES = 100          # 286 files exist, so this truncates
+    truncated = agent.resolve_log_paths(agent.MULE_LOG_PATH)
+    live_paths = {os.path.join(tmp3, "%s.log" % a) for a in apps}
+    kept_live = sum(1 for p in truncated if p in {os.path.abspath(q) for q in live_paths})
+    check("truncation keeps the live files, not the alphabetically-first archives",
+          kept_live == len(apps), "kept %d of %d live files" % (kept_live, len(apps)))
+    agent.MAX_LOG_FILES = saved_cap
+
+    # Excluding numbered archives should leave exactly the live files.
+    agent.LOG_EXCLUDE_PATTERN = re.compile(r"-\d+\.log$|\.(gz|zip|bz2|xz|tar)$|\.log\.\d")
+    only_live = agent.resolve_log_paths(agent.MULE_LOG_PATH)
+    check("excluding -N.log leaves exactly the live files",
+          len(only_live) == len(apps), "got %d, expected %d" % (len(only_live), len(apps)))
+
+    st3 = {"endpoints": {}, "health": {}, "files": {}}
+    out = agent.tail_all_logs(only_live, st3, 100000)
+    check("all live content is read, no archive content",
+          sum(len(v) for v in out.values()) == live_lines,
+          "read %d, expected %d" % (sum(len(v) for v in out.values()), live_lines))
+    agent.LOG_EXCLUDE_PATTERN = re.compile(r"\.(gz|zip|bz2|xz|tar)$|\.log\.\d")
+finally:
+    shutil.rmtree(tmp3, ignore_errors=True)
 
 print("Bounded source-IP tracking")
 st = {"endpoints": {}, "health": {}}

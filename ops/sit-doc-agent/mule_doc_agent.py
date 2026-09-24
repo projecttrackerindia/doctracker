@@ -115,8 +115,11 @@ NEW_FILE_MAX_AGE_SECONDS = int(os.environ.get("NEW_FILE_MAX_AGE_SECONDS", "3600"
 # real Mule apps genuinely end in a digit - so if your rollover uses "%i"
 # with a separate unnumbered live file, add it:
 #     MULE_LOG_EXCLUDE_PATTERN='-\d+\.log$|\.gz$|\.zip$|\.log\.\d'
+# `\.log\.\d` covers BOTH runtime-style rotations (mule_ee.log.9,
+# mule_ee.log.10) and date-stamped ones (app.log.2026-09-21). Neither is ever
+# a live file, so excluding them by default is safe.
 LOG_EXCLUDE_PATTERN = re.compile(
-    os.environ.get("MULE_LOG_EXCLUDE_PATTERN", r"\.(gz|zip|bz2|xz|tar)$|\.log\.\d{4}-\d{2}-\d{2}")
+    os.environ.get("MULE_LOG_EXCLUDE_PATTERN", r"\.(gz|zip|bz2|xz|tar)$|\.log\.\d")
 )
 STATE_FILE = os.environ.get("AGENT_STATE_FILE", "/var/lib/doctracker-agent/state.json")
 
@@ -704,9 +707,26 @@ def resolve_log_paths(spec):
         unique = [p for p in unique if p not in set(excluded)]
     unique = [p for p in unique if os.path.isfile(p)]
     if len(unique) > MAX_LOG_FILES:
-        print(f"[warn] {len(unique)} files matched {spec!r}; tailing only the first {MAX_LOG_FILES} "
-              f"(raise MAX_LOG_FILES if that's wrong)", file=sys.stderr)
-        unique = unique[:MAX_LOG_FILES]
+        # Keep the MOST RECENTLY WRITTEN files, not the alphabetically first.
+        # A real Mule log directory is overwhelmingly rotated archives - one
+        # production node here has 676 files for ~70 apps - and truncating
+        # alphabetically would keep `app-1.log ... app-10.log` (all dead
+        # archives) and silently drop the live `app.log` that is the only
+        # one still being written to.
+        by_mtime = []
+        for p in unique:
+            try:
+                by_mtime.append((os.stat(p).st_mtime, p))
+            except OSError:
+                continue
+        by_mtime.sort(reverse=True)
+        kept = sorted(p for _, p in by_mtime[:MAX_LOG_FILES])
+        print(f"[warn] {len(unique)} files matched {spec!r}, which is over MAX_LOG_FILES="
+              f"{MAX_LOG_FILES}. Tailing the {len(kept)} most recently written and IGNORING the rest. "
+              f"This usually means the pattern is matching rotated archives as well as live logs - "
+              f"set MULE_LOG_EXCLUDE_PATTERN (see AGENT_README.md) rather than just raising the cap.",
+              file=sys.stderr)
+        unique = kept
     return unique
 
 

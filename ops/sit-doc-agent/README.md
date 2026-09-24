@@ -320,11 +320,34 @@ history it ignored, so this is visible rather than silent.
 so only the live file is tailed:
 
 ```bash
-MULE_LOG_EXCLUDE_PATTERN='-\d+\.log$|\.gz$|\.log\.\d'
+MULE_LOG_EXCLUDE_PATTERN='-\d+\.log$|\.(gz|zip|bz2|xz|tar)$|\.log\.\d'
 ```
 
-Numeric suffixes are **not** excluded by default, because some real Mule apps
-genuinely end in a digit and silently dropping them would be worse.
+Numeric suffixes are **not** excluded by default, because some Mule apps
+genuinely end in a digit — an app logging to `filler-api-01.log` would be
+silently dropped by that pattern, which is worse than reading one extra
+file. Check your own app names before applying it.
+
+### Sizing for a real production node
+
+One observed production node holds **676 files / 9.1 GB** in a single log
+directory (~70 apps × 10 rotations each, plus the live files). Two
+consequences:
+
+- `MAX_LOG_FILES` (default 200) will be exceeded by a bare `*.log` glob.
+  When that happens the agent keeps the **most recently written** files, not
+  the alphabetically first — otherwise it would keep `app-1.log …
+  app-10.log` (all dead archives) and drop the live `app.log` that is the
+  only one still growing. It also prints a loud warning telling you to fix
+  the pattern rather than just raise the cap.
+- `MAX_LINES_PER_CYCLE` is divided across every matched file, so matching
+  600 dead archives leaves each live log a tiny share of the budget.
+  Excluding archives took one measured case from 200 files (129 of them
+  dead) at 100 lines each to 71 files at 281 lines each.
+
+Excluding archives is therefore about throughput and budget, not
+correctness — the mtime rule above already prevents archive *content* from
+being counted either way.
 
 Each file gets its own read offset and inode, so rotation is detected per
 file. The glob is re-expanded every `LOG_GLOB_RESCAN_SECONDS` (default 300),
