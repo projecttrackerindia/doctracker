@@ -1144,6 +1144,7 @@ function renderStatusBreakdown(breakdown, total){
   // still align without the shorter card looking stranded.
   return `<div class="obs-panel obs-panel-fill">
     <div class="section-title">Status code breakdown</div>
+    <div class="hint" style="margin-top:-4px;">${total>0 ? Math.round(total).toLocaleString()+' response(s) over the sampled range' : 'Responses observed by the agent, sampled once per push'}</div>
     <div class="obs-statusbreakdown-body">
       <div class="obs-statusbar">${fams.map(f=>`<span style="width:${((breakdown[f]||0)/t*100)}%;background:${colorFor[f]};"></span>`).join('')}</div>
       <div class="obs-statusfam-bars">${rows}</div>
