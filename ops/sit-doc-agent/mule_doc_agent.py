@@ -2025,7 +2025,15 @@ def build_app_projects(state, existing_projects=None):
     for app, eps in groups.items():
         proj_id = project_id_for_app(app)
         endpoints = _endpoint_docs(eps.items(), now_iso)
-        name = f"{app} — Auto-Discovery (unreviewed)" if app else (
+        # Just the app name, not "app — Auto-Discovery (unreviewed)" - that
+        # suffix pushed the one thing that actually distinguishes one
+        # project from the next (the app name) past the sidebar's
+        # single-line ellipsis, e.g. "s-enach-api — Aut…" for every single
+        # one of them. The unreviewed/auto-discovered status is still on
+        # every project via discoveryEnvironment (the client renders it as
+        # a badge, not sidebar text - see renderSidebar()) and in full in
+        # the description below.
+        name = app if app else (
             f"{ENVIRONMENT} Auto-Discovery - unreviewed" if ENVIRONMENT else DEFAULT_PROJECT_NAME)
         projects[proj_id] = _project_shell(existing_projects.get(proj_id), endpoints, proj_id, name, now_iso)
     return projects

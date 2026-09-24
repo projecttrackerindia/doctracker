@@ -155,12 +155,18 @@ check("viewEndpoints checks discoveryEnvironment before falling back to the snap
       "proj.discoveryEnvironment" in util and "toLowerCase() === String(state.env" in util)
 seg = util[util.index("function viewEndpoints("):]
 seg = seg[:seg.index("\nfunction invalidateSnapshotCache(")]
-check("the draft environment is still checked FIRST, unconditionally",
-      seg.index("isViewingDraftEnv()") < seg.index("discoveryEnvironment"),
-      "the bypass must not run ahead of the existing draft check")
-check("the bypass returns the raw endpoint list, matching the draft-env return",
-      "return proj.endpoints;" in seg)
-check("a non-matching environment still falls through to the snapshot/promotion gate",
+check("the discoveryEnvironment check runs FIRST, ahead of the draft-env check",
+      seg.index("discoveryEnvironment") < seg.index("isViewingDraftEnv()"),
+      "an auto-discovered project must not leak into Dev via the draft-env "
+      "always-live rule - Dev shows every hand-written project's full "
+      "content, but a SIT discovery is SIT data, not draft work sitting in "
+      "Dev, and must stay invisible outside the environment it was "
+      "actually observed in")
+check("the bypass returns the raw endpoint list on a match",
+      "return proj.endpoints" in seg)
+check("a non-matching environment returns nothing at all - not even in the draft/Dev view",
+      "? proj.endpoints : [];" in seg or ": [];" in seg)
+check("a project with NO discoveryEnvironment still falls through to the draft/snapshot gate",
       "snapshotEntry(proj.id)" in seg)
 
 print("The page shows which environment a number came from")

@@ -112,6 +112,7 @@ function renderSidebar(){
           <span class="project-caret">▶</span>
           <span class="project-avatar" style="background:${accent};">${escapeHtml(initials)}</span>
           <span class="txt">${escapeHtml(proj.name)}</span>
+          ${proj.discoveryEnvironment ? `<span class="project-auto-pill" title="Auto-discovered from ${escapeHtml(proj.discoveryEnvironment)} server logs by an unattended agent - unreviewed.">Auto</span>` : ''}
         </div>
         <div class="project-actions">
           <span class="project-count">${epsForView.length}</span>
