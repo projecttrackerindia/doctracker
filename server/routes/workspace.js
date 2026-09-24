@@ -1076,14 +1076,29 @@ function metricsRev(value) {
 // know this happened.
 const MAX_METRICS_WRITERS = 50;
 
-function composeWriterSegments(stored) {
-  if (!isPlainObject(stored) || !isPlainObject(stored.writers)) return stored || {};
+// Endpoint counters are summed across writers reporting the SAME endpoint,
+// which is right for two load-balanced nodes of one environment and wrong
+// across environments: the same API is deployed to SIT, UAT and PROD, so a
+// pooled `totalRequests` is not a rougher truth but a meaningless number, and
+// a pooled `topSourceIps` leaks PROD client addresses into a SIT view.
+//
+// So composition happens strictly WITHIN an environment. Each writer segment
+// carries the environment its node serves (the agent refuses to guess it);
+// segments from before this existed have none, and are grouped under
+// UNSCOPED_ENVIRONMENT so they stay visible rather than vanishing.
+const UNSCOPED_ENVIRONMENT = 'Unscoped';
+
+function segmentEnvironment(seg) {
+  const raw = typeof seg.environment === 'string' ? seg.environment.trim() : '';
+  return raw ? raw.slice(0, 32) : UNSCOPED_ENVIRONMENT;
+}
+
+function composeOneEnvironment(entries) {
   const endpoints = {};
   let logRecords = [];
   const agents = [];
 
-  for (const [writerId, seg] of Object.entries(stored.writers)) {
-    if (!isPlainObject(seg)) continue;
+  for (const [writerId, seg] of entries) {
     for (const [key, ep] of Object.entries(seg.endpoints || {})) {
       const prev = endpoints[key];
       if (!prev) { endpoints[key] = { ...ep }; continue; }
@@ -1128,6 +1143,34 @@ function composeWriterSegments(stored) {
   return { endpoints, agentHealth, logRecords };
 }
 
+function composeWriterSegments(stored) {
+  if (!isPlainObject(stored) || !isPlainObject(stored.writers)) return stored || {};
+
+  const byEnv = new Map();
+  for (const [writerId, seg] of Object.entries(stored.writers)) {
+    if (!isPlainObject(seg)) continue;
+    const env = segmentEnvironment(seg);
+    if (!byEnv.has(env)) byEnv.set(env, []);
+    byEnv.get(env).push([writerId, seg]);
+  }
+
+  const environments = {};
+  for (const [env, entries] of byEnv) environments[env] = composeOneEnvironment(entries);
+
+  // The page picks ONE environment to display. A single-environment install
+  // (the common case) still gets the flat shape at the top level so nothing
+  // downstream has to special-case it; with several, the flat fields describe
+  // the default environment only, and `environmentNames` drives the selector.
+  // They are deliberately NOT a cross-environment sum - see the note above.
+  const names = [...byEnv.keys()].sort();
+  const primary = names.includes(UNSCOPED_ENVIRONMENT) && names.length > 1
+    ? names.find((n) => n !== UNSCOPED_ENVIRONMENT)
+    : names[0];
+  const head = (primary && environments[primary]) || { endpoints: {}, agentHealth: null, logRecords: [] };
+
+  return { ...head, environments, environmentNames: names, defaultEnvironment: primary || null };
+}
+
 router.put('/endpoint-metrics', async (req, res) => {
   if (!isPlainObject(req.body?.endpointMetrics)) return res.status(400).json({ error: 'Expected { endpointMetrics: {} }.' });
   const org = req.authUser.organisation;
@@ -1169,7 +1212,19 @@ router.put('/endpoint-metrics', async (req, res) => {
             error: `Too many distinct metrics writers (${MAX_METRICS_WRITERS}). Each agent must send a STABLE writerId; a value that changes per restart will exhaust this.`,
           });
         }
-        writers[writerId] = { ...req.body.endpointMetrics, updatedAt: new Date().toISOString() };
+        // The environment label is rendered on a page and used as a grouping
+        // key, so it is constrained here rather than taken as sent - an agent
+        // is not a trusted source of display strings.
+        const seg = { ...req.body.endpointMetrics, updatedAt: new Date().toISOString() };
+        const envRaw = typeof seg.environment === 'string' ? seg.environment.trim() : '';
+        seg.environment = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,31}$/.test(envRaw) ? envRaw : null;
+        if (envRaw && !seg.environment) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            error: 'environment must be a short label (letters, digits, spaces, - or _, max 32 chars).',
+          });
+        }
+        writers[writerId] = seg;
         const { enc, version } = encryptOrgBlob({ writers }, org, 'endpoint_metrics');
         await client.query(
           `INSERT INTO org_workspace (organisation, endpoint_metrics_enc, endpoint_metrics_key_version, updated_at)

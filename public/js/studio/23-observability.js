@@ -28,16 +28,69 @@
 // or supported capture mode) sent just the endpoints map directly with no
 // wrapper - observabilityData() below normalizes all of these so a server
 // that hasn't re-pushed since upgrading the agent doesn't render as broken.
+// Which environment this page is showing. Metrics are stored and composed
+// per environment on the server (see composeWriterSegments) because the same
+// API runs in SIT, UAT and PROD and a pooled request count is a wrong number,
+// not a rounder one. There is deliberately no "All environments" option: it
+// would be exactly the meaningless sum this separation exists to prevent.
+let obsEnvironment = null;
+
+function obsEnvironmentNames(){
+  const raw = state.endpointMetrics;
+  const names = raw && Array.isArray(raw.environmentNames) ? raw.environmentNames : [];
+  return names.filter(n => typeof n === 'string' && n);
+}
+
+function obsActiveEnvironment(){
+  const names = obsEnvironmentNames();
+  if(!names.length) return null;
+  if(obsEnvironment && names.includes(obsEnvironment)) return obsEnvironment;
+  const raw = state.endpointMetrics;
+  return (raw && names.includes(raw.defaultEnvironment)) ? raw.defaultEnvironment : names[0];
+}
+
+function setObsEnvironment(name){
+  obsEnvironment = name;
+  render();
+}
+
 function observabilityData(){
   const raw = state.endpointMetrics;
-  if(raw && typeof raw === 'object' && raw.endpoints && typeof raw.endpoints === 'object'){
+  // Prefer the selected environment's own segment. The server also puts the
+  // default environment's data at the top level, so a single-environment
+  // install works unchanged whether or not it sends the new field.
+  const env = obsActiveEnvironment();
+  const scoped = (env && raw && raw.environments && typeof raw.environments === 'object')
+    ? raw.environments[env] : null;
+  const src = (scoped && typeof scoped === 'object') ? scoped : raw;
+  if(src && typeof src === 'object' && src.endpoints && typeof src.endpoints === 'object'){
     return {
-      endpoints: raw.endpoints,
-      agentHealth: (raw.agentHealth && typeof raw.agentHealth === 'object') ? raw.agentHealth : null,
-      logRecords: Array.isArray(raw.logRecords) ? raw.logRecords : [],
+      endpoints: src.endpoints,
+      agentHealth: (src.agentHealth && typeof src.agentHealth === 'object') ? src.agentHealth : null,
+      logRecords: Array.isArray(src.logRecords) ? src.logRecords : [],
+      environment: env,
     };
   }
-  return { endpoints: (raw && typeof raw === 'object') ? raw : {}, agentHealth: null, logRecords: [] };
+  return { endpoints: (src && typeof src === 'object') ? src : {}, agentHealth: null, logRecords: [], environment: env };
+}
+
+// Rendered above the dashboard whenever more than one environment reports.
+// With a single environment it stays out of the way - a selector with one
+// option is noise - but the environment is still named, so nobody reads a
+// number without knowing which environment produced it.
+function renderObsEnvironmentBar(){
+  const names = obsEnvironmentNames();
+  const active = obsActiveEnvironment();
+  if(!names.length) return '';
+  if(names.length === 1){
+    return `<div class="obs-env-bar obs-env-bar-single">Showing <strong>${esc(names[0])}</strong></div>`;
+  }
+  return `<div class="obs-env-bar" role="group" aria-label="Environment">
+    <span class="obs-env-label">Environment</span>
+    ${names.map(n => `<button type="button" class="obs-env-btn${n === active ? ' active' : ''}"
+       data-obs-env="${esc(n)}" aria-pressed="${n === active}">${esc(n)}</button>`).join('')}
+    <span class="obs-env-note">Figures are never summed across environments.</span>
+  </div>`;
 }
 
 const OBS_OVERFLOW_KEY = '* OVERFLOW - too many distinct endpoints';
@@ -1478,6 +1531,7 @@ function renderObservability(main){
       <h1>Observability</h1>
       <p>${heroDesc}</p>
     </div>
+    ${renderObsEnvironmentBar()}
     <div id="obsBody"></div>
   `;
 

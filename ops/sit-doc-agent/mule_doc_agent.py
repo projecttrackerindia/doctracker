@@ -214,6 +214,41 @@ MAX_LOG_VOLUME_SAMPLES = int(os.environ.get("MAX_LOG_VOLUME_SAMPLES", "700"))
 # to something meaningful but non-identifying, e.g. "mule-sit-1".
 WRITER_ID = os.environ.get("DOCTRACKER_WRITER_ID", "").strip()
 
+# Which environment THIS node serves - "SIT", "UAT", "PROD".
+#
+# Deliberately has NO default and is NOT inferred from the hostname. The same
+# API is deployed to several environments, so a request count that silently
+# mixes SIT and PROD is not a smaller truth, it's a wrong number: useless for
+# capacity work and misleading for debugging. Worse, pooling would surface
+# PROD source IPs and error payloads in a view someone opened for SIT.
+#
+# Guessing is the failure mode to avoid here, so an unset value is a hard
+# error in push mode (see require_environment()) rather than a default that
+# quietly lands this node's traffic in the wrong bucket.
+ENVIRONMENT = os.environ.get("DOCTRACKER_ENVIRONMENT", "").strip()
+# Kept short and non-identifying for the same reason as WRITER_ID: it is
+# rendered on a page that gets shared.
+ENVIRONMENT_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9 _-]{0,31}$')
+
+
+def require_environment():
+    """Called before any real push. Never in dry-run/sample mode, which write
+    nothing and so can't mislabel anything."""
+    if not ENVIRONMENT:
+        raise SystemExit(
+            "DOCTRACKER_ENVIRONMENT is not set.\n"
+            "  Set it to the environment THIS server serves, e.g. SIT / UAT / PROD.\n"
+            "  It has no default on purpose: metrics are stored and displayed per\n"
+            "  environment, and an agent that guesses would file this node's traffic\n"
+            "  under the wrong one. Nothing has been pushed.")
+    if not ENVIRONMENT_PATTERN.match(ENVIRONMENT):
+        raise SystemExit(
+            "DOCTRACKER_ENVIRONMENT=%r is not a usable environment name.\n"
+            "  Use a short label: letters, digits, spaces, '-' or '_', max 32 chars."
+            % ENVIRONMENT)
+    return ENVIRONMENT
+
+
 HOST_METRICS_ENABLED = os.environ.get("HOST_METRICS_ENABLED", "true").strip().lower() not in ("false", "0", "no")
 MAX_HOST_SAMPLES = int(os.environ.get("MAX_HOST_SAMPLES", "720"))
 
@@ -2184,6 +2219,7 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
                 del volume_samples[0]
 
             metrics_payload = {
+                "environment": ENVIRONMENT or None,
                 "endpoints": build_endpoint_metrics(state),
                 "agentHealth": build_agent_health(state),
                 "logRecords": build_log_records(state),
@@ -2201,6 +2237,7 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
                 print(json.dumps(metrics_payload, indent=2)[:2500])
             else:
                 try:
+                    require_environment()
                     existing = client.get_workspace()
                     existing_project = existing.get("projects", {}).get(PROJECT_ID)
                     project = build_project(state, existing_project)
