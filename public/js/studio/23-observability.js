@@ -1124,6 +1124,8 @@ function renderStatusBreakdown(breakdown, total){
   </div>`;
 }
 
+const OBS_HEALTH_PAGE_SIZE = 8;
+
 // Per-project ranked-by-error-rate list, org-wide - only shown at "All
 // traffic" scope (once you've scoped into one project/endpoint, its own
 // stats are already the KPI row above, this list would be redundant).
@@ -1135,12 +1137,19 @@ function renderServiceHealth(groups, metrics, allRecords, win){
   })).filter(r => r.agg.total > 0)
      .sort((a,b)=> b.agg.errorRate - a.agg.errorRate || b.agg.total - a.agg.total);
 
+  if(!state.obsHealthPage) state.obsHealthPage = 1;
+  const totalPages = Math.max(1, Math.ceil(rows.length / OBS_HEALTH_PAGE_SIZE));
+  if(state.obsHealthPage > totalPages) state.obsHealthPage = totalPages;
+  if(state.obsHealthPage < 1) state.obsHealthPage = 1;
+  const pageStart = (state.obsHealthPage - 1) * OBS_HEALTH_PAGE_SIZE;
+  const pageRows = rows.slice(pageStart, pageStart + OBS_HEALTH_PAGE_SIZE);
+
   // A project with no per-request records falls back to its cumulative
   // aggregate, so in a mixed workspace one row can be windowed and the next
   // all-time. That's worth showing rather than hiding - the marker says
   // which rows the window didn't apply to.
   const anyWindowed = rows.some(r => r.agg.source === 'records');
-  const body = rows.length ? rows.map(r=>{
+  const body = pageRows.length ? pageRows.map(r=>{
     const dot = r.agg.errorRate>=0.25 ? 'var(--delete)' : r.agg.errorRate>=0.05 ? 'var(--put)' : 'var(--post)';
     const p95 = r.agg.latency ? ` · p95 ${r.agg.latency.p95}ms` : '';
     const basisTag = (anyWindowed && r.agg.source !== 'records')
@@ -1153,11 +1162,24 @@ function renderServiceHealth(groups, metrics, allRecords, win){
     </div>`;
   }).join('') : `<div class="empty-field" style="padding:6px 0;">No traffic in the selected window.</div>`;
 
+  // A fixed page size (rather than letting this list grow to however many
+  // APIs have traffic) is also what keeps this panel from towering over its
+  // "Status code breakdown" neighbour in the grid2 row it shares - see
+  // .grid2-top for the other half of that fix.
+  const pagerHtml = rows.length > OBS_HEALTH_PAGE_SIZE ? `
+    <div class="obs-health-pager">
+      <span class="obs-health-pager-label">${pageStart+1}–${Math.min(pageStart+OBS_HEALTH_PAGE_SIZE, rows.length)} of ${rows.length}</span>
+      <button type="button" class="icon-btn" id="obsHealthPagePrev" ${state.obsHealthPage<=1?'disabled':''} title="Previous page">‹</button>
+      <span class="obs-health-pager-page">Page ${state.obsHealthPage} of ${totalPages}</span>
+      <button type="button" class="icon-btn" id="obsHealthPageNext" ${state.obsHealthPage>=totalPages?'disabled':''} title="Next page">›</button>
+    </div>` : '';
+
   const basis = (allRecords && allRecords.length) ? obsActiveWindow().label.toLowerCase() : 'all time (cumulative)';
   return `<div class="obs-panel">
     <div class="section-title">Service health — API status</div>
     <div class="hint" style="margin-top:-4px;">Ranked by error rate, ${escapeHtml(basis)} — click to drill in</div>
     ${body}
+    ${pagerHtml}
   </div>`;
 }
 
@@ -1517,7 +1539,7 @@ function renderConsole(main, metrics, agentHealth, logRecords){
 
     ${renderHostHealthSection(agentHealth)}
 
-    ${state.obsScope.type === 'all' ? `<div class="grid2">
+    ${state.obsScope.type === 'all' ? `<div class="grid2 grid2-top">
       ${renderServiceHealth(groups, metrics, logRecords, win)}
       ${renderStatusBreakdown(agg.statusBreakdown, agg.total)}
     </div>` : renderStatusBreakdown(agg.statusBreakdown, agg.total)}
@@ -1642,6 +1664,17 @@ function renderConsole(main, metrics, agentHealth, logRecords){
       if(!g) return;
       obsSetScope({ type:'project', id, name: g.name, keys: g.keys }, id);
     });
+  });
+
+  const healthPrev = main.querySelector('#obsHealthPagePrev');
+  if(healthPrev) healthPrev.addEventListener('click', ()=>{
+    state.obsHealthPage = Math.max(1, (state.obsHealthPage||1) - 1);
+    renderMain();
+  });
+  const healthNext = main.querySelector('#obsHealthPageNext');
+  if(healthNext) healthNext.addEventListener('click', ()=>{
+    state.obsHealthPage = (state.obsHealthPage||1) + 1;
+    renderMain();
   });
 
   wireEndpointsTable(main);
