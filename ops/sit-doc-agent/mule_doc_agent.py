@@ -103,6 +103,21 @@ MULE_LOG_PATH = os.environ.get("MULE_LOG_PATH", "/opt/mule/logs/mule-app.log")
 LOG_GLOB_RESCAN_SECONDS = int(os.environ.get("LOG_GLOB_RESCAN_SECONDS", "300"))
 # Safety valve for a glob that matches far more than expected.
 MAX_LOG_FILES = int(os.environ.get("MAX_LOG_FILES", "200"))
+# A file first seen with an mtime older than this is treated as a rotated
+# archive: its existing contents are skipped rather than ingested as if they
+# had just happened. See tail_all_logs(). One hour comfortably covers a
+# freshly rolled live file even on a quiet app, while excluding yesterday's
+# archives. Set to 0 to always read newly discovered files from the top.
+NEW_FILE_MAX_AGE_SECONDS = int(os.environ.get("NEW_FILE_MAX_AGE_SECONDS", "3600"))
+# Regex of paths to IGNORE entirely, applied after the glob. Compressed and
+# date-stamped archives are excluded by default because they are never
+# ambiguous. Numeric suffixes (app-1.log) are NOT excluded by default - some
+# real Mule apps genuinely end in a digit - so if your rollover uses "%i"
+# with a separate unnumbered live file, add it:
+#     MULE_LOG_EXCLUDE_PATTERN='-\d+\.log$|\.gz$|\.zip$|\.log\.\d'
+LOG_EXCLUDE_PATTERN = re.compile(
+    os.environ.get("MULE_LOG_EXCLUDE_PATTERN", r"\.(gz|zip|bz2|xz|tar)$|\.log\.\d{4}-\d{2}-\d{2}")
+)
 STATE_FILE = os.environ.get("AGENT_STATE_FILE", "/var/lib/doctracker-agent/state.json")
 
 DOCTRACKER_BASE_URL = os.environ.get("DOCTRACKER_BASE_URL", "https://doctracker-production-7ecc.up.railway.app")
@@ -684,6 +699,10 @@ def resolve_log_paths(spec):
     # Stable order so round-robin fairness below is deterministic, and
     # de-duplicated in case two patterns overlap.
     unique = sorted(set(os.path.abspath(p) for p in paths))
+    excluded = [p for p in unique if LOG_EXCLUDE_PATTERN.search(p)]
+    if excluded:
+        unique = [p for p in unique if p not in set(excluded)]
+    unique = [p for p in unique if os.path.isfile(p)]
     if len(unique) > MAX_LOG_FILES:
         print(f"[warn] {len(unique)} files matched {spec!r}; tailing only the first {MAX_LOG_FILES} "
               f"(raise MAX_LOG_FILES if that's wrong)", file=sys.stderr)
@@ -707,6 +726,38 @@ def tail_all_logs(paths, state, total_budget):
     files_state = state.setdefault("files", {})
     if not paths:
         return {}
+
+    # Rolled-over archives are the hazard here, not live logs. A typical Mule
+    # log directory is mostly 10MB archives (app-1.log, app-2.log, ... or
+    # app.log.2026-09-21) that will never be appended to again. Starting a
+    # newly-DISCOVERED file at offset 0 would ingest all of them from the top
+    # on first start - gigabytes of historical traffic counted as if it had
+    # just happened - and, under a %i scheme where rollover RENAMES files, it
+    # would re-ingest the same content every time it shifted index.
+    #
+    # So discovery is decided by mtime, which handles both schemes:
+    #   * an archive has an old mtime (a rename preserves it) -> skip its
+    #     history by starting at its current end; it never grows again, so
+    #     nothing is lost;
+    #   * a freshly rolled LIVE file has a recent mtime -> start at 0 and
+    #     read it whole, so nothing written between rollover and discovery
+    #     is missed.
+    for path in paths:
+        if path in files_state:
+            continue
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        stale = (time.time() - st.st_mtime) > NEW_FILE_MAX_AGE_SECONDS
+        files_state[path] = {
+            "offset": st.st_size if stale else 0,
+            "inode": getattr(st, "st_ino", None),
+        }
+        if stale:
+            print(f"[info] {os.path.basename(path)}: last written "
+                  f"{int((time.time() - st.st_mtime) / 60)} min ago, treating as a rotated archive - "
+                  f"skipping its {st.st_size / 1048576:.1f} MB of history, will read anything appended from now on")
 
     per_file = max(1, total_budget // len(paths))
     out = {}

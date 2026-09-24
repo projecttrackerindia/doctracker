@@ -184,6 +184,8 @@ access to the log directory.
 | `MAX_LINES_PER_CYCLE` | No | `20000` | Caps how many new log lines one poll cycle reads. If a backlog is bigger than this, the agent processes it in back-to-back bounded chunks (no sleep between them) instead of one unbounded blocking read — see "Scaling to high traffic volumes" below |
 | `LOG_GLOB_RESCAN_SECONDS` | No | `300` | How often `MULE_LOG_PATH` is re-expanded, to pick up newly deployed apps without a restart |
 | `MAX_LOG_FILES` | No | `200` | Safety valve for a glob that matches far more files than expected |
+| `NEW_FILE_MAX_AGE_SECONDS` | No | `3600` | A file first seen with an mtime older than this is treated as a rotated archive — its history is skipped rather than ingested as current traffic. `0` = always read new files from the top |
+| `MULE_LOG_EXCLUDE_PATTERN` | No | compressed + date-stamped archives | Regex of paths to ignore after globbing. See "Rotated archives are skipped" for the exact default and for the pattern to add when your rollover keeps a separate unnumbered live file |
 | `DOCTRACKER_WRITER_ID` | No | — | **Stable** id for this agent's segment when several agents write to one organisation (see "Running more than one agent"). Unset = whole-blob mode. Don't use the hostname |
 | `MAX_SOURCE_IPS_KEPT` | No | `50` | Distinct source IPs retained per endpoint after pruning |
 | `MAX_SOURCE_IPS_WATERMARK` | No | `200` | The map grows to here, then is pruned back to `MAX_SOURCE_IPS_KEPT` by request count |
@@ -290,6 +292,39 @@ single file means **every other app's traffic is invisible, with no error to
 say so** — the counters simply never move for them. One agent tailing a glob
 is much cheaper than one agent process per file, and avoids them fighting
 over the same metrics blob.
+
+### Rotated archives are skipped, not ingested
+
+A real Mule log directory is mostly **rolled-over archives** — this
+deployment rolls at 10 MB into `s-genai-api-8.log`, `s-genai-api-9.log`, and
+so on, alongside date-stamped ones like
+`mule-app-s-rezolv-api.log.2026-09-21`. A glob matches all of them, and
+reading them from the top would ingest gigabytes of **historical** traffic
+and count it as if it had just happened.
+
+Discovery is therefore decided by **mtime**, which handles both rollover
+schemes correctly:
+
+| File | Behaviour |
+|---|---|
+| Archive (mtime older than `NEW_FILE_MAX_AGE_SECONDS`, default 1h) | History skipped — offset starts at its current end. It never grows again, so nothing is lost |
+| Freshly rolled live file (recent mtime) | Read from the top, so nothing written between the rollover and the agent noticing it is missed |
+| Archive renamed up an index by a `%i` rollover | mtime is preserved by a rename, so it's still recognised as an archive and **not re-counted** |
+| `*.gz`, `*.zip`, `*.log.YYYY-MM-DD` | Excluded outright by `MULE_LOG_EXCLUDE_PATTERN` |
+
+The agent prints one line per skipped archive on first start, saying how much
+history it ignored, so this is visible rather than silent.
+
+**If your rollover uses a separate unnumbered live file** (log4j2 `%i` with
+`fileName=app.log` and `filePattern=app-%i.log`), exclude the numbered ones
+so only the live file is tailed:
+
+```bash
+MULE_LOG_EXCLUDE_PATTERN='-\d+\.log$|\.gz$|\.log\.\d'
+```
+
+Numeric suffixes are **not** excluded by default, because some real Mule apps
+genuinely end in a digit and silently dropping them would be worse.
 
 Each file gets its own read offset and inode, so rotation is detected per
 file. The glob is re-expanded every `LOG_GLOB_RESCAN_SECONDS` (default 300),

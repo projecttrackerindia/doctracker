@@ -120,6 +120,63 @@ try:
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
+print("Rotated archives vs live logs")
+# Mirrors the real FSBL layout: each app rolls at 10MB into app-N.log, so the
+# directory is mostly stale archives that must NEVER be ingested as current
+# traffic, plus one recently-written live file per app that must be read whole.
+tmp2 = tempfile.mkdtemp(prefix="doctracker-rotation-test-")
+try:
+    now = __import__("time").time()
+    apps = ["s-portal-customer-api", "s-insurance-api", "s-genai-api"]
+    archive_lines = live_lines = 0
+    for app in apps:
+        for idx in (1, 2, 3):                       # stale archives, rolled yesterday
+            p = os.path.join(tmp2, "%s-%d.log" % (app, idx))
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(req_line(i, "/api/%s/op" % app) for i in range(500)) + "\n")
+            archive_lines += 500
+            old = now - 86400 - idx * 3600
+            os.utime(p, (old, old))
+        p = os.path.join(tmp2, "%s-4.log" % app)     # live, rolled 2 minutes ago
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(req_line(i, "/api/%s/op" % app) for i in range(120)) + "\n")
+        live_lines += 120
+        os.utime(p, (now - 120, now - 120))
+    for name in ("s-genai-api-0.log.gz", "mule-app-s-rezolv-api.log.2026-09-20"):
+        with open(os.path.join(tmp2, name), "w", encoding="utf-8") as fh:
+            fh.write("x")
+
+    agent.MULE_LOG_PATH = os.path.join(tmp2, "*")
+    resolved = agent.resolve_log_paths(agent.MULE_LOG_PATH)
+    check("compressed and date-stamped archives are excluded",
+          not any(p.endswith(".gz") or ".log.2026-" in p for p in resolved),
+          "got %s" % [os.path.basename(p) for p in resolved])
+
+    st2 = {"endpoints": {}, "health": {}, "files": {}}
+    out = agent.tail_all_logs(resolved, st2, 100000)
+    read = sum(len(v) for v in out.values())
+    check("stale archives are NOT ingested as current traffic", read == live_lines,
+          "read %d lines, expected %d live (%d archive lines on disk)" % (read, live_lines, archive_lines))
+
+    # A rollover creates a brand-new live file; its content is real and new.
+    with open(os.path.join(tmp2, "%s-5.log" % apps[0]), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(req_line(i, "/api/%s/op" % apps[0]) for i in range(77)) + "\n")
+    out2 = agent.tail_all_logs(agent.resolve_log_paths(agent.MULE_LOG_PATH), st2, 100000)
+    check("a freshly rolled live file is read from the top",
+          sum(len(v) for v in out2.values()) == 77,
+          "got %s" % {os.path.basename(k): len(v) for k, v in out2.items()})
+
+    # A "%i" rollover RENAMES archives up an index. mtime is preserved, so the
+    # renamed file must still be recognised as an archive, not re-counted.
+    os.rename(os.path.join(tmp2, "%s-3.log" % apps[1]),
+              os.path.join(tmp2, "%s-9.log" % apps[1]))
+    out3 = agent.tail_all_logs(agent.resolve_log_paths(agent.MULE_LOG_PATH), st2, 100000)
+    check("an archive renamed to a new index is not re-counted",
+          sum(len(v) for v in out3.values()) == 0,
+          "re-ingested %d line(s)" % sum(len(v) for v in out3.values()))
+finally:
+    shutil.rmtree(tmp2, ignore_errors=True)
+
 print("Bounded source-IP tracking")
 st = {"endpoints": {}, "health": {}}
 agent.aggregate(st, [obs("203.0.113.%d" % (i % 254) if i < 254 else "198.51.100.%d" % (i % 254))
