@@ -421,7 +421,12 @@ function renderLogVolumeAndLevelsSection(agentHealth){
 
   const volumeHtml = (bucketed && bucketed.totalLines > 0) ? (()=>{
     const max = Math.max(...bucketed.counts, 1);
-    const bars = bucketed.counts.map((c,i)=>`<div class="obs-vol-bar${i>=bucketed.counts.length-3?' hot':''}" style="height:${Math.max(3, Math.round(c/max*100))}%;" title="${Math.round(c).toLocaleString()} log line(s)"></div>`).join('');
+    const bucketMs = (bucketed.maxTs - bucketed.minTs) / bucketed.counts.length;
+    const bars = bucketed.counts.map((c,i)=>{
+      const bucketStart = formatDateTime(new Date(bucketed.minTs + i * bucketMs).toISOString());
+      const bucketEnd = formatDateTime(new Date(bucketed.minTs + (i + 1) * bucketMs).toISOString());
+      return `<div class="obs-vol-bar${i>=bucketed.counts.length-3?' hot':''}" style="height:${Math.max(3, Math.round(c/max*100))}%;" title="${Math.round(c).toLocaleString()} log line(s) — ${bucketStart} to ${bucketEnd}"></div>`;
+    }).join('');
     return `<div class="obs-vol-chart">${bars}</div>
       <div class="obs-vol-axis"><span>${formatDateTime(new Date(bucketed.minTs).toISOString())}</span><span>${formatDateTime(new Date(bucketed.maxTs).toISOString())}</span></div>`;
   })() : `<div class="empty-field" style="padding:6px 0;">Not enough samples yet — one is taken per push, so this fills in once the agent has pushed at least twice.</div>`;
@@ -539,7 +544,12 @@ function renderHostHealthSection(agentHealth){
 
   const latest = samples[samples.length - 1];
   const intervalSec = (agentHealth && agentHealth.hostSampleIntervalSeconds) || 60;
-  const cpuSeries = samples.map(s=>s.cpuPct).filter(v=>typeof v === 'number');
+  // Kept as {cpuPct, at} pairs, not a bare number array, so the sparkline
+  // below can show each bar's OWN sample time on hover - a plain
+  // samples.map(cpuPct).filter(...) would silently desync value from
+  // timestamp the moment the first (nullable) sample gets filtered out.
+  const cpuSamples = samples.filter(s=>typeof s.cpuPct === 'number');
+  const cpuSeries = cpuSamples.map(s=>s.cpuPct);
   const memSeries = samples.map(s=>s.memPct).filter(v=>typeof v === 'number');
 
   const peak = arr => arr.length ? Math.max(...arr) : null;
@@ -573,11 +583,11 @@ function renderHostHealthSection(agentHealth){
   // one sitting under a flat line.
   const spark = cpuSeries.length > 1 ? (()=>{
     const maxV = Math.max(...cpuSeries, 1);
-    const trimmed = cpuSeries.slice(-48);
-    const bars = trimmed.map((v,i)=>`<div class="obs-vol-bar${i>=trimmed.length-3?' hot':''}" style="height:${Math.max(3, Math.round(v/maxV*100))}%;background:var(${pressureVar(v)});" title="${v}% CPU"></div>`).join('');
-    const firstAt = samples[Math.max(0, samples.length - trimmed.length)].at;
+    const trimmed = cpuSamples.slice(-48);
+    const bars = trimmed.map((s,i)=>`<div class="obs-vol-bar${i>=trimmed.length-3?' hot':''}" style="height:${Math.max(3, Math.round(s.cpuPct/maxV*100))}%;background:var(${pressureVar(s.cpuPct)});" title="${s.cpuPct}% CPU — ${formatDateTime(new Date(s.at*1000).toISOString())}"></div>`).join('');
+    const firstAt = trimmed[0].at;
     return `<div class="section-title" style="margin-top:18px;">CPU over time</div>
-      <div class="hint" style="margin-top:-4px;">One sample per poll cycle (~${intervalSec}s), newest at the right</div>
+      <div class="hint" style="margin-top:-4px;">One sample per poll cycle (~${intervalSec}s), newest at the right — hover a bar for its exact time</div>
       <div class="obs-vol-chart" style="height:64px;">${bars}</div>
       <div class="obs-vol-axis"><span>${formatDateTime(new Date(firstAt*1000).toISOString())}</span><span>${formatDateTime(new Date(latest.at*1000).toISOString())}</span></div>`;
   })() : '';
