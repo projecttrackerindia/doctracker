@@ -849,10 +849,24 @@ router.delete('/projects/:id/access/:userId', async (req, res) => {
 // DELETE /api/workspace/projects/:id — owner only.
 router.delete('/projects/:id', async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      'DELETE FROM projects WHERE id = $1 AND owner_id = $2 RETURNING id',
-      [req.params.id, req.authUser.sub]
+    // Ownership alone (the old check: owner_id = the deleting user) leaves
+    // no human able to delete a project a SERVICE ACCOUNT created - the SIT
+    // auto-discovery agent's projects are all owned by svc-doc-agent, so no
+    // admin could ever clean one up. Same owner-or-admin rule
+    // requireOwnerOrAdmin() above already applies to managing a project's
+    // access grants; deleting is at least as sensitive, so it gets the same
+    // bar rather than a stricter one that would strand these permanently.
+    const { rows: existingRows } = await pool.query(
+      'SELECT id, owner_id, organisation FROM projects WHERE id = $1', [req.params.id]
     );
+    if (!existingRows.length || existingRows[0].organisation !== req.authUser.organisation) {
+      return res.status(404).json({ error: 'Project not found, or you are not the owner.' });
+    }
+    const project = existingRows[0];
+    if (project.owner_id !== req.authUser.sub && req.authUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Only the project owner or an Admin can delete this project.' });
+    }
+    const { rows } = await pool.query('DELETE FROM projects WHERE id = $1 RETURNING id', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Project not found, or you are not the owner.' });
     await cache.invalidateOrg(req.authUser.organisation);
     res.json({ ok: true });
