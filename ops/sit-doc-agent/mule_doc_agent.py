@@ -129,7 +129,14 @@ DOCTRACKER_USERNAME = os.environ.get("DOCTRACKER_USERNAME", "svc-doc-agent")
 DOCTRACKER_PASSWORD = os.environ.get("DOCTRACKER_PASSWORD")  # required for a real (non-dry-run) push
 
 PROJECT_ID = os.environ.get("DOCTRACKER_PROJECT_ID", "sitautodisc1")
-PROJECT_NAME = "SIT Auto-Discovery - unreviewed"
+# Was a fixed "SIT Auto-Discovery - unreviewed" string, which is misleading
+# the moment a second agent runs against a different environment (e.g. UAT)
+# under its own DOCTRACKER_PROJECT_ID - its project would still be named
+# "SIT ..." while actually holding UAT data. Computed lazily in
+# build_project() from ENVIRONMENT (defined further below) rather than as a
+# module constant here, since ENVIRONMENT isn't known yet at this point in
+# the file.
+DEFAULT_PROJECT_NAME = "SIT Auto-Discovery - unreviewed"
 
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "60"))
 PUSH_INTERVAL_SECONDS = int(os.environ.get("PUSH_INTERVAL_SECONDS", "900"))  # 15 min batches, not per-line
@@ -1885,7 +1892,8 @@ def build_project(state, existing_project=None):
 
     project = dict(existing_project or {})
     project.update({
-        "id": PROJECT_ID, "name": PROJECT_NAME,
+        "id": PROJECT_ID,
+        "name": f"{ENVIRONMENT} Auto-Discovery - unreviewed" if ENVIRONMENT else DEFAULT_PROJECT_NAME,
         "description": ("Auto-discovered from SIT server logs by an unattended agent (server/totp-style zero-LLM "
                          "design - see AGENT_README.md). Nothing here is reviewed. Treat every field/description/"
                          "requirement as a draft only, and promote individual endpoints into a real project once "
@@ -1897,7 +1905,20 @@ def build_project(state, existing_project=None):
                                           "requestParams": [], "responseParams": [], "requestExample": "",
                                           "responseExample": "", "includeInDocs": True, "includeInSwagger": False},
         "notes": f"Last updated by svc-doc-agent at {now_iso}. {len(endpoints)} endpoint(s) discovered so far.",
-        "lifecycle": "SIT", "owner": "svc-doc-agent", "team": "MULESOFT",
+        # Which environment this project's endpoints were physically observed
+        # in. DocTracker's own "environment" concept (the header selector) is
+        # a documentation-REVIEW stage - a project's endpoints only appear
+        # there once someone promotes them through the Release Pipeline. That
+        # makes sense for hand-written docs, but is backwards for auto-
+        # discovery: these endpoints aren't a draft awaiting review, they are
+        # an observed fact about what's running in SIT right now. The client
+        # (public/js/studio/05-util.js, viewEndpoints()) uses this field to
+        # show a discovery project's content directly under the matching
+        # environment without requiring promotion - but ONLY that one
+        # environment, never as a blanket "show everywhere": a SIT discovery
+        # must not leak into someone's PROD view.
+        "discoveryEnvironment": ENVIRONMENT or project.get("discoveryEnvironment") or None,
+        "lifecycle": ENVIRONMENT or project.get("lifecycle") or "SIT", "owner": "svc-doc-agent", "team": "MULESOFT",
         "requestFlowDirection": "2-way", "requestFlowLabel": "", "version": "0.0.1-draft",
         "termsOfService": "", "contact": {"name": "", "email": ""}, "license": {"name": "", "url": ""},
         "createdAt": project.get("createdAt") or now_iso, "updatedAt": now_iso,
@@ -2050,6 +2071,32 @@ def start_local_server(html_path, port):
 # ============================================================================
 # Main loop
 # ============================================================================
+def project_environment_conflict(existing_project, this_environment):
+    """Non-None (the stored value) if `existing_project` was last written by
+    an agent declaring a DIFFERENT environment than this one.
+
+    PUT /projects is a whole-project overwrite keyed only by
+    DOCTRACKER_PROJECT_ID - unlike endpoint-metrics, which segments by
+    writerId precisely so multiple agents can never clobber each other. A
+    second agent (say, for UAT) left at the default DOCTRACKER_PROJECT_ID
+    would silently overwrite this project's entire 400+ endpoint list on its
+    very first push, and the next SIT push would silently overwrite it back
+    - alternating destructively, forever, with no error either side would
+    ever see. This is the same class of bug MAX_METRICS_WRITERS/writerId
+    segmentation was built to prevent on the metrics side; the project push
+    never got the equivalent guard until now.
+
+    Returns None when there's nothing to compare (no existing project, no
+    recorded environment on it, or it already matches) - i.e. "safe to
+    push"."""
+    if not isinstance(existing_project, dict):
+        return None
+    prior = existing_project.get("discoveryEnvironment")
+    if not prior or not this_environment:
+        return None
+    return prior if str(prior).strip().lower() != str(this_environment).strip().lower() else None
+
+
 def seed_state_from_history(state, log_paths, max_lines):
     """One-time backfill of the endpoint INVENTORY from existing log history.
 
@@ -2434,16 +2481,33 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
                     require_environment()
                     existing = client.get_workspace()
                     existing_project = existing.get("projects", {}).get(PROJECT_ID)
-                    project = build_project(state, existing_project)
-                    if existing_project:
-                        project["_rev"] = existing_project.get("_rev")
-                    client.push_project(project)
+                    conflict = project_environment_conflict(existing_project, ENVIRONMENT)
+                    if conflict:
+                        # Refuse rather than silently overwrite another
+                        # environment's entire endpoint list - see
+                        # project_environment_conflict()'s docstring. Metrics
+                        # still push below: those are already writer-segmented
+                        # and safe regardless of this conflict.
+                        print(f"[error] DOCTRACKER_PROJECT_ID={PROJECT_ID!r} was last written by an agent "
+                              f"declaring environment {conflict!r}, but this agent declares "
+                              f"{ENVIRONMENT!r}. NOT pushing the project - that would overwrite "
+                              f"{conflict!r}'s endpoints. Set a distinct DOCTRACKER_PROJECT_ID for this "
+                              f"environment (e.g. append -{ENVIRONMENT.lower()}) and restart.",
+                              file=sys.stderr)
+                        health["lastPushOk"] = False
+                        health["lastError"] = (f"Project id clash: {PROJECT_ID} belongs to {conflict}, "
+                                                f"not {ENVIRONMENT}. Project push skipped.")[:500]
+                    else:
+                        project = build_project(state, existing_project)
+                        if existing_project:
+                            project["_rev"] = existing_project.get("_rev")
+                        client.push_project(project)
+                        health["lastPushOk"] = True
+                        health["lastError"] = None
                     # The revision read in the SAME get_workspace() call above,
                     # so the server can tell whether anything changed the blob
                     # between that read and this write.
                     client.push_endpoint_metrics(metrics_payload, existing.get("endpointMetricsRev"))
-                    health["lastPushOk"] = True
-                    health["lastError"] = None
                 except Exception as e:
                     print(f"[error] push failed, will retry next cycle: {e}", file=sys.stderr)
                     health["lastPushOk"] = False

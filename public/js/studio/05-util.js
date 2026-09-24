@@ -287,6 +287,19 @@ function snapshotEntry(projId){
 // whatever's frozen in that stage's snapshot (empty array while it loads).
 function viewEndpoints(proj){
   if(isViewingDraftEnv()) return proj.endpoints;
+  // Auto-discovery bypass: a discovery agent's endpoints are an observed
+  // fact about what's running in an environment, not a documentation draft
+  // awaiting Release Pipeline sign-off - requiring promotion before
+  // DocTracker will even ADMIT an endpoint exists in SIT is backwards for
+  // something a log agent watched happen in SIT. proj.discoveryEnvironment
+  // is set by the agent itself (mule_doc_agent.py's build_project) to
+  // whichever DOCTRACKER_ENVIRONMENT it declared, so this only bypasses
+  // promotion for the ONE environment the endpoints actually came from -
+  // never a blanket "show this project everywhere," which would leak a SIT
+  // discovery into someone's PROD view.
+  if(proj.discoveryEnvironment && String(proj.discoveryEnvironment).trim().toLowerCase() === String(state.env||'').trim().toLowerCase()){
+    return proj.endpoints;
+  }
   const entry = snapshotEntry(proj.id);
   return entry.status === 'ready' ? (entry.endpoints || []) : [];
 }

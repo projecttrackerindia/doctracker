@@ -86,6 +86,51 @@ try:
 finally:
     agent.ENVIRONMENT = saved
 
+print("A project remembers which environment discovered it")
+saved_env = agent.ENVIRONMENT
+try:
+    agent.ENVIRONMENT = "SIT"
+    st = {"endpoints": {}, "health": {}}
+    agent.aggregate(st, [{"method": "GET", "path": "/x", "statusCode": 200,
+                          "correlationId": "c-1", "body": None, "app": "x-api"}])
+    proj = agent.build_project(st)
+    check("build_project stamps the project with the agent's environment",
+          proj.get("discoveryEnvironment") == "SIT", "got %r" % proj.get("discoveryEnvironment"))
+    check("the project name reflects the environment, not a fixed 'SIT' string",
+          proj.get("name") == "SIT Auto-Discovery - unreviewed", "got %r" % proj.get("name"))
+    check("lifecycle reflects the environment too", proj.get("lifecycle") == "SIT",
+          "got %r" % proj.get("lifecycle"))
+
+    agent.ENVIRONMENT = "UAT"
+    proj2 = agent.build_project(st)
+    check("a different agent's project is named for ITS environment",
+          proj2.get("name") == "UAT Auto-Discovery - unreviewed", "got %r" % proj2.get("name"))
+finally:
+    agent.ENVIRONMENT = saved_env
+
+print("The project push refuses to overwrite a different environment's project")
+# PUT /projects is a whole-project overwrite keyed only by
+# DOCTRACKER_PROJECT_ID - unlike endpoint-metrics, which segments by
+# writerId precisely so agents can't clobber each other. A second agent left
+# at the default DOCTRACKER_PROJECT_ID would otherwise silently erase every
+# endpoint a first agent had discovered, and the two would alternately wipe
+# each other out forever with no error on either side.
+check("no existing project is never a conflict",
+      agent.project_environment_conflict(None, "SIT") is None)
+check("an existing project with no recorded environment is never a conflict "
+      "(pre-upgrade projects must not suddenly start refusing to push)",
+      agent.project_environment_conflict({"discoveryEnvironment": None}, "SIT") is None)
+check("the SAME environment pushing again is never a conflict",
+      agent.project_environment_conflict({"discoveryEnvironment": "SIT"}, "SIT") is None)
+check("matching is case-insensitive",
+      agent.project_environment_conflict({"discoveryEnvironment": "sit"}, "SIT") is None)
+check("a DIFFERENT environment's project is a real conflict",
+      agent.project_environment_conflict({"discoveryEnvironment": "UAT"}, "SIT") == "UAT",
+      "got %r" % agent.project_environment_conflict({"discoveryEnvironment": "UAT"}, "SIT"))
+check("no environment declared on this side is never treated as a conflict "
+      "(require_environment() is what refuses that case, not this function)",
+      agent.project_environment_conflict({"discoveryEnvironment": "UAT"}, "") is None)
+
 print("The server composes per environment and never across")
 # Asserted against the real route source rather than a copy of the rule, so
 # this fails if someone reverts the composition to a single pooled pass.
@@ -103,6 +148,20 @@ check("the environment label is validated server-side, not trusted as sent",
       "A-Za-z0-9 _-]{0,31}" in ws)
 check("GET exposes the environment names for the selector",
       "environmentNames" in ws and "defaultEnvironment" in ws)
+
+print("Auto-discovered endpoints bypass promotion for their OWN environment only")
+util = open(os.path.join(REPO, "public", "js", "studio", "05-util.js"), encoding="utf-8").read()
+check("viewEndpoints checks discoveryEnvironment before falling back to the snapshot gate",
+      "proj.discoveryEnvironment" in util and "toLowerCase() === String(state.env" in util)
+seg = util[util.index("function viewEndpoints("):]
+seg = seg[:seg.index("\nfunction invalidateSnapshotCache(")]
+check("the draft environment is still checked FIRST, unconditionally",
+      seg.index("isViewingDraftEnv()") < seg.index("discoveryEnvironment"),
+      "the bypass must not run ahead of the existing draft check")
+check("the bypass returns the raw endpoint list, matching the draft-env return",
+      "return proj.endpoints;" in seg)
+check("a non-matching environment still falls through to the snapshot/promotion gate",
+      "snapshotEntry(proj.id)" in seg)
 
 print("The page shows which environment a number came from")
 obs = open(os.path.join(REPO, "public", "js", "studio", "23-observability.js"), encoding="utf-8").read()
