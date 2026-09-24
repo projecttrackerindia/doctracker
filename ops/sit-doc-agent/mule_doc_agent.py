@@ -150,6 +150,10 @@ MAX_TRACKED_ENDPOINTS = int(os.environ.get("MAX_TRACKED_ENDPOINTS", "500"))
 # IPs) instead of on every insert once full.
 MAX_SOURCE_IPS_KEPT = int(os.environ.get("MAX_SOURCE_IPS_KEPT", "50"))
 MAX_SOURCE_IPS_WATERMARK = int(os.environ.get("MAX_SOURCE_IPS_WATERMARK", "200"))
+# Recently-counted Mule `event:` correlation ids, so the many log lines that
+# one request produces are counted as one request. Sized for roughly a
+# cycle's worth of traffic plus margin - see aggregate().
+MAX_SEEN_EVENTS = int(os.environ.get("MAX_SEEN_EVENTS", "20000"))
 
 # --- Capture mode ------------------------------------------------------------
 # "aggregate" (the default, and what every earlier version of this agent
@@ -872,6 +876,74 @@ def migrate_single_file_state(state, paths):
 # ============================================================================
 # Line parsing
 # ============================================================================
+# --- Style D: APIkit flow names -------------------------------------------
+# Mule does NOT log a line per HTTP request by default, so "HTTP Listener
+# received: POST /x" (Style B) simply never appears in most deployments.
+# What DOES appear, on EVERY line a flow logs while handling a request, is
+# the APIkit flow name inside the thread name:
+#
+#   [[MuleRuntime].uber.37: [common-jwt-auth].post:\token:application\json:
+#    jwt-token-api-config/processors/2.CPU_INTENSIVE @52800c94]
+#    [processor: common-logger-flow/processors/0; event: ea4101a1-b7d2-...]
+#
+# That gives method (post), path (\token) and, from `event:`, a correlation
+# id. The same name also appears at startup as
+# "Starting flow: post:\userEncrypt:application\json:jwt-token-api-config",
+# which enumerates an app's whole API surface before it serves any traffic.
+#
+# APIkit writes paths with backslashes and (param) placeholders:
+#   post:\customers\(customerId)\orders  ->  POST /customers/{customerId}/orders
+APIKIT_FLOW_PATTERN = re.compile(
+    r'(?<![A-Za-z0-9_])(get|post|put|patch|delete|head|options):\\([^\s:\]/]*)',
+    re.IGNORECASE,
+)
+# The `event:` field is Mule's own correlation id. It is the ONLY reliable way
+# to tell how many REQUESTS produced a set of lines - one request commonly
+# logs a dozen lines, all sharing this id, so counting lines would overcount
+# traffic by an order of magnitude.
+MULE_EVENT_PATTERN = re.compile(r'event:\s*([0-9a-fA-F][0-9a-fA-F-]{7,})')
+# Startup inventory line.
+STARTING_FLOW_PATTERN = re.compile(r'Starting flow:\s*(\S+)')
+
+
+def apikit_path_to_uri(raw):
+    """`\\customers\\(customerId)\\orders` -> `/customers/{customerId}/orders`."""
+    if not raw:
+        return "/"
+    path = raw.replace("\\", "/")
+    path = re.sub(r'\(([^)]+)\)', r'{\1}', path)
+    if not path.startswith("/"):
+        path = "/" + path
+    return path
+
+
+def parse_apikit_line(stripped):
+    """Style D - see APIKIT_FLOW_PATTERN. Returns an observation, or None.
+
+    `isInventory` marks a startup "Starting flow:" line: it proves the
+    endpoint EXISTS but represents no traffic, so aggregate() must not count
+    it as a request."""
+    m = APIKIT_FLOW_PATTERN.search(stripped)
+    if not m:
+        return None
+    # The flow name can appear with the path segment empty (`post:\`), which
+    # is APIkit's own root resource.
+    method = m.group(1).upper()
+    path = apikit_path_to_uri(m.group(2))
+    is_inventory = bool(STARTING_FLOW_PATTERN.search(stripped))
+    event_m = MULE_EVENT_PATTERN.search(stripped)
+    status_m = STATUS_CODE_PATTERN.search(stripped)
+    return {
+        "method": method,
+        "path": path,
+        "statusCode": int(status_m.group(1)) if status_m else None,
+        "correlationId": event_m.group(1) if event_m else None,
+        "body": None,
+        "isInventory": is_inventory,
+        "style": "apikit",
+    }
+
+
 def parse_line(line):
     """Returns a dict {method, path, statusCode, correlationId, body} or None
     if this line doesn't look like an HTTP call at all. `body` is only
@@ -913,7 +985,11 @@ def parse_line(line):
                 "correlationId": corr_m.group(1) if corr_m else None,
                 "body": None,  # plain-text lines essentially never carry a parseable body
             }
-    return None
+
+    # Style D last: it matches a substring of the thread name, so it must not
+    # pre-empt an explicit "HTTP Listener received:" line that carries a real
+    # status code and a fuller path.
+    return parse_apikit_line(stripped)
 
 
 # ============================================================================
@@ -934,7 +1010,39 @@ def aggregate(state, observations):
     endpoints = state.setdefault("endpoints", {})
     health = state.setdefault("health", {})
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    # Style D (APIkit thread names) matches EVERY line a flow logs while
+    # handling one request - commonly a dozen or more, all carrying the same
+    # `event:` id. Counting each as a request would inflate traffic by an
+    # order of magnitude, so each event id is counted once. The seen-list is
+    # persisted in state because a single request's lines routinely straddle
+    # two poll cycles, and it is capped so it can't grow without bound.
+    seen_events = state.setdefault("seenEvents", [])
+    seen_lookup = set(seen_events)
     for obs in observations:
+        counts_as_request = True
+        if obs.get("style") == "apikit":
+            if obs.get("isInventory"):
+                # A startup "Starting flow:" line proves the endpoint exists
+                # but represents no traffic whatsoever.
+                counts_as_request = False
+            else:
+                event_id = obs.get("correlationId")
+                if not event_id:
+                    # No event id means no way to tell this line apart from
+                    # the other lines of the same request. Register the
+                    # endpoint, but don't guess at a count.
+                    counts_as_request = False
+                else:
+                    dedup_key = "%s %s %s" % (obs["method"], obs["path"], event_id)
+                    if dedup_key in seen_lookup:
+                        counts_as_request = False
+                    else:
+                        seen_lookup.add(dedup_key)
+                        seen_events.append(dedup_key)
+                        if len(seen_events) > MAX_SEEN_EVENTS:
+                            dropped = seen_events[:len(seen_events) - MAX_SEEN_EVENTS]
+                            del seen_events[:len(seen_events) - MAX_SEEN_EVENTS]
+                            seen_lookup.difference_update(dropped)
         templated_path = templatize_path(obs["path"])
         key = f"{obs['method']} {templated_path}"
         if key not in endpoints and len(endpoints) >= MAX_TRACKED_ENDPOINTS:
@@ -959,7 +1067,14 @@ def aggregate(state, observations):
                 "responseFieldShapes": {}, "statusesWithErrorLikeFields": [],
                 "totalRequests": 0, "sourceIps": {}, "lastSeenAt": None,
             })
-        ep["totalRequests"] += 1
+        if counts_as_request:
+            ep["totalRequests"] += 1
+        else:
+            # Seen but not counted: a startup inventory line, or another line
+            # belonging to a request already counted. Tracked so the Agent
+            # Health card can show discovery is working even where traffic
+            # counts stay at zero.
+            ep["discoveredOnly"] = ep.get("discoveredOnly", 0) + 1
         # `now_iso` is formatted ONCE per aggregate() call, not once per
         # observation. At 800+ requests/sec that strftime+gmtime pair was one
         # of the hottest things in the whole agent, and every observation in
