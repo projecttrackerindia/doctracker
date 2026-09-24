@@ -1485,6 +1485,156 @@ pre.code-block{
 .obs-statusbreakdown-body{ flex:1; display:flex; flex-direction:column; justify-content:flex-start; gap:14px; margin-top:22px; }
 .section-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
 
+/* ---- Observability console: tabs, toolbar, charts -----------------------
+   The console had eleven stacked sections on one scroll, so the question you
+   opened it to answer was usually three screens down. These group them by
+   the question being asked (what is happening / what is slow / what broke /
+   raw evidence / is the collector alive) and keep one tab's worth on screen.
+   A side effect worth naming: panels of similar weight now sit together, so
+   the equal-height pairing problems that came from putting a paginated list
+   beside a four-row summary stop arising. */
+.obs-tabs{
+  display:flex; gap:2px; border-bottom:1px solid var(--border); margin:0 0 18px;
+  overflow-x:auto; scrollbar-width:none;
+}
+.obs-tabs::-webkit-scrollbar{ display:none; }
+.obs-tab{
+  appearance:none; background:transparent; border:none; border-bottom:2px solid transparent;
+  color:var(--text-faint); font:inherit; font-size:12.5px; font-weight:600;
+  padding:9px 14px; cursor:pointer; white-space:nowrap; transition:color .12s, border-color .12s;
+}
+.obs-tab:hover{ color:var(--text); }
+.obs-tab.active{ color:var(--accent); border-bottom-color:var(--accent); }
+.obs-tab-count{
+  display:inline-block; margin-left:6px; padding:1px 6px; border-radius:9px;
+  background:var(--surface-2); font-size:10px; font-weight:700; vertical-align:1px;
+}
+.obs-tab.active .obs-tab-count{ background:var(--accent-soft); color:var(--accent); }
+.obs-tab-count.crit{ background:var(--delete); color:#fff; }
+
+.obs-toolbar{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:16px;
+}
+.obs-toolbar-spacer{ flex:1 1 auto; }
+.obs-range-pills{ display:flex; gap:2px; background:var(--surface-2); border-radius:8px; padding:2px; }
+.obs-range-pill{
+  appearance:none; background:transparent; border:none; border-radius:6px;
+  color:var(--text-faint); font:inherit; font-size:11.5px; font-weight:600;
+  padding:5px 10px; cursor:pointer; white-space:nowrap;
+}
+.obs-range-pill:hover{ color:var(--text); }
+.obs-range-pill.active{ background:var(--surface); color:var(--accent); box-shadow:0 1px 2px rgba(0,0,0,.18); }
+.obs-custom-range{
+  display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--text-faint);
+}
+.obs-custom-range input[type="datetime-local"]{
+  background:var(--surface-2); border:1px solid var(--border); border-radius:6px;
+  color:var(--text); font:inherit; font-size:11.5px; padding:4px 7px;
+}
+.obs-env-select{
+  background:var(--surface-2); border:1px solid var(--border); border-radius:7px;
+  color:var(--text); font:inherit; font-size:11.5px; font-weight:600; padding:5px 9px; cursor:pointer;
+}
+.obs-coverage-note{ font-size:11px; color:var(--text-faint); }
+
+/* Live badge: this replaced a 60s poll, so the page has to say plainly
+   whether the stream is actually connected. A silent dead stream looks
+   exactly like "nothing is happening", which is the one thing an
+   observability page must never do. */
+.obs-live-badge{
+  display:inline-flex; align-items:center; gap:6px; font-size:10.5px; font-weight:800;
+  letter-spacing:.4px; color:var(--text-faint); font-family:var(--mono);
+}
+.obs-live-dot{ width:7px; height:7px; border-radius:50%; display:inline-block; }
+.obs-live-dot.pulsing{ animation:obsPulse 2s ease-in-out infinite; }
+@keyframes obsPulse{ 0%,100%{ opacity:1; } 50%{ opacity:.35; } }
+@media (prefers-reduced-motion: reduce){ .obs-live-dot.pulsing{ animation:none; } }
+
+.obs-chart-wrap{ width:100%; }
+.obs-chart{ width:100%; height:260px; display:block; overflow:visible; }
+.obs-chart-grid{ stroke:var(--border); stroke-width:1; vector-effect:non-scaling-stroke; }
+.obs-chart-ylabel{
+  fill:var(--text-faint); font-size:11px; text-anchor:end; font-family:var(--mono);
+}
+.obs-chart-ylabel-right{ text-anchor:start; }
+.obs-chart-errline{
+  fill:none; stroke:var(--st-5); stroke-width:2; vector-effect:non-scaling-stroke;
+  stroke-linejoin:round; stroke-linecap:round;
+}
+.obs-chart-hover{ fill:transparent; cursor:crosshair; }
+.obs-chart-hover:hover{ fill:var(--text); opacity:.06; }
+.obs-chart-axis{
+  display:flex; justify-content:space-between; font-size:10.5px; color:var(--text-faint);
+  font-family:var(--mono); margin-top:2px;
+}
+.obs-chart-empty{
+  padding:40px 12px; text-align:center; color:var(--text-faint); font-size:12px;
+}
+.obs-chart-legend{ display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; align-items:center; }
+.obs-legend-chip{
+  appearance:none; background:var(--surface-2); border:1px solid transparent; border-radius:999px;
+  color:var(--text-faint); font:inherit; font-size:11px; font-weight:600;
+  padding:3px 10px; display:inline-flex; align-items:center; gap:6px; cursor:pointer;
+}
+.obs-legend-chip:hover{ border-color:var(--border-strong); color:var(--text); }
+.obs-legend-chip i{ width:8px; height:8px; border-radius:2px; display:inline-block; }
+.obs-legend-chip.obs-legend-static{ cursor:default; background:transparent; }
+.obs-legend-chip.obs-legend-static:hover{ border-color:transparent; color:var(--text-faint); }
+.obs-legend-line{ width:12px !important; height:2px !important; border-radius:0 !important; background:var(--st-5); }
+
+.obs-histo{ display:flex; flex-direction:column; gap:7px; }
+.obs-histo-row{ display:grid; grid-template-columns:60px 1fr auto; align-items:center; gap:10px; }
+.obs-histo-label{ font-family:var(--mono); font-size:10.5px; color:var(--text-faint); text-align:right; }
+.obs-histo-marks{
+  display:flex; gap:16px; flex-wrap:wrap; margin-top:12px; padding-top:10px;
+  border-top:1px solid var(--border); font-size:11.5px; color:var(--text-faint); font-family:var(--mono);
+}
+.obs-histo-marks b{ color:var(--text); font-weight:700; }
+
+.obs-kpi-spark{ width:100%; height:24px; margin-top:8px; display:block; }
+.obs-kpi-spark polyline{ fill:none; stroke-width:1.6; vector-effect:non-scaling-stroke; }
+
+/* A panel whose rows lead somewhere. Without this, every panel looks equally
+   inert and nobody discovers that clicking a 5xx bar filters the log. */
+.obs-clickable{ cursor:pointer; }
+.obs-clickable:hover{ background:var(--surface-2); }
+.obs-drill-hint{
+  font-size:10.5px; color:var(--text-faint); font-style:italic;
+}
+.obs-active-filters{
+  display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:12px;
+}
+.obs-filter-chip{
+  display:inline-flex; align-items:center; gap:6px; background:var(--accent-soft); color:var(--accent);
+  border:none; border-radius:999px; font:inherit; font-size:11px; font-weight:700;
+  padding:4px 10px; cursor:pointer;
+}
+.obs-filter-chip:hover{ filter:brightness(1.1); }
+.obs-filter-chip .x{ font-weight:800; opacity:.8; }
+
+/* Empty states carry an action, not a paragraph. The old ones explained the
+   architecture at someone who just wanted to know why a box was blank. */
+.obs-empty{
+  display:flex; flex-direction:column; align-items:center; gap:8px;
+  padding:34px 16px; text-align:center;
+}
+.obs-empty-title{ font-size:13px; font-weight:700; color:var(--text); }
+.obs-empty-body{ font-size:11.5px; color:var(--text-faint); max-width:46ch; line-height:1.55; }
+.obs-empty-body code{
+  font-family:var(--mono); font-size:11px; background:var(--surface-2);
+  padding:1px 5px; border-radius:4px;
+}
+
+/* Wide tables scroll in their own container rather than making the whole page
+   scroll sideways. */
+.obs-table-scroll{ overflow-x:auto; margin-top:14px; }
+.obs-data-table{ font-size:12px; }
+.obs-data-table th, .obs-data-table td{ padding:9px 12px; white-space:nowrap; }
+/* tabular-nums so figures line up in a column instead of jittering row to row */
+.obs-data-table .num{ text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; }
+.obs-data-table th.num{ text-align:right; }
+.obs-data-table tbody tr.obs-clickable:hover td{ background:var(--accent-soft); }
+
 .kpi-grid{
   display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; margin-bottom:30px;
 }
@@ -4563,6 +4713,9 @@ const INITIAL_VIEW = __INITIAL_VIEW__;
 <script nonce="__CSP_NONCE__" src="/js/studio/20-export-pdf.js?v=__ASSET_VERSION__"></script>
 <script nonce="__CSP_NONCE__" src="/js/studio/21-events.js?v=__ASSET_VERSION__"></script>
 <script nonce="__CSP_NONCE__" src="/js/studio/22-init.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/24-obs-api.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/25-obs-charts.js?v=__ASSET_VERSION__"></script>
 <script nonce="__CSP_NONCE__" src="/js/studio/23-observability.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/studio/26-obs-console.js?v=__ASSET_VERSION__"></script>
 </body>
 </html>

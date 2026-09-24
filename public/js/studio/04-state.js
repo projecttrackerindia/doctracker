@@ -26,4 +26,16 @@ let state = {
   envMetricsStatus: 'idle',          // 'idle' | 'loading' | 'error' | 'ready'
   liveModeEnvs: [],                  // envIds this user may fire a REAL request against — see 22-init.js / server/routes/liveMode.js
   docBrowseEnvs: [],                 // envIds this user may browse docs for — separate grant from liveModeEnvs, see roleAllowedEnvs()
+
+  // ---- Observability console (time-series API — see 24-obs-api.js) ----
+  obsTab: 'overview',               // 'overview' | 'performance' | 'errors' | 'logs' | 'agent'
+  obsRange: { key: '24h' },         // { key } for a preset, or { from, to } ISO strings for a custom range
+  obsEnvironment: '',               // '' = follow state.env, '__all' = every environment, else a named one
+  obsData: null,                    // last obsLoadAll() result — { current, previous, series, endpoints, coverage }
+  obsStatus: 'idle',                // 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
+  obsError: '',                     // message shown when obsStatus === 'error'
+  obsFilters: {},                   // drill-down: { statusFamily, endpointId, clientIp, correlationId, minLatencyMs }
+  obsRecords: null,                 // last /records page — { records, total, limit, offset }
+  obsRecordsPage: 1,
+  obsEnvOptions: [],                // environments that have actually reported — GET /observability/environments
 };

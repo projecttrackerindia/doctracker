@@ -1784,6 +1784,16 @@ function renderObservability(main){
   const { endpoints: metrics, agentHealth, logRecords } = observabilityData();
   const fullCapture = logRecords && logRecords.length > 0;
 
+  // First visit to this page in a session kicks off the time-series load. It
+  // resolves into state.obsData and re-renders; until then (and permanently,
+  // for an org whose agent predates the rollup push) the original blob-backed
+  // console below is what renders. Deliberately not a flag day: the console
+  // must never show an empty page just because the backend moved ahead of the
+  // collector.
+  if(state.obsStatus === 'idle' && typeof obsLoad === 'function') obsLoad();
+
+  const useTimeSeries = typeof obsDataAvailable === 'function' && obsDataAvailable();
+
   const heroDesc = fullCapture
     ? `Real per-request records, auto-discovered from server logs — never written into documented endpoints. Credential-named fields always redacted.`
     : `Auto-discovered from server logs, never written into documented endpoints. Field values aren't captured in this mode — only counts and structure.`;
@@ -1793,10 +1803,19 @@ function renderObservability(main){
       <h1>Observability</h1>
       <p>${heroDesc}</p>
     </div>
-    ${renderObsEnvironmentBar()}
+    ${useTimeSeries ? '' : renderObsEnvironmentBar()}
     <div id="obsBody"></div>
   `;
 
-  renderConsole(document.getElementById('obsBody'), metrics, agentHealth, logRecords);
-  startObsAutoRefresh();
+  const body = document.getElementById('obsBody');
+  if(useTimeSeries){
+    renderObsConsoleV2(body, agentHealth);
+    // The stream replaces the 60s poll entirely; stop it so a page that is
+    // already live-updating is not also refetching the whole workspace.
+    stopObsAutoRefresh();
+    obsStartLive(()=> obsLoad({ quiet: true }));
+  }else{
+    renderConsole(body, metrics, agentHealth, logRecords);
+    startObsAutoRefresh();
+  }
 }
