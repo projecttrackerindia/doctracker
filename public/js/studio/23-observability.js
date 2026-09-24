@@ -51,7 +51,9 @@ function obsActiveEnvironment(){
 
 function setObsEnvironment(name){
   obsEnvironment = name;
-  render();
+  // renderMain(), not a bare render() - there is no such global. The sidebar
+  // is environment-independent, so only the main pane needs redrawing.
+  renderMain();
 }
 
 function observabilityData(){
@@ -83,12 +85,12 @@ function renderObsEnvironmentBar(){
   const active = obsActiveEnvironment();
   if(!names.length) return '';
   if(names.length === 1){
-    return `<div class="obs-env-bar obs-env-bar-single">Showing <strong>${esc(names[0])}</strong></div>`;
+    return `<div class="obs-env-bar obs-env-bar-single">Showing <strong>${escapeHtml(names[0])}</strong></div>`;
   }
   return `<div class="obs-env-bar" role="group" aria-label="Environment">
     <span class="obs-env-label">Environment</span>
     ${names.map(n => `<button type="button" class="obs-env-btn${n === active ? ' active' : ''}"
-       data-obs-env="${esc(n)}" aria-pressed="${n === active}">${esc(n)}</button>`).join('')}
+       data-obs-env="${escapeHtml(n)}" aria-pressed="${n === active}">${escapeHtml(n)}</button>`).join('')}
     <span class="obs-env-note">Figures are never summed across environments.</span>
   </div>`;
 }
