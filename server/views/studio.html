@@ -1356,6 +1356,13 @@ pre.code-block{
 .obs-status-legend{ display:flex; gap:14px; flex-wrap:wrap; font-size:11px; color:var(--text-faint); }
 .obs-status-legend .k{ display:inline-flex; align-items:center; gap:5px; }
 .obs-status-legend i{ width:8px; height:8px; border-radius:2px; display:inline-block; }
+/* One ranked bar per status family (2xx/3xx/4xx/5xx), same visual
+   language as Top source IPs' bars (.obs-ip-bar-track/.obs-ip-bar/
+   .obs-ip-count, reused as-is) so the page doesn't teach two different
+   bar conventions. */
+.obs-statusfam-bars{ display:flex; flex-direction:column; gap:9px; }
+.obs-statusfam-row{ display:grid; grid-template-columns:32px 1fr auto; align-items:center; gap:10px; }
+.obs-statusfam-label{ font-family:var(--mono); font-size:11px; font-weight:800; }
 
 .obs-alert-row{ display:flex; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); font-size:12px; align-items:flex-start; cursor:pointer; }
 .obs-alert-row:last-child{ border-bottom:none; }
