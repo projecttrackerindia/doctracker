@@ -34,13 +34,37 @@ if [ ! -f agent.env ]; then
   echo "agent.env not found in $DIR - nothing to run with." >&2
   exit 1
 fi
-# Values in agent.env must be quoted; an unquoted regex containing | and ( )
-# is a shell syntax error and the variable silently never gets set.
-if ! ( set -a; . ./agent.env; set +a ) 2>/dev/null; then
-  echo "agent.env is not valid shell. Every value needs single quotes, e.g." >&2
-  echo "  MULE_LOG_EXCLUDE_PATTERN='-\\d+\\.log\$|\\.(gz|zip)\$'" >&2
+# Two separate checks, because they catch different corruption.
+#
+# `bash -n` catches a PARSE error - an unquoted regex containing | and ( ).
+# Sourcing in a subshell does NOT reliably catch this: the error prints but
+# the subshell can still exit 0, so the run carries on with the variable
+# unset and only a message scrolling past to say so.
+if ! bash -n agent.env 2>/tmp/agentenv.$$; then
+  echo "agent.env is not valid shell:" >&2
+  sed 's/^/    /' /tmp/agentenv.$$ >&2
+  rm -f /tmp/agentenv.$$
+  echo "Rebuild it:  bash setup-env.sh 'the-password'" >&2
   exit 1
 fi
+rm -f /tmp/agentenv.$$
+
+# A line-shape check catches text that parses fine but is not config at all -
+# e.g. a shell prompt replayed into the file by a mangled paste, which shows
+# up later as "command not found" and leaves settings missing.
+BAD=$(grep -vE '^[[:space:]]*(#|$)|^[A-Za-z_][A-Za-z0-9_]*=' agent.env | head -3)
+if [ -n "$BAD" ]; then
+  echo "agent.env has lines that are not KEY=VALUE:" >&2
+  printf '    %s\n' "$BAD" >&2
+  echo "Rebuild it:  bash setup-env.sh 'the-password'" >&2
+  exit 1
+fi
+
+# Start from a clean slate so an exported leftover from an earlier
+# `. ./agent.env` in the calling shell cannot mask a broken file.
+unset DOCTRACKER_ENVIRONMENT DOCTRACKER_WRITER_ID DOCTRACKER_USERNAME \
+      DOCTRACKER_PASSWORD DOCTRACKER_PROJECT_ID MULE_LOG_PATH \
+      MULE_LOG_EXCLUDE_PATTERN AGENT_STATE_FILE
 set -a; . ./agent.env; set +a
 
 # Print what was loaded WITHOUT printing the password itself.
@@ -49,7 +73,11 @@ echo "writer id   : ${DOCTRACKER_WRITER_ID:-<unset>}"
 echo "username    : ${DOCTRACKER_USERNAME:-<unset>}"
 echo "project     : ${DOCTRACKER_PROJECT_ID:-<unset>}"
 echo "password    : ${#DOCTRACKER_PASSWORD} chars"
-echo "exclude set : ${MULE_LOG_EXCLUDE_PATTERN:+yes}${MULE_LOG_EXCLUDE_PATTERN:-NO - archives will be tailed}"
+if [ -n "${MULE_LOG_EXCLUDE_PATTERN:-}" ]; then
+  echo "exclude     : ${MULE_LOG_EXCLUDE_PATTERN}"
+else
+  echo "exclude     : NOT SET - rotated archives will be tailed too"
+fi
 
 if [ -z "${DOCTRACKER_ENVIRONMENT:-}" ]; then
   echo "DOCTRACKER_ENVIRONMENT is empty - a real push would refuse to run." >&2
