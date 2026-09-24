@@ -182,6 +182,11 @@ access to the log directory.
 | `POLL_INTERVAL_SECONDS` | No | `60` | How often it checks the log file for new lines |
 | `PUSH_INTERVAL_SECONDS` | No | `900` (15 min) | How often it batches everything discovered and pushes to DocTracker — deliberately NOT per-line, to keep write volume low |
 | `MAX_LINES_PER_CYCLE` | No | `20000` | Caps how many new log lines one poll cycle reads. If a backlog is bigger than this, the agent processes it in back-to-back bounded chunks (no sleep between them) instead of one unbounded blocking read — see "Scaling to high traffic volumes" below |
+| `LOG_GLOB_RESCAN_SECONDS` | No | `300` | How often `MULE_LOG_PATH` is re-expanded, to pick up newly deployed apps without a restart |
+| `MAX_LOG_FILES` | No | `200` | Safety valve for a glob that matches far more files than expected |
+| `DOCTRACKER_WRITER_ID` | No | — | **Stable** id for this agent's segment when several agents write to one organisation (see "Running more than one agent"). Unset = whole-blob mode. Don't use the hostname |
+| `MAX_SOURCE_IPS_KEPT` | No | `50` | Distinct source IPs retained per endpoint after pruning |
+| `MAX_SOURCE_IPS_WATERMARK` | No | `200` | The map grows to here, then is pruned back to `MAX_SOURCE_IPS_KEPT` by request count |
 | `MAX_TRACKED_ENDPOINTS` | No | `500` | Caps how many distinct method+path combinations are tracked. Past this cap, further new combinations are folded into one shared "OVERFLOW" bucket (still counted, just not broken out individually) instead of growing memory/state.json without bound |
 | `CAPTURE_MODE` | No | `aggregate` | `aggregate` (default): counts/types only, never a real field value. `full`: also captures real per-request records including real field values (credential-named fields always redacted) — see "Capture mode" below, this is a deliberate opt-in, not a default to leave on |
 | `MAX_LOG_RECORDS_PER_ENDPOINT` | No | `200` | Only applies when `CAPTURE_MODE=full`. Per-endpoint ring-buffer cap on stored per-request records, oldest dropped first |
@@ -271,7 +276,72 @@ attribution. The agent sits outside the JVM and outside the request path, so
 it cannot measure any of them; a guessed heap number displayed next to real
 CPU numbers would undermine the real ones.
 
-## Only one agent may run per organisation
+## Tailing many log files (one agent, many APIs)
+
+`MULE_LOG_PATH` accepts **a path, a glob, or a comma-separated list**:
+
+```bash
+MULE_LOG_PATH=/opt/mule/logs/*.log
+MULE_LOG_PATH=/opt/mule/logs/orders-api.log,/opt/mule/logs/jwt-token-api.log
+```
+
+A deployment with many Mule apps writes one log per app. Pointing this at a
+single file means **every other app's traffic is invisible, with no error to
+say so** — the counters simply never move for them. One agent tailing a glob
+is much cheaper than one agent process per file, and avoids them fighting
+over the same metrics blob.
+
+Each file gets its own read offset and inode, so rotation is detected per
+file. The glob is re-expanded every `LOG_GLOB_RESCAN_SECONDS` (default 300),
+so an app deployed after start-up is picked up without a restart, and state
+for a file that disappears is dropped rather than accumulating forever.
+
+`MAX_LINES_PER_CYCLE` is a **shared budget, divided evenly** across the
+tailed files, so one very busy log cannot starve the other sixty-nine.
+Whatever the quiet files don't use is redistributed to the ones still
+behind, so a single busy file still gets the whole budget when it's the only
+one with a backlog.
+
+Multi-line JSON blocks are assembled **per file** — a block spans consecutive
+lines within one file, and interleaving two files' lines would desync both
+brace counters.
+
+## Running more than one agent
+
+One agent per *server*, not per file. Give each a **stable**
+`DOCTRACKER_WRITER_ID`:
+
+```bash
+DOCTRACKER_WRITER_ID=mule-sit-1
+```
+
+Each writer then owns its own segment of the metrics blob: the server
+replaces only that segment and composes them all on read, so agents never
+overwrite one another and never conflict. Endpoints seen on more than one
+server are summed (these are aggregate counters, so the union is the sum);
+source-IP counts are summed and the heaviest kept; `lastSeenAt` takes the
+latest.
+
+The merge runs inside a transaction holding `FOR UPDATE` on the row, because
+the blob is encrypted and cannot be merged with `jsonb_set` — without the
+lock, two agents pushing at the same moment would both read the same map and
+the second write would drop the first agent's segment.
+
+Rules:
+
+- The id **must be stable across restarts**. One that changes per restart
+  leaves an orphaned segment behind each time and will eventually hit the
+  50-writer cap.
+- Don't use the hostname. It ends up in a page that gets shared, and a real
+  server hostname doesn't belong there. `mule-sit-1` is fine.
+- Leaving it unset keeps whole-blob mode, which is correct for a
+  single-agent install — existing deployments keep working unchanged after
+  an upgrade.
+- An existing single-agent blob is adopted under `legacy-single-writer` the
+  first time a merge write arrives, so switching modes doesn't reset
+  history.
+
+## Only one agent may run per organisation (without a writer id)
 
 The endpoint-metrics blob is written as a **whole-blob overwrite**. If two
 agents run against the same DocTracker organisation — a stale systemd unit, a
@@ -279,9 +349,11 @@ manual debug run alongside the service, a second server — whichever pushes
 last used to silently erase the other's entire history: every counter, every
 record, no error, no trace.
 
-That is now guarded. Each push sends `ifMatchRev`, the revision the agent read
-in the same cycle, and the server rejects the write with **409** if the stored
-data changed in between. On a conflict the agent **skips that push and retries
+That is now guarded — for agents that have **not** been given a
+`DOCTRACKER_WRITER_ID` (see above; with one, concurrent writes are safe by
+construction and this guard doesn't apply). Each push sends `ifMatchRev`, the
+revision the agent read in the same cycle, and the server rejects the write
+with **409** if the stored data changed in between. On a conflict the agent **skips that push and retries
 next cycle** rather than forcing its copy through — forcing is exactly the
 data loss the check prevents.
 
@@ -299,6 +371,7 @@ keeps working against a newer server.
 
 ```bash
 python3 ops/sit-doc-agent/tests/test_host_metrics.py
+python3 ops/sit-doc-agent/tests/test_ingest_and_scale.py
 ```
 
 No framework, no dependencies — these have to run on the SIT server, where

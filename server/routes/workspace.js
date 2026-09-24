@@ -487,16 +487,21 @@ router.get('/', async (req, res) => {
     // Audit log is no longer part of this payload — it's fetched separately
     // from GET /api/audit/events, which returns server-authoritative entries
     // from the audit_logs table instead of a client-writable JSONB blob.
-    const endpointMetrics = decryptOrgBlob(ws.endpoint_metrics_enc, null, org, 'endpoint_metrics', {});
+    // Composed from per-writer segments when the blob has them, returned
+    // as-is otherwise (a single-agent deployment, or data written before
+    // multi-writer support). Either way the client sees one flat shape.
+    const storedMetrics = decryptOrgBlob(ws.endpoint_metrics_enc, null, org, 'endpoint_metrics', {});
+    const endpointMetrics = composeWriterSegments(storedMetrics);
     const payload = {
       projects,
       environments: decryptOrgBlob(ws.environments_enc, ws.environments, org, 'environments', []),
       requestHistory: decryptOrgBlob(ws.request_history_enc, ws.request_history, org, 'request_history', {}),
       tryitCollections: decryptOrgBlob(ws.tryit_collections_enc, null, org, 'tryit_collections', { variables: [], saved: [] }),
       endpointMetrics,
-      // Revision token for the blob above, so a writer can prove it read the
-      // current state before overwriting it - see PUT /endpoint-metrics.
-      endpointMetricsRev: metricsRev(endpointMetrics),
+      // Revision of the STORED blob, not the composed view above - a
+      // whole-blob writer is overwriting what's stored, so that's what it
+      // has to prove it read. See PUT /endpoint-metrics.
+      endpointMetricsRev: metricsRev(storedMetrics),
       // PER-USER, not org-shared — see the users.tryit_personal_enc comment
       // in server/db.js. Safe to fold into this same cached payload because
       // the cache itself is already keyed per (org, userId) — see cache.js.
@@ -1055,10 +1060,136 @@ function metricsRev(value) {
     .slice(0, 16);
 }
 
+// --- Multi-writer support ---------------------------------------------------
+// Whole-blob overwrite only works with exactly one agent. A deployment with
+// several Mule servers needs one agent per server, and they must not clobber
+// each other - the ifMatchRev guard above would make them 409 in a loop
+// instead, which is safe but useless.
+//
+// So a writer may instead claim only its OWN segment: the stored blob becomes
+// { writers: { [writerId]: {endpoints, agentHealth, logRecords, updatedAt} } }
+// and a merge-mode write replaces exactly one segment, leaving the others
+// untouched. No lost updates, no conflict, no coordination between agents.
+//
+// GET composes the segments back into the flat { endpoints, agentHealth,
+// logRecords } shape the client already reads, so nothing on the page has to
+// know this happened.
+const MAX_METRICS_WRITERS = 50;
+
+function composeWriterSegments(stored) {
+  if (!isPlainObject(stored) || !isPlainObject(stored.writers)) return stored || {};
+  const endpoints = {};
+  let logRecords = [];
+  const agents = [];
+
+  for (const [writerId, seg] of Object.entries(stored.writers)) {
+    if (!isPlainObject(seg)) continue;
+    for (const [key, ep] of Object.entries(seg.endpoints || {})) {
+      const prev = endpoints[key];
+      if (!prev) { endpoints[key] = { ...ep }; continue; }
+      // Same method+path seen on two servers: these are aggregate counters,
+      // so the union is the sum. Anything else would under-report a
+      // load-balanced endpoint.
+      const merged = { ...prev };
+      merged.totalRequests = (prev.totalRequests || 0) + (ep.totalRequests || 0);
+      merged.statusBreakdown = { ...(prev.statusBreakdown || {}) };
+      for (const [fam, n] of Object.entries(ep.statusBreakdown || {})) {
+        merged.statusBreakdown[fam] = (merged.statusBreakdown[fam] || 0) + n;
+      }
+      const errs = (merged.statusBreakdown['4xx'] || 0) + (merged.statusBreakdown['5xx'] || 0);
+      const withStatus = Object.values(merged.statusBreakdown).reduce((a, b) => a + b, 0);
+      merged.errorRate = withStatus ? Math.round((errs / withStatus) * 10000) / 10000 : 0;
+      // Source IPs: sum per IP, then keep the heaviest few.
+      const ipTotals = new Map();
+      for (const list of [prev.topSourceIps || [], ep.topSourceIps || []]) {
+        for (const row of list) ipTotals.set(row.ip, (ipTotals.get(row.ip) || 0) + (row.count || 0));
+      }
+      merged.topSourceIps = [...ipTotals.entries()]
+        .sort((a, b) => b[1] - a[1]).slice(0, 10)
+        .map(([ip, count]) => ({ ip, count }));
+      merged.lastSeenAt = [prev.lastSeenAt, ep.lastSeenAt].filter(Boolean).sort().pop() || null;
+      endpoints[key] = merged;
+    }
+    if (Array.isArray(seg.logRecords)) logRecords = logRecords.concat(seg.logRecords);
+    if (isPlainObject(seg.agentHealth)) agents.push({ writerId, ...seg.agentHealth });
+  }
+
+  // Newest-first, then capped - with several agents this is the union of
+  // their ring buffers and could otherwise grow without bound.
+  logRecords.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
+  logRecords = logRecords.slice(0, 5000);
+
+  // The page renders one agentHealth card; give it the most recently
+  // generated one, and attach every writer's own health beside it so a
+  // multi-server deployment can still see each agent individually.
+  agents.sort((a, b) => String(b.generatedAt || '').localeCompare(String(a.generatedAt || '')));
+  const agentHealth = agents.length ? { ...agents[0], writers: agents } : null;
+
+  return { endpoints, agentHealth, logRecords };
+}
+
 router.put('/endpoint-metrics', async (req, res) => {
   if (!isPlainObject(req.body?.endpointMetrics)) return res.status(400).json({ error: 'Expected { endpointMetrics: {} }.' });
   const org = req.authUser.organisation;
   try {
+    // Merge mode: this writer owns one named segment and never touches the
+    // others, so several agents (one per Mule server) can write concurrently
+    // with no conflict and no lost updates. No ifMatchRev is needed or
+    // honoured here - there is nothing to race against.
+    const writerId = typeof req.body.writerId === 'string' ? req.body.writerId.trim().slice(0, 64) : '';
+    if (writerId) {
+      // The merge itself is a read-modify-write of one encrypted blob, which
+      // cannot be done with jsonb_set - the value is ciphertext. So it runs
+      // inside a transaction holding FOR UPDATE on the row: without that,
+      // two agents pushing at the same moment would both read the same
+      // `writers` map and the second write would drop the first agent's
+      // segment. That is exactly the lost-update class of bug this whole
+      // endpoint is being hardened against, so it would be absurd to
+      // reintroduce it here.
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query(
+          `SELECT endpoint_metrics_enc FROM org_workspace WHERE organisation = $1 FOR UPDATE`,
+          [org]
+        );
+        const stored = rows.length
+          ? decryptOrgBlob(rows[0].endpoint_metrics_enc, null, org, 'endpoint_metrics', {})
+          : {};
+        // A blob written by a pre-merge single agent has no `writers` key.
+        // Its data is adopted under a reserved id rather than discarded, so
+        // switching an existing deployment to merge mode doesn't reset
+        // history.
+        const writers = isPlainObject(stored.writers) ? { ...stored.writers } : (
+          (stored.endpoints || stored.agentHealth) ? { 'legacy-single-writer': stored } : {}
+        );
+        if (!writers[writerId] && Object.keys(writers).length >= MAX_METRICS_WRITERS) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({
+            error: `Too many distinct metrics writers (${MAX_METRICS_WRITERS}). Each agent must send a STABLE writerId; a value that changes per restart will exhaust this.`,
+          });
+        }
+        writers[writerId] = { ...req.body.endpointMetrics, updatedAt: new Date().toISOString() };
+        const { enc, version } = encryptOrgBlob({ writers }, org, 'endpoint_metrics');
+        await client.query(
+          `INSERT INTO org_workspace (organisation, endpoint_metrics_enc, endpoint_metrics_key_version, updated_at)
+           VALUES ($1, $2, $3, now())
+           ON CONFLICT (organisation) DO UPDATE SET
+             endpoint_metrics_enc = EXCLUDED.endpoint_metrics_enc,
+             endpoint_metrics_key_version = EXCLUDED.endpoint_metrics_key_version, updated_at = now()`,
+          [org, enc, version]
+        );
+        await client.query('COMMIT');
+        await cache.invalidateOrg(org);
+        return res.json({ ok: true, writerId, writerCount: Object.keys(writers).length });
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
     // A client that sends `ifMatchRev` is held to it; one that omits it (an
     // older agent build) is never blocked - same forgiving contract the
     // projects route uses for `_rev`, so upgrading the server can't break a

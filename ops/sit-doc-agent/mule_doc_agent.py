@@ -63,6 +63,7 @@ mode" section of AGENT_README.md before setting this to "full".
 import os
 import re
 import sys
+import glob
 import json
 import time
 import platform
@@ -89,7 +90,19 @@ def stable_id(*parts):
 # ============================================================================
 # CONFIG - all via environment variables. Nothing sensitive is hard-coded.
 # ============================================================================
+# One path, a glob, or a comma-separated list of either. A deployment with
+# many Mule apps writes one log per app (jwt-token-api.log, orders-api.log,
+# ...); pointing this at a single file means every other app's traffic is
+# invisible, with no error to say so - the counters simply never move for
+# them. `/opt/mule/logs/*.log` tails all of them in one agent, which is much
+# cheaper than one agent process per file and avoids them fighting over the
+# same metrics blob.
 MULE_LOG_PATH = os.environ.get("MULE_LOG_PATH", "/opt/mule/logs/mule-app.log")
+# Re-expanded on this interval so an app deployed (or rotated to a new name)
+# after start-up is picked up without restarting the agent.
+LOG_GLOB_RESCAN_SECONDS = int(os.environ.get("LOG_GLOB_RESCAN_SECONDS", "300"))
+# Safety valve for a glob that matches far more than expected.
+MAX_LOG_FILES = int(os.environ.get("MAX_LOG_FILES", "200"))
 STATE_FILE = os.environ.get("AGENT_STATE_FILE", "/var/lib/doctracker-agent/state.json")
 
 DOCTRACKER_BASE_URL = os.environ.get("DOCTRACKER_BASE_URL", "https://doctracker-production-7ecc.up.railway.app")
@@ -113,6 +126,12 @@ PUSH_INTERVAL_SECONDS = int(os.environ.get("PUSH_INTERVAL_SECONDS", "900"))  # 1
 # input or grow unbounded state - these two caps stop both:
 MAX_LINES_PER_CYCLE = int(os.environ.get("MAX_LINES_PER_CYCLE", "20000"))
 MAX_TRACKED_ENDPOINTS = int(os.environ.get("MAX_TRACKED_ENDPOINTS", "500"))
+# Per-endpoint distinct source IPs. The map is allowed to grow to the
+# watermark, then pruned back to KEPT by count - see aggregate(). Keeping a
+# gap between the two means pruning runs rarely (once per WATERMARK-KEPT new
+# IPs) instead of on every insert once full.
+MAX_SOURCE_IPS_KEPT = int(os.environ.get("MAX_SOURCE_IPS_KEPT", "50"))
+MAX_SOURCE_IPS_WATERMARK = int(os.environ.get("MAX_SOURCE_IPS_WATERMARK", "200"))
 
 # --- Capture mode ------------------------------------------------------------
 # "aggregate" (the default, and what every earlier version of this agent
@@ -156,6 +175,22 @@ MAX_LOG_VOLUME_SAMPLES = int(os.environ.get("MAX_LOG_VOLUME_SAMPLES", "700"))
 # If you ever run the agent somewhere else - shipping logs to it rather than
 # tailing them locally - these numbers describe the wrong machine and you
 # should set HOST_METRICS_ENABLED=false.
+# Identifies THIS agent's segment of the shared metrics blob, so several
+# agents (one per Mule server) can write concurrently without overwriting
+# each other - the server replaces only the named segment and composes them
+# on read. See "Running more than one agent" in AGENT_README.md.
+#
+# It MUST be stable across restarts: a value that changes each time would
+# leave an orphaned segment behind on every restart and eventually hit the
+# server's writer cap. Empty (the default) means whole-blob mode, which is
+# correct for a single-agent deployment and is what existing installs keep
+# doing after an upgrade.
+#
+# This is not derived from the hostname on purpose - it ends up in a page
+# that gets shared, and a real server hostname doesn't belong there. Set it
+# to something meaningful but non-identifying, e.g. "mule-sit-1".
+WRITER_ID = os.environ.get("DOCTRACKER_WRITER_ID", "").strip()
+
 HOST_METRICS_ENABLED = os.environ.get("HOST_METRICS_ENABLED", "true").strip().lower() not in ("false", "0", "no")
 MAX_HOST_SAMPLES = int(os.environ.get("MAX_HOST_SAMPLES", "720"))
 
@@ -593,8 +628,11 @@ def tail_new_lines(path, state, max_lines=None):
     incomplete trailing line is left unread and picked up whole next cycle."""
     try:
         st = os.stat(path)
-    except FileNotFoundError:
-        print(f"[warn] log file not found: {path}", file=sys.stderr)
+    except (FileNotFoundError, PermissionError) as e:
+        # A glob can match a file that disappears between expansion and read
+        # (rotation), or one this unprivileged user can't open. Neither is
+        # fatal - skip it this cycle.
+        print(f"[warn] cannot read log file {path}: {e.__class__.__name__}", file=sys.stderr)
         return []
 
     inode = getattr(st, "st_ino", None)
@@ -623,6 +661,104 @@ def tail_new_lines(path, state, max_lines=None):
                 break
         state["offset"] = f.tell()
     return lines
+
+
+def resolve_log_paths(spec):
+    """Expand MULE_LOG_PATH into the concrete files to tail.
+
+    Accepts a plain path, a glob, or a comma-separated list of either.
+    Already-rotated files (`.1`, `.gz`, dated suffixes) are deliberately NOT
+    excluded here - if a glob matches them the offsets simply start at their
+    end, because this agent only ever reads what is APPENDED after it first
+    sees a file. Reading a rotated file from the top would re-count history
+    that is already in the counters."""
+    paths = []
+    for part in str(spec).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if any(ch in part for ch in "*?["):
+            paths.extend(glob.glob(part))
+        else:
+            paths.append(part)
+    # Stable order so round-robin fairness below is deterministic, and
+    # de-duplicated in case two patterns overlap.
+    unique = sorted(set(os.path.abspath(p) for p in paths))
+    if len(unique) > MAX_LOG_FILES:
+        print(f"[warn] {len(unique)} files matched {spec!r}; tailing only the first {MAX_LOG_FILES} "
+              f"(raise MAX_LOG_FILES if that's wrong)", file=sys.stderr)
+        unique = unique[:MAX_LOG_FILES]
+    return unique
+
+
+def tail_all_logs(paths, state, total_budget):
+    """Read new lines from EVERY tailed file, sharing one line budget.
+
+    Returns {path: [lines]} so the caller can keep each file's multi-line
+    JSON assembly separate - a JSON block spans lines within ONE file, and
+    interleaving two files' lines into a single stream would corrupt the
+    brace counter for both.
+
+    The budget is divided evenly rather than spent first-come-first-served,
+    so one very busy log can't starve the other 69. Any budget the quiet
+    files don't use is handed to the remaining ones in a second pass, so a
+    single busy file still gets the full budget when it's the only one with
+    a backlog."""
+    files_state = state.setdefault("files", {})
+    if not paths:
+        return {}
+
+    per_file = max(1, total_budget // len(paths))
+    out = {}
+    used = 0
+    # Pass 1: fair share.
+    for path in paths:
+        fstate = files_state.setdefault(path, {"offset": 0, "inode": None})
+        lines = tail_new_lines(path, fstate, max_lines=per_file)
+        if lines:
+            out[path] = lines
+            used += len(lines)
+
+    # Pass 2: redistribute whatever pass 1 left unspent to files that filled
+    # their share (i.e. still have a backlog).
+    leftover = total_budget - used
+    if leftover > 0:
+        hungry = [p for p in paths if len(out.get(p, [])) >= per_file]
+        if hungry:
+            extra = max(1, leftover // len(hungry))
+            for path in hungry:
+                if leftover <= 0:
+                    break
+                fstate = files_state[path]
+                more = tail_new_lines(path, fstate, max_lines=min(extra, leftover))
+                if more:
+                    out.setdefault(path, []).extend(more)
+                    leftover -= len(more)
+
+    # Drop state for files that no longer exist, so state.json can't grow
+    # forever as dated log names come and go.
+    for gone in [p for p in files_state if p not in paths]:
+        del files_state[gone]
+    return out
+
+
+def migrate_single_file_state(state, paths):
+    """Move a pre-multi-file state.json onto the per-file model.
+
+    Older builds kept one top-level `offset`/`inode` for the single
+    MULE_LOG_PATH. Dropping those would make the agent re-read that file
+    from its current end (losing nothing) or from the top (double-counting),
+    so they're carried onto the matching path instead."""
+    if "offset" not in state and "inode" not in state:
+        return
+    files_state = state.setdefault("files", {})
+    legacy_path = os.path.abspath(MULE_LOG_PATH) if not any(ch in MULE_LOG_PATH for ch in "*?[,") else None
+    if legacy_path and legacy_path in paths and legacy_path not in files_state:
+        files_state[legacy_path] = {"offset": state.get("offset", 0), "inode": state.get("inode")}
+        print(f"[info] migrated existing read position for {os.path.basename(legacy_path)} "
+              f"to the multi-file state model")
+    state.pop("offset", None)
+    state.pop("inode", None)
 
 
 # ============================================================================
@@ -689,6 +825,7 @@ OVERFLOW_KEY = "* OVERFLOW - too many distinct endpoints"
 def aggregate(state, observations):
     endpoints = state.setdefault("endpoints", {})
     health = state.setdefault("health", {})
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
     for obs in observations:
         templated_path = templatize_path(obs["path"])
         key = f"{obs['method']} {templated_path}"
@@ -715,13 +852,36 @@ def aggregate(state, observations):
                 "totalRequests": 0, "sourceIps": {}, "lastSeenAt": None,
             })
         ep["totalRequests"] += 1
-        ep["lastSeenAt"] = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+        # `now_iso` is formatted ONCE per aggregate() call, not once per
+        # observation. At 800+ requests/sec that strftime+gmtime pair was one
+        # of the hottest things in the whole agent, and every observation in
+        # a batch lands within the same cycle anyway.
+        ep["lastSeenAt"] = now_iso
         if obs.get("clientIp"):
             ips = ep["sourceIps"]
-            if obs["clientIp"] in ips:
-                ips[obs["clientIp"]] += 1
-            elif len(ips) < 50:  # cap distinct IPs tracked - observability sample, not a full access log
-                ips[obs["clientIp"]] = 1
+            ip = obs["clientIp"]
+            if ip in ips:
+                ips[ip] += 1
+            else:
+                # Previously: `elif len(ips) < 50`, which meant that once 50
+                # distinct IPs had been seen, every NEW IP was dropped
+                # forever - so "Top source IPs" silently became "the first 50
+                # IPs seen since the last restart". At low volume that's
+                # harmless; with many clients a genuinely dominant new caller
+                # could never appear, which is worse than incomplete - it's
+                # misleading.
+                #
+                # Now every IP is admitted and the map is pruned back to the
+                # heaviest MAX_SOURCE_IPS_KEPT once it grows past the
+                # watermark. Counts of survivors are preserved, so a heavy
+                # hitter that appears late still climbs. This is lossy
+                # (a long tail of one-hit IPs is discarded, and an IP pruned
+                # and later re-seen restarts its count), which is the right
+                # trade for an observability sample rather than an access log.
+                ips[ip] = 1
+                if len(ips) > MAX_SOURCE_IPS_WATERMARK:
+                    for dead in sorted(ips, key=ips.get)[:len(ips) - MAX_SOURCE_IPS_KEPT]:
+                        del ips[dead]
         if obs.get("statusCode"):
             sc = str(obs["statusCode"])
             ep["statusCodes"][sc] = ep["statusCodes"].get(sc, 0) + 1
@@ -878,7 +1038,11 @@ class DocTrackerClient:
         # unconditional behaviour, which is what --dry-run and a first-ever
         # push (no existing blob) use.
         body = {"endpointMetrics": payload}
-        if if_match_rev is not None:
+        if WRITER_ID:
+            # Merge mode: claim only this agent's segment. Conflicts are
+            # impossible by construction, so no ifMatchRev is sent.
+            body["writerId"] = WRITER_ID
+        elif if_match_rev is not None:
             body["ifMatchRev"] = if_match_rev
         status, data, _ = self._request("PUT", "/api/workspace/endpoint-metrics", body)
         if status == 409:
@@ -1079,10 +1243,15 @@ def build_agent_health(state):
         if elapsed > 0:
             requests_per_minute = round((c1 - c0) / elapsed * 60, 1)
 
-    try:
-        backlog_bytes = max(0, os.stat(MULE_LOG_PATH).st_size - state.get("offset", 0))
-    except OSError:
-        backlog_bytes = None
+    # Summed across every tailed file, so "am I falling behind" stays
+    # answerable when one agent follows 70 logs.
+    tailed = state.get("files") or {}
+    backlog_bytes = 0
+    for path, fstate in tailed.items():
+        try:
+            backlog_bytes += max(0, os.stat(path).st_size - fstate.get("offset", 0))
+        except OSError:
+            continue
 
     endpoints = state.get("endpoints", {})
     return {
@@ -1091,6 +1260,10 @@ def build_agent_health(state):
         "uptimeSeconds": round(now - started_at),
         "pythonVersion": platform.python_version(),
         "sourceLog": os.path.basename(MULE_LOG_PATH),
+        # Basenames only - never the full paths, which would leak the
+        # server's directory layout into a page that gets shared.
+        "tailedLogs": sorted(os.path.basename(p) for p in tailed),
+        "tailedLogCount": len(tailed),
         "pollIntervalSeconds": POLL_INTERVAL_SECONDS,
         "cyclesRun": health.get("cyclesRun", 0),
         "linesProcessedTotal": health.get("linesProcessedTotal", 0),
@@ -1386,8 +1559,19 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
     state = load_state()
 
     if sample_lines:
-        print(f"[info] sample mode: reading up to {sample_lines} NEW lines from {MULE_LOG_PATH}\n")
-        lines = tail_new_lines(MULE_LOG_PATH, dict(state))[:sample_lines]
+        sample_paths = resolve_log_paths(MULE_LOG_PATH)
+        print(f"[info] sample mode: reading up to {sample_lines} NEW lines from "
+              f"{len(sample_paths)} file(s): "
+              f"{', '.join(os.path.basename(p) for p in sample_paths[:8])}"
+              f"{' …' if len(sample_paths) > 8 else ''}\n")
+        # dict(state) so sampling never advances the real read offsets.
+        lines = []
+        for _p in sample_paths:
+            if len(lines) >= sample_lines:
+                break
+            lines.extend(tail_new_lines(_p, dict((state.get("files") or {}).get(_p, {})),
+                                        max_lines=sample_lines - len(lines)))
+        lines = lines[:sample_lines]
         carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
         multi_obs = assemble_multiline_observations(lines, carry)
 
@@ -1450,7 +1634,19 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
 
     # In-memory only (never persisted to STATE_FILE) - see assemble_multiline_observations()'s
     # docstring for why a partially-read JSON block should never touch disk.
-    multiline_carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+    # Keyed by file path: one carry per tailed log, never shared.
+    multiline_carry = {}
+
+    log_paths = resolve_log_paths(MULE_LOG_PATH)
+    last_glob_scan = time.time()
+    migrate_single_file_state(state, log_paths)
+    if not log_paths:
+        print(f"[warn] nothing matched MULE_LOG_PATH={MULE_LOG_PATH!r} yet - will re-check every "
+              f"{LOG_GLOB_RESCAN_SECONDS}s", file=sys.stderr)
+    else:
+        print(f"[info] tailing {len(log_paths)} file(s): "
+              f"{', '.join(os.path.basename(p) for p in log_paths[:8])}"
+              f"{' …' if len(log_paths) > 8 else ''}")
 
     health = state.setdefault("health", {})
     health.setdefault("startedAt", time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()))
@@ -1466,13 +1662,34 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
         # immediately (no sleep) instead of waiting POLL_INTERVAL_SECONDS -
         # this is how the agent catches back up without ever doing all of
         # it in one giant blocking pass.
-        lines = tail_new_lines(MULE_LOG_PATH, state, max_lines=MAX_LINES_PER_CYCLE)
+        if time.time() - last_glob_scan >= LOG_GLOB_RESCAN_SECONDS:
+            new_paths = resolve_log_paths(MULE_LOG_PATH)
+            if new_paths != log_paths:
+                added = [p for p in new_paths if p not in log_paths]
+                dropped = [p for p in log_paths if p not in new_paths]
+                if added:
+                    print(f"[info] now also tailing: {', '.join(os.path.basename(p) for p in added)}")
+                if dropped:
+                    print(f"[info] no longer present: {', '.join(os.path.basename(p) for p in dropped)}")
+                log_paths = new_paths
+            last_glob_scan = time.time()
+
+        by_file = tail_all_logs(log_paths, state, MAX_LINES_PER_CYCLE)
+        lines = [l for file_lines in by_file.values() for l in file_lines]
         caught_up = len(lines) < MAX_LINES_PER_CYCLE
         observations = [o for o in (parse_line(l) for l in lines) if o]
-        observations += assemble_multiline_observations(lines, multiline_carry)
+        # Multi-line JSON blocks are assembled PER FILE. Each file gets its
+        # own carry, because a block spans consecutive lines within one file
+        # and interleaving two files' lines would desync both brace counters.
+        for path, file_lines in by_file.items():
+            carry = multiline_carry.setdefault(path, {"method": None, "buffer": "", "in_json": False, "depth": 0})
+            observations += assemble_multiline_observations(file_lines, carry)
+        for gone in [p for p in multiline_carry if p not in log_paths]:
+            del multiline_carry[gone]
         if observations:
             aggregate(state, observations)
-            print(f"[info] parsed {len(observations)} HTTP-shaped line(s) this cycle "
+            print(f"[info] parsed {len(observations)} HTTP-shaped line(s) this cycle from "
+                  f"{len(by_file)} file(s) "
                   f"({len([k for k in state['endpoints'] if k != OVERFLOW_KEY])} distinct endpoint(s) known so far)")
 
         # Best-effort log-level tally, independent of the HTTP-request
