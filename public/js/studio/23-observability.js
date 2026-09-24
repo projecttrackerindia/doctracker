@@ -1555,10 +1555,12 @@ function renderConsole(main, metrics, agentHealth, logRecords){
 
     ${renderHostHealthSection(agentHealth)}
 
-    ${state.obsScope.type === 'all' ? `<div class="grid2">
-      ${renderServiceHealth(groups, metrics, logRecords, win)}
+    ${state.obsScope.type === 'all' ? renderServiceHealth(groups, metrics, logRecords, win) : ''}
+
+    <div class="grid2">
       ${renderStatusBreakdown(agg.statusBreakdown, agg.total)}
-    </div>` : renderStatusBreakdown(agg.statusBreakdown, agg.total)}
+      <div class="obs-panel"><div class="section-title">Top source IPs</div><div class="hint" style="margin-top:-4px;">Current scope, ranked by request count</div>${renderIpBreakdown(agg.topIps, agg.total, 'console')}</div>
+    </div>
 
     ${(()=>{
       // Alerts and error clustering are both "what's going wrong" - paired
@@ -1571,10 +1573,7 @@ function renderConsole(main, metrics, agentHealth, logRecords){
         : renderAlertsSection(alerts);
     })()}
 
-    <div class="grid2">
-      <div class="obs-panel"><div class="section-title">Top source IPs</div><div class="hint" style="margin-top:-4px;">Current scope, ranked by request count</div>${renderIpBreakdown(agg.topIps, agg.total, 'console')}</div>
-      ${renderLogVolumeAndLevelsSection(agentHealth)}
-    </div>
+    ${renderLogVolumeAndLevelsSection(agentHealth)}
 
     ${renderLogExplorerSection(scopedRecords)}
 
