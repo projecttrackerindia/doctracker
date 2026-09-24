@@ -90,6 +90,39 @@ function observabilityData(){
   return empty;
 }
 
+// The agent pushes every 60s, so a page left open goes stale at the same
+// rate - and the liveness badge below ages with it, reporting DELAYED about
+// a perfectly healthy agent purely because the tab has been sitting there.
+// Refreshing on the same cadence as the agent keeps the two in step.
+//
+// Only while this page is actually showing, and not while the tab is in the
+// background: this re-fetches the whole workspace (there is one GET for it),
+// which is not something to do every minute behind someone's back.
+let obsRefreshTimer = null;
+
+function stopObsAutoRefresh(){
+  if(obsRefreshTimer){ clearInterval(obsRefreshTimer); obsRefreshTimer = null; }
+}
+
+function startObsAutoRefresh(){
+  stopObsAutoRefresh();
+  obsRefreshTimer = setInterval(async ()=>{
+    if(!state.selected || state.selected.type !== 'observability'){ stopObsAutoRefresh(); return; }
+    if(document.hidden) return;
+    try{
+      const ws = await apiGet('');
+      state.endpointMetrics = (ws.endpointMetrics && typeof ws.endpointMetrics === 'object') ? ws.endpointMetrics : {};
+      // Re-check: the fetch is async, and the user may have navigated away
+      // while it was in flight. Rendering then would replace whatever they
+      // just opened with this page's content.
+      if(state.selected && state.selected.type === 'observability') renderMain();
+    }catch(e){
+      // A failed poll is not worth interrupting anyone over - the badge
+      // will age into DELAYED/STALE on its own if this keeps failing.
+    }
+  }, 60000);
+}
+
 // "Is the agent actually alive right now?" - the question you ask first when
 // a number looks wrong, and which was previously answerable only by reading
 // a timestamp buried in the Agent Health card further down the page.
@@ -1578,4 +1611,5 @@ function renderObservability(main){
   `;
 
   renderConsole(document.getElementById('obsBody'), metrics, agentHealth, logRecords);
+  startObsAutoRefresh();
 }
