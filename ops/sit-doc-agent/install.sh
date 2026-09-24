@@ -55,7 +55,18 @@ fi
 set -a
 . "$DIR/agent.env"
 set +a
-exec python3 "$DIR/mule_doc_agent.py" >> "$DIR/agent.log" 2>&1
+
+# Seed the inventory on a FIRST start only. Without this the agent begins at
+# end-of-file knowing no endpoints, and since most of the inventory comes
+# from "Starting flow:" lines that Mule emits only at application startup, a
+# deployed-but-idle app stays invisible until the next Mule restart. The
+# agent itself also refuses to re-seed once state.json records that it has,
+# so this is safe on every restart and on the 5-minute watchdog.
+SEED=""
+if [ ! -f "${AGENT_STATE_FILE:-$DIR/state.json}" ]; then
+  SEED="--seed-from-history ${SEED_LINES:-200000}"
+fi
+exec python3 "$DIR/mule_doc_agent.py" $SEED >> "$DIR/agent.log" 2>&1
 INNER
 chmod 700 "$DIR/start-agent.sh"
 
