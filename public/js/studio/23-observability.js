@@ -90,6 +90,27 @@ function observabilityData(){
   return empty;
 }
 
+// "Is the agent actually alive right now?" - the question you ask first when
+// a number looks wrong, and which was previously answerable only by reading
+// a timestamp buried in the Agent Health card further down the page.
+//
+// Liveness is judged from the agent's own last push, not from a health check
+// this page performs: the page cannot reach the Mule host, and a server that
+// answers is not evidence that the agent on it is still tailing.
+function renderAgentLiveBadge(){
+  const { agentHealth } = observabilityData();
+  const gen = agentHealth && agentHealth.generatedAt;
+  if(!gen) return `<span class="obs-live obs-live-none" title="No agent has reported for this environment yet">NO AGENT</span>`;
+  const ageMs = Date.now() - new Date(gen).getTime();
+  if(!isFinite(ageMs)) return '';
+  const mins = Math.round(ageMs / 60000);
+  // The agent pushes every 60s, so anything inside 3 minutes is healthy;
+  // beyond 10 it has almost certainly stopped rather than run slow.
+  if(ageMs < 3 * 60e3) return `<span class="obs-live obs-live-ok" title="Last push ${mins} min ago">RUNNING</span>`;
+  if(ageMs < 10 * 60e3) return `<span class="obs-live obs-live-warn" title="Last push ${mins} min ago">DELAYED ${mins}m</span>`;
+  return `<span class="obs-live obs-live-bad" title="Last push ${mins} min ago - the agent has probably stopped">STALE ${mins}m</span>`;
+}
+
 // Names the environment these figures came from, and says plainly when the
 // header's environment has no agent reporting it.
 function renderObsEnvironmentBar(){
@@ -102,7 +123,8 @@ function renderObsEnvironmentBar(){
   }
   if(active){
     const others = names.filter(n => n !== active);
-    return `<div class="obs-env-bar obs-env-bar-single">Showing <strong>${escapeHtml(active)}</strong>,
+    return `<div class="obs-env-bar obs-env-bar-single">${renderAgentLiveBadge()}
+      Showing <strong>${escapeHtml(active)}</strong>,
       from the environment selected in the header.${others.length
         ? ` Also reporting: ${others.map(n => escapeHtml(n)).join(', ')} — switch environment in the header to see those.`
         : ''}

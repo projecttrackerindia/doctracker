@@ -1332,6 +1332,11 @@ def aggregate(state, observations):
                 if len(ips) > MAX_SOURCE_IPS_WATERMARK:
                     for dead in sorted(ips, key=ips.get)[:len(ips) - MAX_SOURCE_IPS_KEPT]:
                         del ips[dead]
+        # Which Mule application serves this endpoint. Used as the tag in
+        # DocTracker so ~380 discovered endpoints group by app instead of
+        # landing in one flat "Auto-discovered" list.
+        if obs.get("app") and not ep.get("app"):
+            ep["app"] = str(obs["app"])[:64]
         if obs.get("statusCode"):
             sc = str(obs["statusCode"])
             ep["statusCodes"][sc] = ep["statusCodes"].get(sc, 0) + 1
@@ -1751,6 +1756,32 @@ def build_agent_health(state):
     }
 
 
+APP_NAME_PREFIX = re.compile(r'^(mule-app-|mule-domain-)', re.IGNORECASE)
+
+
+def app_name_from_path(path):
+    """The Mule application a log file belongs to.
+
+    On this deployment one log per app is the convention, so the file name
+    IS the application name: s-portal-employee-api.log -> s-portal-employee-api.
+    Without this every discovered endpoint lands under one undifferentiated
+    "Auto-discovered" tag, which on a node with 103 apps and ~380 endpoints
+    is a list nobody can navigate.
+
+    A block's own ApplicationName key wins when present (see aggregate);
+    this is the fallback, and the only source for apps whose logger does not
+    emit one."""
+    if not path:
+        return None
+    base = os.path.basename(path)
+    for suffix in (".log",):
+        if base.lower().endswith(suffix):
+            base = base[: -len(suffix)]
+    base = APP_NAME_PREFIX.sub("", base)
+    base = re.sub(r'-1\.0\.0-SNAPSHOT.*$', '', base)
+    return base.strip() or None
+
+
 def describe_log_source():
     """A readable label for where metrics came from. MULE_LOG_PATH is
     usually a glob over a directory of per-app logs, and its basename is
@@ -1836,7 +1867,7 @@ def build_project(state, existing_project=None):
             # reviewer (who isn't svc-doc-agent) can actually see this in DocTracker;
             # a project the agent's own account marks "private" is invisible to
             # everyone else, including Admins, without an explicit share grant.
-            "visibility": "public", "tag": "Auto-discovered", "sourceSystem": "", "targetSystem": "",
+            "visibility": "public", "tag": (ep.get("app") or "Auto-discovered"), "sourceSystem": "", "targetSystem": "",
             "version": "0.0.1-draft", "contentType": "application/json",
             "summary": "Auto-discovered from SIT logs - unreviewed.",
             "description": ("Discovered automatically from SIT server logs by the DocTracker SIT Auto-Discovery "
@@ -2067,6 +2098,9 @@ def seed_state_from_history(state, log_paths, max_lines):
         # jwt-token-api blocks whose method was recoverable all along.
         observations = [o for o in (parse_line(l.strip()) for l in lines) if o]
         observations += assemble_multiline_observations(lines, carry)
+        app = app_name_from_path(path)
+        for o in observations:
+            o.setdefault("app", app)
         aggregate(state, observations)
         total_lines += len(lines)
         total_obs += len(observations)
@@ -2292,13 +2326,20 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
         by_file = tail_all_logs(log_paths, state, MAX_LINES_PER_CYCLE)
         lines = [l for file_lines in by_file.values() for l in file_lines]
         caught_up = len(lines) < MAX_LINES_PER_CYCLE
-        observations = [o for o in (parse_line(l) for l in lines) if o]
-        # Multi-line JSON blocks are assembled PER FILE. Each file gets its
-        # own carry, because a block spans consecutive lines within one file
-        # and interleaving two files' lines would desync both brace counters.
+        observations = []
+        # Everything is now parsed PER FILE, so each observation can be
+        # stamped with the application it came from. Multi-line JSON blocks
+        # always had to be per-file anyway - a block spans consecutive lines
+        # within one file, and interleaving two files' lines would desync
+        # both brace counters.
         for path, file_lines in by_file.items():
+            app = app_name_from_path(path)
+            file_obs = [o for o in (parse_line(l) for l in file_lines) if o]
             carry = multiline_carry.setdefault(path, {"method": None, "buffer": "", "in_json": False, "depth": 0})
-            observations += assemble_multiline_observations(file_lines, carry)
+            file_obs += assemble_multiline_observations(file_lines, carry)
+            for o in file_obs:
+                o.setdefault("app", app)
+            observations += file_obs
         for gone in [p for p in multiline_carry if p not in log_paths]:
             del multiline_carry[gone]
         if observations:

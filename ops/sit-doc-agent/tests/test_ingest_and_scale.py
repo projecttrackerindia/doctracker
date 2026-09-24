@@ -358,6 +358,42 @@ finally:
     shutil.rmtree(seed_dir, ignore_errors=True)
 
 
+print("Grouping discovered endpoints by Mule application")
+# One log per app is this deployment's convention, so the file name is the
+# application name. Without it every endpoint carries the same
+# "Auto-discovered" tag and ~380 of them land in one flat list.
+for fname, want in [
+    ("s-portal-employee-api.log", "s-portal-employee-api"),
+    ("mule-app-s-internal-api.log", "s-internal-api"),
+    ("mule-domain-payment-domain-1.0.0-SNAPSHOT-mule-domain.log", "payment-domain"),
+    ("jwt-token-api.log", "jwt-token-api"),
+]:
+    got = agent.app_name_from_path("/data/mule/logs/" + fname)
+    check("%s -> %s" % (fname, want), got == want, "got %r" % got)
+check("a missing path yields no app", agent.app_name_from_path("") is None)
+
+# The app must reach the endpoint record, and from there the project tag.
+st = {"endpoints": {}, "health": {}}
+agent.aggregate(st, [{"method": "POST", "path": "/token", "statusCode": 200,
+                      "correlationId": "c-1", "body": None, "app": "jwt-token-api"}])
+ep = st["endpoints"]["POST /token"]
+check("the endpoint records which app serves it", ep.get("app") == "jwt-token-api",
+      "got %r" % ep.get("app"))
+proj = agent.build_project(st)
+tags = {e["path"]: e.get("tag") for e in proj["endpoints"]}
+check("the project tags the endpoint with the app name",
+      tags.get("/token") == "jwt-token-api", "got %r" % tags)
+
+# An endpoint seen with no app at all must still be usable, not untagged.
+st2 = {"endpoints": {}, "health": {}}
+agent.aggregate(st2, [{"method": "GET", "path": "/x", "statusCode": 200,
+                       "correlationId": "c-2", "body": None}])
+proj2 = agent.build_project(st2)
+check("an endpoint with no known app falls back to Auto-discovered",
+      proj2["endpoints"][0].get("tag") == "Auto-discovered",
+      "got %r" % proj2["endpoints"][0].get("tag"))
+
+
 print()
 if FAILURES:
     print("FAILED (%d): %s" % (len(FAILURES), ", ".join(FAILURES)))
