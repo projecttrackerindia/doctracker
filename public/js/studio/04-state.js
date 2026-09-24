@@ -13,6 +13,7 @@ let state = {
   authorName: '',                   // display name used to attribute added/modified endpoints — from AUTH_USER when signed in
   organisation: '',                 // from AUTH_USER when signed in
   sidebarCollapsed: false,          // desktop sidebar collapse (persisted) — separate from the mobile drawer's .show class
+  autoSectionOpen: false,           // sidebar's "Auto-discovered APIs" section — collapsed by default, per-viewer (persisted), see 09-render-sidebar.js
   environments: [],                 // user-configurable environment list — see loadState()
   auditLog: [],                     // who changed what, when — see logAudit()
   customFlowDirections: [],         // legacy org-shared flow-direction presets — kept only for resolveFlowDirection()'s back-compat fallback (public/js/studio/03-notifications.js), no longer written to

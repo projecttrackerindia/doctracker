@@ -1733,6 +1733,14 @@ def build_agent_health(state):
         "tailedLogs": sorted(os.path.basename(p) for p in tailed),
         "tailedLogCount": len(tailed),
         "pollIntervalSeconds": POLL_INTERVAL_SECONDS,
+        # So the Observability page's liveness badge can size "how late is
+        # too late" to how this agent is actually configured, instead of
+        # assuming a fixed cadence - see renderAgentLiveBadge()'s docstring
+        # for the bug this fixes (it used to hardcode a 60s-push assumption
+        # against an agent that by default pushes every 900s, so the badge
+        # spent most of every 15-minute cycle reading DELAYED or STALE on a
+        # perfectly healthy agent).
+        "pushIntervalSeconds": PUSH_INTERVAL_SECONDS,
         "cyclesRun": health.get("cyclesRun", 0),
         "linesProcessedTotal": health.get("linesProcessedTotal", 0),
         "requestsProcessedTotal": health.get("requestsProcessedTotal", 0),

@@ -67,6 +67,7 @@ async function loadState(){
   const role = localStorage.getItem(ROLE_KEY);
   state.authorRole = ROLES.some(r=>r.id===role) ? role : 'Developer';
   state.sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === '1';
+  state.autoSectionOpen = localStorage.getItem(AUTO_SECTION_KEY) === '1';
 
   if(AUTH_USER){
     // Signed in via the real auth service — identity comes from the session, not localStorage.

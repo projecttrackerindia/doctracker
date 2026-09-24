@@ -1,4 +1,77 @@
 /* ==================== SECTION:RENDER-SIDEBAR ==================== */
+// One project's full tree (header + Overview row + tag groups), shared by
+// the hand-authored list and the auto-discovered section below — the two
+// groups render identically, they just sit under a different heading.
+// Returns '' if `proj` has no endpoints matching `filter`.
+function renderProjectNode(proj, filter){
+  const epsForView = viewEndpoints(proj);
+  // Preserve the order endpoints were added in (like a real API collection)
+  // — only the tag/category labels below are alphabetized, not the endpoints
+  // inside them, so "Endpoint 1, Endpoint 2…" doesn't get silently reshuffled.
+  const orderIndex = new Map(epsForView.map((ep,i)=>[ep.id,i]));
+  const groups = {};
+  epsForView.forEach(ep=>{
+    const hay = (ep.path + ' ' + (ep.name||'') + ' ' + (ep.summary||'') + ' ' + ep.method).toLowerCase();
+    if(filter && !hay.includes(filter)) return;
+    (groups[ep.tag] = groups[ep.tag] || []).push(ep);
+  });
+  const projMatches = !filter || proj.name.toLowerCase().includes(filter);
+  const hasEpMatches = Object.keys(groups).length > 0;
+  if(filter && !hasEpMatches && !projMatches) return '';
+
+  const groupsToShow = (filter && !hasEpMatches && projMatches) ? groupByTag(epsForView) : groups;
+  const isOpen = proj._open !== false;
+  const canDeleteHere = canEditHere();
+
+  const overviewActive = state.selected && state.selected.type==='overview' && state.selected.projectId===proj.id;
+  const closedTags = proj._closedTags || {};
+  const tagsHtml = Object.keys(groupsToShow).sort().map(tag=>{
+    const eps = groupsToShow[tag].slice().sort((a,b)=>(orderIndex.get(a.id)??0)-(orderIndex.get(b.id)??0));
+    const tagOpen = filter ? true : !closedTags[tag]; // search always shows matches, regardless of collapsed state
+    return `<div class="tag-group ${tagOpen?'open':''}" data-tag-name="${escapeHtml(tag)}">
+      <div class="tag-head" data-tag-toggle="${proj.id}" data-tag-name="${escapeHtml(tag)}">
+        <span class="tag-caret">▶</span>
+        <span class="tag-label">${escapeHtml(tag)}</span>
+        <span class="tag-count">${eps.length}</span>
+      </div>
+      <div class="tag-body">
+        ${eps.map(ep=>`
+          <div class="ep ${state.selected && state.selected.type==='endpoint' && state.selected.id===ep.id ? 'active':''}" data-ep="${ep.id}">
+            <span class="badge ${methodClass(ep.method)}">${ep.method}</span>
+            ${!ep._docLocked ? `<span class="dm-dot dm-t-${DocMeta.endpointStatusMeta(ep).tone}" style="flex-shrink:0;" title="${escapeHtml(DocMeta.endpointStatusMeta(ep).label)}"></span>` : ''}
+            <span class="ep-path" title="${escapeHtml(ep.name ? `${ep.name} — ${ep.path}` : ep.path)}">${escapeHtml(ep.name || ep.path)}</span>
+            ${ep._docLocked ? `<span class="icon-btn" title="Documentation access required" style="margin-left:auto;flex-shrink:0;color:var(--text-faint);pointer-events:none;">${ICON_LOCK}</span>` : ''}
+            ${canDeleteHere ? `<span class="icon-btn ep-del" data-ep-del="${ep.id}" title="Delete endpoint" role="button" tabindex="0"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg></span>` : ''}
+          </div>`).join('')}
+      </div>
+    </div>`;
+  }).join('') || (!isViewingDraftEnv() && !filter ? `<div class="tag-group open"><div class="empty-sidebar" style="padding:10px 8px;font-size:11.5px;">${snapshotEntry(proj.id).status==='loading' ? 'Loading…' : `Nothing promoted to ${escapeHtml(envMeta(state.env).label)} yet.`}</div></div>` : '');
+
+  const initials = (proj.name||'?').trim().split(/\s+/).slice(0,2).map(w=>w[0]).join('').toUpperCase() || '?';
+  const accent = PROFILE_COLORS[hashStr(proj.name||'') % PROFILE_COLORS.length];
+  const { r:ar, g:ag, b:ab } = hexToRgb(accent);
+  const accentBg = `rgba(${ar},${ag},${ab},${state.theme==='light'?0.12:0.18})`;
+
+  return `<div class="project ${isOpen?'open':''}" data-proj="${proj.id}">
+    <div class="project-head" data-toggle="${proj.id}" style="--proj-accent:${accent};--proj-accent-bg:${accentBg};">
+      <div class="project-name">
+        <span class="project-caret">▶</span>
+        <span class="project-avatar" style="background:${accent};">${escapeHtml(initials)}</span>
+        <span class="txt" title="${escapeHtml(proj.name)}">${escapeHtml(proj.name)}</span>
+      </div>
+      <div class="project-actions">
+        <span class="project-count">${epsForView.length}</span>
+        <span class="icon-btn" data-settings="${proj.id}" title="Project settings"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="20" y2="18"></line><circle cx="9" cy="6" r="1.8" fill="var(--surface)"></circle><circle cx="16" cy="12" r="1.8" fill="var(--surface)"></circle><circle cx="9" cy="18" r="1.8" fill="var(--surface)"></circle></svg></span>
+        <span class="icon-btn del" data-del="${proj.id}" title="Delete API"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg></span>
+      </div>
+    </div>
+    <div class="tag-group" style="display:${isOpen?'block':'none'};">
+      <div class="overview-row ${overviewActive?'active':''}" data-overview="${proj.id}">▸ Overview</div>
+    </div>
+    ${tagsHtml}
+  </div>`;
+}
+
 function updatePinnedNavActive(){
   const onObservability = !!state.selected && state.selected.type === 'observability';
   document.querySelectorAll('.pinned-row').forEach(row=>{
@@ -57,76 +130,38 @@ function renderSidebar(){
     return;
   }
 
-  list.innerHTML = projects.map(proj=>{
-    const epsForView = viewEndpoints(proj);
-    // Preserve the order endpoints were added in (like a real API collection)
-    // — only the tag/category labels below are alphabetized, not the endpoints
-    // inside them, so "Endpoint 1, Endpoint 2…" doesn't get silently reshuffled.
-    const orderIndex = new Map(epsForView.map((ep,i)=>[ep.id,i]));
-    const groups = {};
-    epsForView.forEach(ep=>{
-      const hay = (ep.path + ' ' + (ep.name||'') + ' ' + (ep.summary||'') + ' ' + ep.method).toLowerCase();
-      if(filter && !hay.includes(filter)) return;
-      (groups[ep.tag] = groups[ep.tag] || []).push(ep);
+  // Auto-discovered projects (one per Mule app - see mule_doc_agent.py's
+  // build_app_projects()) get their own collapsed-by-default section below
+  // the hand-authored ones, instead of being mixed straight into the same
+  // flat list: on a busy node that's ~100 extra rows burying the handful
+  // of projects someone actually curated. Collapse state is a per-viewer
+  // convenience (localStorage, like the sidebar's own collapse toggle),
+  // not project data, so it isn't pushed to the server via saveState().
+  const manualProjects = projects.filter(p=>!p.discoveryEnvironment);
+  const autoProjects = projects.filter(p=>!!p.discoveryEnvironment);
+  const manualHtml = manualProjects.map(proj=>renderProjectNode(proj, filter)).join('');
+  const autoNodesHtml = autoProjects.map(proj=>renderProjectNode(proj, filter)).join('');
+  const autoSectionOpen = filter ? true : !!state.autoSectionOpen; // search always shows matches, regardless of collapsed state
+  const autoSectionHtml = autoProjects.length ? `<div class="auto-section ${autoSectionOpen?'open':''}">
+      <div class="auto-section-head" data-auto-toggle>
+        <span class="auto-caret">▶</span>
+        <span class="auto-section-label">Auto-discovered APIs</span>
+        <span class="project-count">${autoProjects.length}</span>
+      </div>
+      <div class="auto-section-body" style="display:${autoSectionOpen?'block':'none'};">
+        ${autoNodesHtml || `<div class="empty-sidebar" style="padding:10px 12px;font-size:11.5px;">No matches.</div>`}
+      </div>
+    </div>` : '';
+
+  list.innerHTML = manualHtml + autoSectionHtml;
+
+  list.querySelectorAll('[data-auto-toggle]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      state.autoSectionOpen = !state.autoSectionOpen;
+      localStorage.setItem(AUTO_SECTION_KEY, state.autoSectionOpen ? '1' : '0');
+      renderSidebar();
     });
-    const projMatches = !filter || proj.name.toLowerCase().includes(filter);
-    const hasEpMatches = Object.keys(groups).length > 0;
-    if(filter && !hasEpMatches && !projMatches) return '';
-
-    const groupsToShow = (filter && !hasEpMatches && projMatches) ? groupByTag(epsForView) : groups;
-    const isOpen = proj._open !== false;
-    const canDeleteHere = canEditHere();
-
-    const overviewActive = state.selected && state.selected.type==='overview' && state.selected.projectId===proj.id;
-    const closedTags = proj._closedTags || {};
-    const tagsHtml = Object.keys(groupsToShow).sort().map(tag=>{
-      const eps = groupsToShow[tag].slice().sort((a,b)=>(orderIndex.get(a.id)??0)-(orderIndex.get(b.id)??0));
-      const tagOpen = filter ? true : !closedTags[tag]; // search always shows matches, regardless of collapsed state
-      return `<div class="tag-group ${tagOpen?'open':''}" data-tag-name="${escapeHtml(tag)}">
-        <div class="tag-head" data-tag-toggle="${proj.id}" data-tag-name="${escapeHtml(tag)}">
-          <span class="tag-caret">▶</span>
-          <span class="tag-label">${escapeHtml(tag)}</span>
-          <span class="tag-count">${eps.length}</span>
-        </div>
-        <div class="tag-body">
-          ${eps.map(ep=>`
-            <div class="ep ${state.selected && state.selected.type==='endpoint' && state.selected.id===ep.id ? 'active':''}" data-ep="${ep.id}">
-              <span class="badge ${methodClass(ep.method)}">${ep.method}</span>
-              ${!ep._docLocked ? `<span class="dm-dot dm-t-${DocMeta.endpointStatusMeta(ep).tone}" style="flex-shrink:0;" title="${escapeHtml(DocMeta.endpointStatusMeta(ep).label)}"></span>` : ''}
-              <span class="ep-path" title="${escapeHtml(ep.name ? `${ep.name} — ${ep.path}` : ep.path)}">${escapeHtml(ep.name || ep.path)}</span>
-              ${ep._docLocked ? `<span class="icon-btn" title="Documentation access required" style="margin-left:auto;flex-shrink:0;color:var(--text-faint);pointer-events:none;">${ICON_LOCK}</span>` : ''}
-              ${canDeleteHere ? `<span class="icon-btn ep-del" data-ep-del="${ep.id}" title="Delete endpoint" role="button" tabindex="0"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg></span>` : ''}
-            </div>`).join('')}
-        </div>
-      </div>`;
-    }).join('') || (!isViewingDraftEnv() && !filter ? `<div class="tag-group open"><div class="empty-sidebar" style="padding:10px 8px;font-size:11.5px;">${snapshotEntry(proj.id).status==='loading' ? 'Loading…' : `Nothing promoted to ${escapeHtml(envMeta(state.env).label)} yet.`}</div></div>` : '');
-
-    const initials = (proj.name||'?').trim().split(/\s+/).slice(0,2).map(w=>w[0]).join('').toUpperCase() || '?';
-    const accent = PROFILE_COLORS[hashStr(proj.name||'') % PROFILE_COLORS.length];
-    const { r:ar, g:ag, b:ab } = hexToRgb(accent);
-    const accentBg = `rgba(${ar},${ag},${ab},${state.theme==='light'?0.12:0.18})`;
-
-    return `<div class="project ${isOpen?'open':''}" data-proj="${proj.id}">
-      <div class="project-head" data-toggle="${proj.id}" style="--proj-accent:${accent};--proj-accent-bg:${accentBg};">
-        <div class="project-name">
-          <span class="project-caret">▶</span>
-          <span class="project-avatar" style="background:${accent};">${escapeHtml(initials)}</span>
-          <span class="txt">${escapeHtml(proj.name)}</span>
-          ${proj.discoveryEnvironment ? `<span class="project-auto-pill" title="Auto-discovered from ${escapeHtml(proj.discoveryEnvironment)} server logs by an unattended agent - unreviewed.">Auto</span>` : ''}
-        </div>
-        <div class="project-actions">
-          <span class="project-count">${epsForView.length}</span>
-          <span class="icon-btn" data-settings="${proj.id}" title="Project settings"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="20" y2="18"></line><circle cx="9" cy="6" r="1.8" fill="var(--surface)"></circle><circle cx="16" cy="12" r="1.8" fill="var(--surface)"></circle><circle cx="9" cy="18" r="1.8" fill="var(--surface)"></circle></svg></span>
-          <span class="icon-btn del" data-del="${proj.id}" title="Delete API"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg></span>
-        </div>
-      </div>
-      <div class="tag-group" style="display:${isOpen?'block':'none'};">
-        <div class="overview-row ${overviewActive?'active':''}" data-overview="${proj.id}">▸ Overview</div>
-      </div>
-      ${tagsHtml}
-    </div>`;
-  }).join('');
-
+  });
   list.querySelectorAll('[data-toggle]').forEach(el=>{
     el.addEventListener('click', ()=>{
       const id = el.getAttribute('data-toggle');

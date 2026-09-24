@@ -90,10 +90,13 @@ function observabilityData(){
   return empty;
 }
 
-// The agent pushes every 60s, so a page left open goes stale at the same
-// rate - and the liveness badge below ages with it, reporting DELAYED about
-// a perfectly healthy agent purely because the tab has been sitting there.
-// Refreshing on the same cadence as the agent keeps the two in step.
+// This page polls every 60s (see startObsAutoRefresh below), but the AGENT
+// itself pushes on its own PUSH_INTERVAL_SECONDS - 900s (15 min) by
+// default, not 60s. The liveness badge (renderAgentLiveBadge) sizes its
+// RUNNING/DELAYED/STALE thresholds off agentHealth.pushIntervalSeconds for
+// exactly this reason: badge thresholds hardcoded against a 60s assumption
+// would read DELAYED or STALE for most of every 15-minute cycle on an
+// agent that is running exactly on schedule.
 //
 // Only while this page is actually showing, and not while the tab is in the
 // background: this re-fetches the whole workspace (there is one GET for it),
@@ -185,10 +188,15 @@ function renderAgentLiveBadge(){
   const ageMs = Date.now() - new Date(gen).getTime();
   if(!isFinite(ageMs)) return '';
   const mins = Math.round(ageMs / 60000);
-  // The agent pushes every 60s, so anything inside 3 minutes is healthy;
-  // beyond 10 it has almost certainly stopped rather than run slow.
-  if(ageMs < 3 * 60e3) return `<span class="obs-live obs-live-ok" title="Last push ${mins} min ago">RUNNING</span>`;
-  if(ageMs < 10 * 60e3) return `<span class="obs-live obs-live-warn" title="Last push ${mins} min ago">DELAYED ${mins}m</span>`;
+  // Thresholds scale to how OFTEN this agent actually pushes
+  // (agentHealth.pushIntervalSeconds), not a fixed guess - an agent that
+  // pushes every 15 minutes is still healthy 14 minutes after its last
+  // push. Falls back to the agent's own PUSH_INTERVAL_SECONDS default
+  // (900s) for a payload pushed before this field existed, rather than the
+  // old fixed-60s assumption that read most agents as permanently DELAYED.
+  const intervalMs = (Number(agentHealth.pushIntervalSeconds) || 900) * 1000;
+  if(ageMs < intervalMs * 1.5) return `<span class="obs-live obs-live-ok" title="Last push ${mins} min ago">RUNNING</span>`;
+  if(ageMs < intervalMs * 3) return `<span class="obs-live obs-live-warn" title="Last push ${mins} min ago">DELAYED ${mins}m</span>`;
   return `<span class="obs-live obs-live-bad" title="Last push ${mins} min ago - the agent has probably stopped">STALE ${mins}m</span>`;
 }
 

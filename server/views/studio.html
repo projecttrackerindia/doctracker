@@ -324,17 +324,6 @@ kbd{
 .role-pill.role-Developer{ background:var(--post-bg); color:var(--post); }
 .role-pill.role-viewer{ background:var(--surface); color:var(--text-faint); border:1px solid var(--border-strong); }
 .role-pill.role-custom{ background:var(--patch-bg); color:var(--patch); }
-/* ---------- Auto-discovery pill (sidebar project header) ---------- */
-/* A discovery agent's project used to spell this out in the name itself
-   ("app — Auto-Discovery (unreviewed)"), which pushed the one thing that
-   actually distinguishes one project from the next - the app name - past
-   the sidebar's single-line ellipsis. Now it's just a small badge next to
-   the (short) name instead. */
-.project-auto-pill{
-  font-family:var(--mono); font-size:8px; font-weight:700; letter-spacing:.3px; text-transform:uppercase;
-  padding:1px 6px; border-radius:999px; background:var(--surface-hover); color:var(--text-faint);
-  flex-shrink:0; white-space:nowrap;
-}
 .role-select-row{ display:flex; align-items:center; gap:7px; margin-top:12px; }
 .role-opt{
   font-family:var(--sans); font-size:11.5px; font-weight:600; padding:6px 12px; border-radius:7px;
@@ -551,6 +540,27 @@ kbd{
   content:''; position:absolute; left:0; top:-4px; bottom:11px; width:0;
   border-left:1.5px solid var(--border); border-radius:2px; pointer-events:none;
 }
+
+/* ---------- "Auto-discovered APIs" sidebar section ----------
+   One project per Mule app now (see mule_doc_agent.py's build_app_projects)
+   - on a node running ~100 apps that's ~100 rows, which buried the handful
+   of hand-authored projects someone actually curated when mixed straight
+   into the same flat list. Collapsed by default (see AUTO_SECTION_KEY),
+   visually a step below a project row - smaller, uppercase, muted - since
+   it's a grouping header, not a project of its own. */
+.auto-section{ margin-top:6px; border-top:1px solid var(--border); padding-top:6px; }
+.auto-section-head{
+  display:flex; align-items:center; gap:7px; padding:9px 12px; cursor:pointer; user-select:none;
+  border-radius:7px; transition:background-color .12s ease;
+}
+.auto-section-head:hover{ background:var(--surface-hover); }
+.auto-caret{ color:var(--text-faint); font-size:8px; transition:transform .15s ease; flex-shrink:0; width:10px; text-align:center; }
+.auto-section.open .auto-caret{ transform:rotate(90deg); }
+.auto-section-label{
+  font-size:10px; text-transform:uppercase; letter-spacing:.6px; color:var(--text-faint); font-weight:700; flex:1;
+}
+.auto-section-body{ display:none; }
+.auto-section.open .auto-section-body{ display:block; }
 .ep{
   display:flex; align-items:center; gap:9px; margin:1px 8px 1px 0; padding:7px 10px 7px 16px; cursor:pointer;
   border-radius:7px; position:relative; transition:background-color .12s ease;

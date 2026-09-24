@@ -443,6 +443,17 @@ try:
 finally:
     agent.ENVIRONMENT = saved_env
 
+print("Agent health reports its own push cadence")
+# The Observability page's liveness badge sizes "how late is too late"
+# off this field (agentHealth.pushIntervalSeconds) rather than a fixed
+# guess - without it, a slower-than-60s PUSH_INTERVAL_SECONDS (900s is
+# the agent's own default) reads as permanently DELAYED/STALE even when
+# perfectly on schedule.
+health = agent.build_agent_health({"health": {}, "endpoints": {}, "files": {}})
+check("build_agent_health reports pushIntervalSeconds",
+      health.get("pushIntervalSeconds") == agent.PUSH_INTERVAL_SECONDS,
+      "got %r, PUSH_INTERVAL_SECONDS=%r" % (health.get("pushIntervalSeconds"), agent.PUSH_INTERVAL_SECONDS))
+
 print()
 if FAILURES:
     print("FAILED (%d): %s" % (len(FAILURES), ", ".join(FAILURES)))
