@@ -49,9 +49,20 @@ cat > "$DIR/start-agent.sh" <<'INNER'
 # while to recognise as two writers rather than one misbehaving.
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR" || exit 1
-if pgrep -f "python3 $DIR/mule_doc_agent.py" > /dev/null 2>&1; then
+# A PID FILE, not a pgrep pattern. Matching on the command line was fragile
+# and did break: adding `-u` made the real command "python3 -u /path/..."
+# while the pattern still said "python3 /path/...", so the guard silently
+# stopped matching and the 5-minute watchdog started a fresh agent every
+# five minutes, all of them writing the same state.json. A pid file cannot
+# drift out of step with the command line like that.
+#
+# `exec` below replaces this shell without changing the pid, so $$ recorded
+# here is the python process's own pid.
+PIDFILE="$DIR/agent.pid"
+if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
   exit 0
 fi
+echo $$ > "$PIDFILE"
 set -a
 . "$DIR/agent.env"
 set +a
@@ -105,8 +116,8 @@ echo
 echo "starting now..."
 "$DIR/start-agent.sh" &
 sleep 8
-if pgrep -f "python3 $DIR/mule_doc_agent.py" > /dev/null 2>&1; then
-  echo "agent is running (pid $(pgrep -f "python3 $DIR/mule_doc_agent.py" | head -1))"
+if [ -f "$DIR/agent.pid" ] && kill -0 "$(cat "$DIR/agent.pid" 2>/dev/null)" 2>/dev/null; then
+  echo "agent is running (pid $(cat "$DIR/agent.pid"))"
 else
   echo "agent did NOT stay up - last 20 lines of agent.log:" >&2
   tail -20 "$DIR/agent.log" 2>/dev/null >&2
@@ -114,7 +125,7 @@ else
 fi
 echo
 echo "  watch it:   tail -f $DIR/agent.log"
-echo "  stop it:    pkill -f 'python3 $DIR/mule_doc_agent.py'"
+echo "  stop it:    kill \$(cat $DIR/agent.pid)   # then: crontab -l | grep -v '$TAG' | crontab -"
 echo "  uninstall:  crontab -l | grep -v '$TAG' | crontab -"
 echo
 echo "It pushes every 60s. Give it 2 minutes, then check Observability."
