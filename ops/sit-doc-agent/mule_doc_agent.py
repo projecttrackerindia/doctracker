@@ -1979,11 +1979,16 @@ def seed_state_from_history(state, log_paths, max_lines):
         # A fresh carry per file, exactly as the live tailer keeps one per
         # file - a JSON block must never be assembled across two apps' logs.
         carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
-        observations = assemble_multiline_observations(lines, carry)
-        for raw in lines:
-            obs = parse_line(raw.strip())
-            if obs:
-                observations.append(obs)
+        # ORDER MATTERS, and getting it wrong is silent. parse_line() is what
+        # records a correlation id -> HTTP method from an APIkit thread name,
+        # and _finish_block() uses that map to recover the method for a JSON
+        # block that carries no method of its own. Assembling blocks FIRST
+        # means every lookup misses, because nothing has been recorded yet.
+        # The live tailer already does it in this order; the seed did not,
+        # which produced a run of "no HTTP method was captured" warnings on
+        # jwt-token-api blocks whose method was recoverable all along.
+        observations = [o for o in (parse_line(l.strip()) for l in lines) if o]
+        observations += assemble_multiline_observations(lines, carry)
         aggregate(state, observations)
         total_lines += len(lines)
         total_obs += len(observations)
@@ -2028,6 +2033,13 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
                 per_file_report.append((os.path.basename(_p), 0, 0, 0, set(), set()))
                 continue
             carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+            # Single lines are parsed below, but the correlation id -> method
+            # map they populate has to exist BEFORE blocks are assembled, or
+            # a block with no method of its own can't recover one. Sample
+            # mode would otherwise under-report exactly the records a real
+            # run captures - see the same note in seed_state_from_history().
+            for _pre in flines:
+                parse_line(_pre)
             fmulti = assemble_multiline_observations(flines, carry)
             fmatched, funmatched = 0, 0
             shown = 0

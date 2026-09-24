@@ -323,6 +323,61 @@ check("the map evicts oldest once full", len(agent._CORRID_METHOD) == agent.MAX_
       "grew to %d" % len(agent._CORRID_METHOD))
 agent._CORRID_METHOD.clear()
 
+print("Correlation-id recovery (the fallback, and the ordering it needs)")
+# jwt-token-api logs a complete JSON record whose FlowName is a plain
+# business flow ("common-logger-flow"), so the method is not in the block.
+# The thread name here puts the APIkit name after ": " rather than ".", so
+# HEADER_METHOD_PATTERN cannot match it either - the correlation id is the
+# only route to the method. That makes this fixture actually exercise the
+# fallback rather than quietly passing via the header pattern.
+agent._CORRID_METHOD.clear()
+CID = "dddddddd-b7d2-11f1-8e71-02783a995911"
+apikit_line = (
+    r'INFO  2026-09-24 10:16:30,000 [[MuleRuntime].uber.9: post:\token:application'
+    r'\json:jwt-token-api-config] [processor: p/processors/0; event: %s] '
+    r'org.mule.runtime.core.internal.processor.LoggerMessageProcessor: start' % CID)
+check("the fixture's APIkit line is not matchable by the header pattern",
+      agent.HEADER_METHOD_PATTERN.search(apikit_line) is None,
+      "the header pattern matches, so this would not test the fallback")
+
+blk = {"ApplicationName": "jwt-token-api", "FlowName": "common-logger-flow",
+       "RequestUri": "/auth/jwt/token", "HttpStatus": 200, "correlationId": CID}
+blk_lines = [
+    "INFO  2026-09-24 10:16:33,311 [[MuleRuntime].uber.1: [jwt-token-api].uber@x] "
+    "[processor: x/processors/0; event: %s] "
+    "org.mule.runtime.core.internal.processor.LoggerMessageProcessor: {" % CID
+] + json.dumps(blk, indent=2).splitlines()[1:]
+all_lines = [apikit_line] + blk_lines
+
+# Without the correlation id recorded, the block has no recoverable method.
+agent._CORRID_METHOD.clear()
+c1 = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+check("with nothing recorded, the block yields no observation",
+      len(agent.assemble_multiline_observations(blk_lines, c1)) == 0)
+
+# With single lines parsed first, exactly as seed/sample/live all do.
+agent._CORRID_METHOD.clear()
+for l in all_lines:
+    agent.parse_line(l.strip())
+check("the APIkit line is recorded despite the unusual thread-name shape",
+      agent._CORRID_METHOD.get(CID, (None,))[0] == "POST",
+      "got %r" % (agent._CORRID_METHOD.get(CID),))
+c2 = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+right = agent.assemble_multiline_observations(blk_lines, c2)
+check("the block then recovers method, path and status",
+      len(right) == 1 and right[0]["method"] == "POST"
+      and right[0]["path"] == "/auth/jwt/token" and right[0]["statusCode"] == 200,
+      "got %r" % right)
+
+# Pin the ordering in the source, since getting it wrong fails silently.
+_src = open(os.path.join(AGENT_DIR, "mule_doc_agent.py"), encoding="utf-8").read()
+_seed = _src[_src.index("def seed_state_from_history("):]
+_seed = _seed[:_seed.index("def run(")]
+check("seed_state_from_history parses single lines before assembling blocks",
+      _seed.index("parse_line(") < _seed.index("assemble_multiline_observations("))
+agent._CORRID_METHOD.clear()
+
+
 print()
 if FAILURES:
     print("FAILED (%d): %s" % (len(FAILURES), ", ".join(FAILURES)))

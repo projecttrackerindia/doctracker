@@ -100,6 +100,24 @@ echo "== 5/5 the payload it would push =="
 # which can be large and holds discovered field names.
 sed -n '/would push endpoint metrics/,+12p' "$OUT"
 echo
-echo "endpoints in payload: $(grep -c '"totalRequests"' "$OUT")"
+# Counted from the state file, NOT from the printed payload: the dry-run
+# print is truncated to 2500 characters, so grepping it reports about nine
+# endpoints no matter how many there really are - which looked like a
+# catastrophic discovery failure when 382 had in fact been found.
+if [ -f "${AGENT_STATE_FILE:-state.json}" ]; then
+  python3 - "$AGENT_STATE_FILE" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception as e:
+    print("could not read state file: %s" % e); raise SystemExit(0)
+eps = d.get("endpoints") or {}
+withreq = sum(1 for e in eps.values() if (e or {}).get("totalRequests"))
+print("endpoints known      : %d" % len(eps))
+print("  with real traffic  : %d" % withreq)
+print("  discovered only    : %d" % (len(eps) - withreq))
+print("seeded from history  : %s" % bool(d.get("seededFromHistory")))
+PY
+fi
 echo
 echo "Nothing was sent to DocTracker. Full output is in $DIR/$OUT"
