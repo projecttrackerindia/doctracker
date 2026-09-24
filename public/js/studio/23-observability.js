@@ -717,8 +717,19 @@ function groupMetricsByProject(metrics){
     if(key === OBS_OVERFLOW_KEY){ undocumented.push(key); return; }
     const found = findDocumentedEndpointForMetricsKey(key);
     if(found){
-      if(!groups.has(found.proj.id)) groups.set(found.proj.id, { id: found.proj.id, name: found.proj.name, keys: [] });
-      groups.get(found.proj.id).keys.push(key);
+      // Group by the Mule APPLICATION where we know it, not by the
+      // DocTracker project. Auto-discovery puts every endpoint it finds
+      // into one project, so grouping by project produced a single
+      // undifferentiated list of ~380 - no way to find an API by name.
+      // The agent tags each endpoint with the app that serves it, and that
+      // tag is the name people actually recognise. Hand-documented projects
+      // keep their project name, since their tags mean something else.
+      const tag = found.ep && typeof found.ep.tag === 'string' ? found.ep.tag.trim() : '';
+      const useTag = tag && tag !== 'Auto-discovered';
+      const id = useTag ? `app:${tag}` : found.proj.id;
+      const name = useTag ? tag : found.proj.name;
+      if(!groups.has(id)) groups.set(id, { id, name, keys: [] });
+      groups.get(id).keys.push(key);
     } else {
       undocumented.push(key);
     }
