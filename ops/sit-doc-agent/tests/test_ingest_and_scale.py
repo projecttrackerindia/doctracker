@@ -443,6 +443,42 @@ try:
 finally:
     agent.ENVIRONMENT = saved_env
 
+print("Content fingerprint - skip re-pushing an app whose documentation hasn't changed")
+# The whole point: more of the SAME traffic must NOT look like a change,
+# or shortening PUSH_INTERVAL_SECONDS just means rewriting every app's
+# project 3x as often for nothing.
+base_eps = {
+    "GET /health": {"method": "GET", "path": "/health", "fieldShapes": {},
+                     "responseFieldShapes": {"status": "string"}, "statusCodes": {"200": 40}},
+}
+more_traffic_same_shape = {
+    "GET /health": {"method": "GET", "path": "/health", "fieldShapes": {},
+                     "responseFieldShapes": {"status": "string"}, "statusCodes": {"200": 4000}},
+}
+new_field_seen = {
+    "GET /health": {"method": "GET", "path": "/health", "fieldShapes": {},
+                     "responseFieldShapes": {"status": "string", "uptime": "number"}, "statusCodes": {"200": 40}},
+}
+new_status_seen = {
+    "GET /health": {"method": "GET", "path": "/health", "fieldShapes": {},
+                     "responseFieldShapes": {"status": "string"}, "statusCodes": {"200": 40, "503": 1}},
+}
+fp_base = agent.app_content_fingerprint(base_eps)
+check("100x more of the same traffic does not change the fingerprint",
+      agent.app_content_fingerprint(more_traffic_same_shape) == fp_base)
+check("a newly-observed response field changes the fingerprint",
+      agent.app_content_fingerprint(new_field_seen) != fp_base)
+check("a newly-observed status code changes the fingerprint",
+      agent.app_content_fingerprint(new_status_seen) != fp_base)
+check("an empty app has a stable (not crashing) fingerprint", agent.app_content_fingerprint({}) is not None)
+
+gA = agent._group_endpoints_by_app({"endpoints": {
+    "POST /token": {"method": "POST", "path": "/token", "app": "jwt-token-api",
+                     "fieldShapes": {}, "responseFieldShapes": {}, "statusCodes": {"200": 1}},
+}})
+check("_group_endpoints_by_app groups by the app field build_app_projects() also uses",
+      list(gA.keys()) == ["jwt-token-api"] and "POST /token" in gA["jwt-token-api"])
+
 print("Agent health reports its own push cadence")
 # The Observability page's liveness badge sizes "how late is too late"
 # off this field (agentHealth.pushIntervalSeconds) rather than a fixed

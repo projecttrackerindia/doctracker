@@ -1995,19 +1995,14 @@ def build_project(state, existing_project=None):
 MAX_APP_PROJECTS_PER_PUSH = 200
 
 
-def build_app_projects(state, existing_projects=None):
-    """One DocTracker project PER MULE APP, instead of one project with the
-    apps as internal tag-groups. This is what makes each app its own
-    top-level folder in the sidebar (rather than every app nested one level
-    inside a single "SIT Auto-Discovery" project) - see project_id_for_app()
-    for how each app's project id is derived.
-
-    `existing_projects` is workspace["projects"] (id -> project) from the
-    same get_workspace() call the caller uses for the conflict check, so
-    each app project can carry forward its own prior endpoints/_rev rather
-    than starting blank every cycle."""
-    existing_projects = existing_projects or {}
-    now_iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+def _group_endpoints_by_app(state):
+    """{app: {key: ep}} - every tracked endpoint grouped by the Mule app
+    that serves it, capped at MAX_APP_PROJECTS_PER_PUSH apps (busiest kept,
+    see the [warn] below). Shared by build_app_projects() and the
+    fingerprint diff in run() so both agree on exactly which apps this
+    cycle even considers - if they used two separately-written groupings
+    they could disagree at the cap boundary and either push or fingerprint
+    an app the other one dropped."""
     groups = {}
     for key, ep in state.get("endpoints", {}).items():
         if key == OVERFLOW_KEY:
@@ -2028,6 +2023,49 @@ def build_app_projects(state, existing_projects=None):
               f"{MAX_APP_PROJECTS_PER_PUSH}; skipping this cycle's push for: {dropped}",
               file=sys.stderr)
         groups = dict(by_traffic[:MAX_APP_PROJECTS_PER_PUSH])
+    return groups
+
+
+def app_content_fingerprint(eps):
+    """A hash of what would actually change in DocTracker's documentation
+    for one app - which paths/methods exist, and which request/response
+    field names+types and status codes have ever been seen on them.
+    Deliberately excludes anything that changes on its own just from more
+    of the SAME traffic arriving (observation counts, lastSeenAt, source
+    IPs) - those already have a home in endpoint-metrics, which pushes
+    every cycle regardless. This is the signal for "is there new DOCUMENTATION
+    to write", used in run() to skip re-pushing (and re-encrypting, and
+    rewriting) a project whose discovered shape hasn't moved since the last
+    successful push - see MAX_APP_PROJECTS_PER_PUSH's docstring for the
+    unconditional-rewrite cost this avoids."""
+    parts = []
+    for key in sorted(eps.keys()):
+        ep = eps[key]
+        parts.append(ep.get("method", ""))
+        parts.append(ep.get("path", ""))
+        parts.append(",".join(sorted("%s:%s" % (k, t) for k, t in ep.get("fieldShapes", {}).items())))
+        parts.append(",".join(sorted("%s:%s" % (k, t) for k, t in ep.get("responseFieldShapes", {}).items())))
+        parts.append(",".join(sorted(ep.get("statusCodes", {}).keys())))
+    return stable_id(*parts)
+
+
+def build_app_projects(state, existing_projects=None, groups=None):
+    """One DocTracker project PER MULE APP, instead of one project with the
+    apps as internal tag-groups. This is what makes each app its own
+    top-level folder in the sidebar (rather than every app nested one level
+    inside a single "SIT Auto-Discovery" project) - see project_id_for_app()
+    for how each app's project id is derived.
+
+    `existing_projects` is workspace["projects"] (id -> project) from the
+    same get_workspace() call the caller uses for the conflict check, so
+    each app project can carry forward its own prior endpoints/_rev rather
+    than starting blank every cycle. `groups` lets a caller that already
+    called _group_endpoints_by_app() (run(), for the fingerprint diff)
+    reuse that same result instead of grouping twice."""
+    existing_projects = existing_projects or {}
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    if groups is None:
+        groups = _group_endpoints_by_app(state)
 
     projects = {}
     for app, eps in groups.items():
@@ -2601,10 +2639,36 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
                     # each app then shows as its own top-level folder in the
                     # DocTracker sidebar instead of nested one level inside a
                     # single "SIT Auto-Discovery" entry.
-                    candidate_projects = build_app_projects(state, existing_projects)
+                    #
+                    # Only apps whose DISCOVERED SHAPE actually changed since
+                    # the last successful push are rebuilt and sent - see
+                    # app_content_fingerprint()'s docstring. On a stable API
+                    # surface that's most apps most cycles: more traffic on
+                    # an already-known endpoint moves endpoint-metrics (which
+                    # still pushes every cycle below, unconditionally - that
+                    # data is SUPPOSED to change constantly), not this
+                    # project write. Shortening PUSH_INTERVAL_SECONDS no
+                    # longer means "encrypt and rewrite every app's project
+                    # 3x as often for no reason."
+                    app_groups = _group_endpoints_by_app(state)
+                    fingerprints = {project_id_for_app(app): app_content_fingerprint(eps)
+                                     for app, eps in app_groups.items()}
+                    pushed_fingerprints = state.setdefault("pushedFingerprints", {})
+                    changed_ids = {pid for pid, fp in fingerprints.items() if pushed_fingerprints.get(pid) != fp}
+                    # An id whose fingerprint we already have on file but that
+                    # isn't on the SERVER (e.g. a human deleted it, or this is
+                    # its very first cycle after a state.json wipe) must still
+                    # be considered - otherwise a manually-deleted project
+                    # would never come back once its fingerprint happened to
+                    # match what's locally on file.
+                    changed_ids |= {pid for pid in fingerprints if pid not in existing_projects}
+
+                    candidate_projects = build_app_projects(state, existing_projects, groups=app_groups)
                     to_push = {}
                     conflicts_found = []
                     for pid, proj in candidate_projects.items():
+                        if pid not in changed_ids:
+                            continue  # unchanged since the last successful push - nothing new to write
                         existing_project = existing_projects.get(pid)
                         conflict = project_environment_conflict(existing_project, ENVIRONMENT)
                         if conflict:
@@ -2630,6 +2694,17 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
                         health["lastPushOk"] = True
                         health["lastError"] = None
                     client.push_project(to_push)
+                    # Only record success for what was actually pushed -
+                    # push_project() raises on any failure (see its
+                    # docstring), so reaching here means to_push's ids are
+                    # confirmed written; a skipped (conflicted) id keeps its
+                    # old fingerprint and is retried next cycle.
+                    for pid in to_push:
+                        pushed_fingerprints[pid] = fingerprints[pid]
+                    print(f"[info] {len(to_push)} of {len(candidate_projects)} app project(s) had new "
+                          f"documentation to push this cycle "
+                          f"({len(candidate_projects) - len(to_push) - len(conflicts_found)} unchanged, "
+                          f"{len(conflicts_found)} skipped on conflict)")
                     # The revision read in the SAME get_workspace() call above,
                     # so the server can tell whether anything changed the blob
                     # between that read and this write.
