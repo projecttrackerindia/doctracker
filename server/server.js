@@ -23,6 +23,8 @@ const liveModeRoutes = require('./routes/liveMode');
 const docAccessRoutes = require('./routes/docAccess');
 const aiRoutes = require('./routes/ai');
 const notificationRoutes = require('./routes/notifications');
+const observabilityRoutes = require('./routes/observability');
+const compressionMiddleware = require('./middleware/compress');
 const { verifySession, IdleTimeoutError } = require('./middleware/authGuard');
 
 const app = express();
@@ -116,6 +118,13 @@ app.use(
   })
 );
 app.use(cookieParser());
+// Scoped to /api rather than mounted globally: the large payloads are all
+// JSON API responses, and limiting it here keeps static assets and rendered
+// HTML on Express's untouched send path. Widen it later if there's a reason -
+// there's no benefit in putting response-rewriting middleware in front of
+// routes that don't need it. Skips event streams, HEAD, and small bodies -
+// see server/middleware/compress.js.
+app.use('/api', compressionMiddleware);
 
 // Workspace payloads carry base64-encoded document attachments, so they need a
 // much larger body limit than auth/user requests — scoped to this path only,
@@ -141,6 +150,11 @@ app.use('/api/live-mode', liveModeRoutes);
 // falling back to the tighter 20kb default. It's still its own router/file
 // (server/routes/docAccess.js), same separation as liveModeRoutes.
 app.use('/api/workspace/doc-access', docAccessRoutes);
+// Mounted under /api/workspace for the same two reasons docAccess is: the
+// client's apiGet/apiSend helpers are hard-coded to that base, and the 25mb
+// JSON limit set above applies (an agent's rollup push for a busy interval is
+// far larger than the 20kb default). Its own router/file, same as the others.
+app.use('/api/workspace/observability', observabilityRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/notifications', notificationRoutes);
 

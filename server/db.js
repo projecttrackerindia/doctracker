@@ -666,7 +666,151 @@ async function initDb() {
     );
   `);
 
+  // ---- Observability time-series ----------------------------------------
+  // These two tables replace the single encrypted `endpoint_metrics_enc` blob
+  // as the storage for TIME-SERIES traffic data. The blob shape could not
+  // support any of: a month of retention, server-side date filtering,
+  // pagination, or reading one window without materialising everything - you
+  // cannot index or range-scan inside one ciphertext column.
+  //
+  // WHAT IS AND ISN'T ENCRYPTED HERE, and why that is not a downgrade:
+  // this follows the rule the project already set for users.email /
+  // organisation (see CHANGES_ENCRYPTION_AND_ROUTING.md) - columns the app
+  // must query on directly in SQL are plaintext; content that can hold real
+  // secrets stays encrypted. Concretely:
+  //   * `endpoint_id` is the agent's stable_id HASH, never the literal path,
+  //     so no API surface leaks into a plaintext column. Paths live only in
+  //     the already-encrypted project document and are joined at render time.
+  //   * rollup rows are counters + an opaque hash + a timestamp. There is
+  //     nothing secret in them BY CONSTRUCTION, which is a stronger property
+  //     than encrypting them would be - it does not depend on a key.
+  //   * raw per-request records keep the genuinely sensitive part - the
+  //     captured request/response FIELD VALUES from CAPTURE_MODE=full - in
+  //     `fields_enc`, under the same DEK/KEK envelope as everything else.
+  // Sums two counter-shaped JSONB objects key-by-key ({"100": 3} + {"100": 2,
+  // "250": 1} = {"100": 5, "250": 1}). This is what lets a rollup upsert merge
+  // latency histograms and per-IP counts INSIDE the single INSERT ... ON
+  // CONFLICT statement. Without it, merging those two columns would need a
+  // read-modify-write round trip per bucket - reintroducing exactly the
+  // read-then-write pattern this whole redesign exists to remove.
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION jsonb_counter_merge(a jsonb, b jsonb)
+    RETURNS jsonb LANGUAGE sql IMMUTABLE AS $fn$
+      SELECT coalesce(jsonb_object_agg(k, v), '{}'::jsonb)
+      FROM (
+        SELECT k, sum(v::numeric) AS v
+        FROM (
+          SELECT key AS k, value AS v FROM jsonb_each_text(coalesce(a, '{}'::jsonb))
+          UNION ALL
+          SELECT key AS k, value AS v FROM jsonb_each_text(coalesce(b, '{}'::jsonb))
+        ) merged
+        GROUP BY k
+      ) summed;
+    $fn$;
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS endpoint_metrics_rollup (
+      organisation   TEXT NOT NULL,
+      environment    TEXT NOT NULL,
+      endpoint_id    TEXT NOT NULL,
+      bucket_start   TIMESTAMPTZ NOT NULL,
+      request_count  INTEGER NOT NULL DEFAULT 0,
+      status_2xx     INTEGER NOT NULL DEFAULT 0,
+      status_3xx     INTEGER NOT NULL DEFAULT 0,
+      status_4xx     INTEGER NOT NULL DEFAULT 0,
+      status_5xx     INTEGER NOT NULL DEFAULT 0,
+      status_unknown INTEGER NOT NULL DEFAULT 0,
+      latency_sum    BIGINT  NOT NULL DEFAULT 0,
+      latency_count  INTEGER NOT NULL DEFAULT 0,
+      latency_min    INTEGER,
+      latency_max    INTEGER,
+      latency_buckets JSONB NOT NULL DEFAULT '{}',
+      source_ips     JSONB NOT NULL DEFAULT '{}',
+      PRIMARY KEY (organisation, environment, endpoint_id, bucket_start)
+    );
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_rollup_org_env_bucket
+    ON endpoint_metrics_rollup (organisation, environment, bucket_start DESC);
+  `);
+  // Supports "the whole org, any environment, this date range" without having
+  // to name an environment - the All-scope console view.
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_rollup_org_bucket
+    ON endpoint_metrics_rollup (organisation, bucket_start DESC);
+  `);
+
+  // Raw per-request records. RANGE-partitioned by day so retention is a
+  // DROP TABLE of one partition (instant, no bloat, no vacuum storm) rather
+  // than a DELETE of millions of rows on a schedule, which would slowly
+  // degrade the table it is trying to keep healthy.
+  //
+  // No PRIMARY KEY on `id` alone: Postgres requires every unique constraint
+  // on a partitioned table to include the partition key, so the identity is
+  // (id, ts). `id` is still a BIGSERIAL for stable ordering within a bucket.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS endpoint_log_records (
+      id             BIGSERIAL,
+      organisation   TEXT NOT NULL,
+      environment    TEXT NOT NULL,
+      endpoint_id    TEXT NOT NULL,
+      ts             TIMESTAMPTZ NOT NULL,
+      status_code    SMALLINT,
+      latency_ms     INTEGER,
+      client_ip      TEXT,
+      correlation_id TEXT,
+      flow_name      TEXT,
+      fields_enc     TEXT,
+      key_version    INTEGER,
+      PRIMARY KEY (id, ts)
+    ) PARTITION BY RANGE (ts);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_logrec_org_env_ts
+    ON endpoint_log_records (organisation, environment, ts DESC);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_logrec_org_corr
+    ON endpoint_log_records (organisation, correlation_id);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_logrec_org_endpoint_ts
+    ON endpoint_log_records (organisation, endpoint_id, ts DESC);
+  `);
+  // A partitioned table with no partition covering `now()` rejects every
+  // INSERT outright, so the very first ones are created here at boot rather
+  // than waiting for the retention sweep's first run.
+  await ensureLogRecordPartitions(3);
+
   console.log('Database schema ready.');
 }
 
-module.exports = { pool, initDb };
+// Creates the daily partitions for [today - 1, today + aheadDays]. Idempotent
+// (IF NOT EXISTS), so the boot call and the daily retention sweep can both run
+// it harmlessly. Yesterday is included because an agent catching up on a
+// backlog can legitimately push records timestamped before midnight.
+async function ensureLogRecordPartitions(aheadDays = 3) {
+  const day = 24 * 60 * 60 * 1000;
+  const startOfUtcDay = (ms) => {
+    const d = new Date(ms);
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  };
+  const created = [];
+  for (let offset = -1; offset <= aheadDays; offset += 1) {
+    const from = startOfUtcDay(Date.now() + offset * day);
+    const to = new Date(from.getTime() + day);
+    const suffix = from.toISOString().slice(0, 10).replace(/-/g, '_');
+    const name = `endpoint_log_records_${suffix}`;
+    // Identifiers cannot be parameterised, so `name` is built here from a
+    // date we computed - never from user input.
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS ${name} PARTITION OF endpoint_log_records
+       FOR VALUES FROM ('${from.toISOString()}') TO ('${to.toISOString()}');`
+    );
+    created.push(name);
+  }
+  return created;
+}
+
+module.exports = { pool, initDb, ensureLogRecordPartitions };

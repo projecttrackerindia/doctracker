@@ -1,0 +1,583 @@
+// ============================================================================
+// Observability time-series store.
+//
+// This is the read/write layer for the two tables that replaced the single
+// encrypted `endpoint_metrics_enc` blob as the home for traffic data (see the
+// long note above their CREATE TABLE in server/db.js for why the blob could
+// not do this job).
+//
+// Two tiers, deliberately:
+//
+//   endpoint_metrics_rollup   1-minute buckets, 13-month retention.
+//                             EXACT counts - every request is counted, nothing
+//                             is ever evicted. This is what every chart, KPI
+//                             and date-range filter reads from.
+//
+//   endpoint_log_records      individual requests, 7-day retention, daily
+//                             partitions. Only populated when the agent runs
+//                             with CAPTURE_MODE=full. This is for drill-down
+//                             ("show me the actual failing calls"), never for
+//                             aggregates.
+//
+// The important consequence: a month of accurate, date-filtered metrics needs
+// ONLY the rollup tier, which contains no captured field values at all. Full
+// capture buys per-request drill-down and nothing else, so its privacy cost is
+// now scoped to a 7-day window instead of being the price of having history.
+// ============================================================================
+const { pool } = require('./db');
+const dataCrypto = require('./crypto');
+
+// Prometheus-style cumulative-friendly boundaries, in milliseconds. Stored per
+// rollup bucket as {"10": n, "25": n, ..., "inf": n} where n is the count of
+// requests whose latency fell IN that band (not cumulative - see
+// percentileFromBuckets, which accumulates at read time).
+//
+// Why a histogram rather than storing p50/p95/p99 per bucket: percentiles are
+// not averageable. Taking the mean of sixty one-minute p95s does not give the
+// hour's p95 and can be wildly wrong. Summing histogram bands across any
+// number of buckets and reading the percentile off the total IS correct, which
+// is what makes "p95 over the last 30 days" a meaningful number here.
+const LATENCY_BUCKET_BOUNDS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
+const LATENCY_BUCKET_KEYS = LATENCY_BUCKET_BOUNDS.map(String).concat(['inf']);
+
+function latencyBucketKey(ms) {
+  for (const bound of LATENCY_BUCKET_BOUNDS) {
+    if (ms <= bound) return String(bound);
+  }
+  return 'inf';
+}
+
+// Reads a percentile off summed histogram bands with linear interpolation
+// inside the band the target falls in - the same estimator Prometheus'
+// histogram_quantile uses, so a single sample in the (100, 250] band reports
+// 175ms rather than either edge. The result is always inside the band the
+// value actually fell in, which is the accuracy guarantee a histogram can
+// honestly make; it is an estimate within a known interval, not a precise
+// figure, and the band widths above set how tight that interval is.
+//
+// Returns null rather than 0 when there is nothing to measure - a p95 of
+// "0ms" on an endpoint with no traffic reads as a real, excellent number,
+// which is exactly the kind of confident-looking wrong figure this codebase
+// avoids elsewhere.
+function percentileFromBuckets(buckets, q) {
+  const counts = LATENCY_BUCKET_KEYS.map((k) => Number(buckets?.[k] || 0));
+  const total = counts.reduce((a, b) => a + b, 0);
+  if (!total) return null;
+
+  const target = total * q;
+  let cumulative = 0;
+  for (let i = 0; i < counts.length; i += 1) {
+    const next = cumulative + counts[i];
+    if (next >= target) {
+      const lower = i === 0 ? 0 : LATENCY_BUCKET_BOUNDS[i - 1];
+      // The open-ended top band has no upper bound to interpolate toward, so
+      // report its lower edge rather than inventing a ceiling.
+      const upper = LATENCY_BUCKET_KEYS[i] === 'inf' ? lower : LATENCY_BUCKET_BOUNDS[i];
+      if (upper === lower || counts[i] === 0) return Math.round(upper);
+      const within = (target - cumulative) / counts[i];
+      return Math.round(lower + (upper - lower) * within);
+    }
+    cumulative = next;
+  }
+  return Math.round(LATENCY_BUCKET_BOUNDS[LATENCY_BUCKET_BOUNDS.length - 1]);
+}
+
+// ---------------------------------------------------------------------------
+// Ingest
+// ---------------------------------------------------------------------------
+
+const MAX_BUCKETS_PER_PUSH = 5000;
+const MAX_RECORDS_PER_PUSH = 5000;
+
+function isFiniteNum(v) {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+function toInt(v, fallback = 0) {
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) ? n : fallback;
+}
+
+// Upserts 1-minute rollup buckets, summing into whatever is already stored for
+// the same (org, environment, endpoint, minute).
+//
+// This is the write path's whole point: it is a single statement, it never
+// reads before writing, and concurrent agents touching the same bucket sum
+// correctly rather than overwriting each other. There is no row lock to
+// contend on and no ciphertext to round-trip, which is what makes a 60-second
+// (or faster) push cadence cheap enough to stop thinking about.
+async function ingestRollups(organisation, environment, buckets) {
+  if (!Array.isArray(buckets) || !buckets.length) return { written: 0 };
+  const capped = buckets.slice(0, MAX_BUCKETS_PER_PUSH);
+
+  const values = [];
+  const params = [];
+  let i = 1;
+  for (const b of capped) {
+    const endpointId = typeof b.endpointId === 'string' ? b.endpointId.slice(0, 64) : '';
+    const bucketStart = typeof b.bucketStart === 'string' ? b.bucketStart : null;
+    if (!endpointId || !bucketStart || Number.isNaN(Date.parse(bucketStart))) continue;
+
+    values.push(
+      `($${i}, $${i + 1}, $${i + 2}, $${i + 3}::timestamptz, $${i + 4}, $${i + 5}, $${i + 6}, ` +
+      `$${i + 7}, $${i + 8}, $${i + 9}, $${i + 10}, $${i + 11}, $${i + 12}, $${i + 13}, ` +
+      `$${i + 14}::jsonb, $${i + 15}::jsonb)`
+    );
+    params.push(
+      organisation,
+      environment,
+      endpointId,
+      bucketStart,
+      toInt(b.requestCount),
+      toInt(b.status2xx),
+      toInt(b.status3xx),
+      toInt(b.status4xx),
+      toInt(b.status5xx),
+      toInt(b.statusUnknown),
+      toInt(b.latencySum),
+      toInt(b.latencyCount),
+      isFiniteNum(b.latencyMin) ? toInt(b.latencyMin) : null,
+      isFiniteNum(b.latencyMax) ? toInt(b.latencyMax) : null,
+      JSON.stringify(b.latencyBuckets && typeof b.latencyBuckets === 'object' ? b.latencyBuckets : {}),
+      JSON.stringify(b.sourceIps && typeof b.sourceIps === 'object' ? b.sourceIps : {})
+    );
+    i += 16;
+  }
+  if (!values.length) return { written: 0 };
+
+  await pool.query(
+    `INSERT INTO endpoint_metrics_rollup (
+       organisation, environment, endpoint_id, bucket_start,
+       request_count, status_2xx, status_3xx, status_4xx, status_5xx, status_unknown,
+       latency_sum, latency_count, latency_min, latency_max, latency_buckets, source_ips
+     ) VALUES ${values.join(', ')}
+     ON CONFLICT (organisation, environment, endpoint_id, bucket_start) DO UPDATE SET
+       request_count  = endpoint_metrics_rollup.request_count  + EXCLUDED.request_count,
+       status_2xx     = endpoint_metrics_rollup.status_2xx     + EXCLUDED.status_2xx,
+       status_3xx     = endpoint_metrics_rollup.status_3xx     + EXCLUDED.status_3xx,
+       status_4xx     = endpoint_metrics_rollup.status_4xx     + EXCLUDED.status_4xx,
+       status_5xx     = endpoint_metrics_rollup.status_5xx     + EXCLUDED.status_5xx,
+       status_unknown = endpoint_metrics_rollup.status_unknown + EXCLUDED.status_unknown,
+       latency_sum    = endpoint_metrics_rollup.latency_sum    + EXCLUDED.latency_sum,
+       latency_count  = endpoint_metrics_rollup.latency_count  + EXCLUDED.latency_count,
+       latency_min    = LEAST(endpoint_metrics_rollup.latency_min, EXCLUDED.latency_min),
+       latency_max    = GREATEST(endpoint_metrics_rollup.latency_max, EXCLUDED.latency_max),
+       latency_buckets = jsonb_counter_merge(endpoint_metrics_rollup.latency_buckets, EXCLUDED.latency_buckets),
+       source_ips      = jsonb_counter_merge(endpoint_metrics_rollup.source_ips, EXCLUDED.source_ips)`,
+    params
+  );
+  return { written: values.length };
+}
+
+// Appends raw per-request records (CAPTURE_MODE=full only). The captured field
+// VALUES are encrypted per row before they touch the table; everything else is
+// queryable metadata. See the db.js note on why that split is the right one.
+async function ingestRecords(organisation, environment, records) {
+  if (!Array.isArray(records) || !records.length) return { written: 0 };
+  const capped = records.slice(0, MAX_RECORDS_PER_PUSH);
+
+  const values = [];
+  const params = [];
+  let i = 1;
+  for (const r of capped) {
+    const ts = typeof r.ts === 'string' && !Number.isNaN(Date.parse(r.ts)) ? r.ts : null;
+    const endpointId = typeof r.endpointId === 'string' ? r.endpointId.slice(0, 64) : '';
+    if (!ts || !endpointId) continue;
+
+    let fieldsEnc = null;
+    let keyVersion = null;
+    const fields = {};
+    if (r.requestFields && typeof r.requestFields === 'object') fields.requestFields = r.requestFields;
+    if (r.responseFields && typeof r.responseFields === 'object') fields.responseFields = r.responseFields;
+    if (Object.keys(fields).length) {
+      // AAD-bound to the organisation, same as every other encrypted value in
+      // this app - a ciphertext lifted from one org's row cannot be replayed
+      // into another's. encryptField() embeds the key version in the token
+      // itself; `key_version` is stored alongside purely so a future bulk
+      // re-encryption pass can find old rows with an indexed scan instead of
+      // parsing every ciphertext.
+      fieldsEnc = dataCrypto.encryptField(JSON.stringify(fields), `obs_record:${organisation}`);
+      keyVersion = dataCrypto.currentKeyVersion();
+    }
+
+    values.push(
+      `($${i}, $${i + 1}, $${i + 2}, $${i + 3}::timestamptz, $${i + 4}, $${i + 5}, ` +
+      `$${i + 6}, $${i + 7}, $${i + 8}, $${i + 9}, $${i + 10})`
+    );
+    params.push(
+      organisation,
+      environment,
+      endpointId,
+      ts,
+      isFiniteNum(r.statusCode) ? toInt(r.statusCode) : null,
+      isFiniteNum(r.latencyMs) ? toInt(r.latencyMs) : null,
+      typeof r.clientIp === 'string' ? r.clientIp.slice(0, 64) : null,
+      typeof r.correlationId === 'string' ? r.correlationId.slice(0, 128) : null,
+      typeof r.flowName === 'string' ? r.flowName.slice(0, 200) : null,
+      fieldsEnc,
+      keyVersion
+    );
+    i += 11;
+  }
+  if (!values.length) return { written: 0 };
+
+  await pool.query(
+    `INSERT INTO endpoint_log_records (
+       organisation, environment, endpoint_id, ts,
+       status_code, latency_ms, client_ip, correlation_id, flow_name,
+       fields_enc, key_version
+     ) VALUES ${values.join(', ')}`,
+    params
+  );
+  return { written: values.length };
+}
+
+// ---------------------------------------------------------------------------
+// Read
+// ---------------------------------------------------------------------------
+
+// `alias` qualifies the column names for queries that join this table against
+// something else (the histogram expansions below). Passing it is cleaner and
+// far less fragile than string-rewriting the finished clause.
+function whereClause(organisation, environment, from, to, alias = '') {
+  const col = (name) => (alias ? `${alias}.${name}` : name);
+  const params = [organisation];
+  const parts = [`${col('organisation')} = $1`];
+  let i = 2;
+  if (environment) {
+    parts.push(`${col('environment')} = $${i}`);
+    params.push(environment);
+    i += 1;
+  }
+  if (from) {
+    parts.push(`${col('bucket_start')} >= $${i}::timestamptz`);
+    params.push(from);
+    i += 1;
+  }
+  if (to) {
+    parts.push(`${col('bucket_start')} < $${i}::timestamptz`);
+    params.push(to);
+    i += 1;
+  }
+  return { text: parts.join(' AND '), params, nextIndex: i };
+}
+
+// Everything the console's KPI row needs for one date range, computed in
+// Postgres over exact counts rather than in the browser over a sampled buffer.
+async function getSummary(organisation, { environment, from, to } = {}) {
+  const w = whereClause(organisation, environment, from, to);
+  const { rows } = await pool.query(
+    `SELECT
+       COALESCE(SUM(request_count), 0)::bigint  AS total,
+       COALESCE(SUM(status_2xx), 0)::bigint     AS s2,
+       COALESCE(SUM(status_3xx), 0)::bigint     AS s3,
+       COALESCE(SUM(status_4xx), 0)::bigint     AS s4,
+       COALESCE(SUM(status_5xx), 0)::bigint     AS s5,
+       COALESCE(SUM(status_unknown), 0)::bigint AS sunknown,
+       COALESCE(SUM(latency_sum), 0)::bigint    AS latency_sum,
+       COALESCE(SUM(latency_count), 0)::bigint  AS latency_count,
+       MIN(latency_min)                          AS latency_min,
+       MAX(latency_max)                          AS latency_max,
+       COUNT(DISTINCT endpoint_id)::int          AS endpoint_count,
+       MAX(bucket_start)                         AS last_seen_at
+     FROM endpoint_metrics_rollup WHERE ${w.text}`,
+    w.params
+  );
+  const r = rows[0] || {};
+
+  // The histogram and IP maps are aggregated IN POSTGRES, not by streaming
+  // rows back and summing them here. A 30-day range over a hundred endpoints
+  // is millions of rollup rows; shipping each one's JSONB to Node to merge it
+  // would make the longest ranges - the whole point of keeping a year of
+  // rollups - the slowest ones. Expanded with jsonb_each_text and grouped,
+  // these return at most 11 and 10 rows respectively however long the range.
+  const wr = whereClause(organisation, environment, from, to, 'r');
+  const [{ rows: histoRows }, { rows: ipRows }] = await Promise.all([
+    pool.query(
+      `SELECT kv.key AS k, SUM(kv.value::numeric)::bigint AS v
+       FROM endpoint_metrics_rollup r, LATERAL jsonb_each_text(r.latency_buckets) kv
+       WHERE ${wr.text}
+       GROUP BY kv.key`,
+      wr.params
+    ),
+    pool.query(
+      `SELECT kv.key AS ip, SUM(kv.value::numeric)::bigint AS n
+       FROM endpoint_metrics_rollup r, LATERAL jsonb_each_text(r.source_ips) kv
+       WHERE ${wr.text}
+       GROUP BY kv.key ORDER BY 2 DESC LIMIT 10`,
+      wr.params
+    ),
+  ]);
+  const latencyBuckets = {};
+  for (const row of histoRows) latencyBuckets[row.k] = Number(row.v);
+  const topIps = ipRows.map((row) => ({ ip: row.ip, count: Number(row.n) }));
+
+  const total = Number(r.total || 0);
+  const errCount = Number(r.s4 || 0) + Number(r.s5 || 0);
+  const latencyCount = Number(r.latency_count || 0);
+
+  return {
+    total,
+    errCount,
+    errorRate: total ? errCount / total : 0,
+    statusBreakdown: {
+      '2xx': Number(r.s2 || 0),
+      '3xx': Number(r.s3 || 0),
+      '4xx': Number(r.s4 || 0),
+      '5xx': Number(r.s5 || 0),
+      unknown: Number(r.sunknown || 0),
+    },
+    topIps,
+    endpointCount: Number(r.endpoint_count || 0),
+    lastSeenAt: r.last_seen_at ? new Date(r.last_seen_at).toISOString() : null,
+    latency: latencyCount
+      ? {
+        count: latencyCount,
+        mean: Math.round(Number(r.latency_sum || 0) / latencyCount),
+        min: r.latency_min === null ? null : Number(r.latency_min),
+        max: r.latency_max === null ? null : Number(r.latency_max),
+        p50: percentileFromBuckets(latencyBuckets, 0.5),
+        p95: percentileFromBuckets(latencyBuckets, 0.95),
+        p99: percentileFromBuckets(latencyBuckets, 0.99),
+      }
+      : null,
+    latencyBuckets,
+  };
+}
+
+// Time series for the charts, bucketed server-side to whatever resolution the
+// range warrants (date_trunc/ floor to `intervalSeconds`) so a 30-day view
+// returns a few hundred points instead of 43,200.
+async function getSeries(organisation, { environment, from, to, intervalSeconds = 300 } = {}) {
+  const w = whereClause(organisation, environment, from, to);
+  const seconds = Math.max(60, Math.min(86400, toInt(intervalSeconds, 300)));
+  const params = w.params.concat([seconds]);
+  const idx = w.nextIndex;
+
+  const { rows } = await pool.query(
+    // Explicitly cast the interval parameter: without it Postgres cannot
+    // always infer a type for a bare $n used only in arithmetic, and the
+    // query fails at runtime with "could not determine data type of parameter".
+    `SELECT
+       to_timestamp(floor(extract(epoch FROM bucket_start) / $${idx}::numeric) * $${idx}::numeric) AS ts,
+       SUM(request_count)::bigint  AS total,
+       SUM(status_2xx)::bigint     AS s2,
+       SUM(status_3xx)::bigint     AS s3,
+       SUM(status_4xx)::bigint     AS s4,
+       SUM(status_5xx)::bigint     AS s5,
+       SUM(status_unknown)::bigint AS sunknown,
+       SUM(latency_sum)::bigint    AS latency_sum,
+       SUM(latency_count)::bigint  AS latency_count
+     FROM endpoint_metrics_rollup WHERE ${w.text}
+     GROUP BY 1 ORDER BY 1 ASC`,
+    params
+  );
+
+  return rows.map((r) => {
+    const latencyCount = Number(r.latency_count || 0);
+    return {
+      ts: new Date(r.ts).toISOString(),
+      total: Number(r.total || 0),
+      statusBreakdown: {
+        '2xx': Number(r.s2 || 0),
+        '3xx': Number(r.s3 || 0),
+        '4xx': Number(r.s4 || 0),
+        '5xx': Number(r.s5 || 0),
+        unknown: Number(r.sunknown || 0),
+      },
+      meanLatencyMs: latencyCount ? Math.round(Number(r.latency_sum || 0) / latencyCount) : null,
+    };
+  });
+}
+
+// Per-endpoint totals for the range - drives the endpoints table and the
+// service-health ranking, sorted and paginated in SQL rather than in the page.
+async function getEndpointBreakdown(organisation, { environment, from, to, limit = 500 } = {}) {
+  const w = whereClause(organisation, environment, from, to);
+  const params = w.params.concat([Math.max(1, Math.min(2000, toInt(limit, 500)))]);
+
+  // Same reasoning as getSummary: the per-endpoint histogram is summed by
+  // Postgres. `jsonb_agg(latency_buckets)` here would build one array per
+  // endpoint containing every bucket's JSONB over the whole range and ship
+  // all of it to Node - fine over an hour, ruinous over a month.
+  const { rows } = await pool.query(
+    `WITH totals AS (
+       SELECT endpoint_id,
+              SUM(request_count)::bigint  AS total,
+              SUM(status_2xx)::bigint     AS s2,
+              SUM(status_3xx)::bigint     AS s3,
+              SUM(status_4xx)::bigint     AS s4,
+              SUM(status_5xx)::bigint     AS s5,
+              SUM(status_unknown)::bigint AS sunknown,
+              SUM(latency_sum)::bigint    AS latency_sum,
+              SUM(latency_count)::bigint  AS latency_count,
+              MAX(bucket_start)           AS last_seen_at
+       FROM endpoint_metrics_rollup WHERE ${w.text}
+       GROUP BY endpoint_id
+       ORDER BY SUM(request_count) DESC
+       LIMIT $${w.nextIndex}
+     ),
+     histos AS (
+       SELECT r.endpoint_id, kv.key AS k, SUM(kv.value::numeric)::bigint AS v
+       FROM endpoint_metrics_rollup r
+       JOIN totals t ON t.endpoint_id = r.endpoint_id
+       CROSS JOIN LATERAL jsonb_each_text(r.latency_buckets) kv
+       WHERE ${whereClause(organisation, environment, from, to, 'r').text}
+       GROUP BY r.endpoint_id, kv.key
+     )
+     SELECT totals.*,
+            COALESCE(
+              (SELECT jsonb_object_agg(h.k, h.v) FROM histos h WHERE h.endpoint_id = totals.endpoint_id),
+              '{}'::jsonb
+            ) AS histo
+     FROM totals
+     ORDER BY totals.total DESC`,
+    params
+  );
+
+  return rows.map((r) => {
+    const merged = r.histo || {};
+    const total = Number(r.total || 0);
+    const errCount = Number(r.s4 || 0) + Number(r.s5 || 0);
+    const latencyCount = Number(r.latency_count || 0);
+    return {
+      endpointId: r.endpoint_id,
+      total,
+      errCount,
+      errorRate: total ? errCount / total : 0,
+      statusBreakdown: {
+        '2xx': Number(r.s2 || 0),
+        '3xx': Number(r.s3 || 0),
+        '4xx': Number(r.s4 || 0),
+        '5xx': Number(r.s5 || 0),
+        unknown: Number(r.sunknown || 0),
+      },
+      lastSeenAt: r.last_seen_at ? new Date(r.last_seen_at).toISOString() : null,
+      latency: latencyCount
+        ? {
+          count: latencyCount,
+          mean: Math.round(Number(r.latency_sum || 0) / latencyCount),
+          p50: percentileFromBuckets(merged, 0.5),
+          p95: percentileFromBuckets(merged, 0.95),
+          p99: percentileFromBuckets(merged, 0.99),
+        }
+        : null,
+    };
+  });
+}
+
+// Paginated raw records for the Log Explorer. Every filter here is an indexed
+// column; the encrypted payload is decrypted only for the page actually being
+// returned, never across the whole range.
+async function getRecords(organisation, {
+  environment, from, to, endpointId, statusFamily, correlationId, clientIp,
+  minLatencyMs, limit = 100, offset = 0,
+} = {}) {
+  const params = [organisation];
+  const parts = ['organisation = $1'];
+  let i = 2;
+  const add = (sql, value) => { parts.push(sql.replace('$?', `$${i}`)); params.push(value); i += 1; };
+
+  if (environment) add('environment = $?', environment);
+  if (from) add('ts >= $?::timestamptz', from);
+  if (to) add('ts < $?::timestamptz', to);
+  if (endpointId) add('endpoint_id = $?', endpointId);
+  if (correlationId) add('correlation_id = $?', correlationId);
+  if (clientIp) add('client_ip = $?', clientIp);
+  if (isFiniteNum(Number(minLatencyMs)) && Number(minLatencyMs) > 0) add('latency_ms >= $?', toInt(minLatencyMs));
+  if (statusFamily === 'unknown') {
+    parts.push('status_code IS NULL');
+  } else if (/^[1-5]xx$/.test(statusFamily || '')) {
+    const base = Number(statusFamily[0]) * 100;
+    add('status_code >= $?', base);
+    add('status_code < $?', base + 100);
+  }
+
+  const safeLimit = Math.max(1, Math.min(500, toInt(limit, 100)));
+  const safeOffset = Math.max(0, toInt(offset, 0));
+  const where = parts.join(' AND ');
+
+  const [{ rows }, { rows: countRows }] = await Promise.all([
+    pool.query(
+      `SELECT id, ts, endpoint_id, status_code, latency_ms, client_ip,
+              correlation_id, flow_name, fields_enc
+       FROM endpoint_log_records WHERE ${where}
+       ORDER BY ts DESC, id DESC
+       LIMIT $${i} OFFSET $${i + 1}`,
+      params.concat([safeLimit, safeOffset])
+    ),
+    pool.query(`SELECT COUNT(*)::bigint AS n FROM endpoint_log_records WHERE ${where}`, params),
+  ]);
+
+  const records = rows.map((r) => {
+    let fields = null;
+    if (r.fields_enc) {
+      try {
+        fields = JSON.parse(dataCrypto.decryptField(r.fields_enc, `obs_record:${organisation}`));
+      } catch (err) {
+        // A record whose payload cannot be decrypted (key rotated away, row
+        // corrupted) still has useful metadata - return it flagged rather
+        // than dropping the row and silently shortening the page.
+        fields = { _undecryptable: true };
+      }
+    }
+    return {
+      id: String(r.id),
+      ts: new Date(r.ts).toISOString(),
+      endpointId: r.endpoint_id,
+      statusCode: r.status_code === null ? null : Number(r.status_code),
+      latencyMs: r.latency_ms === null ? null : Number(r.latency_ms),
+      clientIp: r.client_ip,
+      correlationId: r.correlation_id,
+      flowName: r.flow_name,
+      requestFields: fields?.requestFields || null,
+      responseFields: fields?.responseFields || null,
+      undecryptable: !!fields?._undecryptable,
+    };
+  });
+
+  return { records, total: Number(countRows[0]?.n || 0), limit: safeLimit, offset: safeOffset };
+}
+
+async function getEnvironments(organisation) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT environment FROM endpoint_metrics_rollup WHERE organisation = $1 ORDER BY environment`,
+    [organisation]
+  );
+  return rows.map((r) => r.environment).filter(Boolean);
+}
+
+// How far back this org actually has data, so the UI can offer date ranges
+// that exist instead of empty ones.
+async function getCoverage(organisation, environment) {
+  const params = [organisation];
+  let text = 'organisation = $1';
+  if (environment) { text += ' AND environment = $2'; params.push(environment); }
+  const { rows } = await pool.query(
+    `SELECT MIN(bucket_start) AS oldest, MAX(bucket_start) AS newest,
+            COUNT(*)::bigint AS buckets
+     FROM endpoint_metrics_rollup WHERE ${text}`,
+    params
+  );
+  const r = rows[0] || {};
+  return {
+    oldest: r.oldest ? new Date(r.oldest).toISOString() : null,
+    newest: r.newest ? new Date(r.newest).toISOString() : null,
+    buckets: Number(r.buckets || 0),
+  };
+}
+
+module.exports = {
+  LATENCY_BUCKET_BOUNDS,
+  LATENCY_BUCKET_KEYS,
+  latencyBucketKey,
+  percentileFromBuckets,
+  ingestRollups,
+  ingestRecords,
+  getSummary,
+  getSeries,
+  getEndpointBreakdown,
+  getRecords,
+  getEnvironments,
+  getCoverage,
+};

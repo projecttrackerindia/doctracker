@@ -64,6 +64,7 @@ import os
 import re
 import sys
 import glob
+import gzip
 import json
 import time
 import platform
@@ -297,6 +298,12 @@ STATUS_CODE_PATTERN = re.compile(r'\b(?:status(?:Code)?)["\s:=]+(\d{3})\b', re.I
 # may nest things differently.
 # ============================================================================
 HEADER_METHOD_PATTERN = re.compile(r'\.(GET|POST|PUT|PATCH|DELETE):', re.IGNORECASE)
+
+# Cheap pre-filter for parse_line() - see the note there. The union of what
+# every match path needs at minimum: a JSON brace, or an HTTP method token.
+# Deliberately over-permissive (a line containing "header" matches on "head"
+# and just falls through to the real parser); it only has to be a superset.
+PARSE_PREFILTER = re.compile(r'[{]|get|post|put|patch|delete|head|options', re.IGNORECASE)
 # 'endpoint'/'target'/'resource'/'url' are CONFIRMED on this deployment as the
 # path-carrying key in some apps' blocks (seen alongside 'method' in
 # s-portal-common-api-style blocks). They're looser names than 'requestUri',
@@ -832,21 +839,69 @@ def infer_type(value):
 # Log tailing (restart-safe: remembers byte offset across runs/log rotation)
 # ============================================================================
 def load_state():
-    if os.path.exists(STATE_FILE):
+    """Rebuilds state from the two files save_state() writes.
+
+    BACKWARD COMPATIBLE on purpose: an existing deployment's state.json was
+    written by an older build as ONE combined document. Reading it still works
+    - the cursor file is simply absent and every key comes from state.json -
+    so upgrading the agent in place never resets its log offsets or discards
+    its accumulated aggregates.
+    """
+    state = {"offset": 0, "inode": None, "endpoints": {}, "last_push": 0}
+    for path in (STATE_FILE, CURSOR_FILE):
+        if not os.path.exists(path):
+            continue
         try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+            with open(path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                # Cursor is read second so its (always-current) offsets win
+                # over anything a stale state.json still carries.
+                state.update(loaded)
         except Exception:
             pass
-    return {"offset": 0, "inode": None, "endpoints": {}, "last_push": 0}
+    return state
 
 
-def save_state(state):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    tmp = STATE_FILE + ".tmp"
+# The BULKY state keys - the aggregates, the captured records, the pending
+# rollup buckets. Everything NOT listed here (file offsets and inodes, the
+# seen-event ids, push bookkeeping) is small, changes every cycle, and must
+# survive a crash or the agent would re-read and re-count log lines.
+BULKY_STATE_KEYS = ("endpoints", "logRecords", "logRecordKeyCounts", "rollups", "health")
+
+# The small, write-every-cycle half lives in its own file so the bulky half
+# does not have to be re-serialised to update it.
+CURSOR_FILE = STATE_FILE + ".cursor"
+
+
+def _atomic_write_json(path, payload):
+    tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f)
-    os.replace(tmp, STATE_FILE)
+        json.dump(payload, f)
+    os.replace(tmp, path)
+
+
+def save_state(state, full=True):
+    """Persists agent state, split across two files by write frequency.
+
+    DISK: this used to serialise the ENTIRE state once per POLL cycle (~60s) -
+    including, under CAPTURE_MODE=full, up to 3000 captured records carrying
+    real field values. A multi-megabyte rewrite every minute, forever, most of
+    it re-writing bytes that had not changed.
+
+    Now the cheap half (cursors: file offsets, inodes, seen-event ids) goes to
+    its own small file every cycle, and the expensive half (aggregates,
+    records, pending rollups) is written only on push cycles - by which point
+    it has just been durably sent to DocTracker anyway. Losing the bulky half
+    to an unclean shutdown costs at most one push interval of aggregates; the
+    log POSITION, which is the thing that must never be wrong, is always
+    current.
+    """
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    cursor = {k: v for k, v in state.items() if k not in BULKY_STATE_KEYS}
+    _atomic_write_json(CURSOR_FILE, cursor)
+    if full:
+        _atomic_write_json(STATE_FILE, {k: state[k] for k in BULKY_STATE_KEYS if k in state})
 
 
 def tail_new_lines(path, state, max_lines=None):
@@ -1185,6 +1240,21 @@ def parse_line(line):
     never reaches into anything beyond what's already in the log line."""
     stripped = line.strip()
 
+    # PERFORMANCE: the overwhelming majority of lines in a Mule log are not
+    # HTTP request lines at all (stack traces, lifecycle messages, DB chatter).
+    # Without this, every one of them pays for a json.loads attempt plus four
+    # or more regex scans. One short-circuiting scan rejects them instead.
+    #
+    # CORRECTNESS: this must never reject a line the full parser below would
+    # have matched, or traffic silently disappears - the exact failure mode
+    # this agent's tests exist to catch. It is safe because EVERY match path
+    # below requires one of these: Style A needs a "{", Style B needs an HTTP
+    # method token, and Style D's APIKIT_FLOW_PATTERN needs one too. Anything
+    # with none of them cannot match any of them.
+    # test_ingest_and_scale.py asserts exactly that property.
+    if not PARSE_PREFILTER.search(stripped):
+        return None
+
     # Style A: whole line (or a JSON object embedded in it) is JSON.
     json_start = stripped.find("{")
     if json_start != -1:
@@ -1244,6 +1314,9 @@ def aggregate(state, observations):
     endpoints = state.setdefault("endpoints", {})
     health = state.setdefault("health", {})
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    # Fallback rollup bucket for observations whose log line carried no
+    # parseable timestamp - formatted once per call, same reason as now_iso.
+    minute_bucket_iso = time.strftime("%Y-%m-%dT%H:%M:00.000Z", time.gmtime())
     # Style D (APIkit thread names) matches EVERY line a flow logs while
     # handling one request - commonly a dozen or more, all carrying the same
     # `event:` id. Counting each as a request would inflate traffic by an
@@ -1362,8 +1435,135 @@ def aggregate(state, observations):
             for k, v in obs["body"].items():
                 shapes[k] = infer_type(v)
 
+        if counts_as_request and key != OVERFLOW_KEY:
+            # Rollups count REQUESTS, so discovery-only lines (startup
+            # inventory, a second log line for a request already counted) are
+            # excluded - otherwise the exact-count tier would drift above the
+            # real traffic it exists to measure.
+            #
+            # Bucketed on the request's OWN timestamp where the log gave us
+            # one, not on when the agent happened to read the line. A backlog
+            # being caught up must land in the minute the traffic actually
+            # happened or every chart shifts under load.
+            exit_ms = obs.get("exitTsMs")
+            if exit_ms:
+                bucket_iso = time.strftime("%Y-%m-%dT%H:%M:00.000Z", time.gmtime(int(exit_ms / 1000)))
+            else:
+                bucket_iso = minute_bucket_iso
+            accumulate_rollup(state, key, obs, bucket_iso)
+
         if CAPTURE_MODE == "full" and key != OVERFLOW_KEY:
             capture_log_record(state, key, obs)
+
+
+# ============================================================================
+# 1-minute rollup buckets - the primary metrics tier.
+#
+# These are EXACT counts of every request seen, in contrast to the sampled
+# ring buffer below: nothing is ever evicted, so "requests in the last 30
+# days" is a real number rather than "whatever survived in the buffer". They
+# contain no captured field values at all, which is why they can be kept for
+# a year while raw records are kept for a week.
+#
+# Accumulated in memory keyed by (endpoint_id, minute) and flushed on each
+# push. Because the server SUMS on conflict rather than replacing (see
+# ingestRollups in server/observabilityStore.js), sending a partial bucket now
+# and the rest of that same minute on the next push is exactly correct - which
+# is what lets this flush on any cadence without either double-counting or
+# waiting for a minute boundary.
+# ============================================================================
+# Must stay in lockstep with LATENCY_BUCKET_BOUNDS in
+# server/observabilityStore.js - the server reads percentiles off these bands,
+# so a mismatch would silently skew every latency figure on the page.
+LATENCY_BUCKET_BOUNDS = (10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000)
+
+# Per-bucket cap on distinct client IPs. A single endpoint-minute with more
+# callers than this is already a long tail that the console's top-10 view
+# would never show.
+MAX_ROLLUP_IPS_PER_BUCKET = 20
+
+# Backstop on how many (endpoint, minute) buckets can be held between pushes.
+# At a 60s push interval this is never approached; it exists so a long push
+# outage degrades by dropping the oldest buckets instead of growing until the
+# agent is OOM-killed.
+MAX_PENDING_ROLLUP_BUCKETS = int(os.environ.get("MAX_PENDING_ROLLUP_BUCKETS", "20000"))
+
+# Below roughly a KB the gzip header plus the CPU to produce it outweighs what
+# it saves on the wire.
+GZIP_MIN_REQUEST_BYTES = 1024
+
+
+def latency_bucket_key(ms):
+    for bound in LATENCY_BUCKET_BOUNDS:
+        if ms <= bound:
+            return str(bound)
+    return "inf"
+
+
+def endpoint_rollup_id(key):
+    """The same id build_project() gives this endpoint's document, so a rollup
+    row joins to the documented endpoint without storing its path."""
+    return "auto-" + stable_id(key)
+
+
+def accumulate_rollup(state, key, obs, bucket_iso):
+    buckets = state.setdefault("rollups", {})
+    bkey = endpoint_rollup_id(key) + "|" + bucket_iso
+    b = buckets.get(bkey)
+    if b is None:
+        if len(buckets) >= MAX_PENDING_ROLLUP_BUCKETS:
+            # Oldest-first, matching every other cap in this agent.
+            for dead in sorted(buckets.keys())[:len(buckets) - MAX_PENDING_ROLLUP_BUCKETS + 1]:
+                del buckets[dead]
+        b = {
+            "endpointId": endpoint_rollup_id(key), "bucketStart": bucket_iso,
+            "requestCount": 0, "status2xx": 0, "status3xx": 0, "status4xx": 0,
+            "status5xx": 0, "statusUnknown": 0,
+            "latencySum": 0, "latencyCount": 0, "latencyMin": None, "latencyMax": None,
+            "latencyBuckets": {}, "sourceIps": {},
+        }
+        buckets[bkey] = b
+
+    b["requestCount"] += 1
+
+    sc = obs.get("statusCode")
+    fam = None
+    if sc:
+        try:
+            fam = int(str(sc)[0])
+        except (ValueError, IndexError):
+            fam = None
+    if fam == 2:
+        b["status2xx"] += 1
+    elif fam == 3:
+        b["status3xx"] += 1
+    elif fam == 4:
+        b["status4xx"] += 1
+    elif fam == 5:
+        b["status5xx"] += 1
+    else:
+        # Counted explicitly rather than ignored. This is the column that
+        # makes "550 requests but the families only add to 239" visible as a
+        # real, named quantity instead of an unexplained gap in the UI.
+        b["statusUnknown"] += 1
+
+    latency = obs.get("latencyMs")
+    if isinstance(latency, (int, float)) and latency >= 0:
+        ms = int(latency)
+        b["latencySum"] += ms
+        b["latencyCount"] += 1
+        b["latencyMin"] = ms if b["latencyMin"] is None else min(b["latencyMin"], ms)
+        b["latencyMax"] = ms if b["latencyMax"] is None else max(b["latencyMax"], ms)
+        lk = latency_bucket_key(ms)
+        b["latencyBuckets"][lk] = b["latencyBuckets"].get(lk, 0) + 1
+
+    ip = obs.get("clientIp")
+    if ip:
+        ips = b["sourceIps"]
+        if ip in ips:
+            ips[ip] += 1
+        elif len(ips) < MAX_ROLLUP_IPS_PER_BUCKET:
+            ips[ip] = 1
 
 
 # ============================================================================
@@ -1404,11 +1604,30 @@ def capture_log_record(state, key, obs):
     # Per-endpoint cap: drop the oldest record for THIS key once it's over
     # the limit, rather than letting one busy endpoint crowd out every
     # other endpoint's records from the global list.
-    same_key_indices = [i for i, r in enumerate(records) if r["key"] == key]
-    if len(same_key_indices) > MAX_LOG_RECORDS_PER_ENDPOINT:
-        del records[same_key_indices[0]]
+    #
+    # PERFORMANCE: this used to be
+    #     same_key_indices = [i for i, r in enumerate(records) if r["key"] == key]
+    # which walked all 3000 records and built a full index list on EVERY
+    # captured request - roughly 300k comparisons/second at 100 req/s, burning
+    # CPU on the Mule host itself. The per-key tally below answers the same
+    # question in O(1); the list is only scanned on the rare cycle where a key
+    # is actually over its cap.
+    counts = state.setdefault("logRecordKeyCounts", {})
+    counts[key] = counts.get(key, 0) + 1
+    if counts[key] > MAX_LOG_RECORDS_PER_ENDPOINT:
+        for i, r in enumerate(records):
+            if r["key"] == key:
+                del records[i]
+                counts[key] -= 1
+                break
     # Global cap, oldest-first, applied last so it's the final backstop.
     if len(records) > MAX_LOG_RECORDS_TOTAL:
+        for dropped in records[0: len(records) - MAX_LOG_RECORDS_TOTAL]:
+            dk = dropped.get("key")
+            if dk in counts:
+                counts[dk] -= 1
+                if counts[dk] <= 0:
+                    del counts[dk]
         del records[0: len(records) - MAX_LOG_RECORDS_TOTAL]
 
 
@@ -1460,6 +1679,19 @@ class DocTrackerClient:
         if auth and self.cookie:
             headers["Cookie"] = self.cookie
         payload = json.dumps(body).encode("utf-8") if body is not None else None
+        # gzip anything big enough to be worth it. Express decompresses
+        # Content-Encoding: gzip request bodies natively (body-parser's
+        # `inflate` defaults on), so this needs no server-side change at all.
+        # JSON of this shape compresses ~10x; the CPU to gzip it on the Mule
+        # host is far less than the time spent putting it on the wire.
+        if payload is not None and len(payload) >= GZIP_MIN_REQUEST_BYTES:
+            try:
+                payload = gzip.compress(payload, 6)
+                headers["Content-Encoding"] = "gzip"
+                headers["Content-Length"] = str(len(payload))
+            except Exception as e:
+                # Never fail a push because compressing it failed.
+                print(f"[warn] gzip of request body failed, sending uncompressed: {e}", file=sys.stderr)
         conn.request(method, path, body=payload, headers=headers)
         resp = conn.getresponse()
         data = resp.read()
@@ -1539,6 +1771,27 @@ class DocTrackerClient:
             raise RuntimeError(f"PUT /api/workspace/endpoint-metrics failed ({status}): {data}")
         print(f"[info] pushed endpoint metrics for {len(payload.get('endpoints', {}))} endpoint(s) "
               f"+ agent health: {data}")
+
+    def push_observability(self, environment, rollups, records):
+        """Pushes the time-series tiers to the purpose-built tables.
+
+        Unlike push_endpoint_metrics above - which read, decrypted, merged,
+        re-encrypted and rewrote one whole blob every cycle - this is an
+        append/increment against indexed tables. Nothing is read first and no
+        row lock is held that another writer contends on, so this stays cheap
+        as the push cadence shortens and as more agents are added.
+
+        Rollup buckets are SUMMED server-side on conflict, which is what makes
+        it safe to flush a partially-filled minute now and the rest of it on
+        the next cycle: the stored total is exact either way.
+        """
+        if not rollups and not records:
+            return {"rollupsWritten": 0, "recordsWritten": 0}
+        body = {"environment": environment, "rollups": rollups, "records": records}
+        status, data, _ = self._request("PUT", "/api/workspace/observability/ingest", body)
+        if status != 200 or not data.get("ok"):
+            raise RuntimeError(f"PUT /api/workspace/observability/ingest failed ({status}): {data}")
+        return data
 
 
 # ============================================================================
@@ -2609,7 +2862,9 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
             print(f"[warn] backlog: read the full {MAX_LINES_PER_CYCLE}-line chunk this cycle "
                   f"({cycle_duration_ms}ms) and more remains - continuing immediately without sleeping "
                   f"to catch up, see Agent Health on the Observability page")
-        save_state(state)
+        # Cursors only. The bulky aggregates are written on the push cycle
+        # below, right after they have been durably sent - see save_state().
+        save_state(state, full=False)
 
         if time.time() - state.get("last_push", 0) >= PUSH_INTERVAL_SECONDS and state.get("endpoints"):
             # One "Log volume" sample per push (see MAX_LOG_VOLUME_SAMPLES) -
@@ -2636,7 +2891,16 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
             newly_captured = [r for r in all_log_records if r.get("_seq", 0) > last_pushed_seq]
             # `_seq` is a purely local bookkeeping field - strip it before it
             # goes over the wire, same as any other internal-only value.
-            new_log_records = [{k: v for k, v in r.items() if k != "_seq"} for r in newly_captured]
+            # `endpointId` is added for the records TABLE, which stores the
+            # endpoint's stable id rather than its path: the path is already in
+            # the (encrypted) project document, and keeping it out of an
+            # indexed plaintext column means no API surface is stored in the
+            # clear. See the db.js note on what is and isn't encrypted.
+            new_log_records = []
+            for r in newly_captured:
+                row = {k: v for k, v in r.items() if k != "_seq"}
+                row["endpointId"] = endpoint_rollup_id(r.get("key", ""))
+                new_log_records.append(row)
             metrics_payload = {
                 "environment": ENVIRONMENT or None,
                 "endpoints": build_endpoint_metrics(state),
@@ -2742,6 +3006,25 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
                     # new records next cycle rather than silently dropping them.
                     if newly_captured:
                         state["lastPushedLogRecordSeq"] = newly_captured[-1]["_seq"]
+
+                    # --- Time-series tiers -------------------------------
+                    # The rollup tier is what every chart, KPI and date filter
+                    # actually reads; it is exact, and it carries no captured
+                    # field values, which is why it can be retained for a year
+                    # while raw records expire in a week.
+                    pending_rollups = list(state.get("rollups", {}).values())
+                    obs_result = client.push_observability(
+                        ENVIRONMENT, pending_rollups, new_log_records)
+                    # Cleared ONLY after the server confirms the write. A
+                    # failed push leaves the buckets in place and the next
+                    # cycle keeps accumulating into them - the server sums on
+                    # conflict, so re-sending a bucket that partially landed
+                    # cannot double-count what was already stored.
+                    if pending_rollups:
+                        state["rollups"] = {}
+                        print(f"[info] pushed {obs_result.get('rollupsWritten', 0)} rollup bucket(s) "
+                              f"and {obs_result.get('recordsWritten', 0)} raw record(s) "
+                              f"({obs_result.get('liveSubscribers', 0)} browser(s) watching live)")
                 except Exception as e:
                     print(f"[error] push failed, will retry next cycle: {e}", file=sys.stderr)
                     health["lastPushOk"] = False

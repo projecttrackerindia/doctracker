@@ -32,7 +32,7 @@
 // two instances happen to be running is harmless (both operations are
 // idempotent — a row that's already archived/deleted just won't match the
 // WHERE clause a second time).
-const { pool } = require('./db');
+const { pool, ensureLogRecordPartitions } = require('./db');
 
 const AUDIT_RETENTION_DAYS = parseInt(process.env.AUDIT_LOG_RETENTION_DAYS || '0', 10);
 const NOTIFICATIONS_RETENTION_DAYS = parseInt(process.env.NOTIFICATIONS_RETENTION_DAYS || '90', 10);
@@ -114,9 +114,99 @@ async function pruneOldNotifications() {
   }
 }
 
+// ---- Observability time-series retention ---------------------------------
+// Two tiers with very different lifetimes, which is the whole point of the
+// split (see server/observabilityStore.js):
+//
+//   rollups  cheap, tiny, contain nothing sensitive by construction -> kept
+//            for a year by default, which is what makes month-over-month
+//            comparison possible at all.
+//   records  contain real captured field values under CAPTURE_MODE=full ->
+//            kept for a week by default, so the privacy exposure of full
+//            capture is bounded to a short window instead of being permanent.
+//
+// Raw records are dropped a PARTITION at a time, never with a DELETE. A
+// scheduled DELETE of millions of rows leaves behind dead tuples that then
+// need vacuuming, so the cleanup job slowly degrades the table it exists to
+// keep healthy. DROP TABLE on a day's partition is effectively instant and
+// reclaims the space immediately.
+const ROLLUP_RETENTION_DAYS = parseInt(process.env.OBS_ROLLUP_RETENTION_DAYS || '400', 10);
+const RECORD_RETENTION_DAYS = parseInt(process.env.OBS_RECORD_RETENTION_DAYS || '7', 10);
+
+async function pruneOldRollups() {
+  if (!ROLLUP_RETENTION_DAYS || ROLLUP_RETENTION_DAYS <= 0) return { deleted: 0 };
+  try {
+    const { rowCount } = await pool.query(
+      `DELETE FROM endpoint_metrics_rollup
+       WHERE bucket_start < now() - ($1 || ' days')::interval`,
+      [ROLLUP_RETENTION_DAYS]
+    );
+    if (rowCount) console.log(`Retention: deleted ${rowCount} rollup bucket(s) older than ${ROLLUP_RETENTION_DAYS} days.`);
+    return { deleted: rowCount };
+  } catch (err) {
+    console.error('pruneOldRollups failed (will retry next sweep):', err.message);
+    return { deleted: 0 };
+  }
+}
+
+async function dropOldRecordPartitions() {
+  if (!RECORD_RETENTION_DAYS || RECORD_RETENTION_DAYS <= 0) return { dropped: [] };
+  try {
+    // Ask Postgres which partitions exist rather than computing names and
+    // hoping - a gap (an instance that was down on a given day) would make a
+    // computed-name DROP silently skip real, older partitions behind it.
+    const { rows } = await pool.query(
+      `SELECT c.relname AS name
+       FROM pg_class c
+       JOIN pg_inherits i ON i.inhrelid = c.oid
+       JOIN pg_class parent ON parent.oid = i.inhparent
+       WHERE parent.relname = 'endpoint_log_records'`
+    );
+    const cutoff = Date.now() - RECORD_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    const dropped = [];
+    for (const { name } of rows) {
+      const match = /^endpoint_log_records_(\d{4})_(\d{2})_(\d{2})$/.exec(name);
+      if (!match) continue;
+      const partitionDay = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+      // The partition covers [day, day+1), so it is only fully past the cutoff
+      // once its END is. Comparing the start would drop a partition still
+      // holding records inside the retention window.
+      if (partitionDay + 24 * 60 * 60 * 1000 > cutoff) continue;
+      await pool.query(`DROP TABLE IF EXISTS ${name};`);
+      dropped.push(name);
+    }
+    if (dropped.length) {
+      console.log(`Retention: dropped ${dropped.length} log-record partition(s) older than ${RECORD_RETENTION_DAYS} days: ${dropped.join(', ')}`);
+    }
+    return { dropped };
+  } catch (err) {
+    console.error('dropOldRecordPartitions failed (will retry next sweep):', err.message);
+    return { dropped: [] };
+  }
+}
+
+// Partitions must exist BEFORE the agent pushes into them - a partitioned
+// table with no partition covering the incoming timestamp rejects the INSERT
+// outright. Created several days ahead so a missed sweep (or a restart-free
+// stretch longer than a day) can never cause dropped ingest.
+async function ensureUpcomingPartitions() {
+  try {
+    await ensureLogRecordPartitions(7);
+    return { ok: true };
+  } catch (err) {
+    console.error('ensureUpcomingPartitions failed (will retry next sweep):', err.message);
+    return { ok: false };
+  }
+}
+
 async function runRetentionSweep() {
   await archiveOldAuditLogs();
   await pruneOldNotifications();
+  // Creating the next few days' partitions runs BEFORE the drop, so a sweep
+  // that fails partway still leaves somewhere for tomorrow's data to land.
+  await ensureUpcomingPartitions();
+  await pruneOldRollups();
+  await dropOldRecordPartitions();
 }
 
 const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000; // once a day
@@ -129,4 +219,12 @@ function startRetentionSchedule() {
   setInterval(() => runRetentionSweep().catch((err) => console.error('Scheduled retention sweep failed:', err.message)), SWEEP_INTERVAL_MS);
 }
 
-module.exports = { startRetentionSchedule, runRetentionSweep, archiveOldAuditLogs, pruneOldNotifications };
+module.exports = {
+  startRetentionSchedule,
+  runRetentionSweep,
+  archiveOldAuditLogs,
+  pruneOldNotifications,
+  pruneOldRollups,
+  dropOldRecordPartitions,
+  ensureUpcomingPartitions,
+};

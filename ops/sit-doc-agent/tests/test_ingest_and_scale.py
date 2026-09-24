@@ -528,6 +528,150 @@ try:
 finally:
     agent.CAPTURE_MODE = saved_capture_mode
 
+print("parse_line fast-path pre-filter never hides a real request line")
+# The pre-filter exists to skip the regex battery on the overwhelming majority
+# of log lines that are not HTTP requests. If it ever rejects a line the full
+# parser WOULD have matched, traffic silently vanishes with no error - so the
+# property under test is "superset of everything that can match", not "rejects
+# a lot".
+real_lines = [
+    req_line(3, "/api/orders"),
+    '{"correlationId":"abc12345","method":"POST","path":"/api/pay","statusCode":200}',
+    '2026-09-24 09:01:02,003 INFO  [[MuleRuntime].uber.04: [common-jwt-auth].post:\\token:jwt-config/processors] event:0001abcd',
+    '... HTTP Listener received: DELETE /api/orders/99 - statusCode=204',
+    '... Starting flow: get:\\health:api-config',
+]
+for i, ln in enumerate(real_lines):
+    check("pre-filter admits real request line #%d" % i,
+          agent.PARSE_PREFILTER.search(ln.strip()) is not None,
+          repr(ln[:70]))
+    # And the stronger end-to-end property: whatever the full parser makes of
+    # it, the pre-filter must not have been the thing that stopped it.
+    check("parse_line still returns something for real request line #%d" % i,
+          agent.parse_line(ln) is not None, repr(ln[:70]))
+
+noise_lines = [
+    "2026-09-24 09:00:00,001 INFO  org.mule.runtime.core.internal.lifecycle: Initialising bean",
+    "\tat java.base/java.lang.Thread.run(Thread.java:829)",
+    "2026-09-24 09:00:00,002 ERROR Connection refused to database replica 7",
+]
+for i, ln in enumerate(noise_lines):
+    check("parse_line finds nothing in noise line #%d (unchanged behaviour)" % i,
+          agent.parse_line(ln) is None, repr(ln[:70]))
+
+print("1-minute rollup buckets - the exact-count tier")
+st_roll = {}
+BK = "2026-09-24T09:30:00.000Z"
+agent.accumulate_rollup(st_roll, "GET /api/orders",
+                        {"statusCode": 200, "latencyMs": 42, "clientIp": "10.0.0.1"}, BK)
+agent.accumulate_rollup(st_roll, "GET /api/orders",
+                        {"statusCode": 500, "latencyMs": 900, "clientIp": "10.0.0.1"}, BK)
+agent.accumulate_rollup(st_roll, "GET /api/orders",
+                        {"statusCode": None, "latencyMs": None, "clientIp": None}, BK)
+bucket = list(st_roll["rollups"].values())[0]
+check("all three requests land in one (endpoint, minute) bucket", len(st_roll["rollups"]) == 1)
+check("requestCount counts every request", bucket["requestCount"] == 3)
+check("status families are counted separately",
+      bucket["status2xx"] == 1 and bucket["status5xx"] == 1)
+check("a request with no status code is counted as unknown, not dropped",
+      bucket["statusUnknown"] == 1,
+      "this is the column that explains a 550-vs-239 style gap")
+check("latency is summed only over requests that had one", bucket["latencyCount"] == 2)
+check("latency min/max track the real extremes",
+      bucket["latencyMin"] == 42 and bucket["latencyMax"] == 900)
+check("latency histogram uses the shared bucket bounds",
+      bucket["latencyBuckets"].get("50") == 1 and bucket["latencyBuckets"].get("1000") == 1,
+      repr(bucket["latencyBuckets"]))
+check("repeat caller is counted, not listed twice", bucket["sourceIps"] == {"10.0.0.1": 2})
+
+agent.accumulate_rollup(st_roll, "GET /api/orders",
+                        {"statusCode": 200, "latencyMs": 5, "clientIp": "10.0.0.2"},
+                        "2026-09-24T09:31:00.000Z")
+check("a different minute opens a new bucket", len(st_roll["rollups"]) == 2)
+agent.accumulate_rollup(st_roll, "POST /api/pay",
+                        {"statusCode": 201, "latencyMs": 5, "clientIp": "10.0.0.2"}, BK)
+check("a different endpoint in the same minute opens its own bucket",
+      len(st_roll["rollups"]) == 3)
+
+check("latency_bucket_key puts a value on its own boundary in that bucket",
+      agent.latency_bucket_key(100) == "100")
+check("latency_bucket_key sends anything past the top bound to 'inf'",
+      agent.latency_bucket_key(999999) == "inf")
+check("endpoint_rollup_id matches the id build_project gives the same endpoint",
+      agent.endpoint_rollup_id("GET /x") == "auto-" + agent.stable_id("GET /x"))
+
+print("Per-endpoint record cap no longer rescans the whole buffer")
+saved_capture_mode2 = agent.CAPTURE_MODE
+saved_per_ep = agent.MAX_LOG_RECORDS_PER_ENDPOINT
+try:
+    agent.CAPTURE_MODE = "full"
+    agent.MAX_LOG_RECORDS_PER_ENDPOINT = 5
+    st_cap2 = {}
+    for i in range(12):
+        agent.capture_log_record(st_cap2, "GET /hot", obs("10.0.0.9"))
+    for i in range(3):
+        agent.capture_log_record(st_cap2, "GET /cold", obs("10.0.0.9"))
+    hot = [r for r in st_cap2["logRecords"] if r["key"] == "GET /hot"]
+    cold = [r for r in st_cap2["logRecords"] if r["key"] == "GET /cold"]
+    check("a busy endpoint is capped at its own limit", len(hot) == 5, "got %d" % len(hot))
+    check("a quiet endpoint is NOT evicted by the busy one", len(cold) == 3, "got %d" % len(cold))
+    check("the per-key tally matches what is actually in the buffer",
+          st_cap2["logRecordKeyCounts"]["GET /hot"] == len(hot)
+          and st_cap2["logRecordKeyCounts"]["GET /cold"] == len(cold),
+          repr(st_cap2["logRecordKeyCounts"]))
+    check("the records kept are the NEWEST ones, oldest evicted first",
+          [r["_seq"] for r in hot] == sorted(r["_seq"] for r in hot)
+          and min(r["_seq"] for r in hot) > 5)
+finally:
+    agent.CAPTURE_MODE = saved_capture_mode2
+    agent.MAX_LOG_RECORDS_PER_ENDPOINT = saved_per_ep
+
+print("State is split by write frequency, and still loads old single-file state")
+state_tmp = tempfile.mkdtemp(prefix="doctracker-state-test-")
+saved_state_file = agent.STATE_FILE
+saved_cursor_file = agent.CURSOR_FILE
+try:
+    agent.STATE_FILE = os.path.join(state_tmp, "state.json")
+    agent.CURSOR_FILE = agent.STATE_FILE + ".cursor"
+
+    st_save = {"offset": 1234, "inode": 99, "last_push": 7,
+               "endpoints": {"GET /x": {"totalRequests": 5}},
+               "rollups": {"a|b": {"requestCount": 1}},
+               "health": {"linesProcessedTotal": 10}}
+    agent.save_state(st_save, full=True)
+    check("a full save writes both files",
+          os.path.exists(agent.STATE_FILE) and os.path.exists(agent.CURSOR_FILE))
+    round_trip = agent.load_state()
+    check("a full save round-trips every key",
+          round_trip["offset"] == 1234 and round_trip["endpoints"]["GET /x"]["totalRequests"] == 5
+          and round_trip["rollups"]["a|b"]["requestCount"] == 1)
+
+    bulky_before = os.path.getsize(agent.STATE_FILE)
+    st_save["offset"] = 5678
+    st_save["endpoints"]["GET /x"]["totalRequests"] = 999
+    agent.save_state(st_save, full=False)
+    check("a cursor-only save does NOT rewrite the bulky file",
+          os.path.getsize(agent.STATE_FILE) == bulky_before)
+    reloaded = agent.load_state()
+    check("a cursor-only save still persists the new offset", reloaded["offset"] == 5678)
+    check("a cursor-only save leaves the last-written aggregates intact",
+          reloaded["endpoints"]["GET /x"]["totalRequests"] == 5,
+          "in-memory value was 999; on disk it stays at the last full save")
+    check("the cursor file is much smaller than the bulky file it replaces per cycle",
+          os.path.getsize(agent.CURSOR_FILE) < bulky_before)
+
+    # Upgrading an existing deployment must not reset its log offsets.
+    os.remove(agent.CURSOR_FILE)
+    with open(agent.STATE_FILE, "w", encoding="utf-8") as fh:
+        fh.write('{"offset": 4242, "inode": 7, "endpoints": {"GET /legacy": {"totalRequests": 3}}}')
+    legacy = agent.load_state()
+    check("an old single-file state.json still loads with no cursor file",
+          legacy["offset"] == 4242 and legacy["endpoints"]["GET /legacy"]["totalRequests"] == 3)
+finally:
+    agent.STATE_FILE = saved_state_file
+    agent.CURSOR_FILE = saved_cursor_file
+    shutil.rmtree(state_tmp, ignore_errors=True)
+
 print()
 if FAILURES:
     print("FAILED (%d): %s" % (len(FAILURES), ", ".join(FAILURES)))
