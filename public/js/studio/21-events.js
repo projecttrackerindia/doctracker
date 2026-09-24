@@ -17,10 +17,8 @@ document.getElementById('btnReleasePipeline').addEventListener('click', ()=>{
   renderMain();
 });
 // Toggle, not a one-way jump: clicking it again while already on
-// Observability returns to the API Control Center, the same place the
-// sidebar's own exit row (home-exit) lands - so the icon itself is a
-// complete way in AND out, not just a way in that leaves the sidebar's
-// exit row as the only way back.
+// Observability returns to the API Control Center - a complete way in
+// AND out on its own (the sidebar no longer has a separate exit row).
 document.getElementById('btnObservability').addEventListener('click', ()=>{
   const onObservability = !!state.selected && state.selected.type === 'observability';
   state.selected = onObservability ? { type:'home' } : { type:'observability' };
@@ -209,16 +207,6 @@ document.querySelectorAll('.pinned-row').forEach(row=>{
     // 09-render-sidebar.js.
     if(nav === 'home' && state.selected && state.selected.type === 'observability'){
       obsSetScope({ type:'all' });
-      closeMobileSidebar();
-      return;
-    }
-    // The Observability-only exit row - leaves the page entirely rather than
-    // changing scope within it, which is what the relabelled row above now
-    // does. Both land on the API Control Center; this is the one that
-    // actually navigates there.
-    if(nav === 'home-exit'){
-      state.selected = { type:'home' };
-      renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
       closeMobileSidebar();
       return;
     }

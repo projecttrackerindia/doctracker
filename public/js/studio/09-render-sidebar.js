@@ -113,19 +113,14 @@ function renderSidebar(){
   // tree is currently showing. The pinned "API Control Center" row itself
   // relabels to "All traffic" and becomes the top of that tree, instead of
   // the tree repeating an "All traffic" row of its own right underneath it.
-  // The way back out of Observability. Shown only here, because this is the
-  // only page where the pinned row below has been repurposed as "All traffic"
-  // and so no longer navigates home.
-  const exitRow = document.getElementById('pinnedExitObs');
-
+  // Getting back out is the header's Observability button, now a toggle
+  // (see 21-events.js) - no separate exit row needed here any more.
   if(state.selected && state.selected.type === 'observability'){
     document.getElementById('searchBox').placeholder = 'Filter APIs / endpoints…';
     if(homeLabel){ homeLabel.textContent = 'All traffic'; homeRow.title = 'All traffic — every endpoint DocTracker has seen hits for'; }
-    if(exitRow) exitRow.style.display = '';
     renderObservabilitySidebar(list, filter);
     return;
   }
-  if(exitRow) exitRow.style.display = 'none';
   if(homeLabel){ homeLabel.textContent = 'API Control Center'; homeRow.title = 'API Control Center'; }
   document.getElementById('searchBox').placeholder = 'Filter endpoints…';
 
