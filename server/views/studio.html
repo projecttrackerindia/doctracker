@@ -1474,11 +1474,16 @@ pre.code-block{
    have comparable content, e.g. Top source IPs + Log volume). */
 .grid2{ display:grid; grid-template-columns:1.3fr 1fr; gap:14px; margin-bottom:16px; }
 @media (max-width:1050px){ .grid2{ grid-template-columns:1fr; } }
-/* .grid2-top: Service health (paginated, several rows tall) paired with
-   Status code breakdown (one bar + a legend, always short) - stretching
-   the short panel to match left a large empty card under its content.
-   Each panel sizes to its own content instead. */
-.grid2-top{ align-items:start; }
+/* Status code breakdown (one bar + a legend) sits next to Service health
+   (a paginated list, several rows tall) in a .grid2 row - stretched to
+   match its neighbour's height by .grid2's own default. Letting the short
+   content sit pinned to the top left a big empty gap below it; letting
+   the card shrink to its own height instead left two visibly mismatched
+   card heights side by side, which read just as unpolished. This keeps
+   the matched heights (the two cards' bottom edges align) and centers the
+   short content in the space instead - the title stays pinned to the top. */
+.obs-panel-fill{ display:flex; flex-direction:column; }
+.obs-statusbreakdown-body{ flex:1; display:flex; flex-direction:column; justify-content:center; gap:12px; }
 .section-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
 
 .kpi-grid{

@@ -1117,10 +1117,18 @@ function renderStatusBreakdown(breakdown, total){
   const t = total || 1;
   const fams = ['2xx','3xx','4xx','5xx'];
   const colorFor = { '2xx':'var(--st-2)', '3xx':'var(--st-3)', '4xx':'var(--st-4)', '5xx':'var(--st-5)' };
-  return `<div class="obs-panel">
+  // .obs-panel-fill + .obs-statusbreakdown-body: this card's content (one
+  // bar, one legend) is inherently short next to its grid2 neighbour
+  // (Service health, a paginated list) - rather than either stretching an
+  // empty card underneath it or letting the two cards sit at visibly
+  // different heights, the title stays pinned to the top and the content
+  // below it centers in whatever height the row ends up being.
+  return `<div class="obs-panel obs-panel-fill">
     <div class="section-title">Status code breakdown</div>
-    <div class="obs-statusbar">${fams.map(f=>`<span style="width:${((breakdown[f]||0)/t*100)}%;background:${colorFor[f]};"></span>`).join('')}</div>
-    <div class="obs-status-legend">${fams.map(f=>`<span class="k"><i style="background:${colorFor[f]};"></i>${f} ${(breakdown[f]||0).toLocaleString()}</span>`).join('')}</div>
+    <div class="obs-statusbreakdown-body">
+      <div class="obs-statusbar">${fams.map(f=>`<span style="width:${((breakdown[f]||0)/t*100)}%;background:${colorFor[f]};"></span>`).join('')}</div>
+      <div class="obs-status-legend">${fams.map(f=>`<span class="k"><i style="background:${colorFor[f]};"></i>${f} ${(breakdown[f]||0).toLocaleString()}</span>`).join('')}</div>
+    </div>
   </div>`;
 }
 
@@ -1539,7 +1547,7 @@ function renderConsole(main, metrics, agentHealth, logRecords){
 
     ${renderHostHealthSection(agentHealth)}
 
-    ${state.obsScope.type === 'all' ? `<div class="grid2 grid2-top">
+    ${state.obsScope.type === 'all' ? `<div class="grid2">
       ${renderServiceHealth(groups, metrics, logRecords, win)}
       ${renderStatusBreakdown(agg.statusBreakdown, agg.total)}
     </div>` : renderStatusBreakdown(agg.statusBreakdown, agg.total)}
