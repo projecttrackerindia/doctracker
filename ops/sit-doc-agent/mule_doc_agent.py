@@ -70,6 +70,7 @@ import platform
 import hashlib
 import datetime
 import argparse
+import collections
 import http.client
 import http.server
 import socketserver
@@ -254,7 +255,12 @@ STATUS_CODE_PATTERN = re.compile(r'\b(?:status(?:Code)?)["\s:=]+(\d{3})\b', re.I
 # may nest things differently.
 # ============================================================================
 HEADER_METHOD_PATTERN = re.compile(r'\.(GET|POST|PUT|PATCH|DELETE):', re.IGNORECASE)
-REQUEST_URI_KEY_PATTERN = re.compile(r'requesturi|^path$|^uri$', re.IGNORECASE)
+# 'endpoint'/'target'/'resource'/'url' are CONFIRMED on this deployment as the
+# path-carrying key in some apps' blocks (seen alongside 'method' in
+# s-portal-common-api-style blocks). They're looser names than 'requestUri',
+# so a value found under them must still LOOK like a path - see _path_like().
+REQUEST_URI_KEY_PATTERN = re.compile(
+    r'requesturi|^path$|^uri$|^url$|^endpoint$|^target$|^resource$', re.IGNORECASE)
 # An explicit HTTP method carried inside a structured JSON log block.
 METHOD_KEY_PATTERN = re.compile(r'^method$|httpmethod|requestmethod|^verb$', re.IGNORECASE)
 HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
@@ -487,6 +493,46 @@ def assemble_multiline_observations(lines, carry):
     return observations
 
 
+def _find_all_key_values(obj, pattern, out=None):
+    """Every SCALAR value whose key matches `pattern`, not just the first.
+
+    Needed because a single block can carry several FlowName keys - a
+    top-level one plus one inside each of entry/exit - and only ONE of them
+    is the APIkit name that encodes the HTTP method. Taking only the first
+    (as _find_key_value does) threw away complete per-request records from
+    s-lms-flexcube-api, whose top-level FlowName is a plain business flow
+    name while the method lives on a sibling."""
+    if out is None:
+        out = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if pattern.search(k) and not isinstance(v, (dict, list)):
+                out.append(v)
+            else:
+                _find_all_key_values(v, pattern, out)
+    elif isinstance(obj, list):
+        for item in obj:
+            _find_all_key_values(item, pattern, out)
+    return out
+
+
+def _path_like(value):
+    """True if `value` could be an HTTP path. Guards the looser key names
+    ('endpoint', 'target', 'url') against matching a hostname, a queue name
+    or a free-text label. Returns the normalised path, or None."""
+    if not value or isinstance(value, (dict, list, bool)):
+        return None
+    s = str(value).strip()
+    if not s or len(s) > 2048 or " " in s:
+        return None
+    m = re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*://[^/]+(/.*)?$', s)
+    if m:                       # absolute URL - keep only the path part
+        s = m.group(1) or "/"
+    if not s.startswith("/"):
+        return None
+    return s.split("?")[0].split("#")[0] or "/"
+
+
 def _all_keys(obj, depth=0, out=None):
     """Collects every key name (not value) up to a bounded depth, for safe
     diagnostic printing - never includes a value, only structure."""
@@ -515,15 +561,50 @@ def extract_client_ip(obj):
     return str(raw).split(",")[0].strip() or None
 
 
-def _finish_block(carry, observations):
+def _decode_json_block(buffer):
+    """json.loads, then a raw_decode retry.
+
+    A real log line often ends with trailing text after the closing brace
+    (a Mule suffix, a second object, a stack fragment), which json.loads
+    rejects outright as "Extra data: line N column M". raw_decode parses the
+    leading JSON value and reports where it stopped, so the record is kept
+    instead of discarded over trailing noise. CONFIRMED against this
+    deployment: several blocks failed only on "Extra data"."""
     try:
-        obj = json.loads(carry["buffer"])
-    except (ValueError, TypeError) as e:
+        return json.loads(buffer), None
+    except (ValueError, TypeError) as first:
+        try:
+            obj, _end = json.JSONDecoder().raw_decode(buffer.lstrip())
+            return obj, None
+        except (ValueError, TypeError):
+            return None, first
+
+
+# A correlation id seen on an APIkit thread-name line carries the HTTP method.
+# The SAME correlation id then appears inside that request's structured JSON
+# block, which may have no method of its own. Remembering the mapping briefly
+# recovers the method for those blocks WITHOUT guessing it from the payload.
+# Bounded so a long-running agent can't grow this without limit.
+MAX_CORRID_METHODS = int(os.environ.get("MAX_CORRID_METHODS", "5000"))
+_CORRID_METHOD = collections.OrderedDict()
+
+
+def remember_corrid_method(corr_id, method, path=None):
+    if not corr_id or not method:
+        return
+    _CORRID_METHOD[corr_id] = (method, path)
+    while len(_CORRID_METHOD) > MAX_CORRID_METHODS:
+        _CORRID_METHOD.popitem(last=False)
+
+
+def _finish_block(carry, observations):
+    obj, err = _decode_json_block(carry["buffer"])
+    if err is not None:
+        e = err
         # Diagnostic only - never prints buffer CONTENT (it may hold real
         # captured field values), only the parse error and buffer length.
         print(f"[warn] found what looked like a JSON block (method={carry['method']}) but it failed to parse: "
               f"{e} (buffer length {len(carry['buffer'])} chars) - not counted as a match.", file=sys.stderr)
-        obj = None
     carry["buffer"] = ""
     if isinstance(obj, dict) and not carry["method"]:
         # The method isn't always on the preceding line. A structured JSON
@@ -538,10 +619,21 @@ def _finish_block(carry, observations):
         if explicit and str(explicit).upper() in HTTP_METHODS:
             carry["method"] = str(explicit).upper()
         else:
-            flow_any = _find_key_value(obj, FLOWNAME_KEY_PATTERN)
-            m = APIKIT_FLOW_PATTERN.search(str(flow_any)) if flow_any else None
-            if m:
-                carry["method"] = m.group(1).upper()
+            # EVERY FlowName in the block, not just the first - a block can
+            # carry a plain business flow name at the top and the APIkit name
+            # on a nested entry/exit sibling.
+            for flow_any in _find_all_key_values(obj, FLOWNAME_KEY_PATTERN):
+                m = APIKIT_FLOW_PATTERN.search(str(flow_any))
+                if m:
+                    carry["method"] = m.group(1).upper()
+                    break
+
+    if isinstance(obj, dict) and not carry["method"]:
+        # Last resort, and the only one that needs no guessing: this block's
+        # own correlation id was already seen on an APIkit thread-name line.
+        seen = _CORRID_METHOD.get(str(_find_key_value(obj, CORR_ID_KEY_PATTERN) or ""))
+        if seen:
+            carry["method"] = seen[0]
 
     if isinstance(obj, dict) and not carry["method"]:
         print(f"[warn] parsed a JSON block successfully but no HTTP method was captured - not counted as a "
@@ -549,7 +641,11 @@ def _finish_block(carry, observations):
               f"an APIkit FlowName inside the block. Key names seen: "
               f"{sorted(set(_all_keys(obj)))}", file=sys.stderr)
     if isinstance(obj, dict) and carry["method"]:
-        path = _find_key_value(obj, REQUEST_URI_KEY_PATTERN)
+        path = None
+        for cand in _find_all_key_values(obj, REQUEST_URI_KEY_PATTERN):
+            path = _path_like(cand)
+            if path:
+                break
         if not path:
             print(f"[warn] parsed a JSON block (method={carry['method']}) but found no path-like key "
                   f"(looked for a name matching 'requesturi'/'path'/'uri'). Top-level/nested key names seen: "
@@ -567,7 +663,7 @@ def _finish_block(carry, observations):
                         (entry_block and _find_key_value(entry_block, FLOWNAME_KEY_PATTERN))
             observations.append({
                 "method": carry["method"],
-                "path": str(path).split("?")[0],
+                "path": path,
                 "statusCode": _find_key_value(obj, STATUS_KEY_PATTERN),
                 "correlationId": _find_key_value(obj, CORR_ID_KEY_PATTERN),
                 "body": req_payload if isinstance(req_payload, dict) else None,
@@ -955,6 +1051,10 @@ def parse_apikit_line(stripped):
     is_inventory = bool(STARTING_FLOW_PATTERN.search(stripped))
     event_m = MULE_EVENT_PATTERN.search(stripped)
     status_m = STATUS_CODE_PATTERN.search(stripped)
+    if event_m and not is_inventory:
+        # So a structured JSON block logged later under this same correlation
+        # id can recover the method without guessing it (see _finish_block).
+        remember_corrid_method(event_m.group(1), method, path)
     return {
         "method": method,
         "path": path,

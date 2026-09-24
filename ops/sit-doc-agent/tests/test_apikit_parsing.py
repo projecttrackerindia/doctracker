@@ -209,6 +209,120 @@ try:
 finally:
     agent.CAPTURE_MODE = saved_mode
 
+print("Block-shape variants found on the production node")
+# Each of these was a real [warn] in the sample run against 103 app logs.
+
+# 1. Trailing text after the closing brace. json.loads calls this "Extra data"
+#    and rejects the whole record; raw_decode keeps it.
+obj, err = agent._decode_json_block('{"RequestUri": "/a", "method": "GET"} trailing mule suffix')
+check("a block with trailing text after the closing brace still parses",
+      err is None and obj and obj.get("RequestUri") == "/a", "err=%r obj=%r" % (err, obj))
+obj, err = agent._decode_json_block('{ this is not json at all')
+check("genuinely broken JSON is still reported as broken", obj is None and err is not None)
+
+# 2. 'endpoint' as the path key, seen alongside an explicit 'method'.
+ENDPOINT_KEY_BLOCK = {
+    "correlationid": "aaaaaaaa-b7d2-11f1-8e71-02783a995911",
+    "method": "POST", "endpoint": "/portal/common/lookup", "target": "https://internal.example",
+    "message": "calling downstream", "timestampIST": "2026-09-24 10:16:33.311",
+}
+ek_lines = [
+    "INFO  2026-09-24 10:16:33,311 [[MuleRuntime].uber.1: [s-portal-common-api].uber@x] "
+    "[processor: x/processors/0; event: aaaaaaaa-b7d2-11f1-8e71-02783a995911] "
+    "org.mule.runtime.core.internal.processor.LoggerMessageProcessor: {"
+] + json.dumps(ENDPOINT_KEY_BLOCK, indent=2).splitlines()[1:]
+ek_carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+ek_obs = agent.assemble_multiline_observations(ek_lines, ek_carry)
+check("a block whose path key is named 'endpoint' is recovered",
+      len(ek_obs) == 1 and ek_obs[0]["path"] == "/portal/common/lookup",
+      "got %r" % ([o.get("path") for o in ek_obs],))
+
+# 3. The path-likeness guard: those looser key names must not admit a host,
+#    a queue name or free text just because the key is called 'target'.
+check("a bare hostname under 'target' is rejected as a path",
+      agent._path_like("https://internal.example") == "/", agent._path_like("https://internal.example"))
+check("a queue/table name is rejected as a path", agent._path_like("LOAN_TXN_QUEUE") is None,
+      agent._path_like("LOAN_TXN_QUEUE"))
+check("free text is rejected as a path", agent._path_like("calling downstream now") is None,
+      agent._path_like("calling downstream now"))
+check("an absolute URL keeps only its path",
+      agent._path_like("https://host:8443/api/v1/loan?x=1") == "/api/v1/loan",
+      agent._path_like("https://host:8443/api/v1/loan?x=1"))
+check("a fragment is stripped too", agent._path_like("/api/v1/loan#top") == "/api/v1/loan",
+      agent._path_like("/api/v1/loan#top"))
+
+# 4. Several FlowName keys in one block - only a nested one is the APIkit name.
+#    This is the s-lms-flexcube-api shape, which was being discarded entirely.
+MULTI_FLOW_BLOCK = {
+    "ApplicationName": "s-lms-flexcube-api",
+    "FlowName": "loan-receipt-business-flow",          # plain name, no method
+    "RequestUri": "/api/loan/9931/receipt",
+    "statusCode": 200,
+    "entry": {"TimestampIST": "2026-09-24 10:16:33.311",
+              "FlowName": r"put:\loan\(loanId)\receipt:application\json:s-lms-flexcube-api-config"},
+    "exit": {"TimestampIST": "2026-09-24 10:16:33.811", "FlowName": "loan-receipt-business-flow"},
+}
+mf_lines = [
+    "INFO  2026-09-24 10:16:33,311 [[MuleRuntime].uber.1: [s-lms-flexcube-api].uber@x] "
+    "[processor: x/processors/0; event: bbbbbbbb-b7d2-11f1-8e71-02783a995911] "
+    "org.mule.runtime.core.internal.processor.LoggerMessageProcessor: {"
+] + json.dumps(MULTI_FLOW_BLOCK, indent=2).splitlines()[1:]
+mf_carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+mf_obs = agent.assemble_multiline_observations(mf_lines, mf_carry)
+check("the APIkit FlowName is found even when it is not the first FlowName key",
+      len(mf_obs) == 1 and mf_obs[0]["method"] == "PUT",
+      "got %r" % ([o.get("method") for o in mf_obs],))
+check("_find_all_key_values returns every match, not just the first",
+      len(agent._find_all_key_values(MULTI_FLOW_BLOCK, agent.FLOWNAME_KEY_PATTERN)) == 3,
+      "got %d" % len(agent._find_all_key_values(MULTI_FLOW_BLOCK, agent.FLOWNAME_KEY_PATTERN)))
+
+# 5. Correlation-id method memory: the method came from an earlier APIkit
+#    thread-name line, NOT from a guess about the payload.
+agent._CORRID_METHOD.clear()
+CORR = "cccccccc-b7d2-11f1-8e71-02783a995911"
+NO_METHOD_BLOCK = {"RequestUri": "/api/employee/77/photo", "statusCode": 204,
+                   "correlationId": CORR, "FlowName": "photo-business-flow"}
+nm_lines = [
+    "INFO  2026-09-24 10:16:33,311 [[MuleRuntime].uber.1: [s-portal-employee-api].uber@x] "
+    "[processor: x/processors/0; event: %s] "
+    "org.mule.runtime.core.internal.processor.LoggerMessageProcessor: {" % CORR
+] + json.dumps(NO_METHOD_BLOCK, indent=2).splitlines()[1:]
+
+nm_carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+check("with nothing remembered, a method-less block is still not invented",
+      len(agent.assemble_multiline_observations(nm_lines, nm_carry)) == 0,
+      "an observation was fabricated without a method")
+
+# Now the APIkit line for that same request is seen first, as it is in a real log.
+agent.parse_line(
+    r'INFO  2026-09-24 10:16:30,000 [[MuleRuntime].uber.9: [s-portal-employee-api].'
+    r'delete:\employee\(employeeId)\photo:application\json:s-portal-employee-api-config.BLOCKING @x] '
+    r'[processor: p/processors/0; event: %s] '
+    r'org.mule.runtime.core.internal.processor.LoggerMessageProcessor: start' % CORR)
+check("an APIkit line records its correlation id -> method",
+      agent._CORRID_METHOD.get(CORR, (None,))[0] == "DELETE",
+      "got %r" % (agent._CORRID_METHOD.get(CORR),))
+nm_carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+nm_obs = agent.assemble_multiline_observations(nm_lines, nm_carry)
+check("the method-less block now recovers its method from that correlation id",
+      len(nm_obs) == 1 and nm_obs[0]["method"] == "DELETE" and nm_obs[0]["statusCode"] == 204,
+      "got %r" % ([(o.get("method"), o.get("statusCode")) for o in nm_obs],))
+
+# A startup "Starting flow:" line proves an endpoint exists but is NOT a
+# request, so it must not seed the map and let an unrelated later block
+# inherit its method.
+agent._CORRID_METHOD.clear()
+agent.parse_line(STARTUP_FLOW)
+check("a startup inventory line does not seed the correlation-id map",
+      len(agent._CORRID_METHOD) == 0, "map=%r" % (list(agent._CORRID_METHOD),))
+
+check("the correlation-id map is bounded", agent.MAX_CORRID_METHODS <= 50000)
+for i in range(agent.MAX_CORRID_METHODS + 50):
+    agent.remember_corrid_method("id-%d" % i, "GET", "/x")
+check("the map evicts oldest once full", len(agent._CORRID_METHOD) == agent.MAX_CORRID_METHODS,
+      "grew to %d" % len(agent._CORRID_METHOD))
+agent._CORRID_METHOD.clear()
+
 print()
 if FAILURES:
     print("FAILED (%d): %s" % (len(FAILURES), ", ".join(FAILURES)))
