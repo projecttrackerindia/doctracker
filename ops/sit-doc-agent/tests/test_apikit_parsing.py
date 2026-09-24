@@ -141,6 +141,74 @@ check("a new event id does increment the count",
       state["endpoints"]["POST /token"]["totalRequests"] == 4,
       "counted %r" % state["endpoints"]["POST /token"]["totalRequests"])
 
+print("Structured JSON log blocks (RequestUri / FlowName / statusCode)")
+# Found on the production node: a JSON logger emitting a complete per-request
+# record. The agent parsed the block fine and then discarded it because the
+# HTTP method was not on the preceding line - it is implied by the APIkit
+# FlowName INSIDE the block. A full record with a real status code, client IP
+# and latency was being thrown away for want of one field.
+import json  # noqa: E402
+
+BLOCK = {
+    "ApplicationName": "s-portal-employee-api",
+    "FlowName": r"post:\employee\(employeeId)\receipt:application\json:s-portal-employee-api-config",
+    "RequestUri": "/api/employee/9931/receipt?trace=1",
+    "correlationId": "ea4101a1-b7d2-11f1-8e71-02783a995911",
+    "statusCode": 200,
+    "X-Forwarded-For": "10.2.7.55",
+    "entry": {"TimestampIST": "2026-09-24 10:16:33.311", "FlowName": "employee-receipt-flow"},
+    "exit": {"TimestampIST": "2026-09-24 10:16:33.964", "FlowName": "employee-receipt-flow"},
+    "RequestPayload": {"amount": 1200, "password": "hunter2", "userId": "u-1"},
+}
+block_lines = [
+    "INFO  2026-09-24 10:16:33,311 [[MuleRuntime].uber.37: [s-portal-employee-api].uber@x] "
+    "[processor: common-logger-flow/processors/0; event: ea4101a1-b7d2-11f1-8e71-02783a995911] "
+    "org.mule.runtime.core.internal.processor.LoggerMessageProcessor: {"
+] + json.dumps(BLOCK, indent=2).splitlines()[1:]
+
+carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+block_obs = agent.assemble_multiline_observations(block_lines, carry)
+check("a JSON block with no method on the preceding line is still recovered",
+      len(block_obs) == 1, "got %d observation(s)" % len(block_obs))
+if block_obs:
+    b = block_obs[0]
+    check("method is taken from the APIkit FlowName in the block", b["method"] == "POST",
+          "got %r" % b["method"])
+    check("path comes from RequestUri, query string stripped",
+          b["path"] == "/api/employee/9931/receipt", "got %r" % b["path"])
+    check("status code is captured", b["statusCode"] == 200, "got %r" % b["statusCode"])
+    check("client IP comes from X-Forwarded-For", b.get("clientIp") == "10.2.7.55",
+          "got %r" % b.get("clientIp"))
+    check("latency is derived from entry/exit timestamps", b.get("latencyMs") == 653,
+          "got %r" % b.get("latencyMs"))
+
+# The security posture this unlocks has to hold, since these blocks carry real
+# request payloads.
+saved_mode = agent.CAPTURE_MODE
+try:
+    agent.CAPTURE_MODE = "aggregate"
+    st_agg = {"endpoints": {}, "health": {}}
+    agent.aggregate(st_agg, block_obs)
+    agg_blob = json.dumps(st_agg)
+    shapes = list(st_agg["endpoints"].values())[0]["fieldShapes"]
+    check("aggregate mode keeps field names and types only",
+          shapes.get("password") == "String" and "hunter2" not in agg_blob,
+          "shapes=%r leaked=%s" % (shapes, "hunter2" in agg_blob))
+    check("aggregate mode keeps no per-request records", not st_agg.get("logRecords"),
+          "got %r" % st_agg.get("logRecords"))
+
+    agent.CAPTURE_MODE = "full"
+    st_full = {"endpoints": {}, "health": {}}
+    agent.aggregate(st_full, block_obs)
+    full_blob = json.dumps(st_full)
+    check("full mode redacts a credential-named field", "hunter2" not in full_blob,
+          "the raw password value reached stored state")
+    recs = st_full.get("logRecords") or []
+    check("full mode templates ids out of the stored path",
+          bool(recs) and "{" in recs[0].get("path", ""), "got %r" % (recs[0].get("path") if recs else None))
+finally:
+    agent.CAPTURE_MODE = saved_mode
+
 print()
 if FAILURES:
     print("FAILED (%d): %s" % (len(FAILURES), ", ".join(FAILURES)))

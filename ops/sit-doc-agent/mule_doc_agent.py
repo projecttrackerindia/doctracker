@@ -255,6 +255,9 @@ STATUS_CODE_PATTERN = re.compile(r'\b(?:status(?:Code)?)["\s:=]+(\d{3})\b', re.I
 # ============================================================================
 HEADER_METHOD_PATTERN = re.compile(r'\.(GET|POST|PUT|PATCH|DELETE):', re.IGNORECASE)
 REQUEST_URI_KEY_PATTERN = re.compile(r'requesturi|^path$|^uri$', re.IGNORECASE)
+# An explicit HTTP method carried inside a structured JSON log block.
+METHOD_KEY_PATTERN = re.compile(r'^method$|httpmethod|requestmethod|^verb$', re.IGNORECASE)
+HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 CORR_ID_KEY_PATTERN = re.compile(r'correlationid', re.IGNORECASE)
 STATUS_KEY_PATTERN = re.compile(r'httpstatus|statuscode|^status$', re.IGNORECASE)
 REQUEST_PAYLOAD_KEY_PATTERN = re.compile(r'^requestpayload$', re.IGNORECASE)
@@ -523,9 +526,28 @@ def _finish_block(carry, observations):
         obj = None
     carry["buffer"] = ""
     if isinstance(obj, dict) and not carry["method"]:
-        print(f"[warn] parsed a JSON block successfully but no HTTP method was captured off the preceding "
-              f"request-start line (HEADER_METHOD_PATTERN found no match) - not counted as a match. Key names "
-              f"seen in the block: {sorted(set(_all_keys(obj)))}", file=sys.stderr)
+        # The method isn't always on the preceding line. A structured JSON
+        # logger - confirmed on this deployment, with keys like RequestUri /
+        # FlowName / statusCode / X-Forwarded-For / TimestampIST - carries it
+        # INSIDE the block instead, either as an explicit method key or
+        # implied by an APIkit FlowName ("post:\token:application\json:...").
+        # Without this, a complete per-request record with a real status code
+        # and client IP was being parsed and then thrown away for want of one
+        # field.
+        explicit = _find_key_value(obj, METHOD_KEY_PATTERN)
+        if explicit and str(explicit).upper() in HTTP_METHODS:
+            carry["method"] = str(explicit).upper()
+        else:
+            flow_any = _find_key_value(obj, FLOWNAME_KEY_PATTERN)
+            m = APIKIT_FLOW_PATTERN.search(str(flow_any)) if flow_any else None
+            if m:
+                carry["method"] = m.group(1).upper()
+
+    if isinstance(obj, dict) and not carry["method"]:
+        print(f"[warn] parsed a JSON block successfully but no HTTP method was captured - not counted as a "
+              f"match. Looked on the preceding line (HEADER_METHOD_PATTERN), for a method-like key, and for "
+              f"an APIkit FlowName inside the block. Key names seen: "
+              f"{sorted(set(_all_keys(obj)))}", file=sys.stderr)
     if isinstance(obj, dict) and carry["method"]:
         path = _find_key_value(obj, REQUEST_URI_KEY_PATTERN)
         if not path:
