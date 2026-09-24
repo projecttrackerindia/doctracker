@@ -152,16 +152,24 @@ running the agent unattended in its normal push mode.
 Anywhere you control on the SIT server that has read access to the Mule
 logs — following the systemd layout used later in this doc:
 
-| What | Path |
-|---|---|
-| The script itself | `/opt/doctracker-agent/mule_doc_agent.py` |
-| Its env/config file | `/etc/doctracker-agent/env` (`chmod 600`) |
-| Its state file (read position, discovered data) | `/var/lib/doctracker-agent/state.json` |
-| Local HTML report (if using `--local-html`) | `/opt/doctracker-agent/report.html` |
+| What | Path | Owner | Mode |
+|---|---|---|---|
+| The script itself | `/opt/doctracker-agent/mule_doc_agent.py` | **`root`** | `0755` |
+| Its env/config file | `/etc/doctracker-agent/env` | `doctracker-agent` | `0600` |
+| Its state file (read position, discovered data) | `/var/lib/doctracker-agent/state.json` | `doctracker-agent` | `0600` |
+| Local HTML report (if using `--local-html`) | `/opt/doctracker-agent/report.html` | `doctracker-agent` | `0644` |
 
 Run it as its own dedicated OS user (`doctracker-agent`), never as root and
 never as the Mule runtime's own user — it only ever needs **read-only**
 access to the log directory.
+
+**The script stays owned by `root`, not by `doctracker-agent`.** The agent
+must not be able to rewrite its own code: if it could, anything that
+compromised the agent process could persist arbitrary code that then runs
+every time the service restarts. `0755` root-owned gives it exactly what it
+needs — execute and read, nothing more. The env and state files *are* owned
+by the agent, because it genuinely has to read the first and write the
+second.
 
 ## Requirements
 
