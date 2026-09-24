@@ -33,66 +33,84 @@
 // API runs in SIT, UAT and PROD and a pooled request count is a wrong number,
 // not a rounder one. There is deliberately no "All environments" option: it
 // would be exactly the meaningless sum this separation exists to prevent.
-let obsEnvironment = null;
-
+// The environment shown is the one picked in the HEADER (state.env), the
+// same control that scopes the rest of the app. An earlier version of this
+// page carried its own separate environment buttons, which meant the header
+// could read Dev while the dashboard below it showed SIT figures - two
+// controls disagreeing about the same question, which is worse than having
+// no selector at all.
 function obsEnvironmentNames(){
   const raw = state.endpointMetrics;
   const names = raw && Array.isArray(raw.environmentNames) ? raw.environmentNames : [];
   return names.filter(n => typeof n === 'string' && n);
 }
 
+// Agents name their environment freely ("SIT"), while state.env is an id
+// ("DEV"). Match case-insensitively so "Sit" and "SIT" are one environment,
+// but never fall back to a DIFFERENT environment's data - that is exactly
+// the cross-environment mixing this whole split exists to prevent.
 function obsActiveEnvironment(){
-  const names = obsEnvironmentNames();
-  if(!names.length) return null;
-  if(obsEnvironment && names.includes(obsEnvironment)) return obsEnvironment;
-  const raw = state.endpointMetrics;
-  return (raw && names.includes(raw.defaultEnvironment)) ? raw.defaultEnvironment : names[0];
-}
-
-function setObsEnvironment(name){
-  obsEnvironment = name;
-  // renderMain(), not a bare render() - there is no such global. The sidebar
-  // is environment-independent, so only the main pane needs redrawing.
-  renderMain();
+  const want = String(state.env || '').trim().toLowerCase();
+  if(!want) return null;
+  return obsEnvironmentNames().find(n => n.toLowerCase() === want) || null;
 }
 
 function observabilityData(){
   const raw = state.endpointMetrics;
-  // Prefer the selected environment's own segment. The server also puts the
-  // default environment's data at the top level, so a single-environment
-  // install works unchanged whether or not it sends the new field.
   const env = obsActiveEnvironment();
-  const scoped = (env && raw && raw.environments && typeof raw.environments === 'object')
-    ? raw.environments[env] : null;
-  const src = (scoped && typeof scoped === 'object') ? scoped : raw;
-  if(src && typeof src === 'object' && src.endpoints && typeof src.endpoints === 'object'){
+  const empty = { endpoints: {}, agentHealth: null, logRecords: [], environment: null };
+  if(!raw || typeof raw !== 'object') return empty;
+
+  const envs = (raw.environments && typeof raw.environments === 'object') ? raw.environments : null;
+  if(envs){
+    // Scoped storage. No segment for this environment means no agent is
+    // reporting it - show nothing rather than another environment's numbers.
+    const src = env ? envs[env] : null;
+    if(!src || typeof src !== 'object') return empty;
     return {
-      endpoints: src.endpoints,
+      endpoints: (src.endpoints && typeof src.endpoints === 'object') ? src.endpoints : {},
       agentHealth: (src.agentHealth && typeof src.agentHealth === 'object') ? src.agentHealth : null,
       logRecords: Array.isArray(src.logRecords) ? src.logRecords : [],
       environment: env,
     };
   }
-  return { endpoints: (src && typeof src === 'object') ? src : {}, agentHealth: null, logRecords: [], environment: env };
+
+  // Unscoped legacy blob, written before metrics carried an environment.
+  // Its environment is genuinely unknown, so it is shown whatever the header
+  // says, and renderObsEnvironmentBar() says so rather than implying the
+  // figures belong to the selected environment.
+  if(raw.endpoints && typeof raw.endpoints === 'object'){
+    return {
+      endpoints: raw.endpoints,
+      agentHealth: (raw.agentHealth && typeof raw.agentHealth === 'object') ? raw.agentHealth : null,
+      logRecords: Array.isArray(raw.logRecords) ? raw.logRecords : [],
+      environment: null,
+    };
+  }
+  return empty;
 }
 
-// Rendered above the dashboard whenever more than one environment reports.
-// With a single environment it stays out of the way - a selector with one
-// option is noise - but the environment is still named, so nobody reads a
-// number without knowing which environment produced it.
+// Names the environment these figures came from, and says plainly when the
+// header's environment has no agent reporting it.
 function renderObsEnvironmentBar(){
   const names = obsEnvironmentNames();
   const active = obsActiveEnvironment();
-  if(!names.length) return '';
-  if(names.length === 1){
-    return `<div class="obs-env-bar obs-env-bar-single">Showing <strong>${escapeHtml(names[0])}</strong></div>`;
+  const header = escapeHtml(String(state.env || '—'));
+  if(!names.length){
+    return `<div class="obs-env-bar obs-env-bar-single">These figures predate per-environment
+      recording, so the environment they came from isn't known. The next agent push will label them.</div>`;
   }
-  return `<div class="obs-env-bar" role="group" aria-label="Environment">
-    <span class="obs-env-label">Environment</span>
-    ${names.map(n => `<button type="button" class="obs-env-btn${n === active ? ' active' : ''}"
-       data-obs-env="${escapeHtml(n)}" aria-pressed="${n === active}">${escapeHtml(n)}</button>`).join('')}
-    <span class="obs-env-note">Figures are never summed across environments.</span>
-  </div>`;
+  if(active){
+    const others = names.filter(n => n !== active);
+    return `<div class="obs-env-bar obs-env-bar-single">Showing <strong>${escapeHtml(active)}</strong>,
+      from the environment selected in the header.${others.length
+        ? ` Also reporting: ${others.map(n => escapeHtml(n)).join(', ')} — switch environment in the header to see those.`
+        : ''}
+      <span class="obs-env-note">Figures are never summed across environments.</span></div>`;
+  }
+  return `<div class="obs-env-bar obs-env-bar-warn">No agent is reporting for <strong>${header}</strong>,
+    so there is nothing to show. Reporting environments: ${names.map(n => `<strong>${escapeHtml(n)}</strong>`).join(', ')}
+    — switch environment in the header to see them.</div>`;
 }
 
 const OBS_OVERFLOW_KEY = '* OVERFLOW - too many distinct endpoints';

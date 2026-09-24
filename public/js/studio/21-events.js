@@ -417,8 +417,6 @@ document.addEventListener('click', (e)=>{
   if(toggleProjVisBtn){ toggleProjectVisibility(toggleProjVisBtn.getAttribute('data-toggle-proj-visibility')); }
   const toggleEpVisBtn = e.target.closest('[data-toggle-ep-visibility]');
   if(toggleEpVisBtn){ toggleEndpointVisibility(toggleEpVisBtn.getAttribute('data-toggle-ep-visibility')); }
-  const obsEnvBtn = e.target.closest('[data-obs-env]');
-  if(obsEnvBtn){ setObsEnvironment(obsEnvBtn.getAttribute('data-obs-env')); return; }
   const ovCopyBtn = e.target.closest('[data-ov-env-copy]');
   if(ovCopyBtn){
     const url = ovCopyBtn.getAttribute('data-ov-env-copy');

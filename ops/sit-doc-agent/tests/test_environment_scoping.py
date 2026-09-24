@@ -106,17 +106,32 @@ check("GET exposes the environment names for the selector",
 
 print("The page shows which environment a number came from")
 obs = open(os.path.join(REPO, "public", "js", "studio", "23-observability.js"), encoding="utf-8").read()
-check("observabilityData reads the selected environment's segment",
-      "obsActiveEnvironment()" in obs and "raw.environments[env]" in obs)
-# Prose may discuss why there is no pooled option; code must not offer one.
-obs_code = "\n".join(l for l in obs.splitlines() if not l.strip().startswith("//"))
-check("no pooled 'all environments' option is offered in the markup",
-      "All environments" not in obs_code and "data-obs-env=\"*\"" not in obs_code,
-      "a pooled option reached the selector")
-check("a single-environment install still names the environment",
-      "obs-env-bar-single" in obs)
+check("the page follows the header environment (state.env), not its own picker",
+      "String(state.env" in obs and "obsActiveEnvironment()" in obs)
+check("environment names are matched case-insensitively",
+      "toLowerCase()" in obs and "obsEnvironmentNames()" in obs)
+
+# The bug this replaced: the header read Dev while the dashboard showed SIT.
+# Two controls disagreeing about the same question is worse than one.
 events = open(os.path.join(REPO, "public", "js", "studio", "21-events.js"), encoding="utf-8").read()
-check("the selector is wired to a handler", "data-obs-env" in events)
+check("the page no longer has a second, competing environment picker",
+      "data-obs-env" not in obs and "data-obs-env" not in events)
+check("setObsEnvironment is gone with it", "setObsEnvironment" not in obs and "setObsEnvironment" not in events)
+
+# Most important: an environment with no agent must show NOTHING, never
+# another environment's figures.
+obs_code = chr(10).join(l for l in obs.splitlines() if not l.strip().startswith("//"))
+seg = obs_code[obs_code.index("function observabilityData("):]
+seg = seg[:seg.index("function renderObsEnvironmentBar(")]
+check("an unreported environment returns empty rather than falling back",
+      "if(!src || typeof src !== 'object') return empty;" in seg,
+      "a fallback to another environment's data may still exist")
+check("no pooled 'all environments' option is offered",
+      "All environments" not in obs_code and 'data-obs-env="*"' not in obs_code)
+check("the empty state names the environment that has no agent",
+      "No agent is reporting for" in obs)
+check("a legacy unscoped blob is labelled as unknown, not as the selected environment",
+      "predate per-environment" in obs)
 
 print()
 if FAILURES:
