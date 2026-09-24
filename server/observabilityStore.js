@@ -86,8 +86,33 @@ function percentileFromBuckets(buckets, q) {
 // Ingest
 // ---------------------------------------------------------------------------
 
-const MAX_BUCKETS_PER_PUSH = 5000;
-const MAX_RECORDS_PER_PUSH = 5000;
+// Postgres's wire protocol counts bind parameters in a 16-bit field, so a
+// single statement can carry at most 65,535 of them. Exceeding it does not
+// raise a clean "too many parameters" error - the counter WRAPS, and the
+// server reports a nonsensical mismatch ("bind message has 14464 parameter
+// formats but 0 parameters"), which is close to undebuggable from the agent
+// side.
+//
+// So inserts are CHUNKED to stay well inside the limit rather than capped at
+// a number that happens to fit. Capping would silently discard buckets on a
+// busy interval, which is the one thing the exact-count tier must never do.
+// The agent can legitimately send far more than one chunk's worth after any
+// push outage (it holds up to MAX_PENDING_ROLLUP_BUCKETS).
+const ROLLUP_PARAMS_PER_ROW = 16;
+const RECORD_PARAMS_PER_ROW = 11;
+const ROLLUP_CHUNK_ROWS = 1000; // 16,000 params - comfortable margin
+const RECORD_CHUNK_ROWS = 1000; // 11,000 params
+
+// Outer ceilings, so a runaway or malicious client cannot make the server
+// loop forever. Far above anything the agent produces in practice.
+const MAX_BUCKETS_PER_PUSH = 50000;
+const MAX_RECORDS_PER_PUSH = 50000;
+
+function chunk(rows, size) {
+  const out = [];
+  for (let i = 0; i < rows.length; i += size) out.push(rows.slice(i, i + size));
+  return out;
+}
 
 function isFiniteNum(v) {
   return typeof v === 'number' && Number.isFinite(v);
@@ -110,6 +135,35 @@ async function ingestRollups(organisation, environment, buckets) {
   if (!Array.isArray(buckets) || !buckets.length) return { written: 0 };
   const capped = buckets.slice(0, MAX_BUCKETS_PER_PUSH);
 
+  const chunks = chunk(capped, ROLLUP_CHUNK_ROWS);
+  if (chunks.length === 1) {
+    return { written: await ingestRollupChunk(organisation, environment, chunks[0], pool) };
+  }
+
+  // ATOMIC across chunks, deliberately. The agent only clears its pending
+  // buckets after a successful push and retries the whole set otherwise - so
+  // if chunk 1 committed and chunk 2 failed, the retry would add chunk 1's
+  // counts A SECOND time. Because the upsert sums rather than replaces, that
+  // double-count would be permanent and invisible. All-or-nothing makes the
+  // retry safe.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let written = 0;
+    for (const part of chunks) {
+      written += await ingestRollupChunk(organisation, environment, part, client);
+    }
+    await client.query('COMMIT');
+    return { written };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function ingestRollupChunk(organisation, environment, capped, runner) {
   const values = [];
   const params = [];
   let i = 1;
@@ -141,11 +195,11 @@ async function ingestRollups(organisation, environment, buckets) {
       JSON.stringify(b.latencyBuckets && typeof b.latencyBuckets === 'object' ? b.latencyBuckets : {}),
       JSON.stringify(b.sourceIps && typeof b.sourceIps === 'object' ? b.sourceIps : {})
     );
-    i += 16;
+    i += ROLLUP_PARAMS_PER_ROW;
   }
-  if (!values.length) return { written: 0 };
+  if (!values.length) return 0;
 
-  await pool.query(
+  await runner.query(
     `INSERT INTO endpoint_metrics_rollup (
        organisation, environment, endpoint_id, bucket_start,
        request_count, status_2xx, status_3xx, status_4xx, status_5xx, status_unknown,
@@ -166,7 +220,7 @@ async function ingestRollups(organisation, environment, buckets) {
        source_ips      = jsonb_counter_merge(endpoint_metrics_rollup.source_ips, EXCLUDED.source_ips)`,
     params
   );
-  return { written: values.length };
+  return values.length;
 }
 
 // Appends raw per-request records (CAPTURE_MODE=full only). The captured field
@@ -176,6 +230,31 @@ async function ingestRecords(organisation, environment, records) {
   if (!Array.isArray(records) || !records.length) return { written: 0 };
   const capped = records.slice(0, MAX_RECORDS_PER_PUSH);
 
+  const chunks = chunk(capped, RECORD_CHUNK_ROWS);
+  if (chunks.length === 1) {
+    return { written: await ingestRecordChunk(organisation, environment, chunks[0], pool) };
+  }
+  // Records are an append, so a partially-applied batch would duplicate rows
+  // on the agent's retry rather than double-count a counter. Still atomic,
+  // for the same reason: the retry has to be safe.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let written = 0;
+    for (const part of chunks) {
+      written += await ingestRecordChunk(organisation, environment, part, client);
+    }
+    await client.query('COMMIT');
+    return { written };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function ingestRecordChunk(organisation, environment, capped, runner) {
   const values = [];
   const params = [];
   let i = 1;
@@ -217,11 +296,11 @@ async function ingestRecords(organisation, environment, records) {
       fieldsEnc,
       keyVersion
     );
-    i += 11;
+    i += RECORD_PARAMS_PER_ROW;
   }
-  if (!values.length) return { written: 0 };
+  if (!values.length) return 0;
 
-  await pool.query(
+  await runner.query(
     `INSERT INTO endpoint_log_records (
        organisation, environment, endpoint_id, ts,
        status_code, latency_ms, client_ip, correlation_id, flow_name,
@@ -229,7 +308,7 @@ async function ingestRecords(organisation, environment, records) {
      ) VALUES ${values.join(', ')}`,
     params
   );
-  return { written: values.length };
+  return values.length;
 }
 
 // ---------------------------------------------------------------------------

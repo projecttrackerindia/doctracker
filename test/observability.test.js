@@ -148,8 +148,12 @@ test('CONTRACT: every rollup field the server reads is one the agent sets', () =
   assert.ok(bucketLiteral, 'could not locate the rollup bucket literal in the agent');
   const agentKeys = new Set([...bucketLiteral[1].matchAll(/"([a-zA-Z0-9_]+)":/g)].map((m) => m[1]));
 
-  const ingest = /async function ingestRollups[\s\S]*?\n}/.exec(storeSrc);
-  assert.ok(ingest, 'could not locate ingestRollups');
+  // The chunk function is where the bucket fields are actually read; the
+  // ingestRollups wrapper only batches. Scanning both keeps this test honest
+  // if that split changes again.
+  const ingest = /async function ingestRollupChunk[\s\S]*?\n}/.exec(storeSrc)
+    || /async function ingestRollups[\s\S]*?\n}/.exec(storeSrc);
+  assert.ok(ingest, 'could not locate the rollup ingest function');
   const serverKeys = new Set([...ingest[0].matchAll(/\bb\.([a-zA-Z0-9_]+)/g)].map((m) => m[1]));
 
   const missing = [...serverKeys].filter((k) => !agentKeys.has(k));
