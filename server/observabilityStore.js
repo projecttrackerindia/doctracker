@@ -114,6 +114,59 @@ function chunk(rows, size) {
   return out;
 }
 
+function addCounters(into, from) {
+  for (const [k, v] of Object.entries(from || {})) {
+    into[k] = (into[k] || 0) + Number(v || 0);
+  }
+  return into;
+}
+
+// Collapses buckets that share a (endpoint, minute) key BEFORE they reach the
+// INSERT.
+//
+// Postgres refuses to let one ON CONFLICT DO UPDATE statement touch the same
+// row twice - it aborts the whole statement with "ON CONFLICT DO UPDATE
+// command cannot affect row a second time". So a single push containing two
+// buckets for the same endpoint-minute would 500 the entire request, losing
+// every other bucket in it too.
+//
+// The agent cannot currently produce such a pair (it accumulates into a dict
+// keyed by exactly this pair), but relying on that is fragile: chunking makes
+// the failure depend on whether the duplicates happen to land in the same
+// batch, and "add both" is the obviously correct reading of the request
+// anyway. Summing here makes ingest order-independent and duplicate-proof.
+function collapseDuplicateBuckets(buckets) {
+  const byKey = new Map();
+  for (const b of buckets) {
+    const key = String(b.endpointId) + '|' + String(b.bucketStart);
+    const seen = byKey.get(key);
+    if (!seen) {
+      byKey.set(key, Object.assign({}, b, {
+        latencyBuckets: Object.assign({}, b.latencyBuckets || {}),
+        sourceIps: Object.assign({}, b.sourceIps || {}),
+      }));
+      continue;
+    }
+    seen.requestCount = toInt(seen.requestCount) + toInt(b.requestCount);
+    seen.status2xx = toInt(seen.status2xx) + toInt(b.status2xx);
+    seen.status3xx = toInt(seen.status3xx) + toInt(b.status3xx);
+    seen.status4xx = toInt(seen.status4xx) + toInt(b.status4xx);
+    seen.status5xx = toInt(seen.status5xx) + toInt(b.status5xx);
+    seen.statusUnknown = toInt(seen.statusUnknown) + toInt(b.statusUnknown);
+    seen.latencySum = toInt(seen.latencySum) + toInt(b.latencySum);
+    seen.latencyCount = toInt(seen.latencyCount) + toInt(b.latencyCount);
+    if (isFiniteNum(b.latencyMin)) {
+      seen.latencyMin = isFiniteNum(seen.latencyMin) ? Math.min(seen.latencyMin, b.latencyMin) : b.latencyMin;
+    }
+    if (isFiniteNum(b.latencyMax)) {
+      seen.latencyMax = isFiniteNum(seen.latencyMax) ? Math.max(seen.latencyMax, b.latencyMax) : b.latencyMax;
+    }
+    addCounters(seen.latencyBuckets, b.latencyBuckets);
+    addCounters(seen.sourceIps, b.sourceIps);
+  }
+  return [...byKey.values()];
+}
+
 function isFiniteNum(v) {
   return typeof v === 'number' && Number.isFinite(v);
 }
@@ -133,7 +186,10 @@ function toInt(v, fallback = 0) {
 // (or faster) push cadence cheap enough to stop thinking about.
 async function ingestRollups(organisation, environment, buckets) {
   if (!Array.isArray(buckets) || !buckets.length) return { written: 0 };
-  const capped = buckets.slice(0, MAX_BUCKETS_PER_PUSH);
+  // Collapse duplicates first - see collapseDuplicateBuckets(). Doing this
+  // before the cap also means a push full of duplicates is not counted
+  // against the ceiling twice.
+  const capped = collapseDuplicateBuckets(buckets).slice(0, MAX_BUCKETS_PER_PUSH);
 
   const chunks = chunk(capped, ROLLUP_CHUNK_ROWS);
   if (chunks.length === 1) {
