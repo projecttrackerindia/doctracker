@@ -1648,6 +1648,11 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None):
         # Each file also gets its OWN multi-line carry, for the same reason the
         # main loop does: a JSON block spans lines within one file.
         per_file = max(1, sample_lines // max(1, len(sample_paths)))
+        print(f"[info] budget is split across the files: ~{per_file} line(s) sampled per file.")
+        if per_file < 10 and len(sample_paths) > 1:
+            print(f"[warn] that is too few lines per file to judge a parse rate. For {len(sample_paths)} "
+                  f"file(s), use --sample-lines {len(sample_paths) * 50} or more.", file=sys.stderr)
+        print()
         totals = {"matched": 0, "unmatched": 0, "lines": 0}
         per_file_report = []
 
