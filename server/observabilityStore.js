@@ -757,6 +757,37 @@ async function getCoverage(organisation, environment) {
   };
 }
 
+// Records "an ingest PUT for this org+environment landed just now" -
+// unconditionally, regardless of whether that push carried any rollups or
+// records worth writing. This is deliberately a DIFFERENT signal from
+// getCoverage() above: coverage answers "when did we last see TRAFFIC",
+// which stays frozen through any genuinely quiet spell even with the agent
+// perfectly healthy. This answers "when did the agent last push, period",
+// which is what "is the collector silent" (server/alertEngine.js's
+// agent_silent metric) needs - conflating the two made a quiet-but-alive
+// environment indistinguishable from a dead collector.
+async function touchHeartbeat(organisation, environment) {
+  await pool.query(
+    `INSERT INTO agent_heartbeat (organisation, environment, last_seen_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (organisation, environment) DO UPDATE SET last_seen_at = now()`,
+    [organisation, environment]
+  );
+}
+
+async function getHeartbeat(organisation, environment) {
+  const { rows } = await pool.query(
+    `SELECT last_seen_at FROM agent_heartbeat WHERE organisation = $1 AND environment = $2`,
+    [organisation, environment]
+  );
+  // No row yet reads as "unknown", not "silent" - see breaches()'s null
+  // handling in alertEngine.js, which never treats a missing measurement as
+  // a breach. That matters right after this table is first introduced: an
+  // environment with a perfectly healthy agent has no heartbeat row until
+  // its NEXT push, and must not read as newly-firing in the meantime.
+  return { lastSeenAt: rows[0] ? new Date(rows[0].last_seen_at).toISOString() : null };
+}
+
 module.exports = {
   LATENCY_BUCKET_BOUNDS,
   LATENCY_BUCKET_KEYS,
@@ -770,4 +801,6 @@ module.exports = {
   getRecords,
   getEnvironments,
   getCoverage,
+  touchHeartbeat,
+  getHeartbeat,
 };

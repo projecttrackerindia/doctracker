@@ -899,6 +899,26 @@ async function initDb() {
   // than waiting for the retention sweep's first run.
   await ensureLogRecordPartitions(3);
 
+  // The collector's own heartbeat, separate from the rollup/record tables
+  // above on purpose. Those only gain a row when a push carries actual
+  // TRAFFIC - a genuinely healthy agent watching a genuinely quiet
+  // environment (nobody called the API for an hour) writes nothing to them
+  // either, which is indistinguishable from the agent being dead if that is
+  // what "is the collector silent" is measured against. This table is
+  // touched on every PUT /observability/ingest UNCONDITIONALLY, whether or
+  // not that push had anything new to report - see touchHeartbeat() in
+  // observabilityStore.js - so it answers "did the agent push at all",
+  // which is what the agent_silent alert (server/alertEngine.js) actually
+  // needs to ask.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agent_heartbeat (
+      organisation  TEXT NOT NULL,
+      environment   TEXT NOT NULL,
+      last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (organisation, environment)
+    );
+  `);
+
   console.log('Database schema ready.');
 }
 

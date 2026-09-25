@@ -79,7 +79,9 @@ Set per rule, in **Observability ▸ Alerts**.
 | `latency_p95` | ms | Slowest 5% | Degradation the average hides |
 | `latency_p99` | ms | Slowest 1% | A hard timeout ceiling |
 | `request_rate` | /min | Requests per minute | With **below**, catches traffic falling off a cliff — an upstream that stopped calling you, which no error-rate rule can ever see |
-| `agent_silent` | min | Minutes since this environment received any data | The collector died. Cannot be raised by incoming data; see path B above |
+| `agent_silent` | min | Minutes since the agent last **pushed**, at all — not since traffic was last seen (below) | The collector died. Cannot be raised by incoming data; see path B above |
+
+Deliberately *pushed*, not *received traffic*: a healthy agent watching a genuinely quiet environment writes nothing new to the rollup tables either, and measuring against those would make an ordinary quiet hour indistinguishable from a dead collector. The agent's own push — including one with nothing new to report — is recorded separately (`agent_heartbeat` table, touched on every `PUT /observability/ingest` regardless of whether it carried any rollups) precisely so this metric answers "is the process alive," not "was there traffic."
 
 ---
 
@@ -143,7 +145,7 @@ does **not** bring them back.
 |---|---|---|---|
 | Server errors (5xx) across an environment | 5xx rate > 5% over 10 min, min 20 req | 5 min | 60 min |
 | A single endpoint failing | error rate > 25% over 15 min per endpoint, min 10 req | 10 min | 120 min |
-| Collector stopped reporting | no data for 45 min | — | 180 min |
+| Collector stopped reporting | no push at all for 45 min | — | 180 min |
 | Requests not being logged to completion | unclassified > 40% over 30 min, min 50 req | 15 min | 360 min |
 
 The collector threshold is 45 minutes because the agent's own heartbeat is
@@ -176,7 +178,8 @@ system silently stops watching for something.
 |---|---|
 | `server/alertEngine.js` | Metric catalogue, state machine, evaluation, sweep |
 | `server/routes/alerts.js` | `/api/workspace/alerts` — read, CRUD, "evaluate now" |
-| `server/db.js` | `alert_rule`, `alert_state`, `org_workspace.alert_settings` |
+| `server/db.js` | `alert_rule`, `alert_state`, `org_workspace.alert_settings`, `agent_heartbeat` |
+| `server/observabilityStore.js` | `touchHeartbeat()` / `getHeartbeat()` — the collector's own liveness signal, separate from traffic coverage |
 | `public/js/studio/26-obs-console.js` | The Alerts tab |
 | `test/alerting.test.js` | State machine, quiet hours, validation |
 

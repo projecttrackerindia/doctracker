@@ -91,9 +91,11 @@ const METRICS = {
   },
   agent_silent: {
     kind: 'absence', unit: 'min', label: 'Collector silent',
-    help: 'Minutes since this environment last received ANY data. The one alert that cannot be '
-      + 'raised by incoming data, because it is about data no longer arriving. Set the threshold '
-      + 'above the agent\'s own push interval (15 min by default) or it will fire on every quiet spell.',
+    help: 'Minutes since the agent last PUSHED, at all - including a push with nothing new to '
+      + 'report. Deliberately not "minutes since traffic was last seen": an environment can go a '
+      + 'genuinely quiet hour with the collector perfectly healthy, and that must read as "ok", not '
+      + 'as a dead agent. Set the threshold above the agent\'s own push interval (15 min by default) '
+      + 'or it will fire on every quiet spell.',
   },
 };
 
@@ -518,8 +520,16 @@ async function evaluateOrganisation(organisation, { environments = null, include
     for (const env of targets) {
       let rows;
       if (isAbsence) {
-        const coverage = await store.getCoverage(organisation, env);
-        const newest = coverage.newest ? new Date(coverage.newest).getTime() : null;
+        // Deliberately the agent's HEARTBEAT (did it push at all), not
+        // getCoverage()'s rollup freshness (did any TRAFFIC arrive). Those
+        // are different questions: a healthy collector watching a
+        // genuinely quiet environment writes no rollup rows either, which
+        // made a quiet API indistinguishable from a dead agent under the
+        // old signal - this alert fired on ordinary silence, not just a
+        // dead process. See touchHeartbeat()'s comment in
+        // observabilityStore.js.
+        const heartbeat = await store.getHeartbeat(organisation, env);
+        const newest = heartbeat.lastSeenAt ? new Date(heartbeat.lastSeenAt).getTime() : null;
         const silentMinutes = newest === null ? null : (now - newest) / 60000;
         rows = [{ endpointId: '', value: silentMinutes, sample: 1 }];
       } else {

@@ -126,9 +126,15 @@ router.put('/ingest', async (req, res) => {
 
   try {
     const org = req.authUser.organisation;
+    // Unconditional, alongside the writes below rather than gated on
+    // whether they wrote anything - a push with zero new rollups/records
+    // (nothing happened this cycle) is still proof the agent is alive, and
+    // is exactly the case agent_silent (server/alertEngine.js) must not
+    // mistake for a dead collector. See touchHeartbeat()'s own comment.
     const [rollupResult, recordResult] = await Promise.all([
       store.ingestRollups(org, envRaw, body.rollups),
       store.ingestRecords(org, envRaw, body.records),
+      store.touchHeartbeat(org, envRaw),
     ]);
 
     // Wake any browser currently watching this org's console. Deliberately
