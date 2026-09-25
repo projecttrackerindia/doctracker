@@ -1570,6 +1570,18 @@ pre.code-block{
 .obs-chart-empty{
   padding:40px 12px; text-align:center; color:var(--text-faint); font-size:12px;
 }
+/* "Real, but waiting on the upgraded agent" — deliberately distinct from an
+   empty state, which would read as "nothing happened here". */
+.obs-chart-pending{
+  padding:30px 22px; text-align:left; border:1px dashed var(--border-strong);
+  border-radius:10px; background:var(--surface-2); margin-top:14px;
+}
+.obs-pending-title{ color:var(--text); font-weight:700; font-size:12.5px; margin-bottom:6px; }
+.obs-pending-body{ color:var(--text-faint); font-size:11.5px; line-height:1.65; max-width:62ch; }
+.obs-pending-body code{
+  font-family:var(--mono); font-size:10.5px; background:var(--surface);
+  border:1px solid var(--border); border-radius:4px; padding:1px 5px;
+}
 .obs-chart-legend{ display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; align-items:center; }
 .obs-legend-chip{
   appearance:none; background:var(--surface-2); border:1px solid transparent; border-radius:999px;
@@ -1650,6 +1662,24 @@ pre.code-block{
 .obs-handoff-btn:hover{ filter:brightness(1.08); }
 .obs-handoff-preview .obs-handoff-btn{
   background:transparent; color:var(--text); border-color:var(--border-strong);
+}
+/* The bridged notice is informational, not a call to action — it sits under
+   the header every visit until the agent is upgraded, so it stays quiet. */
+.obs-handoff-bridged{
+  background:var(--surface-2); border-color:var(--border-strong); color:var(--text-faint);
+}
+.obs-handoff-bridged b{ color:var(--text); }
+.obs-handoff-bridged .obs-handoff-btn{
+  background:transparent; color:var(--text-faint); border-color:var(--border-strong);
+}
+.obs-handoff-bridged .obs-handoff-btn:hover{ color:var(--text); filter:none; }
+
+/* Controls that exist and are about to work. Hiding them would make the
+   upgrade look like a different page; leaving them live would be a lie. */
+.obs-toolbar-bridged .obs-range-pill[disabled],
+.obs-toolbar-bridged input[disabled],
+.obs-toolbar-bridged select[disabled]{
+  opacity:.45; cursor:not-allowed;
 }
 
 .obs-table-scroll{ overflow-x:auto; margin-top:14px; }

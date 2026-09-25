@@ -886,6 +886,68 @@ function aggregateKeys(keys, metrics){
   return { total, errCount, errorRate: total ? errCount/total : 0, statusBreakdown, topIps, lastSeenAt, endpointCount: keys.length };
 }
 
+/* --- Blob -> time-series bridge -----------------------------------------
+   The rebuilt console reads the time-series API. An org whose agent has not
+   started pushing rollups has nothing there yet - but it DOES have the blob
+   this page has always drawn from. Mapping the blob into the shape the API
+   returns means the new layout shows REAL numbers on day one instead of
+   sitting behind an agent deploy, which is the difference between a console
+   someone can use today and a promise they have to take on trust.
+
+   What the blob genuinely cannot supply - a time dimension, latency
+   percentiles, per-request rows - is marked, not faked: `source: 'blob'` is
+   what every panel keys off to say so in its own words rather than drawing an
+   empty chart that reads as "no traffic".
+
+   coverage.buckets stays 0 on purpose, so obsDataAvailable() is still false
+   and a real rollup load overwrites this the moment one lands. */
+function obsBridgeFromBlob(metrics, logRecords){
+  const keys = Object.keys(metrics || {}).filter(k => k !== OBS_OVERFLOW_KEY);
+  if(!keys.length) return null;
+
+  const agg = aggregateKeys(keys, metrics);
+  const endpoints = keys.map(key=>{
+    const m = metrics[key] || {};
+    const total = m.totalRequests || 0;
+    const b = m.statusBreakdown || {};
+    const errCount = (b['4xx'] || 0) + (b['5xx'] || 0);
+    return {
+      endpointId: key,            // a blob key is already "METHOD /path"; obsEndpointLabel() passes it through
+      total,
+      errCount,
+      errorRate: total ? errCount / total : 0,
+      statusBreakdown: {
+        '2xx': b['2xx'] || 0, '3xx': b['3xx'] || 0, '4xx': b['4xx'] || 0,
+        '5xx': b['5xx'] || 0, unknown: b.unknown || 0,
+      },
+      lastSeenAt: m.lastSeenAt || null,
+      latency: null,
+    };
+  }).sort((a, b)=> b.total - a.total);
+
+  return {
+    source: 'blob',
+    recordCount: Array.isArray(logRecords) ? logRecords.length : 0,
+    range: null,
+    current: {
+      total: agg.total,
+      errCount: agg.errCount,
+      errorRate: agg.errorRate,
+      statusBreakdown: Object.assign({ '2xx':0, '3xx':0, '4xx':0, '5xx':0, unknown:0 }, agg.statusBreakdown),
+      topIps: agg.topIps,
+      endpointCount: agg.endpointCount,
+      lastSeenAt: agg.lastSeenAt,
+      latency: null,
+      latencyBuckets: {},
+    },
+    previous: null,                              // no prior window to compare against, so no delta badges
+    coverage: { oldest: null, newest: agg.lastSeenAt, buckets: 0 },
+    series: [],
+    endpoints,
+    loadedAt: Date.now(),
+  };
+}
+
 // Same anomaly thresholds anomaly_notes() in mule_doc_agent.py already
 // flags server-side (>=25% over >=5 requests) plus a lower "watch" tier -
 // not a new definition of "alert," the same one the agent's own notes use.
@@ -1811,7 +1873,18 @@ function renderObservability(main){
   // said nothing either way. A preview with honest zeros beats a page that
   // gives you nothing to go on.
   const dataReady = typeof obsDataAvailable === 'function' && obsDataAvailable();
-  const useTimeSeries = dataReady || state.obsForcePreview === true;
+
+  // No rollups yet is no longer a reason to withhold the rebuilt console: the
+  // blob is mapped into the same shape so the new layout renders this org's
+  // actual traffic today. The panels the blob can't fill say why. `obsLegacyView`
+  // is the way back for anyone who wants the old page.
+  let bridged = false;
+  if(!dataReady && !state.obsLegacyView){
+    const bridge = obsBridgeFromBlob(metrics, logRecords);
+    if(bridge){ state.obsData = bridge; bridged = true; }
+  }
+  const useTimeSeries = !state.obsLegacyView
+    && (dataReady || bridged || state.obsForcePreview === true);
 
   const heroDesc = fullCapture
     ? `Real per-request records, auto-discovered from server logs — never written into documented endpoints. Credential-named fields always redacted.`
@@ -1821,7 +1894,28 @@ function renderObservability(main){
   // exists, and on the PREVIEW so nobody mistakes empty charts for broken
   // ones.
   let handoffNotice = '';
-  if(!dataReady && !state.obsForcePreview){
+  if(state.obsLegacyView){
+    handoffNotice = `<div class="obs-handoff">
+      <div>
+        <b>You're on the previous layout.</b>
+        The rebuilt console has the same numbers with tabs, click-through filtering and a
+        date-range picker.
+      </div>
+      <button type="button" class="obs-handoff-btn" id="obsNewView">Back to the new console</button>
+    </div>`;
+  }else if(bridged){
+    handoffNotice = `<div class="obs-handoff obs-handoff-bridged">
+      <div>
+        <b>Showing your real traffic from the current agent.</b>
+        These are the same cumulative counters the previous layout showed — totals, error rates,
+        status families, source IPs and every endpoint, all exact. Three things need the upgraded
+        agent and are labelled wherever they appear: <b>traffic over time</b>, <b>latency
+        percentiles</b> and <b>per-request rows</b>. They fill in by themselves within a minute of
+        its first push, along with date filtering.
+      </div>
+      <button type="button" class="obs-handoff-btn" id="obsLegacyOn">Previous layout</button>
+    </div>`;
+  }else if(!dataReady && !state.obsForcePreview){
     handoffNotice = `<div class="obs-handoff">
       <div>
         <b>A rebuilt console is ready and waiting for data.</b>
@@ -1849,7 +1943,7 @@ function renderObservability(main){
       <p>${heroDesc}</p>
     </div>
     ${handoffNotice}
-    ${useTimeSeries ? '' : renderObsEnvironmentBar()}
+    ${useTimeSeries && !bridged ? '' : renderObsEnvironmentBar()}
     <div id="obsBody"></div>
   `;
 
@@ -1873,6 +1967,17 @@ function renderObservability(main){
   const previewOff = document.getElementById('obsPreviewOff');
   if(previewOff) previewOff.addEventListener('click', ()=>{
     state.obsForcePreview = false;
+    renderMain();
+  });
+  const legacyOn = document.getElementById('obsLegacyOn');
+  if(legacyOn) legacyOn.addEventListener('click', ()=>{
+    state.obsLegacyView = true;
+    state.obsForcePreview = false;
+    renderMain();
+  });
+  const newView = document.getElementById('obsNewView');
+  if(newView) newView.addEventListener('click', ()=>{
+    state.obsLegacyView = false;
     renderMain();
   });
 

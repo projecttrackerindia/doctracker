@@ -35,6 +35,7 @@ let state = {
   obsStatus: 'idle',                // 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
   obsLastCheckedAt: 0,              // last availability probe — see OBS_AVAILABILITY_RECHECK_MS
   obsForcePreview: false,           // show the rebuilt console before any rollup data exists (session-only)
+  obsLegacyView: false,             // opt back into the pre-rebuild console (session-only)
   obsError: '',                     // message shown when obsStatus === 'error'
   obsFilters: {},                   // drill-down: { statusFamily, endpointId, clientIp, correlationId, minLatencyMs }
   obsRecords: null,                 // last /records page — { records, total, limit, offset }

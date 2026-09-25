@@ -40,6 +40,9 @@ async function obsLoad(opts){
 }
 
 async function obsLoadRecordsPage(){
+  // Nothing writes records before the upgraded agent, so this would be a round
+  // trip that can only come back empty. The Log explorer tab says why instead.
+  if(obsIsBridged()) return;
   const filters = state.obsFilters || {};
   const limit = 50;
   try{
@@ -64,6 +67,13 @@ async function obsLoadRecordsPage(){
    thing, see the requests behind it" works the same way everywhere and there
    is exactly one place that knows what the log explorer is filtered by. */
 function obsDrillTo(filters, opts){
+  // Drilling in means "show me the requests behind this number", and behind a
+  // blob counter there are none. Sending someone to an empty log explorer
+  // would read as a broken click; saying why costs one toast.
+  if(obsIsBridged()){
+    toast('Drilling into individual requests needs the upgraded agent — these totals are counters, not stored requests.');
+    return;
+  }
   state.obsFilters = Object.assign({}, state.obsFilters, filters);
   state.obsRecordsPage = 1;
   if(!opts || opts.switchTab !== false) state.obsTab = 'logs';
@@ -107,16 +117,42 @@ function obsEndpointLabel(endpointId){
   return state._obsEndpointNames[endpointId] || endpointId;
 }
 
+/* --- Bridged (pre-rollup) mode -----------------------------------------
+   True while the console is drawing this org's blob counters because no
+   rollups exist yet (see obsBridgeFromBlob in 23-observability.js). The
+   numbers are real; what's missing is the time dimension. Every panel that
+   needs one checks this and says so in its own words, because an empty chart
+   captioned "no traffic in this range" would be a lie on a page that is at
+   the same moment reporting hundreds of requests. */
+function obsIsBridged(){
+  return !!(state.obsData && state.obsData.source === 'blob');
+}
+
+/* One shape for "this panel is real, it just needs the upgraded agent" — so
+   the three places it appears read as the same deliberate state rather than
+   three different kinds of blank. */
+function obsPendingPanel(title, body){
+  return `<div class="obs-chart-empty obs-chart-pending">
+    <div class="obs-pending-title">${escapeHtml(title)}</div>
+    <div class="obs-pending-body">${body}</div>
+  </div>`;
+}
+
 /* --- Toolbar ------------------------------------------------------------ */
 
 function renderObsToolbar(){
   const sel = state.obsRange || { key: '24h' };
   const custom = !!(sel.from && sel.to);
   const range = obsResolvedRange();
+  const bridged = obsIsBridged();
 
+  // Disabled rather than hidden: the control is real and about to work, and
+  // hiding it would make the upgrade look like a different page. A pill that
+  // silently re-queried and returned the same cumulative number either way
+  // would be worse than either.
   const pills = OBS_RANGES.map(r =>
-    `<button type="button" class="obs-range-pill${!custom && sel.key === r.key ? ' active' : ''}"
-       data-obs-range="${r.key}">${r.label}</button>`).join('');
+    `<button type="button" class="obs-range-pill${!custom && !bridged && sel.key === r.key ? ' active' : ''}"
+       data-obs-range="${r.key}"${bridged ? ' disabled title="Date filtering needs the upgraded agent — these totals are cumulative"' : ''}>${r.label}</button>`).join('');
 
   const envs = state.obsEnvOptions || [];
   const currentEnv = state.obsEnvironment || '';
@@ -128,9 +164,9 @@ function renderObsToolbar(){
   )).join('');
 
   const coverage = state.obsData && state.obsData.coverage;
-  const coverageNote = coverage && coverage.oldest
-    ? `Data from ${formatDateTime(coverage.oldest)}`
-    : '';
+  const coverageNote = bridged
+    ? 'Cumulative since the agent started'
+    : (coverage && coverage.oldest ? `Data from ${formatDateTime(coverage.oldest)}` : '');
 
   // datetime-local wants a local, second-less value; the state holds ISO.
   const toLocalInput = (iso)=>{
@@ -141,15 +177,17 @@ function renderObsToolbar(){
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
 
-  return `<div class="obs-toolbar">
+  const dis = bridged ? ' disabled' : '';
+  return `<div class="obs-toolbar${bridged ? ' obs-toolbar-bridged' : ''}">
     <div class="obs-range-pills">${pills}</div>
     <div class="obs-custom-range">
-      <input type="datetime-local" id="obsFrom" value="${toLocalInput(custom ? sel.from : range.from)}" aria-label="Range start">
+      <input type="datetime-local" id="obsFrom" value="${toLocalInput(custom ? sel.from : range.from)}" aria-label="Range start"${dis}>
       <span>→</span>
-      <input type="datetime-local" id="obsTo" value="${toLocalInput(custom ? sel.to : range.to)}" aria-label="Range end">
-      <button type="button" class="obs-range-pill${custom ? ' active' : ''}" id="obsApplyRange">Apply</button>
+      <input type="datetime-local" id="obsTo" value="${toLocalInput(custom ? sel.to : range.to)}" aria-label="Range end"${dis}>
+      <button type="button" class="obs-range-pill${custom && !bridged ? ' active' : ''}" id="obsApplyRange"${dis}>Apply</button>
     </div>
-    <select class="obs-env-select" id="obsEnvSelect" aria-label="Environment">${envOptions}</select>
+    <select class="obs-env-select" id="obsEnvSelect" aria-label="Environment"${bridged
+      ? ' disabled title="Scoped by the environment selected in the header until the upgraded agent is running"' : ''}>${envOptions}</select>
     <span class="obs-toolbar-spacer"></span>
     ${coverageNote ? `<span class="obs-coverage-note">${escapeHtml(coverageNote)}</span>` : ''}
     ${renderObsLiveBadge()}
@@ -218,7 +256,9 @@ function renderObsKpis(){
       + renderKpiSparkline(sparkErrs, errColor), errColor)}
     ${lat ? healthKpi('Latency p95', lat.p95 + 'ms',
       `p50 ${lat.p50}ms · p99 ${lat.p99}ms${prev && prev.latency ? ' · ' + deltaBadge(lat.p95, prev.latency.p95, 'pct', 'down') : ''}`)
-      : healthKpi('Latency p95', '—', 'No durations parsed from these log lines')}
+      : healthKpi('Latency p95', '—', obsIsBridged()
+          ? 'Recorded by the upgraded agent'
+          : 'No durations parsed from these log lines')}
     ${healthKpi('Unclassified', obsFormatCount(cur.statusBreakdown.unknown || 0),
       (cur.statusBreakdown.unknown || 0) > 0
         ? 'Requests with no status code logged'
@@ -232,22 +272,31 @@ function renderObsKpis(){
 function renderObsOverviewTab(){
   const d = state.obsData;
   const cur = d.current;
+  const bridged = obsIsBridged();
   return `
     ${renderObsKpis()}
     <div class="obs-panel">
       <div class="section-head">
         <div>
           <div class="section-title">Traffic over time</div>
-          <div class="hint" style="margin-top:-4px;">Requests by status family · error rate on the right axis · click a colour to see those requests</div>
+          <div class="hint" style="margin-top:-4px;">${bridged
+            ? 'Needs the upgraded agent — the counters below have no time dimension'
+            : 'Requests by status family · error rate on the right axis · click a colour to see those requests'}</div>
         </div>
       </div>
-      ${renderTrafficChart(d.series || [])}
+      ${bridged
+        ? obsPendingPanel('Traffic over time starts the moment the agent pushes',
+            `The current agent reports one running total per endpoint, so there is nothing to plot against a clock — `
+            + `the ${obsFormatCount(cur.total)} requests below are real, but they're a sum, not a history. `
+            + `The upgraded agent writes one bucket per minute, and this becomes a stacked chart by status family `
+            + `with error rate on the right axis.`)
+        : renderTrafficChart(d.series || [])}
     </div>
 
     <div class="grid2">
       <div class="obs-panel obs-panel-fill">
         <div class="section-title">Status code breakdown</div>
-        <div class="hint" style="margin-top:-4px;">${obsFormatCount(cur.total)} response(s) in this range · click a row to drill in</div>
+        <div class="hint" style="margin-top:-4px;">${obsFormatCount(cur.total)} response(s) ${bridged ? 'in total' : 'in this range'} · click a row to drill in</div>
         ${renderObsStatusBreakdown(cur)}
       </div>
       <div class="obs-panel obs-panel-fill">
@@ -311,21 +360,27 @@ function renderObsTopIps(cur){
 function renderObsPerformanceTab(){
   const d = state.obsData;
   const cur = d.current;
+  const bridged = obsIsBridged();
   const eps = (d.endpoints || []).filter(e => e.latency).slice();
   eps.sort((a,b)=> (b.latency.p95 || 0) - (a.latency.p95 || 0));
   const slowest = eps.slice(0, 12);
+
+  const latencyPending = obsPendingPanel('Latency needs the upgraded agent',
+    `Durations are in the log lines already — the current agent doesn't keep them. The upgraded one `
+    + `records a latency histogram per minute, which is what makes a p95 over any range a real number `
+    + `rather than an average of averages.`);
 
   return `
     <div class="grid2">
       <div class="obs-panel">
         <div class="section-title">Latency distribution</div>
         <div class="hint" style="margin-top:-4px;">Where the time actually goes — a second clump here is invisible in p50/p95/p99 alone</div>
-        ${renderLatencyHistogram(cur.latencyBuckets, cur.latency)}
+        ${bridged ? latencyPending : renderLatencyHistogram(cur.latencyBuckets, cur.latency)}
       </div>
       <div class="obs-panel">
         <div class="section-title">Slowest endpoints</div>
-        <div class="hint" style="margin-top:-4px;">By p95 in this range · click to filter</div>
-        ${slowest.length ? `<div class="obs-histo" style="margin-top:18px;">
+        <div class="hint" style="margin-top:-4px;">By p95 ${bridged ? '— not available yet' : 'in this range · click to filter'}</div>
+        ${bridged ? latencyPending : slowest.length ? `<div class="obs-histo" style="margin-top:18px;">
           ${(()=>{
             const max = Math.max(...slowest.map(e=>e.latency.p95||0), 1);
             return slowest.map(e=>`
@@ -343,7 +398,7 @@ function renderObsPerformanceTab(){
 
     <div class="obs-panel">
       <div class="section-title">All endpoints</div>
-      <div class="hint" style="margin-top:-4px;">${(d.endpoints||[]).length} endpoint(s) with traffic in this range · click a row to drill in</div>
+      <div class="hint" style="margin-top:-4px;">${(d.endpoints||[]).length} endpoint(s) with traffic ${bridged ? 'since the agent started' : 'in this range'} · click a row to drill in</div>
       ${renderObsEndpointTable(d.endpoints || [])}
     </div>`;
 }
@@ -378,13 +433,14 @@ function renderObsEndpointTable(endpoints){
 function renderObsErrorsTab(){
   const d = state.obsData;
   const cur = d.current;
+  const bridged = obsIsBridged();
   const failing = (d.endpoints || []).filter(e => e.errCount > 0).slice();
   failing.sort((a,b)=> b.errorRate - a.errorRate || b.errCount - a.errCount);
 
   if(!cur.errCount){
     return `<div class="obs-panel"><div class="obs-empty">
-      <div class="obs-empty-title">No errors in this range</div>
-      <div class="obs-empty-body">Every classified response was 2xx or 3xx. Widen the range to look further back.</div>
+      <div class="obs-empty-title">No errors ${bridged ? 'recorded' : 'in this range'}</div>
+      <div class="obs-empty-body">Every classified response was 2xx or 3xx.${bridged ? '' : ' Widen the range to look further back.'}</div>
     </div></div>`;
   }
 
@@ -400,8 +456,13 @@ function renderObsErrorsTab(){
   return `
     <div class="obs-panel">
       <div class="section-title">Errors over time</div>
-      <div class="hint" style="margin-top:-4px;">${obsFormatCount(cur.errCount)} error(s) — ${(cur.errorRate*100).toFixed(1)}% of traffic in this range</div>
-      ${renderTrafficChart(errSeries, { hideLegend: true })}
+      <div class="hint" style="margin-top:-4px;">${obsFormatCount(cur.errCount)} error(s) — ${(cur.errorRate*100).toFixed(1)}% of ${bridged ? 'all traffic so far' : 'traffic in this range'}</div>
+      ${bridged
+        ? obsPendingPanel('Error history starts with the upgraded agent',
+            `The ${obsFormatCount(cur.errCount)} errors below are real and attributed to the right endpoints. `
+            + `What a running total can't answer is <i>when</i> — whether this is a steady trickle or one bad `
+            + `ten minutes. That's the question the upgraded agent's per-minute buckets answer.`)
+        : renderTrafficChart(errSeries, { hideLegend: true })}
     </div>
 
     <div class="obs-panel">
@@ -420,6 +481,25 @@ function renderObsLogsTab(){
   const captureOn = state.obsRecords && state.obsRecords.total > 0;
   const filters = state.obsFilters || {};
   const hasFilter = Object.keys(filters).some(k => filters[k]);
+
+  // Before the upgraded agent exists, the reason this tab is empty is not
+  // capture mode — it's that nothing is writing records at all. Saying
+  // "turn on CAPTURE_MODE=full" here would send someone to change a setting
+  // that would not help yet.
+  if(obsIsBridged()){
+    const kept = state.obsData.recordCount || 0;
+    return `<div class="obs-panel"><div class="obs-empty">
+      <div class="obs-empty-title">Per-request rows start with the upgraded agent</div>
+      <div class="obs-empty-body">
+        This tab lists individual requests — timestamp, endpoint, status, latency, source IP and
+        correlation id — and is what every "click a number to see the requests behind it" action
+        opens. The current agent only reports counters, so there is nothing to list.
+        Once the upgraded agent is running, set <code>CAPTURE_MODE=full</code> to fill this in;
+        credential-named fields are always redacted and rows are kept for 7 days.
+        ${kept ? `<br><br>The previous layout still has ${kept.toLocaleString()} record(s) this agent captured earlier.` : ''}
+      </div>
+    </div></div>`;
+  }
 
   if(state.obsRecords === null){
     return `<div class="obs-panel"><div class="obs-empty"><div class="obs-empty-title">Loading requests…</div></div></div>`;
@@ -506,7 +586,9 @@ function renderObsConsoleV2(main, agentHealth){
 
   if(state.obsStatus === 'loading' && !d){
     body = `<div class="obs-panel"><div class="obs-empty"><div class="obs-empty-title">Loading…</div></div></div>`;
-  }else if(state.obsStatus === 'error'){
+  }else if(state.obsStatus === 'error' && !obsIsBridged()){
+    // A failed time-series probe is not a reason to hide blob-backed numbers
+    // that rendered fine — the error still shows, as a strip above them.
     body = `<div class="obs-panel"><div class="obs-empty">
       <div class="obs-empty-title">Could not load observability data</div>
       <div class="obs-empty-body">${escapeHtml(state.obsError)}</div>
