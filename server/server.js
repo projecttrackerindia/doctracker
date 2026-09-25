@@ -30,6 +30,7 @@ const compressionMiddleware = require('./middleware/compress');
 const { verifySession, IdleTimeoutError } = require('./middleware/authGuard');
 const { assignRequestId } = require('./requestId');
 const { log } = require('./logger');
+const { createRateLimiter } = require('./rateLimitStore');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -133,6 +134,23 @@ app.use(cookieParser());
 // routes that don't need it. Skips event streams, HEAD, and small bodies -
 // see server/middleware/compress.js.
 app.use('/api', compressionMiddleware);
+
+// General backstop, layered ahead of every route-specific limiter (login,
+// AI generate, live-call, etc. all still have their own tighter ones). This
+// one is deliberately generous — its job is only to bound a runaway/buggy
+// client or a genuine flood, never to be felt by real usage. Per-IP rather
+// than per-org/user (matching every other limiter in this codebase), so it's
+// sized to tolerate many users and a few observability agents (pushing every
+// ~5s) sharing one corporate NAT IP: 1200 requests/minute is ~20/s, an order
+// of magnitude above what that traffic pattern needs.
+const generalApiLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 1200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down and try again shortly.' },
+});
+app.use('/api', generalApiLimiter);
 
 // Workspace payloads carry base64-encoded document attachments, so they need a
 // much larger body limit than auth/user requests — scoped to this path only,
