@@ -799,6 +799,47 @@ function obsAlertMetricMeta(key){
   return list.find(m => m.key === key) || { key, label: key, unit: '', kind: 'gauge', help: '' };
 }
 
+// Which console tab actually shows the thing this alert is about. An
+// absence measure (agent_silent) has no rate or latency to chart — the tab
+// that answers it is the one with the agent's own last-seen timestamp.
+// Everything else maps to whichever tab already charts that measure, so a
+// click lands somewhere that explains the number rather than a generic
+// "here's the app" landing page.
+function obsAlertDrillDownTab(metric){
+  if(obsAlertMetricMeta(metric).kind === 'absence') return 'agent';
+  if(metric === 'latency_p95' || metric === 'latency_p99') return 'performance';
+  if(metric === 'request_rate') return 'overview';
+  return 'errors'; // error_rate, server_error_rate, client_error_rate, unclassified_rate
+}
+
+// The single entry point for "an alert row was clicked" — sets the header
+// environment to where the alert actually fired (an alert about SIT means
+// nothing while looking at UAT), scopes the console to the one endpoint if
+// the rule is endpoint-scoped, and opens the tab that explains the number.
+// Environment-restricted the same way the header's own switcher is, so this
+// never lands a viewer on data their role can't see.
+function obsGoToAlert(env, metric, endpointId){
+  if(!isAdmin() && !ownsAnyProject()){
+    toast("You don't have access to Observability.");
+    return;
+  }
+  if(env && !roleAllowsEnv(env)){
+    const meta = envMeta(env);
+    toast(meta.restricted ? `${meta.label} is restricted to Admins` : `An Admin hasn't granted you access to ${meta.label} yet`);
+    return;
+  }
+  if(env && env !== state.env){ state.env = env; saveEnv(); applyEnvAccent(); applyRoleGatedUI(); }
+  state.selected = { type: 'observability' };
+  state.obsTab = obsAlertDrillDownTab(metric);
+  state.obsScope = endpointId ? { type: 'key', key: obsEndpointLabel(endpointId) } : { type: 'all' };
+  state.obsRecords = null;
+  state.obsRecordsPage = 1;
+  state.obsEndpointPage = 1;
+  renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
+  if(typeof obsLoad === 'function') obsLoad({ quiet: true });
+  if(state.obsTab === 'logs' && typeof obsLoadRecordsPage === 'function') obsLoadRecordsPage();
+}
+
 function obsAlertRuleSummary(r){
   const m = obsAlertMetricMeta(r.metric);
   const where = r.scope === 'endpoint'
@@ -854,7 +895,19 @@ function renderObsActiveAlerts(d){
     const m = obsAlertMetricMeta(a.metric);
     const color = OBS_ALERT_SEV[a.severity] || '--put';
     const where = [a.environment, a.endpointId ? obsEndpointLabel(a.endpointId) : null].filter(Boolean).join(' · ');
-    return `<div class="obs-alert-row obs-alert-${a.status}" style="--obs-alert-color:var(${color});">
+    // Where clicking this row actually takes you — said out loud on the row
+    // itself, not left to a bare cursor change, since a row that merely
+    // LOOKED clickable and did nothing is exactly the complaint this fixes.
+    const destTab = OBS_TABS.find(t => t.key === obsAlertDrillDownTab(a.metric));
+    // NOT .obs-alert-row — that class name is already used by 23-observability.js's
+    // unrelated legacy anomaly digest and carries its own conflicting :hover rule
+    // (different padding/margin/radius), which would fight this row's layout on
+    // hover. .obs-alert-live-row is this panel's own, so the two never collide.
+    return `<div class="obs-alert-live-row obs-alert-${a.status}" style="--obs-alert-color:var(${color});"
+      role="button" tabindex="0"
+      data-obs-alert-goto data-obs-alert-env="${escapeHtml(a.environment || '')}"
+      data-obs-alert-metric="${escapeHtml(a.metric)}" data-obs-alert-epid="${escapeHtml(a.endpointId || '')}"
+      title="Open ${escapeHtml(destTab ? destTab.label : 'Observability')}${a.environment ? ' for ' + escapeHtml(a.environment) : ''}">
       <span class="obs-alert-pip"></span>
       <div class="obs-alert-main">
         <div class="obs-alert-name">${escapeHtml(a.name)}</div>
@@ -872,6 +925,7 @@ function renderObsActiveAlerts(d){
           : `<span class="obs-alert-tag crit">firing</span><div class="hint">since ${escapeHtml(formatDateTime(a.since))}${
               a.notifyCount ? ` · ${a.notifyCount} notification(s)` : ''}</div>`}
       </div>
+      <span class="obs-alert-goto-ic" aria-hidden="true">${destTab ? escapeHtml(destTab.label) : 'Investigate'} →</span>
     </div>`;
   };
 
@@ -1094,6 +1148,16 @@ function wireObsAlerts(main){
     obsLoadAlerts();
     return;
   }
+
+  main.querySelectorAll('[data-obs-alert-goto]').forEach(row=>{
+    const go = ()=> obsGoToAlert(
+      row.getAttribute('data-obs-alert-env') || null,
+      row.getAttribute('data-obs-alert-metric'),
+      row.getAttribute('data-obs-alert-epid') || null,
+    );
+    row.addEventListener('click', go);
+    row.addEventListener('keydown', (e)=>{ if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); go(); } });
+  });
 
   const evalNow = main.querySelector('#obsAlertEvalNow');
   if(evalNow) evalNow.addEventListener('click', async ()=>{
