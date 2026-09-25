@@ -26,8 +26,12 @@ const aiRoutes = require('./routes/ai');
 const notificationRoutes = require('./routes/notifications');
 const observabilityRoutes = require('./routes/observability');
 const alertRoutes = require('./routes/alerts');
+const adminAnalyticsRoutes = require('./routes/adminAnalytics');
 const compressionMiddleware = require('./middleware/compress');
 const { verifySession, IdleTimeoutError } = require('./middleware/authGuard');
+const { assignRequestId } = require('./requestId');
+const { log } = require('./logger');
+const { createRateLimiter } = require('./rateLimitStore');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -65,6 +69,10 @@ app.set('trust proxy', 2);
 // script loaded from cdnjs. Everything else in that file is wired up with
 // addEventListener, not inline handlers, so we don't need 'unsafe-inline' —
 // a per-request nonce covers the inline block, and cdnjs is explicitly allowed.
+// Mounted before everything else: helmet/cors/error handlers further down
+// can all assume req.id already exists.
+app.use(assignRequestId);
+
 app.use((req, res, next) => {
   res.locals.cspNonce = crypto.randomBytes(16).toString('base64');
   next();
@@ -128,6 +136,23 @@ app.use(cookieParser());
 // see server/middleware/compress.js.
 app.use('/api', compressionMiddleware);
 
+// General backstop, layered ahead of every route-specific limiter (login,
+// AI generate, live-call, etc. all still have their own tighter ones). This
+// one is deliberately generous — its job is only to bound a runaway/buggy
+// client or a genuine flood, never to be felt by real usage. Per-IP rather
+// than per-org/user (matching every other limiter in this codebase), so it's
+// sized to tolerate many users and a few observability agents (pushing every
+// ~5s) sharing one corporate NAT IP: 1200 requests/minute is ~20/s, an order
+// of magnitude above what that traffic pattern needs.
+const generalApiLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 1200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down and try again shortly.' },
+});
+app.use('/api', generalApiLimiter);
+
 // Workspace payloads carry base64-encoded document attachments, so they need a
 // much larger body limit than auth/user requests — scoped to this path only,
 // mounted ahead of the tighter global limit below.
@@ -162,6 +187,7 @@ app.use('/api/workspace/observability', observabilityRoutes);
 app.use('/api/workspace/alerts', alertRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/admin/analytics', adminAnalyticsRoutes);
 
 // Previously just `{ ok: true }` unconditionally — a deploy platform's
 // health check would keep reporting this instance as healthy even while its
@@ -185,7 +211,7 @@ app.get('/api/health', async (req, res) => {
   } catch (err) {
     health.ok = false;
     health.db = 'unreachable';
-    console.error('Health check: DB ping failed:', err.message);
+    log.error('Health check: DB ping failed', { requestId: req.id, err });
   }
   res.status(health.ok ? 200 : 503).json(health);
 });
@@ -226,7 +252,7 @@ app.get('/public/openapi/:token', async (req, res) => {
     res.set('Content-Type', 'text/yaml; charset=utf-8');
     res.send(specYaml);
   } catch (err) {
-    console.error('GET /public/openapi failed:', err);
+    log.error('GET /public/openapi failed', { requestId: req.id, err });
     res.status(500).type('text/plain').send('Could not generate this spec.');
   }
 });
@@ -250,7 +276,7 @@ async function requireAuth(req, res, next) {
       res.clearCookie(COOKIE_NAME, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
       return res.redirect('/login.html?reason=idle');
     }
-    console.error('requireAuth() failed:', err);
+    log.error('requireAuth() failed', { requestId: req.id, err });
     res.redirect('/login.html');
   }
 }
