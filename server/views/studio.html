@@ -1311,14 +1311,29 @@ pre.code-block{
 /* Slim header (title + one-liner) replacing the old .ctrl-hero banner card
    on this page specifically - not a change to .ctrl-hero itself, which
    other pages (Control Center etc.) still use as-is. */
-.obs-header{ display:flex; align-items:flex-start; gap:16px; margin-bottom:20px; }
-.obs-header-text{ min-width:0; }
-.obs-header-live{ margin-left:auto; flex:0 0 auto; }
+/* The live badge sits in this header's top-right corner. Three separate
+   things hold it there, because one of them failing silently drops it onto
+   its own line at the LEFT margin - which is the one place it must never be,
+   since the whole point of moving it here was that it is the first thing you
+   look for. space-between and margin:auto each place it alone; flex:1 on the
+   text block pushes it there even if they did not.
+
+   Wrapping is what puts it on a line of its own, so the breakpoint for that
+   is set by what actually stops fitting. The text column is capped at 70ch
+   (~450px) and the badge is ~140px, so they sit side by side comfortably
+   past 600px; wrapping at 720px was wrapping a header that had well over
+   100px to spare. At phone width it wraps, and even then it stays right. */
+.obs-header{
+  display:flex; align-items:flex-start; justify-content:space-between;
+  flex-wrap:nowrap; gap:16px; margin-bottom:20px;
+}
+.obs-header-text{ min-width:0; flex:1 1 auto; }
+.obs-header-live{ margin-left:auto; flex:0 0 auto; align-self:flex-start; }
 .obs-header h1{ font-size:19px; font-weight:800; letter-spacing:-.3px; margin-bottom:4px; color:var(--text); }
 .obs-header p{ font-size:11.5px; color:var(--text-faint); max-width:70ch; line-height:1.5; margin:0; }
-@media (max-width: 720px){
+@media (max-width: 560px){
   .obs-header{ flex-wrap:wrap; }
-  .obs-header-live{ margin-left:0; }
+  .obs-header-text{ flex:1 1 100%; }
 }
 .obs-env-bar{ display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin:0 0 16px; padding:8px 10px;
   border:1px solid var(--border); border-radius:8px; background:var(--bg-alt); font-size:11.5px; }
@@ -1587,7 +1602,7 @@ pre.code-block{
    on the Mule host last pushed - the two things that can independently be
    down. */
 .obs-live-badge{
-  display:inline-flex; align-items:center; gap:9px;
+  display:inline-flex; align-items:center; gap:9px; white-space:nowrap;
   border:1px solid color-mix(in srgb, var(--obs-live, var(--text-faint)) 45%, transparent);
   background:color-mix(in srgb, var(--obs-live, var(--text-faint)) 12%, transparent);
   border-radius:10px; padding:7px 13px; font-family:var(--mono);
