@@ -669,16 +669,43 @@ async function acknowledgeAlert(organisation, ruleId, environment, endpointId, a
 const SWEEP_INTERVAL_MS = parseInt(process.env.ALERT_SWEEP_INTERVAL_MS || String(60 * 1000), 10);
 let sweepTimer = null;
 
+// A fixed, single global key: the sweep already loops every organisation
+// sequentially within one tick, so a per-organisation lock would add
+// complexity for no benefit — the unit of "should this run at all right
+// now" is one process, not one org.
+const SWEEP_LOCK_KEY = "hashtext('doctracker:alert-sweep')";
+
+// Runs on a `setInterval` (see startAlertSchedule below) with no other
+// coordination between processes. Two app instances would otherwise each
+// run this and could double-notify — a `pg_try_advisory_lock` skip-if-busy
+// lock (not the blocking `pg_advisory_xact_lock` server/routes/auth.js uses
+// for registration, since a sweep tick that has to WAIT for another
+// instance defeats the point of a fixed-interval sweep) makes at most one
+// instance actually evaluate per tick; the others no-op and try again next
+// interval.
 async function runAlertSweep() {
-  const { rows } = await pool.query('SELECT DISTINCT organisation FROM alert_rule WHERE enabled');
-  for (const row of rows) {
-    try {
-      await evaluateOrganisation(row.organisation, { includeAbsence: true });
-    } catch (err) {
-      console.error(`Alert sweep failed for ${row.organisation}:`, err.message);
+  const client = await pool.connect();
+  try {
+    const { rows: lockRows } = await client.query(`SELECT pg_try_advisory_lock(${SWEEP_LOCK_KEY}) AS acquired`);
+    if (!lockRows[0].acquired) {
+      return { organisations: 0, skipped: 'another instance holds the sweep lock' };
     }
+    try {
+      const { rows } = await pool.query('SELECT DISTINCT organisation FROM alert_rule WHERE enabled');
+      for (const row of rows) {
+        try {
+          await evaluateOrganisation(row.organisation, { includeAbsence: true });
+        } catch (err) {
+          console.error(`Alert sweep failed for ${row.organisation}:`, err.message);
+        }
+      }
+      return { organisations: rows.length };
+    } finally {
+      await client.query(`SELECT pg_advisory_unlock(${SWEEP_LOCK_KEY})`);
+    }
+  } finally {
+    client.release();
   }
-  return { organisations: rows.length };
 }
 
 function startAlertSchedule() {

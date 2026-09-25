@@ -42,6 +42,14 @@ something **absent**: *the collector stopped*. That one can never be
 event-driven, because the event it would react to is precisely the event that
 is no longer happening. Silence has to be noticed by a clock.
 
+Running more than one app instance, each would run this same 60s sweep
+independently and could double-notify — so `runAlertSweep()` wraps itself in
+a `pg_try_advisory_lock`: whichever instance's tick gets there first evaluates
+every organisation; every other instance's tick for that interval finds the
+lock held and no-ops rather than waiting for it (a fixed-interval sweep that
+blocks defeats the point). Nothing is lost by an instance skipping a tick —
+the next tick, 60s later, runs uncontended the same way.
+
 That is the whole reason `runAlertSweep()` exists, and it also handles the
 mirror case: an environment whose traffic stops entirely stops producing
 ingests, so without the sweep a firing alert could never **resolve**.
@@ -225,6 +233,3 @@ engine's writes, and a rule's audit trail churning every few seconds.
   `emitNotification()` in `alertEngine.js` is the single place it would hook in.
 - **No alert history.** `alert_state` holds *current* state; the notification
   rows are the record of what fired. There is no "incidents over time" view.
-- **Evaluation is per-process.** Two app instances would each run the sweep and
-  could double-notify. Fine on a single Railway instance; needs an advisory
-  lock before scaling out.
