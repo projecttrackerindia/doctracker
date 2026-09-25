@@ -31,6 +31,17 @@ function obsNiceCeiling(value){
   return step * magnitude;
 }
 
+/* How many gridlines to cut a scale into so every tick is a whole number.
+
+   Four was hardcoded, which put 2.5 and 7.5 on a 0-10 axis and printed them
+   as 3 and 8: ticks that look evenly spaced but aren't, on a chart counting
+   whole requests. Picking the divisor from the ceiling instead keeps the
+   labels honest at every magnitude. */
+function obsGridFractions(yMax){
+  const divisions = [4, 5, 2, 1].find(d => yMax % d === 0) || 4;
+  return Array.from({ length: divisions + 1 }, (_, i)=> i / divisions);
+}
+
 function obsFormatCount(n){
   if(n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
   if(n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
@@ -77,12 +88,20 @@ function renderTrafficChart(series, opts){
   const spanMs = Date.parse(series[series.length - 1].ts) - Date.parse(series[0].ts);
   const maxTotal = Math.max(...series.map(p => p.total), 1);
   const yMax = obsNiceCeiling(maxTotal);
-  // One point produces no line; give it a visible column instead of a dot
-  // floating in an empty plot.
   const stepX = series.length > 1 ? plotW / (series.length - 1) : plotW;
 
   const xAt = (i)=> padL + (series.length > 1 ? i * stepX : plotW / 2);
   const yAt = (v)=> padT + plotH - (v / yMax) * plotH;
+
+  // A range wide enough to bucket everything into ONE interval is normal —
+  // 24 hours auto-selects 15-minute buckets, so ten requests a minute apart
+  // are a single point. An area chart cannot draw a single point: the polygon
+  // gets two coordinates, encloses no area, and renders as nothing at all.
+  // That is a blank chart on a page simultaneously reporting the traffic, so
+  // one point is drawn as a stacked column instead.
+  const single = series.length === 1;
+  const barW = Math.min(plotW * 0.18, 90);
+  const barX = xAt(0) - barW / 2;
 
   // Stacked bands, bottom-up in severity order so errors sit on top where
   // they are visible against the plot edge rather than buried under 2xx.
@@ -93,20 +112,32 @@ function renderTrafficChart(series, opts){
     const lower = running.slice();
     series.forEach((p, i)=>{ running[i] += (p.statusBreakdown?.[fam] || 0); });
     if(running.every((v, i)=> v === lower[i])) continue; // family absent - no empty band
+    if(single){
+      const yTop = yAt(running[0]);
+      const h = yAt(lower[0]) - yTop;
+      if(h <= 0) continue;
+      bands.push(`<rect class="obs-chart-bar" x="${barX}" y="${yTop}" width="${barW}" height="${h}"
+        fill="${OBS_STATUS_COLORS[fam]}" opacity="0.75"></rect>`);
+      continue;
+    }
     const top = series.map((p, i)=> `${xAt(i)},${yAt(running[i])}`).join(' ');
     const bottom = lower.map((v, i)=> `${xAt(series.length - 1 - i)},${yAt(lower[series.length - 1 - i])}`).join(' ');
     bands.push(`<polygon points="${top} ${bottom}" fill="${OBS_STATUS_COLORS[fam]}" opacity="0.75"></polygon>`);
   }
 
   // Error rate on its own 0-100% axis. Drawn as a line, not a band, so it
-  // reads as a rate rather than another volume.
-  const errPoints = series.map((p, i)=>{
+  // reads as a rate rather than another volume. A one-point polyline draws
+  // nothing for the same reason the polygon did, so a single bucket gets a
+  // short horizontal segment across its column.
+  const rateAt = (p)=>{
     const errs = (p.statusBreakdown?.['4xx'] || 0) + (p.statusBreakdown?.['5xx'] || 0);
-    const rate = p.total ? errs / p.total : 0;
-    return `${xAt(i)},${padT + plotH - rate * plotH}`;
-  }).join(' ');
+    return p.total ? errs / p.total : 0;
+  };
+  const errPoints = single
+    ? (()=>{ const y = padT + plotH - rateAt(series[0]) * plotH; return `${barX},${y} ${barX + barW},${y}`; })()
+    : series.map((p, i)=> `${xAt(i)},${padT + plotH - rateAt(p) * plotH}`).join(' ');
 
-  const gridLines = [0, 0.25, 0.5, 0.75, 1].map(f=>{
+  const gridLines = obsGridFractions(yMax).map(f=>{
     const y = padT + plotH - f * plotH;
     return `<line x1="${padL}" y1="${y}" x2="${padL + plotW}" y2="${y}" class="obs-chart-grid"></line>
       <text x="${padL - 8}" y="${y + 4}" class="obs-chart-ylabel">${obsFormatCount(Math.round(yMax * f))}</text>
@@ -130,10 +161,25 @@ function renderTrafficChart(series, opts){
       class="obs-chart-hover" data-obs-point="${i}"><title>${escapeHtml(title)}</title></rect>`;
   }).join('');
 
-  const firstLabel = obsTimeLabel(series[0].ts, spanMs);
-  const lastLabel = obsTimeLabel(series[series.length - 1].ts, spanMs);
+  // Axis labels are chosen to be DIFFERENT from one another. A 24-hour range
+  // holding one 15-minute bucket printed "10:00" at both ends, which reads as
+  // a broken axis rather than as a narrow slice of data.
+  let firstLabel = obsTimeLabel(series[0].ts, spanMs);
+  let lastLabel = obsTimeLabel(series[series.length - 1].ts, spanMs);
+  if(!single && firstLabel === lastLabel){
+    firstLabel = obsTimeLabel(series[0].ts, 0);
+    lastLabel = obsTimeLabel(series[series.length - 1].ts, 0);
+  }
   const midIdx = Math.floor(series.length / 2);
-  const midLabel = series.length > 2 ? obsTimeLabel(series[midIdx].ts, spanMs) : '';
+  let midLabel = series.length > 2 ? obsTimeLabel(series[midIdx].ts, spanMs) : '';
+  if(midLabel === firstLabel || midLabel === lastLabel) midLabel = '';
+  const axis = single
+    ? `<div class="obs-chart-axis obs-chart-axis-single"><span>${escapeHtml(firstLabel)}</span></div>`
+    : `<div class="obs-chart-axis">
+        <span>${escapeHtml(firstLabel)}</span>
+        ${midLabel ? `<span>${escapeHtml(midLabel)}</span>` : ''}
+        <span>${escapeHtml(lastLabel)}</span>
+      </div>`;
 
   return `<div class="obs-chart-wrap">
     <svg viewBox="0 0 ${width} ${height}" class="obs-chart" preserveAspectRatio="none" role="img"
@@ -143,11 +189,7 @@ function renderTrafficChart(series, opts){
       <polyline points="${errPoints}" class="obs-chart-errline"></polyline>
       ${hoverCols}
     </svg>
-    <div class="obs-chart-axis">
-      <span>${escapeHtml(firstLabel)}</span>
-      ${midLabel ? `<span>${escapeHtml(midLabel)}</span>` : ''}
-      <span>${escapeHtml(lastLabel)}</span>
-    </div>
+    ${axis}
     ${o.hideLegend ? '' : `<div class="obs-chart-legend">
       ${order.filter(f => series.some(p => (p.statusBreakdown?.[f] || 0) > 0)).map(f =>
         `<button type="button" class="obs-legend-chip" data-obs-filter-family="${f}" title="Show only ${f} responses in the log explorer">

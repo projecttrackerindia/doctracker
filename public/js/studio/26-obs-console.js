@@ -30,6 +30,11 @@ async function obsLoad(opts){
     state.obsEnvOptions = envs;
     state.obsStatus = data.coverage && data.coverage.buckets > 0 ? 'ready' : 'unavailable';
     state.obsError = '';
+    // Remembered so the NEXT page load paints the right console immediately
+    // instead of guessing and correcting itself a second later.
+    if(typeof obsRememberAvailability === 'function'){
+      obsRememberAvailability(state.obsStatus === 'ready');
+    }
   }catch(err){
     // A failed refresh must not blank a console that is already showing good
     // data — keep what is on screen and surface the error alongside it.
@@ -247,15 +252,25 @@ function renderObsKpis(){
   const errPct = (cur.errorRate * 100);
   const errColor = errPct >= 25 ? '--delete' : errPct >= 5 ? '--put' : '--post';
 
+  /* deltaBadge() returns an empty string when there is nothing to compare
+     against - most visibly when the previous window held zero requests,
+     which is every window right after an agent starts. Joining the parts
+     rather than concatenating a separator is what stops that becoming a
+     subtitle that trails off in a bare "·". */
+  const sub = (...parts)=> parts.filter(p => p !== null && p !== undefined && p !== '').join(' · ');
+
   return `<div class="kpi-grid">
     ${healthKpi('Requests', obsFormatCount(cur.total),
-      `${cur.endpointCount} endpoint(s)${prev ? ' · ' + deltaBadge(cur.total, prev.total, 'pct', 'neutral') : ''}`
+      sub(`${cur.endpointCount} endpoint(s)`,
+          prev ? deltaBadge(cur.total, prev.total, 'pct', 'neutral') : '')
       + renderKpiSparkline(sparkTotals, '--accent'))}
     ${healthKpi('Error rate', errPct.toFixed(1) + '%',
-      `${obsFormatCount(cur.errCount)} error(s)${prev ? ' · ' + deltaBadge(cur.errorRate, prev.errorRate, 'pp', 'down') : ''}`
+      sub(`${obsFormatCount(cur.errCount)} error(s)`,
+          prev ? deltaBadge(cur.errorRate, prev.errorRate, 'pp', 'down') : '')
       + renderKpiSparkline(sparkErrs, errColor), errColor)}
     ${lat ? healthKpi('Latency p95', lat.p95 + 'ms',
-      `p50 ${lat.p50}ms · p99 ${lat.p99}ms${prev && prev.latency ? ' · ' + deltaBadge(lat.p95, prev.latency.p95, 'pct', 'down') : ''}`)
+      sub(`p50 ${lat.p50}ms`, `p99 ${lat.p99}ms`,
+          prev && prev.latency ? deltaBadge(lat.p95, prev.latency.p95, 'pct', 'down') : ''))
       : healthKpi('Latency p95', '—', obsIsBridged()
           ? 'Recorded by the upgraded agent'
           : 'No durations parsed from these log lines')}
@@ -584,8 +599,15 @@ function renderObsConsoleV2(main, agentHealth){
   const d = state.obsData;
   let body = '';
 
-  if(state.obsStatus === 'loading' && !d){
-    body = `<div class="obs-panel"><div class="obs-empty"><div class="obs-empty-title">Loading…</div></div></div>`;
+  if(!d && state.obsStatus !== 'error'){
+    // A skeleton in the SHAPE of the real thing, not a spinner. The first
+    // paint after a reload happens before the probe answers, and a body that
+    // changes height when data lands is the jump this replaces.
+    body = `<div class="kpi-grid">${[0,1,2,3].map(()=>
+      `<div class="kpi-card obs-skeleton-card"><span class="obs-skeleton-line short"></span>
+       <span class="obs-skeleton-line tall"></span><span class="obs-skeleton-line"></span></div>`).join('')}</div>
+      <div class="obs-panel"><span class="obs-skeleton-line short"></span>
+        <div class="obs-skeleton-chart"></div></div>`;
   }else if(state.obsStatus === 'error' && !obsIsBridged()){
     // A failed time-series probe is not a reason to hide blob-backed numbers
     // that rendered fine — the error still shows, as a strip above them.

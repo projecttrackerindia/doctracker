@@ -1874,17 +1874,27 @@ function renderObservability(main){
   // gives you nothing to go on.
   const dataReady = typeof obsDataAvailable === 'function' && obsDataAvailable();
 
+  // Until the first probe answers, this org's rollup availability is unknown.
+  // Rendering a guess and correcting it a second later is a visible flash of
+  // a different console on every reload, so the previous answer is reused for
+  // that window - and where there is no previous answer, the rebuilt console's
+  // own loading state is shown rather than the pre-rebuild page.
+  const probing = (state.obsStatus === 'idle' || state.obsStatus === 'loading') && !state.obsData;
+  const remembered = typeof obsRememberedAvailability === 'function'
+    ? obsRememberedAvailability() : null;
+  const expectTimeSeries = probing && remembered !== '0';
+
   // No rollups yet is no longer a reason to withhold the rebuilt console: the
   // blob is mapped into the same shape so the new layout renders this org's
   // actual traffic today. The panels the blob can't fill say why. `obsLegacyView`
   // is the way back for anyone who wants the old page.
   let bridged = false;
-  if(!dataReady && !state.obsLegacyView){
+  if(!dataReady && !state.obsLegacyView && !expectTimeSeries){
     const bridge = obsBridgeFromBlob(metrics, logRecords);
     if(bridge){ state.obsData = bridge; bridged = true; }
   }
   const useTimeSeries = !state.obsLegacyView
-    && (dataReady || bridged || state.obsForcePreview === true);
+    && (dataReady || bridged || expectTimeSeries || state.obsForcePreview === true);
 
   const heroDesc = fullCapture
     ? `Real per-request records, auto-discovered from server logs — never written into documented endpoints. Credential-named fields always redacted.`
@@ -1915,6 +1925,10 @@ function renderObservability(main){
       </div>
       <button type="button" class="obs-handoff-btn" id="obsLegacyOn">Previous layout</button>
     </div>`;
+  }else if(expectTimeSeries){
+    // Still probing. Any notice shown here would be a claim about an answer
+    // that has not arrived, and would vanish a second later.
+    handoffNotice = '';
   }else if(!dataReady && !state.obsForcePreview){
     handoffNotice = `<div class="obs-handoff">
       <div>

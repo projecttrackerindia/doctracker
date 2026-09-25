@@ -1567,6 +1567,24 @@ pre.code-block{
   display:flex; justify-content:space-between; font-size:10.5px; color:var(--text-faint);
   font-family:var(--mono); margin-top:2px;
 }
+/* A single bucket has one honest label, centred under its column, rather than
+   the same time printed at both ends of the axis. */
+.obs-chart-axis-single{ justify-content:center; }
+
+/* Shown for the moment between a reload and the first response. Shaped like
+   the real content so nothing shifts when the data lands. */
+.obs-skeleton-line{
+  display:block; height:10px; border-radius:5px; background:var(--surface-2);
+  margin:8px 0; width:100%;
+}
+.obs-skeleton-line.short{ width:38%; }
+.obs-skeleton-line.tall{ height:22px; width:56%; }
+.obs-skeleton-chart{ height:226px; border-radius:10px; background:var(--surface-2); margin-top:10px; }
+.obs-skeleton-card .obs-skeleton-line{ margin:6px 0; }
+@media (prefers-reduced-motion: no-preference){
+  .obs-skeleton-line, .obs-skeleton-chart{ animation:obsSkeletonPulse 1.4s ease-in-out infinite; }
+  @keyframes obsSkeletonPulse{ 0%,100%{ opacity:.55; } 50%{ opacity:.95; } }
+}
 .obs-chart-empty{
   padding:40px 12px; text-align:center; color:var(--text-faint); font-size:12px;
 }

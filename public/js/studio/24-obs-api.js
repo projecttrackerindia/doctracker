@@ -138,6 +138,22 @@ function obsDataAvailable(){
   return !!(state.obsData && state.obsData.coverage && state.obsData.coverage.buckets > 0);
 }
 
+/* --- What to paint before the first probe answers -------------------------
+   A reload starts with no data and an unanswered question, and rendering the
+   wrong answer for the ~1s the probe takes is a visible flash of a different
+   console. Remembering the last answer per viewer makes the first paint
+   almost always correct, and it is a display hint only: the probe still runs
+   and still decides. Wrapped because storage throws in private windows. */
+const OBS_SEEN_KEY = 'doctracker.obsHadData';
+
+function obsRememberAvailability(has){
+  try{ localStorage.setItem(OBS_SEEN_KEY, has ? '1' : '0'); }catch(e){ /* storage unavailable */ }
+}
+
+function obsRememberedAvailability(){
+  try{ return localStorage.getItem(OBS_SEEN_KEY); }catch(e){ return null; }
+}
+
 /* --- Live updates (SSE) ---------------------------------------------------
    Replaces the 60s poll. The server pushes an event the moment an agent
    ingests, so the console updates in step with collection instead of on a
