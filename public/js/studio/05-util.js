@@ -326,6 +326,191 @@ function findEndpointForView(epId){
 function canEditHere(){ return canEdit() && isViewingDraftEnv(); }
 
 // ----------------------------------------------------------------------------
+// Discovery reconciliation — "is this auto-discovered thing already documented?"
+//
+// The log agent has no idea what anybody has documented by hand. It groups the
+// traffic it sees by Mule app and pushes one project per app (see
+// build_app_projects() / project_id_for_app() in ops/sit-doc-agent), with an id
+// derived from the app name and the agent's own PROJECT_ID. A hand-authored
+// project covering that same app has an unrelated id, so the two sit side by
+// side in the sidebar as two entries with the same name — which reads as "we
+// have this twice" when the truth is "we have this once, and the agent also
+// found it running."
+//
+// Rather than have the agent guess (it cannot see the curated docs, and writing
+// unreviewed discovery INTO a reviewed project would be worse than the
+// duplicate), the reconciliation happens here, at render time, where both sides
+// are in hand. Nothing is mutated: discovery stays a separate, unreviewed
+// record of what is actually running, and the sidebar simply stops showing the
+// half of it that is already written up.
+//
+// Matching is deliberately conservative and explainable — a wrong match hides a
+// real, undocumented endpoint, which is the one failure that matters here.
+// ----------------------------------------------------------------------------
+
+// A path with its per-request variation removed, so two spellings of the same
+// endpoint compare equal: the agent templatises identifier segments to "{id}"
+// (templatize_path) while a human writes "{loanId}", and a trailing slash or a
+// query string is not a different endpoint.
+function discoveryPathShape(path){
+  let p = String(path || '').trim();
+  const q = p.indexOf('?');
+  if(q >= 0) p = p.slice(0, q);
+  p = p.replace(/\{[^}]*\}/g, '{}').replace(/\/+$/, '');
+  if(!p.startsWith('/')) p = '/' + p;
+  return p || '/';
+}
+
+function discoveryEndpointKey(method, path){
+  return String(method || '').trim().toUpperCase() + ' ' + discoveryPathShape(path);
+}
+
+// Mule's APIkit logs the router flow with the listener's base path stripped, so
+// the agent can observe "/loan/dpd" for an endpoint documented as
+// "/api/v1/loan/dpd". Because every shape starts with "/", endsWith() already
+// guarantees the overlap begins on a segment boundary — "/dpd" can never match
+// "/loandpd". Used ONLY inside an already-matched project (see below), where a
+// loose suffix cannot pull in an unrelated API.
+function discoveryPathIsSuffix(shortPath, longPath){
+  return shortPath !== longPath && shortPath.length > 1 && longPath.endsWith(shortPath);
+}
+
+// Project names compare on letters and digits only: "Razor pay", "razor-pay"
+// and "razorpay" are the same app written three ways.
+function discoveryNameKey(name){
+  return String(name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+// A human's verdict on one auto project, stored on the DOCUMENTED project
+// (which the agent never rewrites) as { [autoProjectId]: 'linked' | 'separate' }.
+// 'linked' forces a match the name heuristic missed; 'separate' dismisses one it
+// got wrong. Nothing else in the app reads these, so an agent push cannot
+// clobber them.
+function discoveryLinkVerdict(docProj, autoProjId){
+  const links = docProj && docProj.discoveryLinks;
+  return (links && links[autoProjId]) || null;
+}
+
+// Every hand-documented endpoint, indexed by shape. Built from proj.endpoints
+// (the live draft) rather than viewEndpoints(): "have we documented this?" is a
+// question about the documentation, not about what has been promoted into the
+// environment you happen to be looking at — an endpoint documented but not yet
+// promoted to SIT is still documented, and should not be offered as new.
+function documentedEndpointIndex(){
+  const exact = new Map();  // "GET /a/{}/b" -> [{ proj, ep }]
+  const byProject = new Map();  // projId -> [{ proj, ep, shape }]
+  for(const proj of allProjects()){
+    if(proj.discoveryEnvironment) continue;
+    const rows = [];
+    for(const ep of (proj.endpoints || [])){
+      if(!ep || !ep.path) continue;
+      const shape = discoveryPathShape(ep.path);
+      const key = String(ep.method || '').trim().toUpperCase() + ' ' + shape;
+      if(!exact.has(key)) exact.set(key, []);
+      exact.get(key).push({ proj, ep });
+      rows.push({ proj, ep, shape, method: String(ep.method || '').trim().toUpperCase() });
+    }
+    byProject.set(proj.id, rows);
+  }
+  return { exact, byProject };
+}
+
+// Which documented project, if any, this auto-discovered one is a second copy
+// of — and why, so the UI can say so rather than asserting it.
+function discoveryCounterpart(autoProj, index){
+  const docProjects = allProjects().filter(p => !p.discoveryEnvironment);
+  for(const docProj of docProjects){
+    if(discoveryLinkVerdict(docProj, autoProj.id) === 'linked'){
+      return { proj: docProj, reason: 'linked' };
+    }
+  }
+  const autoKey = discoveryNameKey(autoProj.name);
+  if(autoKey){
+    for(const docProj of docProjects){
+      if(discoveryLinkVerdict(docProj, autoProj.id) === 'separate') continue;
+      if(discoveryNameKey(docProj.name) === autoKey) return { proj: docProj, reason: 'name' };
+    }
+  }
+  // No name match: fall back to whichever documented project already covers the
+  // most of these endpoints. An app renamed between the docs and the deployment
+  // is still the same app, and its endpoints say so.
+  const tally = new Map();
+  for(const ep of (autoProj.endpoints || [])){
+    const hits = index.exact.get(discoveryEndpointKey(ep.method, ep.path)) || [];
+    for(const hit of hits){
+      if(discoveryLinkVerdict(hit.proj, autoProj.id) === 'separate') continue;
+      tally.set(hit.proj.id, (tally.get(hit.proj.id) || 0) + 1);
+    }
+  }
+  let bestId = null, bestCount = 0;
+  for(const [projId, count] of tally){
+    if(count > bestCount){ bestId = projId; bestCount = count; }
+  }
+  if(bestId && bestCount > 0) return { proj: state.projects[bestId], reason: 'endpoints' };
+  return null;
+}
+
+// One auto-discovered project reconciled against the documentation.
+//   documented  the project this duplicates, or null
+//   reason      'linked' | 'name' | 'endpoints' — why we think so
+//   matches     epId -> { proj, ep, confidence: 'exact' | 'path' }
+//   novelIds    Set of this project's endpoint ids that nothing documents
+function discoveryCoverage(autoProj, index){
+  index = index || documentedEndpointIndex();
+  const counterpart = discoveryCounterpart(autoProj, index);
+  const matches = new Map();
+  const novelIds = new Set();
+  const siblings = counterpart ? (index.byProject.get(counterpart.proj.id) || []) : [];
+
+  for(const ep of (autoProj.endpoints || [])){
+    if(!ep || !ep.path){ continue; }
+    const exact = index.exact.get(discoveryEndpointKey(ep.method, ep.path)) || [];
+    // Prefer a hit inside the counterpart project — the same path documented in
+    // two projects should resolve to the one this app actually belongs to.
+    let hit = counterpart ? exact.find(h => h.proj.id === counterpart.proj.id) : null;
+    if(hit){ matches.set(ep.id, { ...hit, confidence: 'exact' }); continue; }
+    if(exact.length){ matches.set(ep.id, { ...exact[0], confidence: 'exact' }); continue; }
+
+    // Base-path drift, only ever within the counterpart project.
+    const method = String(ep.method || '').trim().toUpperCase();
+    const shape = discoveryPathShape(ep.path);
+    const loose = siblings.find(row => row.method === method
+      && (discoveryPathIsSuffix(shape, row.shape) || discoveryPathIsSuffix(row.shape, shape)));
+    if(loose){ matches.set(ep.id, { proj: loose.proj, ep: loose.ep, confidence: 'path' }); continue; }
+
+    novelIds.add(ep.id);
+  }
+
+  const total = (autoProj.endpoints || []).filter(ep => ep && ep.path).length;
+  return {
+    autoProj,
+    documented: counterpart ? counterpart.proj : null,
+    reason: counterpart ? counterpart.reason : null,
+    matches, novelIds,
+    total,
+    covered: matches.size,
+    novel: novelIds.size,
+  };
+}
+
+// Every auto-discovered project reconciled in one pass, plus the two headline
+// numbers the sidebar and Control Center report.
+function reconcileDiscovery(){
+  const index = documentedEndpointIndex();
+  const byAutoId = {};
+  let duplicateProjects = 0, duplicateEndpoints = 0, novelEndpoints = 0;
+  for(const proj of allProjects()){
+    if(!proj.discoveryEnvironment) continue;
+    const cov = discoveryCoverage(proj, index);
+    byAutoId[proj.id] = cov;
+    if(cov.documented) duplicateProjects += 1;
+    duplicateEndpoints += cov.covered;
+    novelEndpoints += cov.novel;
+  }
+  return { byAutoId, duplicateProjects, duplicateEndpoints, novelEndpoints };
+}
+
+// ----------------------------------------------------------------------------
 // Release health (breaking-changes-per-release trend for the Overview page's
 // sparkline — Release Pipeline v2 item "a signal, not just something you see
 // mid-promotion"). Same lazy-fetch-and-cache shape as snapshotEntry above:

@@ -68,6 +68,10 @@ async function loadState(){
   state.authorRole = ROLES.some(r=>r.id===role) ? role : 'Developer';
   state.sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === '1';
   state.autoSectionOpen = localStorage.getItem(AUTO_SECTION_KEY) === '1';
+  // Defaults ON — the point of the auto-discovered section is what you have
+  // NOT documented yet; showing the already-documented half of it back to you
+  // is the duplicate this setting exists to remove.
+  state.discoveryNewOnly = localStorage.getItem(DISCOVERY_NEW_ONLY_KEY) !== '0';
 
   if(AUTH_USER){
     // Signed in via the real auth service — identity comes from the session, not localStorage.

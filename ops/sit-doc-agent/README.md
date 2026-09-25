@@ -578,6 +578,48 @@ generated is marked as needing review. Promote confirmed endpoints into
 your real project(s) manually (or copy/adapt them) — this project is a
 staging area, not a destination.
 
+### Apps you have already documented
+
+The agent pushes one project per Mule app, named after the app, and it has
+**no visibility into what anyone has documented by hand** — it authenticates
+as its own service account and only ever writes to its own projects (see
+"What it does NOT do"). So an app already written up in the API Control
+Center gets pushed anyway, and used to appear a second time in the sidebar
+under "Auto-discovered APIs".
+
+That comparison is not the agent's to make. An unattended process deciding
+that a running endpoint is "already covered" would be deciding to stop
+telling you about it — and writing unreviewed discovery into a reviewed
+project would be worse than the duplicate. So DocTracker reconciles the two
+lists in the app instead, where both are in hand and a human can overrule it
+(`reconcileDiscovery()` in `public/js/studio/05-util.js`):
+
+- The sidebar's **"Hide what's already documented"** filter, on by default,
+  drops the discovered endpoints that already exist in a documented project,
+  so each API appears once. Anything genuinely undocumented stays.
+- An app's **Overview** carries a reconciliation panel: which documented API
+  it matches and why, which endpoints are already covered, and which are
+  running with nothing written about them — each with a button to add it to
+  that API's draft.
+- The **API Control Center** reports the headline: how much of what is
+  running is documented.
+
+Matching is conservative on purpose, because a wrong match hides a real,
+undocumented, running endpoint. Method must always agree; a path matches on
+its shape, so the agent's templated `{id}` (see `templatize_path`) and a
+hand-written `{loanId}` are the same endpoint. A path that is only the *tail*
+of a documented one — which is what APIkit's router flow logs, with the
+listener base path stripped — is matched too, but only inside an API the app
+already matched, and it is labelled as the weaker match that it is.
+
+Names are matched on letters and digits alone, so `Razor pay` and
+`razor-pay` agree. When they do not agree at all, whichever documented API
+already covers the most of these endpoints is offered. Either way you can
+link an app to an API by hand, or record that two APIs that happen to share
+a name are **not** the same thing — and that decision is stored on the
+documented project, which the agent never rewrites, so the next push cannot
+clobber it.
+
 For real traffic (hit counts, error rate, source IPs, and the agent's own
 throughput/backlog health) rather than field-shape documentation, use the
 **Observability** page in the top bar instead — it's kept separate from the

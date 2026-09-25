@@ -566,6 +566,91 @@ kbd{
 }
 .auto-section-body{ display:none; }
 .auto-section.open .auto-section-body{ display:block; }
+
+/* ---------- Discovery reconciliation ----------
+   The agent cannot see the curated documentation, so it pushes every Mule app
+   it finds, including ones already written up by hand. reconcileDiscovery()
+   in 05-util.js matches the two sides; these are the marks it renders with.
+   The filter row sits inside the section body, above the app rows, so the
+   choice is visible right where its effect is. */
+.auto-filter-row{
+  display:flex; flex-direction:column; gap:5px;
+  margin:2px 8px 8px 12px; padding:8px 10px;
+  background:var(--surface-hover); border:1px solid var(--border); border-radius:7px;
+}
+.auto-filter{
+  display:flex; align-items:center; gap:7px; cursor:pointer; user-select:none;
+  font-size:11px; color:var(--text-dim); font-weight:500;
+}
+.auto-filter input{ margin:0; flex-shrink:0; accent-color:var(--accent); cursor:pointer; }
+.auto-filter-note{ font-size:10.5px; color:var(--text-faint); line-height:1.45; }
+.proj-dup-tag, .ep-dup-tag{
+  flex-shrink:0; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.4px;
+  padding:2px 6px; border-radius:20px; white-space:nowrap;
+  color:var(--get); background:var(--get-bg); border:1px solid transparent;
+}
+.ep-dup-tag{ font-size:8.5px; padding:1px 5px; }
+/* A duplicate reads as settled, not as something waiting on you. */
+.ep.ep-dup .ep-path{ color:var(--text-faint); }
+
+/* ---------- Reconciliation panel (an auto-discovered project's Overview) ----------
+   Where a duplicate is resolved: confirm or correct which documented API the
+   discovered app belongs to, and pull the undocumented endpoints into it.
+   See renderDiscoveryReconcilePanel() in 14-users.js. */
+.dr-card{
+  border:1px solid var(--border); border-radius:10px; padding:14px 16px;
+  background:var(--surface); display:flex; flex-direction:column; gap:12px;
+}
+.dr-verdict{ display:flex; align-items:flex-start; gap:11px; }
+.dr-verdict-ic{
+  flex-shrink:0; width:26px; height:26px; border-radius:8px;
+  display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700;
+}
+.dr-verdict-dup .dr-verdict-ic{ color:var(--get); background:var(--get-bg); }
+.dr-verdict-new .dr-verdict-ic{ color:var(--put); background:var(--put-bg); }
+.dr-verdict-t{ font-size:13.5px; font-weight:600; color:var(--text); }
+.dr-verdict-s{ font-size:11.5px; color:var(--text-faint); margin-top:3px; line-height:1.5; }
+.dr-link{ color:var(--accent); text-decoration:none; font-weight:600; }
+.dr-link:hover{ text-decoration:underline; }
+.dr-linkrow{
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  padding:10px 0; border-top:1px solid var(--border); border-bottom:1px solid var(--border);
+}
+.dr-linkrow label{ font-size:11px; color:var(--text-faint); font-weight:600; text-transform:uppercase; letter-spacing:.5px; }
+.dr-linkrow select{
+  flex:1; min-width:180px; padding:6px 9px; border-radius:7px;
+  border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:12px;
+}
+.dr-sub{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint);
+}
+.dr-list{ display:flex; flex-direction:column; gap:4px; }
+.dr-row{
+  display:flex; align-items:center; gap:9px; flex-wrap:wrap;
+  padding:7px 10px; border-radius:7px; background:var(--surface-hover);
+}
+.dr-row-dim{ background:transparent; padding:5px 10px; }
+.dr-path{ font-size:11.5px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
+.dr-row-dim .dr-path{ color:var(--text-faint); flex:0 1 auto; }
+.dr-arrow{ color:var(--text-faint); font-size:11px; flex-shrink:0; }
+.dr-conf{
+  margin-left:auto; flex-shrink:0; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.4px;
+  color:var(--text-faint); border:1px solid var(--border); border-radius:20px; padding:2px 7px;
+}
+.dr-promote{ flex-shrink:0; text-transform:none; letter-spacing:0; font-weight:600; font-size:11px; padding:4px 10px; }
+.dr-details summary{
+  cursor:pointer; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.5px;
+  color:var(--text-faint); padding:4px 0; list-style:none;
+}
+.dr-details summary::-webkit-details-marker{ display:none; }
+.dr-details summary::before{ content:'▸ '; }
+.dr-details[open] summary::before{ content:'▾ '; }
+.dr-foot{ font-size:11px; color:var(--text-faint); line-height:1.55; border-top:1px solid var(--border); padding-top:10px; }
+@media (max-width:720px){
+  .dr-linkrow select{ min-width:0; width:100%; flex:1 1 100%; }
+}
+
 .ep{
   display:flex; align-items:center; gap:9px; margin:1px 8px 1px 0; padding:7px 10px 7px 16px; cursor:pointer;
   border-radius:7px; position:relative; transition:background-color .12s ease;
@@ -1982,6 +2067,9 @@ pre.code-block{
 .cc-digest-proj{ font-size:11px; color:var(--text-faint); flex-shrink:0; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cc-digest-row .doc-score-bar{ width:60px; flex-shrink:0; }
 .cc-digest-pct{ width:36px; flex-shrink:0; text-align:right; font-size:11px; }
+/* Discovery coverage reuses these rows, but its figure is "12 new", not "40%" —
+   the percentage column's fixed 36px would clip it. */
+.cc-digest-pct.cc-digest-new{ width:auto; min-width:52px; }
 
 .health-bars{ display:flex; flex-direction:column; gap:10px; }
 .health-row{ display:flex; align-items:center; gap:12px; }

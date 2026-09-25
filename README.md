@@ -35,6 +35,13 @@ with a plain HTML/CSS/vanilla-JS frontend (no framework, no bundler).
 - **AI Studio** — turns pasted notes into structured endpoint documentation
   via an org-configured LLM provider (Anthropic or OpenAI; the API key is
   encrypted at rest and never re-exposed, not even to the admin who set it).
+- **Auto-discovery & reconciliation** — an unattended log agent
+  (`ops/sit-doc-agent`) reports every Mule app it sees serving traffic. It
+  cannot see the curated documentation, so DocTracker matches the two lists
+  itself (`reconcileDiscovery()` in `public/js/studio/05-util.js`): an app
+  already in the Control Center stops appearing twice, and what is left is
+  what is running with nothing written about it. See "Apps you have already
+  documented" in the agent's README.
 - **PII field rules & masking** — org-level rules for which fields get
   masked where request/response examples are shown or exported.
 - **Audit log** — server-recorded, not client-writable; every security-

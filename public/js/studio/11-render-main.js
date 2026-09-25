@@ -498,6 +498,46 @@ function renderControlCenter(main){
       </div>
     </div>` : '';
 
+  // Discovery coverage — the one number this page could not answer before:
+  // of everything the log agent watched running, how much is actually written
+  // up here. Both sides are in state.projects; reconcileDiscovery() matches
+  // them (see 05-util.js). Hidden entirely when no agent is reporting.
+  const ccRecon = reconcileDiscovery();
+  const ccAutoProjects = allProjectsSorted.filter(p => !!p.discoveryEnvironment);
+  const ccGaps = ccAutoProjects
+    .map(p => ccRecon.byAutoId[p.id])
+    .filter(c => c && c.novel > 0)
+    .sort((a, b) => b.novel - a.novel);
+  const ccDiscoveredEndpoints = ccRecon.duplicateEndpoints + ccRecon.novelEndpoints;
+  const ccCoveredPct = ccDiscoveredEndpoints
+    ? Math.round((ccRecon.duplicateEndpoints / ccDiscoveredEndpoints) * 100) : 0;
+  const ccDiscoveryHtml = ccAutoProjects.length ? `
+    <div class="section">
+      <div class="section-title">Discovery coverage <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— what is running versus what is documented</span></div>
+      <div class="hint" style="margin-top:-4px;">The log agent reports every Mule app it sees serving traffic, with no
+        knowledge of what anyone has documented. These are the two lists compared: an app already in the Control
+        Center is not a second API, and the sidebar no longer lists it as one.</div>
+      <div class="sec-card" style="--sc-accent:var(${ccGaps.length ? '--put' : '--post'});margin-top:10px;">
+        <div class="v" style="font-size:14px;"><span class="dot"></span>${ccRecon.duplicateEndpoints} of
+          ${ccDiscoveredEndpoints} discovered endpoint${ccDiscoveredEndpoints === 1 ? '' : 's'} (${ccCoveredPct}%) are documented</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;">
+          <span class="sec-status-dot"><span class="dot" style="background:var(--get);"></span>${ccAutoProjects.length} app(s) discovered</span>
+          <span class="sec-status-dot"><span class="dot" style="background:var(--post);"></span>${ccRecon.duplicateProjects} already in the Control Center</span>
+          <span class="sec-status-dot"><span class="dot" style="background:${ccRecon.novelEndpoints ? 'var(--put)' : 'var(--post)'};"></span>${ccRecon.novelEndpoints} endpoint(s) running but undocumented</span>
+        </div>
+        ${ccGaps.length ? `<div class="cc-digest" style="margin-top:12px;">
+          ${ccGaps.slice(0, 5).map(c => `
+            <div class="cc-digest-row" data-cc-discovery-proj="${escapeHtml(c.autoProj.id)}">
+              <span class="cc-digest-path mono">${escapeHtml(c.autoProj.name)}</span>
+              <span class="cc-digest-proj">${c.documented ? 'documented as ' + escapeHtml(c.documented.name) : 'no matching API'}</span>
+              <span class="mono cc-digest-pct cc-digest-new" style="color:var(--put);">${c.novel} new</span>
+            </div>`).join('')}
+        </div>
+        ${ccGaps.length > 5 ? `<div class="s" style="margin-top:8px;">…and ${ccGaps.length - 5} more app(s) with undocumented endpoints.</div>` : ''}`
+        : `<div class="s" style="margin-top:8px;">Everything the agent has seen running is documented.</div>`}
+      </div>
+    </div>` : '';
+
   main.innerHTML = `
     <div class="crumb">API Control Center</div>
     <div class="ctrl-hero" style="--ctrl-glow-bg:var(${ctrlBgVar});">
@@ -536,6 +576,8 @@ function renderControlCenter(main){
           : 'Every documented endpoint has SecOps, VAPT, and Log Mgmt all signed off. Whether they\'re actually live in Production is a separate question — check each project\'s Release Pipeline.'}</div>
       </div>
     </div>
+
+    ${ccDiscoveryHtml}
 
     ${ccDigestHtml}
 
@@ -646,6 +688,24 @@ function renderControlCenter(main){
       const proj = state.projects[row.getAttribute('data-cc-digest-proj')];
       const ep = proj && proj.endpoints.find(e=>e.id===row.getAttribute('data-cc-digest-ep'));
       if(proj && ep) openEditorTab(proj, ep);
+    });
+  });
+
+  // A discovery gap opens that app's Overview, where the reconciliation panel
+  // lives (renderDiscoveryReconcilePanel in 14-users.js) — the place the gap
+  // is actually resolved, rather than a read-only number on this page.
+  main.querySelectorAll('[data-cc-discovery-proj]').forEach(row=>{
+    row.addEventListener('click', ()=>{
+      const id = row.getAttribute('data-cc-discovery-proj');
+      const proj = state.projects[id];
+      if(!proj) return;
+      // The panel only renders in the environment the traffic was observed in.
+      if(proj.discoveryEnvironment && envIds().includes(proj.discoveryEnvironment) && state.env !== proj.discoveryEnvironment){
+        state.env = proj.discoveryEnvironment;
+        saveEnv();
+      }
+      state.selected = { type:'overview', projectId: id };
+      renderAll();
     });
   });
 }
