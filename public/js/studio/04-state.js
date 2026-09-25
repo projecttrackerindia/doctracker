@@ -46,5 +46,9 @@ let state = {
   obsAlertsStatus: 'idle',          // 'idle' | 'loading' | 'ready' | 'error'
   obsAlertsError: '',
   obsAlertDraft: null,              // the rule currently open in the editor; null = editor closed
+  obsAlertHistory: null,            // GET /api/workspace/alerts/history — { incidents, hasMore }, loaded on demand
+  obsAlertHistoryStatus: 'idle',    // 'idle' | 'loading' | 'ready' | 'error'
+  obsAlertHistoryError: '',
+  obsAlertHistoryOldestId: null,    // cursor for "load more"
   obsEnvOptions: [],                // environments that have actually reported — GET /observability/environments. Not a picker: the header switcher is the only one. Used to say so when the environment you're in has no agent.
 };

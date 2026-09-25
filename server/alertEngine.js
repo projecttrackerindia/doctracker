@@ -41,6 +41,9 @@
 const { pool } = require('./db');
 const store = require('./observabilityStore');
 const { notifyUsers, adminUserIds } = require('./notifications');
+const dataCrypto = require('./crypto');
+const { validateOutboundUrlSync } = require('./urlSafety');
+const { deliverAlertWebhook } = require('./webhookDelivery');
 
 // ---------------------------------------------------------------------------
 // The metric catalogue. Everything an alert rule can be written about.
@@ -151,6 +154,13 @@ const DEFAULT_SETTINGS = {
   // configured to ignore them. Stored as minutes-from-midnight in the
   // organisation's chosen IANA zone.
   quietHours: { enabled: false, startMinute: 22 * 60, endMinute: 7 * 60, timezone: 'Asia/Kolkata', allowCritical: true },
+  // Off by default, and `secretEnc` never leaves this module in plaintext —
+  // see toClientSettings() below, which is what every route actually returns
+  // to the browser. `secretKeyVersion` mirrors the pattern server/routes/
+  // auth.js already uses for the MFA secret (dataCrypto.encryptField's
+  // output already embeds its own key version, but a parallel column/field
+  // keeps rotation bookkeeping queryable without decrypting every value).
+  webhook: { url: '', secretEnc: null, secretKeyVersion: null, enabled: false },
 };
 
 async function getSettings(organisation) {
@@ -162,7 +172,53 @@ async function getSettings(organisation) {
     ...DEFAULT_SETTINGS,
     ...raw,
     quietHours: { ...DEFAULT_SETTINGS.quietHours, ...(raw.quietHours || {}) },
+    webhook: { ...DEFAULT_SETTINGS.webhook, ...(raw.webhook || {}) },
   };
+}
+
+// Only ever called from a route response, never from anything that needs the
+// real secret (emitNotification/deliverAlertWebhook read getSettings()
+// directly) — this is the one place the encrypted secret gets stripped down
+// to a boolean, matching AI Studio's "never re-exposed, not even to the
+// admin who set it" convention for its own LLM API key.
+function toClientSettings(settings) {
+  const { webhook, ...rest } = settings;
+  return {
+    ...rest,
+    webhook: { url: webhook.url || '', enabled: !!webhook.enabled, hasSecret: !!webhook.secretEnc },
+  };
+}
+
+// `patch.webhook.secret`: a non-empty string replaces the stored secret
+// (encrypted here, never persisted plaintext); an empty string clears it
+// (webhook becomes unsigned); omitted keeps whatever secret is already
+// stored — so re-saving the URL or toggling `enabled` doesn't force
+// re-entering the secret every time.
+function buildWebhookPatch(current, patch, organisation) {
+  const currentWebhook = current.webhook || DEFAULT_SETTINGS.webhook;
+  if (!patch || typeof patch !== 'object') return currentWebhook;
+  const url = typeof patch.url === 'string' ? patch.url.trim().slice(0, 2048) : currentWebhook.url;
+  let secretEnc = currentWebhook.secretEnc;
+  let secretKeyVersion = currentWebhook.secretKeyVersion;
+  if (typeof patch.secret === 'string') {
+    if (patch.secret === '') {
+      secretEnc = null;
+      secretKeyVersion = null;
+    } else {
+      secretEnc = dataCrypto.encryptField(patch.secret, `org:${organisation}:alert-webhook`);
+      secretKeyVersion = dataCrypto.currentKeyVersion();
+    }
+  }
+  const enabled = patch.enabled !== undefined ? !!patch.enabled : currentWebhook.enabled;
+  if (enabled && url) {
+    const check = validateOutboundUrlSync(url);
+    if (!check.valid) {
+      const e = new Error(`Webhook URL: ${check.reason}`);
+      e.status = 400;
+      throw e;
+    }
+  }
+  return { url, secretEnc, secretKeyVersion, enabled };
 }
 
 async function saveSettings(organisation, patch) {
@@ -174,6 +230,7 @@ async function saveSettings(organisation, patch) {
       ? patch.extraUserIds.map((n) => parseInt(n, 10)).filter(Number.isFinite).slice(0, 50)
       : current.extraUserIds,
     quietHours: { ...current.quietHours, ...(patch.quietHours || {}) },
+    webhook: buildWebhookPatch(current, patch.webhook, organisation),
   };
   await pool.query(
     `INSERT INTO org_workspace (organisation, alert_settings) VALUES ($1, $2)
@@ -304,12 +361,22 @@ async function updateRule(organisation, id, input, actor) {
   // rule still "firing" under a threshold that no longer exists would keep
   // re-notifying about a condition nobody configured.
   await pool.query('DELETE FROM alert_state WHERE rule_id = $1', [id]);
+  // Without this, any incident still open (resolved_at IS NULL) at edit time
+  // would stay open forever — alert_state was just wiped, so no future
+  // evaluation can ever produce the 'resolve' transition that would normally
+  // close it out.
+  await closeOpenIncidents(id);
   return toRule(rows[0]);
 }
 
 async function deleteRule(organisation, id) {
+  await closeOpenIncidents(id);
   const { rowCount } = await pool.query('DELETE FROM alert_rule WHERE organisation=$1 AND id=$2', [organisation, id]);
   return rowCount > 0;
+}
+
+async function closeOpenIncidents(ruleId) {
+  await pool.query('UPDATE alert_incident SET resolved_at = now() WHERE rule_id = $1 AND resolved_at IS NULL', [ruleId]);
 }
 
 // Seeded once, on the organisation's first visit to the Alerts tab. Guarded by
@@ -451,7 +518,6 @@ async function emitNotification(organisation, rule, ctx, kind, settings) {
   if (rule.notifyAdmins && settings.notifyAdmins) (await adminUserIds(organisation)).forEach((id) => recipients.add(id));
   (rule.notifyUserIds || []).forEach((id) => recipients.add(id));
   (settings.extraUserIds || []).forEach((id) => recipients.add(id));
-  if (!recipients.size) return { suppressed: 'no-recipients' };
 
   const m = METRICS[rule.metric];
   const where = [ctx.environment, ctx.endpointLabel].filter(Boolean).join(' · ');
@@ -466,23 +532,57 @@ async function emitNotification(organisation, rule, ctx, kind, settings) {
       + `${formatValue(rule.metric, rule.threshold)} threshold`
       + (m.kind === 'absence' ? '.' : ` over the last ${rule.windowMinutes} minutes (${ctx.sample.toLocaleString()} requests).`);
 
-  await notifyUsers([...recipients], {
-    organisation,
-    type: resolved ? 'alert_resolved' : 'alert_firing',
-    title,
-    body,
-    // A routing hint, not a URL - matching the convention in
-    // server/notifications.js. Opens the console already scoped to the thing
-    // that fired, so the click lands on evidence rather than a home page.
-    link: {
-      view: 'observability',
-      tab: 'alerts',
+  let notifiedCount = 0;
+  if (recipients.size) {
+    await notifyUsers([...recipients], {
+      organisation,
+      type: resolved ? 'alert_resolved' : 'alert_firing',
+      title,
+      body,
+      // A routing hint, not a URL - matching the convention in
+      // server/notifications.js. Opens the console already scoped to the thing
+      // that fired, so the click lands on evidence rather than a home page.
+      link: {
+        view: 'observability',
+        tab: 'alerts',
+        environment: ctx.environment,
+        endpointId: ctx.endpointId || null,
+        ruleId: rule.id,
+      },
+    });
+    notifiedCount = recipients.size;
+  }
+
+  // Independent of in-app recipients — an org can have no admins subscribed
+  // to in-app notifications and still want every incident delivered to a
+  // webhook, so this isn't gated on recipients.size the way notifyUsers is
+  // above. Fire-and-forget: a slow/blocked webhook target must never delay
+  // alert evaluation, and deliverAlertWebhook already catches everything
+  // internally, so this .catch is only a backstop against a genuinely
+  // unexpected synchronous throw.
+  if (settings.webhook && settings.webhook.enabled && settings.webhook.url) {
+    deliverAlertWebhook(organisation, settings.webhook, {
+      rule: rule.name,
+      ruleId: rule.id,
+      metric: rule.metric,
+      severity: rule.severity,
+      status: resolved ? 'resolved' : 'firing',
       environment: ctx.environment,
       endpointId: ctx.endpointId || null,
-      ruleId: rule.id,
-    },
-  });
-  return { notified: recipients.size };
+      value: ctx.value,
+      threshold: rule.threshold,
+      comparison: rule.comparison,
+      sample: ctx.sample,
+      title,
+      body,
+      timestamp: new Date().toISOString(),
+    }).catch((err) => console.error('Alert webhook delivery threw unexpectedly:', err.message));
+  }
+
+  if (!recipients.size && !(settings.webhook && settings.webhook.enabled && settings.webhook.url)) {
+    return { suppressed: 'no-recipients' };
+  }
+  return { notified: notifiedCount };
 }
 
 // Evaluates every enabled rule for one organisation. `environments` limits the
@@ -609,7 +709,77 @@ async function applyState(organisation, rule, environment, row, now, settings) {
       clearAck ? null : (prev && prev.acknowledged_by) || null,
     ]
   );
+
+  // alert_state above is CURRENT state only (one row per rule/env/endpoint,
+  // overwritten in place); alert_incident is the durable history a resolved
+  // breach would otherwise leave no trace of. 'fire' opens a new row,
+  // 'renotify' updates the still-open one, 'resolve' closes it — mirrors the
+  // notify_count/last_value bookkeeping alert_state just did, above.
+  const notifyIncrement = notified && notifyResult && notifyResult.notified ? 1 : 0;
+  const lastValue = Number.isFinite(row.value) ? row.value : null;
+  const lastSample = Number.isFinite(row.sample) ? row.sample : null;
+  if (decision.action === 'fire') {
+    await pool.query(
+      `INSERT INTO alert_incident
+         (organisation, rule_id, rule_name, metric, severity, environment, endpoint_id, started_at, last_value, last_sample, notify_count)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [organisation, rule.id, rule.name, rule.metric, rule.severity, environment, key, new Date(now), lastValue, lastSample, notifyIncrement]
+    );
+  } else if (decision.action === 'renotify') {
+    await pool.query(
+      `UPDATE alert_incident SET last_value=$5, last_sample=$6, notify_count = notify_count + $7
+       WHERE organisation=$1 AND rule_id=$2 AND environment=$3 AND endpoint_id=$4 AND resolved_at IS NULL`,
+      [organisation, rule.id, environment, key, lastValue, lastSample, notifyIncrement]
+    );
+  } else if (decision.action === 'resolve') {
+    await pool.query(
+      `UPDATE alert_incident SET resolved_at = now(), last_value=$5, last_sample=$6, notify_count = notify_count + $7
+       WHERE organisation=$1 AND rule_id=$2 AND environment=$3 AND endpoint_id=$4 AND resolved_at IS NULL`,
+      [organisation, rule.id, environment, key, lastValue, lastSample, notifyIncrement]
+    );
+  }
+
   return { rule: rule.name, environment, endpointId: key, action: decision.action, value: row.value, notifyResult };
+}
+
+// Cursor-paginated read of alert_incident — the "incidents over time" view
+// ALERTING.md's Known limits used to say didn't exist. Readable by everyone,
+// same as currentAlerts() — see routes/alerts.js's GET /history.
+async function listIncidents(organisation, { limit = 30, beforeId = null } = {}) {
+  const cappedLimit = Math.min(Math.max(parseInt(limit, 10) || 30, 1), 100);
+  const params = [organisation];
+  let cursorClause = '';
+  if (beforeId) {
+    params.push(beforeId);
+    cursorClause = `AND id < $${params.length}`;
+  }
+  params.push(cappedLimit + 1);
+  const { rows } = await pool.query(
+    `SELECT id, rule_id, rule_name, metric, severity, environment, endpoint_id,
+            started_at, resolved_at, last_value, last_sample, notify_count
+     FROM alert_incident
+     WHERE organisation = $1 ${cursorClause}
+     ORDER BY id DESC
+     LIMIT $${params.length}`,
+    params
+  );
+  const hasMore = rows.length > cappedLimit;
+  const incidents = rows.slice(0, cappedLimit).map((r) => ({
+    id: String(r.id),
+    ruleId: String(r.rule_id),
+    ruleName: r.rule_name,
+    metric: r.metric,
+    severity: r.severity,
+    environment: r.environment,
+    endpointId: r.endpoint_id || null,
+    startedAt: r.started_at,
+    resolvedAt: r.resolved_at,
+    lastValue: r.last_value === null ? null : Number(r.last_value),
+    lastSample: r.last_sample,
+    notifyCount: r.notify_count,
+    display: formatValue(r.metric, r.last_value === null ? null : Number(r.last_value)),
+  }));
+  return { incidents, hasMore };
 }
 
 // What the console shows: every rule's current state, joined to the rule.
@@ -743,6 +913,7 @@ module.exports = {
   ABSENCE_METRICS,
   getSettings,
   saveSettings,
+  toClientSettings,
   listRules,
   createRule,
   updateRule,
@@ -754,6 +925,7 @@ module.exports = {
   formatValue,
   evaluateOrganisation,
   currentAlerts,
+  listIncidents,
   acknowledgeAlert,
   runAlertSweep,
   startAlertSchedule,

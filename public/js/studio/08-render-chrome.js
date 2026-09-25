@@ -129,6 +129,9 @@ function selectEnvironment(envId){
   // environment's badge indefinitely, not just until the next fetch resolves.
   state.obsAlerts = null;
   state.obsAlertsStatus = 'idle';
+  state.obsAlertHistory = null;
+  state.obsAlertHistoryStatus = 'idle';
+  state.obsAlertHistoryOldestId = null;
   // renderSidebar() was missing here, so the endpoint tree kept showing
   // whichever environment was rendered last (e.g. SIT's promoted endpoints)
   // until something else happened to trigger a full renderAll() — like a
