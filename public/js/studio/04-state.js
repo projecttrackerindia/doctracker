@@ -33,6 +33,7 @@ let state = {
   obsEnvironment: '',               // '' = follow state.env, '__all' = every environment, else a named one
   obsData: null,                    // last obsLoadAll() result — { current, previous, series, endpoints, coverage }
   obsStatus: 'idle',                // 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
+  obsLastCheckedAt: 0,              // last availability probe — see OBS_AVAILABILITY_RECHECK_MS
   obsError: '',                     // message shown when obsStatus === 'error'
   obsFilters: {},                   // drill-down: { statusFamily, endpointId, clientIp, correlationId, minLatencyMs }
   obsRecords: null,                 // last /records page — { records, total, limit, offset }

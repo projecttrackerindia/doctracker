@@ -1790,7 +1790,19 @@ function renderObservability(main){
   // console below is what renders. Deliberately not a flag day: the console
   // must never show an empty page just because the backend moved ahead of the
   // collector.
-  if(state.obsStatus === 'idle' && typeof obsLoad === 'function') obsLoad();
+  // Re-checked, not checked once. The first load settles on 'unavailable'
+  // for an org whose agent has not started pushing rollups yet - and if that
+  // were the end of it, deploying the agent would light nothing up until
+  // someone happened to hard-refresh. A console left open through a deploy
+  // should notice on its own.
+  if(typeof obsLoad === 'function'){
+    const stale = state.obsStatus === 'unavailable'
+      && (Date.now() - (state.obsLastCheckedAt || 0)) > OBS_AVAILABILITY_RECHECK_MS;
+    if(state.obsStatus === 'idle' || stale){
+      state.obsLastCheckedAt = Date.now();
+      obsLoad({ quiet: state.obsStatus !== 'idle' });
+    }
+  }
 
   const useTimeSeries = typeof obsDataAvailable === 'function' && obsDataAvailable();
 

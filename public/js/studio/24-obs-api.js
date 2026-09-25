@@ -17,6 +17,12 @@
 
 const OBS_API_BASE = '/api/workspace/observability';
 
+// How often to re-ask "does this org have rollup data yet?" once the answer
+// has been no. Matches the fallback console's own refresh cadence, so a page
+// open across an agent deploy switches over within about a minute rather than
+// waiting for someone to reload it.
+const OBS_AVAILABILITY_RECHECK_MS = 60000;
+
 // Presets stay as shortcuts; an explicit from/to always wins. `all` is
 // deliberately absent - with real retention "everything" is a year of data and
 // nobody means that. The widest preset is 90d, and the date picker covers the
