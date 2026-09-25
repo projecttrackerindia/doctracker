@@ -355,7 +355,19 @@ function renderAgentHealth(health){
     healthKpi('Last cycle', health.lastCycleDurationMs !== null && health.lastCycleDurationMs !== undefined ? `${health.lastCycleDurationMs} ms` : '—', health.lastCycleLinesRead !== null && health.lastCycleLinesRead !== undefined ? `${health.lastCycleLinesRead.toLocaleString()} line(s) read` : ''),
     healthKpi('Logs tailed', health.tailedLogCount ? String(health.tailedLogCount) : '—',
       health.tailedLogCount ? `${health.maxLinesPerCycle ? Math.floor(health.maxLinesPerCycle / health.tailedLogCount).toLocaleString() : '—'} line(s) of budget each per cycle` : 'Single file, or an older agent build'),
-    healthKpi('Agent uptime', formatDuration(health.uptimeSeconds), health.cyclesRun ? `${health.cyclesRun.toLocaleString()} poll cycle(s) run` : ''),
+    healthKpi('Agent uptime', formatDuration(health.uptimeSeconds),
+      // Uptime is per PROCESS, so a small figure beside a large lifetime
+      // count means "restarted recently", not "lost its history".
+      [health.cyclesRun ? `${health.cyclesRun.toLocaleString()} poll cycle(s) this run` : '',
+       health.restartCount ? `${health.restartCount} restart(s) since install` : '']
+        .filter(Boolean).join(' · ')),
+    // Shown because "we serve twice the traffic we thought" and "we log every
+    // request twice" are the same numbers until someone says which it is.
+    healthKpi('Duplicate log records', health.collapsedHopObservations
+      ? obsFormatCount(health.collapsedHopObservations) : '0',
+      health.collapsedHopObservations
+        ? 'Same request logged under a second path spelling — counted once'
+        : 'Every request is logged once'),
     healthKpi('Last push', health.lastPushAt ? formatDateTime(health.lastPushAt) : '—', health.lastPushOk === false ? 'Failed - retrying' : (health.lastPushOk ? 'Succeeded' : ''), health.lastPushOk === false ? '--delete' : (health.lastPushOk ? '--post' : undefined)),
   ];
 
