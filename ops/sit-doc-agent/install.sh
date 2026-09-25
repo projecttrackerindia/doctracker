@@ -40,6 +40,12 @@ if [ -z "$ENVNAME" ]; then
   echo "DOCTRACKER_ENVIRONMENT is not set in agent.env - the agent would refuse to push." >&2
   exit 1
 fi
+# For the "it pushes every Ns" message below. POLL_INTERVAL_SECONDS (60s
+# default) is how often it CHECKS the log for new lines; PUSH_INTERVAL_SECONDS
+# (900s / 15min default) is how often it actually SENDS to DocTracker - a
+# hardcoded "every 60s" here was conflating the two and had people checking
+# Observability minutes before the first real push could possibly land.
+PUSHSECS=$( set -a; . ./agent.env; set +a; printf '%s' "${PUSH_INTERVAL_SECONDS:-900}" )
 
 cat > "$DIR/start-agent.sh" <<'INNER'
 #!/bin/bash
@@ -128,4 +134,5 @@ echo "  watch it:   tail -f $DIR/agent.log"
 echo "  stop it:    kill \$(cat $DIR/agent.pid)   # then: crontab -l | grep -v '$TAG' | crontab -"
 echo "  uninstall:  crontab -l | grep -v '$TAG' | crontab -"
 echo
-echo "It pushes every 60s. Give it 2 minutes, then check Observability."
+echo "It checks the log every 60s, but only PUSHES to DocTracker every ${PUSHSECS}s"
+echo "(PUSH_INTERVAL_SECONDS) - that's the earliest Observability can show anything new."
