@@ -1804,20 +1804,77 @@ function renderObservability(main){
     }
   }
 
-  const useTimeSeries = typeof obsDataAvailable === 'function' && obsDataAvailable();
+  // `obsForcePreview` lets someone look at the new console before their agent
+  // has pushed anything. It exists because the automatic switch is invisible
+  // until that happens: there was no way to tell "the new console has not
+  // shipped" apart from "the new console is waiting for data", and the page
+  // said nothing either way. A preview with honest zeros beats a page that
+  // gives you nothing to go on.
+  const dataReady = typeof obsDataAvailable === 'function' && obsDataAvailable();
+  const useTimeSeries = dataReady || state.obsForcePreview === true;
 
   const heroDesc = fullCapture
     ? `Real per-request records, auto-discovered from server logs — never written into documented endpoints. Credential-named fields always redacted.`
     : `Auto-discovered from server logs, never written into documented endpoints. Field values aren't captured in this mode — only counts and structure.`;
+
+  // Shown on the OLD console so nobody has to wonder whether the new one
+  // exists, and on the PREVIEW so nobody mistakes empty charts for broken
+  // ones.
+  let handoffNotice = '';
+  if(!dataReady && !state.obsForcePreview){
+    handoffNotice = `<div class="obs-handoff">
+      <div>
+        <b>A rebuilt console is ready and waiting for data.</b>
+        It adds traffic-over-time charts, a date-range picker, tabs and click-through filtering.
+        It switches on by itself, within a minute of this environment's agent pushing its first
+        rollup — no reload needed. Until then this view stays, because it has your real history and
+        the new one would read zero.
+      </div>
+      <button type="button" class="obs-handoff-btn" id="obsPreviewOn">Preview it now</button>
+    </div>`;
+  }else if(!dataReady && state.obsForcePreview){
+    handoffNotice = `<div class="obs-handoff obs-handoff-preview">
+      <div>
+        <b>Preview — no data yet.</b>
+        Every figure below reads zero because this environment's agent hasn't pushed a rollup.
+        This is the layout, not your traffic. Your real numbers are still on the current console.
+      </div>
+      <button type="button" class="obs-handoff-btn" id="obsPreviewOff">Back to current console</button>
+    </div>`;
+  }
 
   main.innerHTML = `
     <div class="obs-header">
       <h1>Observability</h1>
       <p>${heroDesc}</p>
     </div>
+    ${handoffNotice}
     ${useTimeSeries ? '' : renderObsEnvironmentBar()}
     <div id="obsBody"></div>
   `;
+
+  const previewOn = document.getElementById('obsPreviewOn');
+  if(previewOn) previewOn.addEventListener('click', ()=>{
+    state.obsForcePreview = true;
+    if(state.obsStatus === 'unavailable' && !state.obsData){
+      // Nothing was loaded, so give the preview an empty-but-valid shape
+      // rather than letting every panel hit undefined.
+      state.obsData = {
+        range: obsResolvedRange(),
+        current: { total:0, errCount:0, errorRate:0,
+          statusBreakdown:{'2xx':0,'3xx':0,'4xx':0,'5xx':0,unknown:0},
+          topIps:[], endpointCount:0, lastSeenAt:null, latency:null, latencyBuckets:{} },
+        previous: null, coverage:{ oldest:null, newest:null, buckets:0 },
+        series: [], endpoints: [], loadedAt: Date.now(),
+      };
+    }
+    renderMain();
+  });
+  const previewOff = document.getElementById('obsPreviewOff');
+  if(previewOff) previewOff.addEventListener('click', ()=>{
+    state.obsForcePreview = false;
+    renderMain();
+  });
 
   const body = document.getElementById('obsBody');
   if(useTimeSeries){
