@@ -198,14 +198,6 @@ function renderObsToolbar(){
   const range = obsResolvedRange();
   const bridged = obsIsBridged();
 
-  // Disabled rather than hidden: the control is real and about to work, and
-  // hiding it would make the upgrade look like a different page. A pill that
-  // silently re-queried and returned the same cumulative number either way
-  // would be worse than either.
-  const pills = OBS_RANGES.map(r =>
-    `<button type="button" class="obs-range-pill${!custom && !bridged && sel.key === r.key ? ' active' : ''}"
-       data-obs-range="${r.key}"${bridged ? ' disabled title="Date filtering needs the upgraded agent — these totals are cumulative"' : ''}>${r.label}</button>`).join('');
-
   // Removing this page's own environment dropdown removed the only place the
   // OTHER environments were visible, and with them the explanation for an
   // empty page: you are in an environment no agent reports. Said outright
@@ -215,6 +207,27 @@ function renderObsToolbar(){
   const envGap = here && reported.length && !reported.includes(here)
     ? `No agent reports ${here}. Reporting: ${reported.slice(0, 4).join(', ')}${reported.length > 4 ? '…' : ''}`
     : '';
+
+  // Agent & host isn't queried by range at all — it renders whatever window
+  // the agent itself retained (see renderHostHealthSection / agentHealth
+  // above). A picker that visibly sits above the tab but changes nothing in
+  // it is worse than no picker, so it's hidden here rather than disabled —
+  // "disabled" would still imply it applies once some condition is met, and
+  // none ever will be for this tab.
+  if(state.obsTab === 'agent'){
+    return `<div class="obs-toolbar obs-toolbar-agent">
+      <span class="obs-toolbar-agent-note">Host health and log volume below reflect the agent's own retained window, not a selectable date range.</span>
+      ${envGap ? `<span class="obs-env-gap">${escapeHtml(envGap)}</span>` : ''}
+    </div>`;
+  }
+
+  // Disabled rather than hidden: the control is real and about to work, and
+  // hiding it would make the upgrade look like a different page. A pill that
+  // silently re-queried and returned the same cumulative number either way
+  // would be worse than either.
+  const pills = OBS_RANGES.map(r =>
+    `<button type="button" class="obs-range-pill${!custom && !bridged && sel.key === r.key ? ' active' : ''}"
+       data-obs-range="${r.key}"${bridged ? ' disabled title="Date filtering needs the upgraded agent — these totals are cumulative"' : ''}>${r.label}</button>`).join('');
 
   const coverage = state.obsData && state.obsData.coverage;
   // Said plainly when it matters: a range reaching past the start of
