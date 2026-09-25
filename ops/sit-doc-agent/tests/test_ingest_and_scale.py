@@ -17,6 +17,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 AGENT_DIR = os.path.dirname(HERE)
@@ -754,6 +755,64 @@ try:
 finally:
     agent.CAPTURE_SUCCESS_SAMPLE_RATE = saved_rate
     agent.CAPTURE_MODE = saved_mode3
+
+print("Clock skew is measured and reported, not left to be discovered")
+st_clock = {}
+agent.measure_clock_offset(st_clock, None)
+check("a missing Date header is ignored rather than crashing the push",
+      st_clock.get("health", {}).get("clockOffsetSeconds") is None)
+
+st_clock = {}
+agent.measure_clock_offset(st_clock, "not a date at all")
+check("an unparseable Date header is ignored rather than recording nonsense",
+      st_clock.get("health", {}).get("clockOffsetSeconds") is None)
+
+import calendar as _cal  # noqa: E402
+st_clock = {}
+# A header claiming the server is 3600s BEHIND this host.
+behind = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(time.time() - 3600))
+agent.measure_clock_offset(st_clock, behind)
+off = st_clock["health"]["clockOffsetSeconds"]
+check("a one-hour skew is measured with the right sign and magnitude",
+      3595 <= off <= 3605, "got %r" % off)
+
+st_clock = {}
+now_hdr = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+agent.measure_clock_offset(st_clock, now_hdr)
+check("a correct clock reports approximately zero skew",
+      abs(st_clock["health"]["clockOffsetSeconds"]) <= 2,
+      "got %r" % st_clock["health"]["clockOffsetSeconds"])
+
+print("Source fingerprint - so two agents on one file can be told apart")
+fp_a = agent.source_fingerprint({"files": {"/opt/mule/logs/a.log": {}, "/opt/mule/logs/b.log": {}}})
+fp_same = agent.source_fingerprint({"files": {"/opt/mule/logs/b.log": {}, "/opt/mule/logs/a.log": {}}})
+fp_other = agent.source_fingerprint({"files": {"/opt/mule/logs/c.log": {}}})
+check("the same host reading the same files fingerprints identically",
+      fp_a == fp_same, "order of the file map must not matter")
+check("a different file set fingerprints differently", fp_a != fp_other)
+check("an agent with no files yet still produces a stable id",
+      agent.source_fingerprint({}) == agent.source_fingerprint({"files": {}}))
+
+health4 = agent.build_agent_health({"health": {"clockOffsetSeconds": 7},
+                                    "endpoints": {}, "files": {"/x.log": {}}})
+check("agent health carries the fingerprint so a duplicate is detectable",
+      isinstance(health4.get("sourceFingerprint"), str) and len(health4["sourceFingerprint"]) > 0)
+check("agent health carries the measured clock offset",
+      health4.get("clockOffsetSeconds") == 7)
+check("agent health reports the host's timezone offset for context",
+      isinstance(health4.get("hostUtcOffsetSeconds"), int))
+
+print("Push cadence - responsive when busy, heartbeat when quiet")
+check("the push floor is at least a second", agent.PUSH_MIN_INTERVAL_SECONDS >= 1)
+check("the active poll interval is shorter than the idle one",
+      agent.POLL_INTERVAL_ACTIVE_SECONDS <= agent.POLL_INTERVAL_SECONDS,
+      "active=%s idle=%s" % (agent.POLL_INTERVAL_ACTIVE_SECONDS, agent.POLL_INTERVAL_SECONDS))
+check("backoff needs several idle cycles, so it cannot oscillate on one gap",
+      agent.POLL_IDLE_CYCLES_BEFORE_BACKOFF >= 1)
+health5 = agent.build_agent_health({"health": {}, "endpoints": {}, "files": {}})
+check("agent health reports both cadences so the page can size its badge",
+      health5.get("pushMinIntervalSeconds") == agent.PUSH_MIN_INTERVAL_SECONDS
+      and health5.get("pollIntervalActiveSeconds") == agent.POLL_INTERVAL_ACTIVE_SECONDS)
 
 print()
 if FAILURES:

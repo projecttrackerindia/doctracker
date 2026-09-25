@@ -68,6 +68,7 @@ import gzip
 import json
 import time
 import platform
+import calendar
 import hashlib
 import datetime
 import argparse
@@ -141,6 +142,41 @@ DEFAULT_PROJECT_NAME = "SIT Auto-Discovery - unreviewed"
 
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "60"))
 PUSH_INTERVAL_SECONDS = int(os.environ.get("PUSH_INTERVAL_SECONDS", "900"))  # 15 min batches, not per-line
+
+# --- Adaptive polling --------------------------------------------------------
+# End-to-end latency used to be the sum of three fixed waits: up to one poll
+# interval before a line is read, up to one push interval before it is sent,
+# and up to one page-poll before it is drawn. The page side is gone (the
+# server streams over SSE now), and these two close most of the rest.
+#
+# WHY POLLING FASTER IS ALMOST FREE: a poll that finds nothing is one stat()
+# plus one seek-and-read that returns zero bytes at an offset the agent
+# already holds. It does not re-read the file, and it does no parsing. The
+# expensive part of a cycle is proportional to the lines found, so checking
+# every couple of seconds while traffic is flowing costs approximately what
+# checking every sixty seconds costs - the same lines get parsed either way,
+# just sooner and in smaller batches.
+#
+# So: poll fast while there is traffic, back off to POLL_INTERVAL_SECONDS
+# once it goes quiet. An idle agent is as cheap as it ever was; a busy one
+# sees lines within seconds. Set POLL_INTERVAL_ACTIVE_SECONDS equal to
+# POLL_INTERVAL_SECONDS to switch this off entirely.
+POLL_INTERVAL_ACTIVE_SECONDS = max(1, int(os.environ.get("POLL_INTERVAL_ACTIVE_SECONDS", "2")))
+# How many consecutive empty cycles before dropping back to the idle
+# interval. Without a few cycles of hysteresis the agent would oscillate
+# between fast and slow on any gap between requests.
+POLL_IDLE_CYCLES_BEFORE_BACKOFF = max(1, int(os.environ.get("POLL_IDLE_CYCLES_BEFORE_BACKOFF", "5")))
+
+# --- Push cadence ------------------------------------------------------------
+# PUSH_INTERVAL_SECONDS is now a HEARTBEAT ceiling rather than the cadence:
+# the agent pushes as soon as it has something new, subject to this floor, and
+# pushes anyway once the ceiling elapses even with nothing new so the liveness
+# badge stays honest and the page can tell "quiet" from "dead".
+#
+# The floor exists because a busy agent would otherwise push on every poll,
+# turning one useful write into thirty tiny ones. Five seconds batches a burst
+# without being noticeable to anyone reading the page.
+PUSH_MIN_INTERVAL_SECONDS = max(1, int(os.environ.get("PUSH_MIN_INTERVAL_SECONDS", "5")))
 
 # --- Scale safeguards -------------------------------------------------------
 # These two bound the agent's own resource use so it degrades gracefully
@@ -1595,6 +1631,44 @@ def accumulate_rollup(state, key, obs, bucket_iso):
 # global) keep this bounded; oldest records are dropped first, same
 # trade-off the aggregate side already makes for correlationIds/sourceIps.
 # ============================================================================
+def source_fingerprint(state):
+    """Stable id for WHAT this agent is reading: hostname plus the set of log
+    files it currently has offsets for.
+
+    Two agents on different servers tailing different logs are a supported
+    deployment and their counters should sum. Two agents on the SAME host
+    reading the SAME files are a mistake that doubles every number, and the
+    server cannot tell the two cases apart from counters alone. Matching
+    fingerprints from different writerIds is the signal that distinguishes
+    them."""
+    try:
+        host = platform.node() or "unknown-host"
+    except Exception:
+        host = "unknown-host"
+    files = sorted((state.get("files") or {}).keys())
+    return stable_id(host, "|".join(files))
+
+
+def measure_clock_offset(state, server_date_header):
+    """Records how far this host's clock is from the DocTracker server's.
+
+    `server_date_header` is the Date: header from the last push response -
+    already present on every HTTP response, so this costs nothing extra. A
+    second or two of difference is normal network latency; minutes mean a
+    genuinely wrong clock, and every timestamp this agent produces is
+    therefore wrong by that much."""
+    if not server_date_header:
+        return
+    try:
+        # RFC 7231 IMF-fixdate, e.g. "Wed, 24 Sep 2026 18:25:49 GMT".
+        parsed = time.strptime(server_date_header, "%a, %d %b %Y %H:%M:%S GMT")
+        server_epoch = calendar.timegm(parsed)
+    except (ValueError, TypeError):
+        return
+    health = state.setdefault("health", {})
+    health["clockOffsetSeconds"] = int(round(time.time() - server_epoch))
+
+
 def should_capture_record(state, obs):
     """Keep every error; sample successes 1-in-CAPTURE_SUCCESS_SAMPLE_RATE.
 
@@ -1721,6 +1795,7 @@ class DocTrackerClient:
         self.username = username
         self.password = password
         self.cookie = None
+        self.last_server_date = None  # Date: header from the most recent response
 
     def _conn(self):
         ctx = ssl.create_default_context()
@@ -1748,6 +1823,11 @@ class DocTrackerClient:
         conn.request(method, path, body=payload, headers=headers)
         resp = conn.getresponse()
         data = resp.read()
+        # Every HTTP response already carries the server's clock in Date:, so
+        # measuring skew against it is free - see measure_clock_offset(). Kept
+        # on the instance rather than returned, so no call site has to change
+        # its tuple unpacking for a value most of them do not care about.
+        self.last_server_date = resp.getheader("Date")
         conn.close()
         try:
             parsed = json.loads(data) if data else {}
@@ -2065,6 +2145,24 @@ def build_agent_health(state):
         # one panel needs the caveat.
         "captureMode": CAPTURE_MODE,
         "captureSuccessSampleRate": CAPTURE_SUCCESS_SAMPLE_RATE,
+        "pollIntervalActiveSeconds": POLL_INTERVAL_ACTIVE_SECONDS,
+        "pushMinIntervalSeconds": PUSH_MIN_INTERVAL_SECONDS,
+        # CLOCK SKEW: rollup buckets are stamped from the Mule log line's own
+        # timestamp, read in this host's local time. If this host's clock
+        # drifts from DocTracker's, every chart shifts by that amount and
+        # date-range filtering quietly returns the wrong window - with nothing
+        # anywhere saying so. Reporting the offset makes it visible instead of
+        # leaving it to be discovered as "the numbers look about an hour out".
+        "clockOffsetSeconds": health.get("clockOffsetSeconds"),
+        "hostTimezone": time.strftime("%Z"),
+        "hostUtcOffsetSeconds": -time.timezone if not time.daylight else -time.altzone,
+        # DOUBLE-COUNTING GUARD: the server SUMS counters across writers that
+        # report the same endpoint, which is right for two load-balanced nodes
+        # and wrong for two agents tailing the SAME file - that silently
+        # doubles all traffic. This fingerprint identifies the (host, log set)
+        # an agent is reading so a duplicate can be detected rather than
+        # quietly inflating every number on the page.
+        "sourceFingerprint": source_fingerprint(state),
         "cyclesRun": health.get("cyclesRun", 0),
         "linesProcessedTotal": health.get("linesProcessedTotal", 0),
         "requestsProcessedTotal": health.get("requestsProcessedTotal", 0),
@@ -2928,7 +3026,18 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
         # below, right after they have been durably sent - see save_state().
         save_state(state, full=False)
 
-        if time.time() - state.get("last_push", 0) >= PUSH_INTERVAL_SECONDS and state.get("endpoints"):
+        # Push as soon as there is something new (subject to the floor), and
+        # push anyway once the heartbeat ceiling elapses so a quiet agent
+        # still proves it is alive. Previously this was a fixed cadence, which
+        # was simultaneously too slow when traffic was flowing and pointless
+        # work when it was not.
+        since_push = time.time() - state.get("last_push", 0)
+        has_new_data = bool(state.get("rollups")) or bool(
+            [r for r in state.get("logRecords", [])
+             if r.get("_seq", 0) > state.get("lastPushedLogRecordSeq", 0)])
+        due_for_heartbeat = since_push >= PUSH_INTERVAL_SECONDS
+        due_for_data = has_new_data and since_push >= PUSH_MIN_INTERVAL_SECONDS
+        if (due_for_data or due_for_heartbeat) and state.get("endpoints"):
             # One "Log volume" sample per push (see MAX_LOG_VOLUME_SAMPLES) -
             # cumulative lines-processed-so-far, same shape as
             # throughputSamples above; the client derives a per-interval
@@ -3087,6 +3196,16 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
                         print(f"[info] pushed {obs_result.get('rollupsWritten', 0)} rollup bucket(s) "
                               f"and {obs_result.get('recordsWritten', 0)} raw record(s) "
                               f"({obs_result.get('liveSubscribers', 0)} browser(s) watching live)")
+                    # Free: the response we just received carries the server's
+                    # clock. A large offset means every timestamp this agent
+                    # produces is wrong by that much, which is otherwise only
+                    # ever noticed as "the charts look about an hour out".
+                    measure_clock_offset(state, client.last_server_date)
+                    offset = state.get("health", {}).get("clockOffsetSeconds")
+                    if offset is not None and abs(offset) >= 60:
+                        print(f"[warn] this host's clock is {offset}s away from DocTracker's. "
+                              f"Every bucket timestamp is off by that much - check NTP on this server.",
+                              file=sys.stderr)
                 except Exception as e:
                     print(f"[error] push failed, will retry next cycle: {e}", file=sys.stderr)
                     health["lastPushOk"] = False
@@ -3097,7 +3216,16 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
 
         if not caught_up:
             continue  # skip the sleep - go straight into the next bounded chunk
-        time.sleep(POLL_INTERVAL_SECONDS)
+
+        # Adaptive sleep: stay responsive while traffic is flowing, back off
+        # once it stops. `lines` is what this cycle actually read, so the
+        # decision is about real activity rather than elapsed time.
+        if lines:
+            state["idleCycles"] = 0
+        else:
+            state["idleCycles"] = state.get("idleCycles", 0) + 1
+        idle_enough = state.get("idleCycles", 0) >= POLL_IDLE_CYCLES_BEFORE_BACKOFF
+        time.sleep(POLL_INTERVAL_SECONDS if idle_enough else POLL_INTERVAL_ACTIVE_SECONDS)
 
 
 if __name__ == "__main__":
