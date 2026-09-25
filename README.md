@@ -6,26 +6,47 @@ with a plain HTML/CSS/vanilla-JS frontend (no framework, no bundler).
 
 > This README describes the app as it stands today. For the history of
 > specific past changes (why encryption was added, why doc-access requests
-> became environment-scoped, why `studio.html` was split into 22 files),
+> became environment-scoped, why `studio.html` was split into 26 files),
 > see `SECURITY_IMPLEMENTATION_REPORT.md`, `CHANGES_ENCRYPTION_AND_ROUTING.md`,
 > `ENV_SCOPED_DOC_ACCESS.md`, and `ITEM_5_FILE_SPLIT.md` — those are
 > point-in-time change logs, not living docs, so treat this file as the
-> source of truth for current behavior.
+> source of truth for current behavior. `ALERTING.md` is the one exception:
+> it's a living reference for the alerting subsystem, kept current alongside
+> this file rather than frozen at a point in time.
 
 ## What it does
 
-- **Auth & roles** — email/username + password login, `admin` / `editor` /
+- **Auth & roles** — email/username + password login with account lockout
+  and optional per-user TOTP MFA (`server/totp.js`, RFC 6238, built on
+  Node's own `crypto` module, no external dependency), `admin` / `editor` /
   `viewer` / `custom` (per-permission) roles, admin-managed user invites and
-  password resets (no outbound email is configured, so there's no self-serve
-  "forgot password" flow), optional per-user access-time-window scheduling,
-  and idle-timeout + revocation-aware sessions (a role change, password
-  reset, or "sign out everywhere" invalidates existing JWTs immediately,
-  not just on next expiry).
+  password resets, optional per-user access-time-window scheduling, and
+  idle-timeout + revocation-aware sessions (a role change, password reset,
+  or "sign out everywhere" invalidates existing JWTs immediately, not just
+  on next expiry). No outbound email is configured, so password reset stays
+  admin-completed: a locked-out user can self-flag it (`POST
+  /api/auth/request-password-reset`), which notifies every Admin in-app to
+  verify identity out-of-band and finish the reset — there's no emailed
+  reset link.
 - **Workspace (Studio)** — projects containing endpoints, grouped by
   environment (Dev/SIT/UAT/...), with a diagram editor
   (`architecture-studio.html`) and a dedicated endpoint editor
   (`edit.studio`). All project/environment data is envelope-encrypted at
   rest (see `server/crypto.js`) with admin-triggered key rotation.
+- **Release Pipeline** — per-project diff and promote between two
+  environments (`server/routes/workspace.js`, rendered by
+  `server/views/release-pipeline.html`), gated on a required release note.
+  `server/breakingChangeDetector.js` flags only changes a well-behaved
+  client would actually break on (a removed required parameter, a changed
+  response shape, etc.) — not every structural diff.
+- **Observability & Alerting** — the `ops/sit-doc-agent` log agent pushes
+  traffic in; the Observability console (`public/js/studio/23-…-26-*.js`)
+  gives per-environment traffic charts, a log explorer, and live status.
+  `server/alertEngine.js` evaluates threshold rules (error rate, latency,
+  request rate) and absence rules (collector gone silent) as a per-rule
+  state machine — with hold times, cooldowns, and quiet hours, so one
+  incident produces one notification, not a flood. See `ALERTING.md` for
+  the full reference.
 - **Doc-access requests** — non-admins request time-boxed access to an
   endpoint's documentation in a given environment; admins/project owners
   approve, deny, or revoke from the Security Center
@@ -103,37 +124,51 @@ the next request.
 ```
 doctracker-main/
 ├── server/
-│   ├── server.js              # Express app, security middleware (helmet/CSP, CORS, cookies), routing, boots DB + crypto
-│   ├── db.js                  # Postgres pool + full schema (initDb, idempotent CREATE TABLE/INDEX IF NOT EXISTS)
-│   ├── crypto.js               # Envelope encryption (MASTER_KEY -> DEKs), field- and buffer-level encrypt/decrypt, key rotation
-│   ├── validators.js           # Email/password/role/org/custom-permission validation
-│   ├── cache.js                 # Optional Redis-backed cache in front of GET /api/workspace
-│   ├── rateLimitStore.js        # Rate limiting; Redis-shared across instances if REDIS_URL is set, else per-instance in-memory
-│   ├── storage.js               # Optional S3-compatible attachment storage (encrypted client-side before upload)
-│   ├── notifications.js         # Notification creation/listing/read-state
-│   ├── auditService.js          # Server-side audit event recording
-│   ├── accessSchedule.js        # Per-user access-time-window evaluation
-│   ├── projectAccess.js         # Project-level access checks
-│   ├── openapiExport.js         # Builds masked OpenAPI YAML for a project
-│   ├── middleware/authGuard.js  # Session verification (DB-revalidated every request), idle timeout, admin gate
+│   ├── server.js                  # Express app, security middleware (helmet/CSP, CORS, cookies), routing, boots DB + crypto + migrations
+│   ├── db.js                      # Postgres pool + full schema (initDb, idempotent CREATE TABLE/INDEX IF NOT EXISTS) — the frozen baseline; see migrations/ for anything since
+│   ├── migrations/                # Schema changes since the baseline (numbered .sql, up/down) — see migrations/README.md
+│   ├── crypto.js                  # Envelope encryption (MASTER_KEY -> DEKs), field- and buffer-level encrypt/decrypt, key rotation
+│   ├── totp.js                    # RFC 6238 TOTP for MFA, built on Node's crypto only — no otplib/qrcode dependency
+│   ├── validators.js              # Email/password/role/org/custom-permission validation
+│   ├── cache.js                   # Optional Redis-backed cache in front of GET /api/workspace
+│   ├── rateLimitStore.js          # Rate limiting; Redis-shared across instances if REDIS_URL is set, else per-instance in-memory
+│   ├── storage.js                 # Optional S3-compatible attachment storage (encrypted client-side before upload)
+│   ├── notifications.js           # Notification creation/listing/read-state
+│   ├── auditService.js            # Server-side audit event recording
+│   ├── accessSchedule.js          # Per-user access-time-window evaluation
+│   ├── projectAccess.js           # Project-level access checks
+│   ├── openapiExport.js           # Builds masked OpenAPI YAML for a project
+│   ├── piiMasking.js              # Server-enforced PII masking, mirrors the client-side masker
+│   ├── breakingChangeDetector.js  # Flags client-breaking changes between two endpoint versions, for the Release Pipeline
+│   ├── alertEngine.js             # Alert rule state machine + evaluation (ingest-triggered and 60s sweep) — see ALERTING.md
+│   ├── observabilityBus.js        # In-process pub/sub fanning live ingests out to open Observability tabs
+│   ├── observabilityStore.js      # Rollup read/write, agent heartbeat tracking
+│   ├── retention.js               # Time-based cleanup of aged observability/audit data
+│   ├── middleware/
+│   │   ├── authGuard.js           # Session verification (DB-revalidated every request), idle timeout, admin gate
+│   │   └── compress.js            # Response compression for /api
 │   ├── routes/
-│   │   ├── auth.js              # /register /login /logout /me
-│   │   ├── users.js             # Admin: list/invite/reset/role/schedule
-│   │   ├── workspace.js         # Projects, environments, attachments, request history
-│   │   ├── docAccess.js         # Doc-access request lifecycle + admin queue (cursor-paginated)
-│   │   ├── ai.js                # AI Studio: org LLM config + generation
-│   │   ├── audit.js             # Audit log read/write
-│   │   ├── pii.js               # PII field-rule CRUD
-│   │   ├── security.js          # Admin: encryption key status + rotation
-│   │   ├── liveMode.js          # Live-mode request proxying
-│   │   └── notifications.js     # List/unread-count/mark-read
-│   └── views/                   # Server-rendered HTML shells (studio, editor, architecture-studio, auditlog) — injected with a fresh CSP nonce + signed-in user per request
+│   │   ├── auth.js                # /register /login /logout /me, MFA challenge/setup, password-reset request
+│   │   ├── users.js               # Admin: list/invite/reset/role/schedule
+│   │   ├── workspace.js           # Projects, environments, attachments, request history, Release Pipeline diff/promote
+│   │   ├── docAccess.js           # Doc-access request lifecycle + admin queue (cursor-paginated)
+│   │   ├── ai.js                  # AI Studio: org LLM config + generation
+│   │   ├── audit.js               # Audit log read/write
+│   │   ├── pii.js                 # PII field-rule CRUD
+│   │   ├── security.js            # Admin: encryption key status + rotation
+│   │   ├── liveMode.js            # Live-mode request proxying
+│   │   ├── observability.js       # Agent ingest endpoint + console read APIs
+│   │   ├── alerts.js              # Alert rule CRUD + read/acknowledge
+│   │   └── notifications.js       # List/unread-count/mark-read
+│   └── views/                     # Server-rendered HTML shells (studio, editor, architecture-studio, auditlog, release-pipeline) — injected with a fresh CSP nonce + signed-in user per request
 ├── public/
 │   ├── login.html / register.html / dashboard.html
 │   ├── css/auth.css
 │   └── js/
 │       ├── theme.js, login.js, register.js, idle-session.js
-│       └── studio/01-…-22-*.js   # The Studio app, split into 22 load-ordered files (see ITEM_5_FILE_SPLIT.md) — no bundler, so load order in studio.html matters
+│       └── studio/01-…-26-*.js    # The Studio app, split into 26 load-ordered files (see ITEM_5_FILE_SPLIT.md) — no bundler, so load order in studio.html matters
+├── test/                          # node:test suite — see "Testing" below
+├── ops/sit-doc-agent/             # Python log agent that reports Mule traffic in; own README + pytest suite
 ├── package.json
 ├── Procfile / railway.json
 └── .env.example
@@ -149,8 +184,10 @@ npm run dev
 ```
 
 Visit `http://localhost:3000/login.html`. The app creates/updates its own
-schema on boot (`initDb()` in `server/db.js`) — there's no separate manual
-migration step.
+schema on boot (`initDb()` in `server/db.js`, then any pending file in
+`server/migrations/`) — there's no separate manual step for a normal run.
+`npm run migrate:status` shows what's applied if you want to check; see
+`server/migrations/README.md` for the full migration workflow.
 
 ## Environment variables
 
@@ -172,17 +209,32 @@ and defaults — it's kept in sync with what the code actually reads
 4. **Generate a domain:** Settings → Networking → Generate Domain.
 5. Every push to `main` redeploys automatically.
 
+## Testing
+
+`npm test` runs the `node:test` suite in `test/`: the alert engine's state
+machine, breaking-change detection, access-schedule evaluation, discovery
+reconciliation, the observability charts/rollups, and validators. Core
+CRUD/permission routes (`auth.js`, `users.js`, `workspace.js`,
+`docAccess.js`, `crypto.js`) have no coverage yet — see "Known gaps." The
+log agent has its own Python suite under `ops/sit-doc-agent/tests/` (pytest).
+
 ## Known gaps
 
-- **No automated tests.** Nothing in `server/` or `public/js/` has test
-  coverage; regressions in cursor/permission logic (the kind #6 and #7 were)
-  currently rely entirely on manual review to catch.
+- **Test coverage is partial.** See "Testing" above — the newer subsystems
+  (alerting, observability, breaking-change detection) are covered; core
+  auth/permission/workspace logic isn't, so regressions there (the kind #6
+  and #7 were) still rely on manual review to catch.
 - **No live push for doc-access revoke.** An open tab only picks up a
   revoked grant on full reload; the 25s notification poll is the natural
   place to extend this (see `03-notifications.js`), but hasn't been done.
-- **No MFA.** Login is password-only.
-- **No self-serve password reset.** No email service is configured, so only
-  an admin can reset a user's password.
-- **Frontend has no build step.** `public/js/studio/*.js` are loaded as 22
+- **Password reset isn't link-based self-serve.** A locked-out user can
+  request one (`POST /api/auth/request-password-reset`), but it only
+  notifies an Admin to verify identity and complete it — there's no
+  outbound-email service, so there's no emailed reset link.
+- **Alerting is in-app only and single-process.** No email/webhook delivery
+  channel, no historical "incidents over time" view, and no advisory lock —
+  two app instances would each run the alert sweep independently and could
+  double-notify. See "Known limits" in `ALERTING.md`.
+- **Frontend has no build step.** `public/js/studio/*.js` are loaded as 26
   separate, order-dependent `<script>` tags with implicit shared global
   scope — no bundling, minification, or per-file isolation for testing.
