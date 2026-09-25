@@ -4,9 +4,9 @@
 #   bash setup-env.sh 'the-password'
 #
 # Put SINGLE quotes around the password. They stop the shell expanding a
-# '$' inside it - the failure that silently turned '$@Z3pNJ9WF3z' into
-# 'Z3pNJ9WF3z' and would have produced an authentication error pointing at
-# entirely the wrong thing.
+# '$' inside it - a password containing e.g. '$@x' silently loses the '$@'
+# under double quotes or no quotes at all, and produces an authentication
+# error pointing at entirely the wrong thing.
 set -u
 
 if [ $# -lt 1 ] || [ -z "$1" ]; then
