@@ -168,7 +168,7 @@ test('CONTRACT: every rollup field the server reads is one the agent sets', () =
 
 test('CONTRACT: every rollup field maps to a real column', () => {
   const dbSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'db.js'), 'utf8');
-  const table = /CREATE TABLE IF NOT EXISTS endpoint_metrics_rollup \(([\s\S]*?)\n    \);/.exec(dbSrc);
+  const table = /CREATE TABLE IF NOT EXISTS endpoint_metrics_rollup \(([\s\S]*?)\n {4}\);/.exec(dbSrc);
   assert.ok(table, 'could not find the rollup table definition');
   // [a-z0-9_] - the digits matter: status_2xx and status_5xx are column names.
   const columns = new Set([...table[1].matchAll(/^\s{6}([a-z0-9_]+)\s+[A-Z]/gm)].map((m) => m[1]));

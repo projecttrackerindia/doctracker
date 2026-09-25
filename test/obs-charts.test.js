@@ -39,7 +39,7 @@ function shapes(svg, tag) {
 }
 function points(svg, tag) {
   return shapes(svg, tag).map((m) => {
-    const p = (m.match(/points="([^"]*)"/) || [, ''])[1].trim();
+    const p = (m.match(/points="([^"]*)"/) || [undefined, ''])[1].trim();
     return p ? p.split(/\s+/).map((c) => c.split(',').map(Number)) : [];
   });
 }
