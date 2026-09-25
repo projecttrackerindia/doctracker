@@ -170,7 +170,11 @@ function renderSidebar(){
   // convenience (localStorage, like the sidebar's own collapse toggle),
   // not project data, so it isn't pushed to the server via saveState().
   const manualProjects = projects.filter(p=>!p.discoveryEnvironment);
-  const autoProjects = projects.filter(p=>!!p.discoveryEnvironment);
+  // Scoped to the currently selected environment — same check reconcileDiscovery()
+  // uses and viewEndpoints() already enforces per-project. Without this, switching
+  // the header environment left the same pooled list of every environment's
+  // discovery projects on screen here.
+  const autoProjects = projects.filter(p=>!!p.discoveryEnvironment && discoveryMatchesCurrentEnv(p));
   const manualHtml = manualProjects.map(proj=>renderProjectNode(proj, filter)).join('');
 
   // Reconcile discovery against the documentation before rendering it, so an

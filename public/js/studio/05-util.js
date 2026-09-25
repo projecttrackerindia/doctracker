@@ -493,14 +493,27 @@ function discoveryCoverage(autoProj, index){
   };
 }
 
+// Same comparison viewEndpoints() already uses to keep an auto-discovered
+// project invisible outside the one environment it was actually observed in.
+// reconcileDiscovery() needs its own copy of that check: without it, the
+// sidebar's "Auto-discovered APIs" count and the Control Center's Discovery
+// Coverage panel pooled every environment's discovery projects together —
+// switching the header from SIT to Dev showed the exact same numbers, and a
+// Dev-only app like x-mobile-common-api appeared in the list while looking
+// at SIT.
+function discoveryMatchesCurrentEnv(proj){
+  return String(proj.discoveryEnvironment || '').trim().toLowerCase() === String(state.env || '').trim().toLowerCase();
+}
+
 // Every auto-discovered project reconciled in one pass, plus the two headline
-// numbers the sidebar and Control Center report.
+// numbers the sidebar and Control Center report. Scoped to the CURRENTLY
+// SELECTED environment — see discoveryMatchesCurrentEnv() above.
 function reconcileDiscovery(){
   const index = documentedEndpointIndex();
   const byAutoId = {};
   let duplicateProjects = 0, duplicateEndpoints = 0, novelEndpoints = 0;
   for(const proj of allProjects()){
-    if(!proj.discoveryEnvironment) continue;
+    if(!proj.discoveryEnvironment || !discoveryMatchesCurrentEnv(proj)) continue;
     const cov = discoveryCoverage(proj, index);
     byAutoId[proj.id] = cov;
     if(cov.documented) duplicateProjects += 1;

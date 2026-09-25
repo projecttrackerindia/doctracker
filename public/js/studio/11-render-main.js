@@ -503,7 +503,13 @@ function renderControlCenter(main){
   // up here. Both sides are in state.projects; reconcileDiscovery() matches
   // them (see 05-util.js). Hidden entirely when no agent is reporting.
   const ccRecon = reconcileDiscovery();
-  const ccAutoProjects = allProjectsSorted.filter(p => !!p.discoveryEnvironment);
+  // Scoped to the currently selected environment, same as reconcileDiscovery()
+  // itself (see discoveryMatchesCurrentEnv() in 05-util.js) — otherwise this
+  // count pooled every environment's discovery projects even though ccRecon's
+  // OWN numbers were already correctly scoped, e.g. "75 app(s) discovered"
+  // staying identical and wrong after ccGaps below had already been filtered
+  // down to just the current environment's gaps.
+  const ccAutoProjects = allProjectsSorted.filter(p => !!p.discoveryEnvironment && discoveryMatchesCurrentEnv(p));
   const ccGaps = ccAutoProjects
     .map(p => ccRecon.byAutoId[p.id])
     .filter(c => c && c.novel > 0)
