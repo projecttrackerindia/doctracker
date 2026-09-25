@@ -1,4 +1,5 @@
 const { pool } = require('./db');
+const liveBus = require('./notificationsBus');
 
 // Single place that ever writes to `notifications` — same pattern as
 // auditService.recordAuditEvent, and deliberately called from the exact
@@ -16,10 +17,19 @@ async function notifyUser(userId, { organisation, type, title, body = null, link
   const { rows } = await pool.query(
     `INSERT INTO notifications (organisation, user_id, type, title, body, link)
      VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id`,
+     RETURNING id, organisation, user_id, type, title, body, link, read_at, created_at`,
     [organisation, userId, String(type).slice(0, 64), String(title).slice(0, 300), body ? String(body).slice(0, 500) : null, link ? JSON.stringify(link) : null]
   );
-  return rows[0].id;
+  const row = rows[0];
+  // Fire-and-forget: a live-push failure must never turn an already-committed
+  // notification write into a reported error for the caller. Same discipline
+  // as observabilityBus.publish (see its own header comment).
+  try {
+    liveBus.publish(organisation, userId, row);
+  } catch (err) {
+    console.error('Notifications: live publish failed:', err.message);
+  }
+  return row.id;
 }
 
 // Fan-out helper for the common "notify everyone with a given set of user

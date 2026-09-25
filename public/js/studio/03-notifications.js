@@ -1,11 +1,13 @@
 /* ==================== SECTION:NOTIFICATIONS ====================
    Bell in the topbar + a count badge on Security. See server/notifications.js
-   for the write side — this is purely the read/poll/render side. Deliberately
-   NOT under WORKSPACE_API (mounted separately at /api/notifications), and NOT
-   gated by an access-schedule lock — see server/routes/notifications.js for why. */
-const NOTIF_POLL_MS = 25000;
+   for the write side — this is purely the read/live-push/render side.
+   Deliberately NOT under WORKSPACE_API (mounted separately at
+   /api/notifications), and NOT gated by an access-schedule lock — see
+   server/routes/notifications.js for why. */
+const NOTIF_POLL_MS = 25000; // fallback cadence only — see initNotifications()
 let _notifPanelOpen = false;
 let _notifOldestId = null; // cursor for "load more"
+let _notifEventSource = null;
 
 async function notifApiGet(path){
   const res = await fetch('/api/notifications' + path, { credentials:'same-origin' });
@@ -182,13 +184,58 @@ document.addEventListener('click', (e)=>{
   if(_notifPanelOpen && !e.target.closest('#notifPanel') && !e.target.closest('#btnNotifBell')) toggleNotifPanel(false);
 });
 
+function refreshAllNotifBadges(){
+  refreshNotifBadge();
+  refreshSecurityBadge();
+  refreshReleasePipelineBadge();
+  if(_notifPanelOpen) loadNotifPanel();
+}
+
+// Live push, same pattern as obsStartLive() in 24-obs-api.js: plain SSE,
+// cookie auth, EventSource's native auto-reconnect (no retry loop of our
+// own). One difference from Observability's page-scoped stream — this opens
+// once at boot and stays open for the session, since the bell/badges are
+// visible everywhere in the SPA chrome, not just on one page. Any single
+// event could in principle mean any of the three badges changed (a doc-access
+// approval affects the bell AND the Security badge, a promotion affects the
+// bell AND the Release Pipeline badge), so the simplest correct handling is
+// to refresh all three on every event rather than routing by `type` — each
+// refresh is one cheap GET.
+function notifStartLive(){
+  if(_notifEventSource) return;
+  if(typeof EventSource === 'undefined'){
+    // No SSE support in this browser: fall back to the old poll so badges
+    // still update, just less promptly.
+    setInterval(refreshAllNotifBadges, NOTIF_POLL_MS);
+    return;
+  }
+  try{
+    _notifEventSource = new EventSource('/api/notifications/stream', { withCredentials: true });
+  }catch(e){
+    setInterval(refreshAllNotifBadges, NOTIF_POLL_MS);
+    return;
+  }
+  let refetchTimer = null;
+  _notifEventSource.addEventListener('notification', ()=>{
+    // Coalesce a burst (e.g. notifyUsers() fanning out to several admins at
+    // once server-side doesn't mean several client-side refetches here).
+    clearTimeout(refetchTimer);
+    refetchTimer = setTimeout(refreshAllNotifBadges, 400);
+  });
+  _notifEventSource.addEventListener('error', ()=>{
+    // EventSource retries on its own; nothing to do here beyond letting it.
+    // The 25s heartbeat on the server side (see routes/notifications.js)
+    // means a silently-dropped connection is rare, and a genuinely down
+    // connection self-heals on reconnect without ever having missed more
+    // than the gap — the next successful event still triggers a refresh.
+  });
+}
+
 function initNotifications(){
   refreshNotifBadge();
   refreshSecurityBadge();
   refreshReleasePipelineBadge();
-  setInterval(refreshNotifBadge, NOTIF_POLL_MS);
-  setInterval(refreshSecurityBadge, NOTIF_POLL_MS);
-  setInterval(refreshReleasePipelineBadge, NOTIF_POLL_MS);
+  notifStartLive();
 }
 
 // One-time: if this browser still has the old localStorage workspace, ship it
