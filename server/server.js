@@ -28,6 +28,8 @@ const observabilityRoutes = require('./routes/observability');
 const alertRoutes = require('./routes/alerts');
 const compressionMiddleware = require('./middleware/compress');
 const { verifySession, IdleTimeoutError } = require('./middleware/authGuard');
+const { assignRequestId } = require('./requestId');
+const { log } = require('./logger');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -65,6 +67,10 @@ app.set('trust proxy', 2);
 // script loaded from cdnjs. Everything else in that file is wired up with
 // addEventListener, not inline handlers, so we don't need 'unsafe-inline' —
 // a per-request nonce covers the inline block, and cdnjs is explicitly allowed.
+// Mounted before everything else: helmet/cors/error handlers further down
+// can all assume req.id already exists.
+app.use(assignRequestId);
+
 app.use((req, res, next) => {
   res.locals.cspNonce = crypto.randomBytes(16).toString('base64');
   next();
@@ -185,7 +191,7 @@ app.get('/api/health', async (req, res) => {
   } catch (err) {
     health.ok = false;
     health.db = 'unreachable';
-    console.error('Health check: DB ping failed:', err.message);
+    log.error('Health check: DB ping failed', { requestId: req.id, err });
   }
   res.status(health.ok ? 200 : 503).json(health);
 });
@@ -226,7 +232,7 @@ app.get('/public/openapi/:token', async (req, res) => {
     res.set('Content-Type', 'text/yaml; charset=utf-8');
     res.send(specYaml);
   } catch (err) {
-    console.error('GET /public/openapi failed:', err);
+    log.error('GET /public/openapi failed', { requestId: req.id, err });
     res.status(500).type('text/plain').send('Could not generate this spec.');
   }
 });
@@ -250,7 +256,7 @@ async function requireAuth(req, res, next) {
       res.clearCookie(COOKIE_NAME, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
       return res.redirect('/login.html?reason=idle');
     }
-    console.error('requireAuth() failed:', err);
+    log.error('requireAuth() failed', { requestId: req.id, err });
     res.redirect('/login.html');
   }
 }

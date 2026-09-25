@@ -44,6 +44,7 @@ const { notifyUsers, adminUserIds } = require('./notifications');
 const dataCrypto = require('./crypto');
 const { validateOutboundUrlSync } = require('./urlSafety');
 const { deliverAlertWebhook } = require('./webhookDelivery');
+const { log } = require('./logger');
 
 // ---------------------------------------------------------------------------
 // The metric catalogue. Everything an alert rule can be written about.
@@ -576,7 +577,7 @@ async function emitNotification(organisation, rule, ctx, kind, settings) {
       title,
       body,
       timestamp: new Date().toISOString(),
-    }).catch((err) => console.error('Alert webhook delivery threw unexpectedly:', err.message));
+    }).catch((err) => log.error('Alert webhook delivery threw unexpectedly', { organisation, err }));
   }
 
   if (!recipients.size && !(settings.webhook && settings.webhook.enabled && settings.webhook.url)) {
@@ -866,7 +867,7 @@ async function runAlertSweep() {
         try {
           await evaluateOrganisation(row.organisation, { includeAbsence: true });
         } catch (err) {
-          console.error(`Alert sweep failed for ${row.organisation}:`, err.message);
+          log.error('Alert sweep failed for organisation', { organisation: row.organisation, err });
         }
       }
       return { organisations: rows.length };
@@ -883,9 +884,9 @@ function startAlertSchedule() {
   // Offset from boot so a redeploy does not evaluate before the first agent
   // push has had a chance to land - otherwise every restart briefly looks
   // like a silent collector.
-  setTimeout(() => runAlertSweep().catch((e) => console.error('Initial alert sweep failed:', e.message)), 90 * 1000);
+  setTimeout(() => runAlertSweep().catch((e) => log.error('Initial alert sweep failed', { err: e })), 90 * 1000);
   sweepTimer = setInterval(
-    () => runAlertSweep().catch((e) => console.error('Scheduled alert sweep failed:', e.message)),
+    () => runAlertSweep().catch((e) => log.error('Scheduled alert sweep failed', { err: e })),
     SWEEP_INTERVAL_MS
   );
 }
@@ -902,7 +903,7 @@ function evaluateAfterIngest(organisation, environment) {
   if (Date.now() - last < MIN_EVAL_INTERVAL_MS) return;
   lastEvaluated.set(key, Date.now());
   evaluateOrganisation(organisation, { environments: [environment] })
-    .catch((err) => console.error('Alert evaluation after ingest failed:', err.message));
+    .catch((err) => log.error('Alert evaluation after ingest failed', { organisation, err }));
 }
 
 module.exports = {

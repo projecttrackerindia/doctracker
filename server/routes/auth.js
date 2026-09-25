@@ -7,6 +7,7 @@ const dataCrypto = require('../crypto');
 const totp = require('../totp');
 const { verifySession, IdleTimeoutError, authenticate } = require('../middleware/authGuard');
 const { notifyUsers, adminUserIds } = require('../notifications');
+const { log } = require('../logger');
 const {
   validateEmail,
   validateUsername,
@@ -202,7 +203,7 @@ router.post('/register', authLimiter, async (req, res) => {
     const { token_version, ...publicUser } = user; // never expose the revocation counter to the client
     res.status(201).json({ user: publicUser, orgToken: dataCrypto.encryptOrgToken(user.organisation) });
   } catch (err) {
-    console.error('Register error:', err);
+    log.error('Register error', { requestId: req.id, err });
     res.status(500).json({ error: 'Something went wrong creating your account. Please try again.' });
   }
 });
@@ -311,7 +312,7 @@ router.post('/login', authLimiter, async (req, res) => {
 
     await finalizeLogin(user, res);
   } catch (err) {
-    console.error('Login error:', err);
+    log.error('Login error', { requestId: req.id, err });
     res.status(500).json({ error: 'Something went wrong signing you in. Please try again.' });
   }
 });
@@ -342,7 +343,7 @@ router.post('/mfa/challenge', authLimiter, async (req, res) => {
 
     await finalizeLogin(user, res);
   } catch (err) {
-    console.error('MFA challenge error:', err);
+    log.error('MFA challenge error', { requestId: req.id, err });
     res.status(500).json({ error: 'Something went wrong verifying your code. Please try again.' });
   }
 });
@@ -367,7 +368,7 @@ router.post('/mfa/setup', authenticate, async (req, res) => {
     const otpauthUri = totp.buildOtpauthUri({ secret, accountLabel: req.authUser.username, issuer: 'DocTracker' });
     res.json({ secret, otpauthUri });
   } catch (err) {
-    console.error('MFA setup error:', err);
+    log.error('MFA setup error', { requestId: req.id, err });
     res.status(500).json({ error: 'Could not start MFA setup. Please try again.' });
   }
 });
@@ -398,7 +399,7 @@ router.post('/mfa/confirm', authenticate, async (req, res) => {
     );
     res.json({ ok: true });
   } catch (err) {
-    console.error('MFA confirm error:', err);
+    log.error('MFA confirm error', { requestId: req.id, err });
     res.status(500).json({ error: 'Could not confirm MFA setup. Please try again.' });
   }
 });
@@ -421,7 +422,7 @@ router.post('/mfa/disable', authenticate, async (req, res) => {
     );
     res.json({ ok: true });
   } catch (err) {
-    console.error('MFA disable error:', err);
+    log.error('MFA disable error', { requestId: req.id, err });
     res.status(500).json({ error: 'Could not disable MFA. Please try again.' });
   }
 });
@@ -460,7 +461,7 @@ router.post('/request-password-reset', authLimiter, async (req, res) => {
       });
     }
   } catch (err) {
-    console.error('Request password reset error:', err);
+    log.error('Request password reset error', { requestId: req.id, err });
     // Still return the generic response — never let this leak account
     // existence or internal error detail through a different response shape.
   }
@@ -524,7 +525,7 @@ router.get('/me', async (req, res) => {
       res.clearCookie(COOKIE_NAME, { ...COOKIE_OPTS, maxAge: undefined });
       return res.status(401).json({ error: 'idle_timeout', message: "You've been signed out after 30 minutes of inactivity." });
     }
-    console.error('GET /api/auth/me failed:', err);
+    log.error('GET /api/auth/me failed', { requestId: req.id, err });
     res.status(401).json({ error: 'Session expired. Please sign in again.' });
   }
 });
