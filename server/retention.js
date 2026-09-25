@@ -33,6 +33,7 @@
 // idempotent — a row that's already archived/deleted just won't match the
 // WHERE clause a second time).
 const { pool, ensureLogRecordPartitions } = require('./db');
+const { log } = require('./logger');
 
 const AUDIT_RETENTION_DAYS = parseInt(process.env.AUDIT_LOG_RETENTION_DAYS || '0', 10);
 const NOTIFICATIONS_RETENTION_DAYS = parseInt(process.env.NOTIFICATIONS_RETENTION_DAYS || '90', 10);
@@ -340,17 +341,45 @@ async function ensureUpcomingPartitions() {
   }
 }
 
+// A fixed, single global key, same reasoning as alertEngine.js's sweep lock:
+// this sweep already loops all its sub-tasks in one tick, so the unit of
+// "should this run at all right now" is one process, not one org/table.
+const RETENTION_LOCK_KEY = "hashtext('doctracker:retention-sweep')";
+
+// Runs on a `setInterval` (see startRetentionSchedule below) with no other
+// coordination between processes. Every sub-task here is individually
+// idempotent (a row already archived/deleted/dropped just won't match the
+// WHERE clause again), which is why this went unlocked for a while — but two
+// instances both archiving the same batch, or both trying to DROP the same
+// partition, is still wasted duplicate work on every deploy with 2+
+// instances, not just a rare race. Same `pg_try_advisory_lock` skip-if-busy
+// pattern as the alert sweep: at most one instance actually runs per tick,
+// the others no-op and try again next interval.
 async function runRetentionSweep() {
-  await archiveOldAuditLogs();
-  await pruneOldNotifications();
-  // Creating the next few days' partitions runs BEFORE the drop, so a sweep
-  // that fails partway still leaves somewhere for tomorrow's data to land.
-  await ensureUpcomingPartitions();
-  // Fold before pruning: a minute row that is past the MINUTE horizon but
-  // inside the overall one must end up in the hourly tier, not be deleted.
-  await downsampleOldRollups();
-  await pruneOldRollups();
-  await dropOldRecordPartitions();
+  const client = await pool.connect();
+  try {
+    const { rows: lockRows } = await client.query(`SELECT pg_try_advisory_lock(${RETENTION_LOCK_KEY}) AS acquired`);
+    if (!lockRows[0].acquired) {
+      return { skipped: 'another instance holds the retention-sweep lock' };
+    }
+    try {
+      await archiveOldAuditLogs();
+      await pruneOldNotifications();
+      // Creating the next few days' partitions runs BEFORE the drop, so a sweep
+      // that fails partway still leaves somewhere for tomorrow's data to land.
+      await ensureUpcomingPartitions();
+      // Fold before pruning: a minute row that is past the MINUTE horizon but
+      // inside the overall one must end up in the hourly tier, not be deleted.
+      await downsampleOldRollups();
+      await pruneOldRollups();
+      await dropOldRecordPartitions();
+      return { ran: true };
+    } finally {
+      await client.query(`SELECT pg_advisory_unlock(${RETENTION_LOCK_KEY})`);
+    }
+  } finally {
+    client.release();
+  }
 }
 
 const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000; // once a day
@@ -359,8 +388,8 @@ const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000; // once a day
 // initial sweep shortly after boot (delayed, so it never competes with
 // startup for DB connections) and then on a fixed daily interval.
 function startRetentionSchedule() {
-  setTimeout(() => runRetentionSweep().catch((err) => console.error('Initial retention sweep failed:', err.message)), 60 * 1000);
-  setInterval(() => runRetentionSweep().catch((err) => console.error('Scheduled retention sweep failed:', err.message)), SWEEP_INTERVAL_MS);
+  setTimeout(() => runRetentionSweep().catch((err) => log.error('Initial retention sweep failed', { err })), 60 * 1000);
+  setInterval(() => runRetentionSweep().catch((err) => log.error('Scheduled retention sweep failed', { err })), SWEEP_INTERVAL_MS);
 }
 
 module.exports = {
