@@ -2189,7 +2189,12 @@ def build_agent_health(state):
         "hostSampleColumns": HOST_SAMPLE_COLUMNS,
         "hostSamples": health.get("hostSamples", []),
         "hostInfo": health.get("hostInfo", {}),
-        "hostSampleIntervalSeconds": POLL_INTERVAL_SECONDS,
+        # The host sampler is on its own wall clock, not one sample per poll
+        # cycle - adaptive polling made a per-cycle sampler collapse 12 hours
+        # of CPU history into about 24 minutes. Reporting the poll interval
+        # here would mislabel the CPU chart's spacing for anyone who changes
+        # either value; they only agree at their defaults.
+        "hostSampleIntervalSeconds": HOST_SAMPLE_INTERVAL_SECONDS,
         "lastCycleAt": health.get("lastCycleAt"),
         "lastCycleDurationMs": health.get("lastCycleDurationMs"),
         "lastCycleLinesRead": health.get("lastCycleLinesRead"),
