@@ -2263,6 +2263,10 @@ def build_agent_health(state):
         # quietly inflating every number on the page.
         "sourceFingerprint": source_fingerprint(state),
         "cyclesRun": health.get("cyclesRun", 0),
+        # Both since installation, so a short uptime beside a large lifetime
+        # figure reads as "restarted recently" rather than as lost history.
+        "restartCount": health.get("restartCount", 0),
+        "lifetimeCyclesRun": health.get("lifetimeCyclesRun", 0) + health.get("cyclesRun", 0),
         "linesProcessedTotal": health.get("linesProcessedTotal", 0),
         "requestsProcessedTotal": health.get("requestsProcessedTotal", 0),
         "requestsPerMinute": requests_per_minute,
@@ -3118,8 +3122,18 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
               f"{' …' if len(log_paths) > 8 else ''}")
 
     health = state.setdefault("health", {})
-    health.setdefault("startedAt", time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()))
-    health.setdefault("startedAtEpoch", time.time())
+    # Assigned, not setdefault. `health` is persisted in state.json, so
+    # setdefault kept the value from the FIRST start this node ever had and
+    # "agent uptime" then counted time since installation - reporting 19h
+    # after a restart eight minutes earlier. Uptime exists to show whether
+    # this process has been up continuously, so every restart has to reset
+    # it. The lifetime figures are kept separately rather than lost.
+    if health.get("startedAtEpoch"):
+        health["restartCount"] = health.get("restartCount", 0) + 1
+        health["lifetimeCyclesRun"] = health.get("lifetimeCyclesRun", 0) + health.get("cyclesRun", 0)
+    health["startedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    health["startedAtEpoch"] = time.time()
+    health["cyclesRun"] = 0
 
     if seed_from_history and not state.get("seededFromHistory"):
         seed_state_from_history(state, log_paths, seed_from_history)

@@ -1257,7 +1257,14 @@ pre.code-block{
 .obs-ip-row{ display:grid; grid-template-columns:7px 96px 1fr auto; align-items:center; gap:8px; }
 .obs-ip-dot{ width:7px; height:7px; border-radius:50%; flex-shrink:0; }
 .obs-ip-addr{ font-size:10.5px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.obs-ip-bar-track{ height:6px; background:var(--surface-2); border-radius:3px; overflow:hidden; }
+/* The trough has to read as EMPTY. At var(--surface-2) it was as prominent
+   as a filled bar, so a 33% row looked like a full one with a slightly
+   different tint - the fill was there, it just could not be told apart from
+   the track behind it. */
+.obs-ip-bar-track{
+  height:8px; background:transparent; border:1px solid var(--border);
+  border-radius:4px; overflow:hidden;
+}
 .obs-ip-bar{ height:100%; border-radius:3px; min-width:3px; }
 .obs-ip-count{ font-size:10.5px; color:var(--text-faint); white-space:nowrap; text-align:right; font-variant-numeric:tabular-nums; }
 .obs-ip-more{
@@ -1510,7 +1517,15 @@ pre.code-block{
   background:var(--surface-2); font-size:10px; font-weight:700; vertical-align:1px;
 }
 .obs-tab.active .obs-tab-count{ background:var(--accent-soft); color:var(--accent); }
-.obs-tab-count.crit{ background:var(--delete); color:#fff; }
+/* A solid red pill on a tab is the universal shape of an UNREAD counter, so
+   a standing figure in it reads as "you still have 7 things to look at" and
+   never goes away however often you look. This is a measurement, not an
+   inbox: outlined, in the 5xx red, so it reads as a quantity. */
+.obs-tab-count.crit{
+  background:transparent; color:var(--st-5); border:1px solid var(--st-5);
+  padding:0 5px; font-variant-numeric:tabular-nums;
+}
+.obs-tab.active .obs-tab-count.crit{ background:transparent; color:var(--st-5); }
 
 .obs-toolbar{
   display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:16px;

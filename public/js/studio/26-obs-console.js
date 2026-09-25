@@ -242,10 +242,16 @@ function renderObsTabs(){
   const counts = {
     errors: errCount ? obsFormatCount(errCount) : '',
   };
+  // The figure is how many errors fall in the SELECTED RANGE, not how many
+  // are unread — it does not clear by visiting the tab, it clears when the
+  // range holds no errors. Said in the tooltip because the shape of a
+  // number beside a tab name implies otherwise.
+  const countTitle = `${errCount.toLocaleString()} error(s) in the selected range`;
   return `<div class="obs-tabs" role="tablist">
     ${OBS_TABS.map(t => `<button type="button" role="tab" class="obs-tab${state.obsTab === t.key ? ' active' : ''}"
       data-obs-tab="${t.key}" aria-selected="${state.obsTab === t.key}">${t.label}${
-        counts[t.key] ? `<span class="obs-tab-count${t.key === 'errors' && errCount ? ' crit' : ''}">${counts[t.key]}</span>` : ''
+        counts[t.key] ? `<span class="obs-tab-count${t.key === 'errors' && errCount ? ' crit' : ''}"
+          title="${escapeHtml(countTitle)}">${counts[t.key]}</span>` : ''
       }</button>`).join('')}
   </div>`;
 }
@@ -377,11 +383,12 @@ function renderObsStatusBreakdown(cur){
       ${fams.map((f,i)=>{
         const c = counts[i];
         if(!c) return '';
+        // Bar width = the share printed next to it. Scaling to the largest
+        // family instead made the biggest one always look like 100%.
         const share = Math.round((c/total)*1000)/10;
-        const max = Math.max(...counts, 1);
-        return `<div class="obs-histo-row obs-clickable" data-obs-filter-family="${f}" title="Show ${f} requests in the log explorer">
+        return `<div class="obs-histo-row obs-clickable" data-obs-filter-family="${f}" title="${f}: ${c.toLocaleString()} of ${total.toLocaleString()} response(s) — ${share}%">
           <span class="obs-histo-label" style="color:${OBS_STATUS_COLORS[f]};font-weight:800;">${f}</span>
-          <span class="obs-ip-bar-track"><span class="obs-ip-bar" style="width:${Math.max(Math.round(c/max*100),2)}%;background:${OBS_STATUS_COLORS[f]};"></span></span>
+          <span class="obs-ip-bar-track"><span class="obs-ip-bar" style="width:${Math.max(share,1.5)}%;background:${OBS_STATUS_COLORS[f]};"></span></span>
           <span class="obs-ip-count">${obsFormatCount(c)} <span style="opacity:.7;">(${share}%)</span></span>
         </div>`;
       }).join('')}
@@ -395,15 +402,17 @@ function renderObsTopIps(cur){
     return `<div class="obs-empty"><div class="obs-empty-title">No source IPs recorded</div>
       <div class="obs-empty-body">The agent records caller addresses when the log line carries one.</div></div>`;
   }
-  const max = Math.max(...ips.map(x=>x.count), 1);
   return `<div class="obs-histo obs-histo-wide" style="margin-top:22px;">
     ${ips.map(x=>{
       const cls = typeof classifyIp === 'function' ? classifyIp(x.ip) : 'unknown';
       const dot = cls === 'internal' ? 'var(--accent)' : cls === 'external' ? 'var(--put)' : 'var(--text-faint)';
+      // Share of all traffic, matching the number printed beside it. Drawn
+      // relative to the busiest IP instead, the top row was always a full
+      // bar whether it carried 90% of traffic or 9%.
       const share = cur.total ? Math.round((x.count/cur.total)*1000)/10 : 0;
-      return `<div class="obs-histo-row obs-clickable" data-obs-filter-ip="${escapeHtml(x.ip)}" title="${escapeHtml(x.ip)} — ${x.count.toLocaleString()} request(s)">
+      return `<div class="obs-histo-row obs-clickable" data-obs-filter-ip="${escapeHtml(x.ip)}" title="${escapeHtml(x.ip)} — ${x.count.toLocaleString()} of ${cur.total.toLocaleString()} request(s), ${share}%">
         <span class="obs-histo-label mono">${escapeHtml(x.ip)}</span>
-        <span class="obs-ip-bar-track"><span class="obs-ip-bar" style="width:${Math.max(Math.round(x.count/max*100),2)}%;background:${dot};"></span></span>
+        <span class="obs-ip-bar-track"><span class="obs-ip-bar" style="width:${Math.max(share,1.5)}%;background:${dot};"></span></span>
         <span class="obs-ip-count">${obsFormatCount(x.count)} <span style="opacity:.7;">(${share}%)</span></span>
       </div>`;
     }).join('')}
@@ -461,19 +470,41 @@ function renderObsEndpointTable(endpoints){
     return `<div class="obs-empty"><div class="obs-empty-title">No endpoints reported traffic</div>
       <div class="obs-empty-body">${obsEmptyRangeHint()}</div></div>`;
   }
+  /* 4xx, 5xx and unclassified each get their own column rather than being
+     folded into one "Errors" number. They are not interchangeable: a 4xx is
+     usually the caller's problem, a 5xx is ours, and an unclassified
+     response is neither - it is a request whose outcome was never logged,
+     which is a gap in the logging rather than a failure. Summing them into
+     one figure hid exactly the distinction worth acting on. */
+  const cell = (n, colorVar)=> n
+    ? `<td class="num" style="color:var(${colorVar});font-weight:700;">${obsFormatCount(n)}</td>`
+    : `<td class="num" style="color:var(--text-faint);opacity:.45;">0</td>`;
+
   return `<div class="obs-table-scroll"><table class="data-table obs-data-table">
     <thead><tr>
-      <th>Endpoint</th><th class="num">Requests</th><th class="num">Errors</th>
+      <th>Endpoint</th><th class="num">Requests</th>
+      <th class="num" title="Successful responses">2xx</th>
+      <th class="num" title="Client errors — counted in the error rate">4xx</th>
+      <th class="num" title="Server errors — counted in the error rate">5xx</th>
+      <th class="num" title="No status code was logged for these requests — NOT counted as errors">Unclassified</th>
       <th class="num">Error rate</th><th class="num">p95</th><th>Last seen</th>
     </tr></thead>
     <tbody>
       ${endpoints.map(e=>{
         const rate = e.errorRate * 100;
+        const b = e.statusBreakdown || {};
         const color = rate >= 25 ? 'var(--st-5)' : rate >= 5 ? 'var(--st-4)' : 'var(--text-faint)';
+        const unknown = b.unknown || 0;
         return `<tr class="obs-clickable" data-obs-filter-endpoint="${escapeHtml(e.endpointId)}">
           <td class="mono">${escapeHtml(obsEndpointLabel(e.endpointId))}</td>
           <td class="num">${obsFormatCount(e.total)}</td>
-          <td class="num">${obsFormatCount(e.errCount)}</td>
+          ${cell(b['2xx'] || 0, '--st-2')}
+          ${cell(b['4xx'] || 0, '--st-4')}
+          ${cell(b['5xx'] || 0, '--st-5')}
+          ${unknown
+            ? `<td class="num" style="color:var(--text-faint);font-weight:700;"
+                   title="${unknown.toLocaleString()} request(s) with no status code in the log line">${obsFormatCount(unknown)}</td>`
+            : `<td class="num" style="color:var(--text-faint);opacity:.45;">0</td>`}
           <td class="num" style="color:${color};font-weight:700;">${rate.toFixed(1)}%</td>
           <td class="num">${e.latency ? e.latency.p95 + 'ms' : '—'}</td>
           <td>${e.lastSeenAt ? formatDateTime(e.lastSeenAt) : '—'}</td>

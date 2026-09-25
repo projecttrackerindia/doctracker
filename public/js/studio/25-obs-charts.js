@@ -256,12 +256,15 @@ function renderLatencyHistogram(buckets, latency){
   if(!total){
     return `<div class="obs-chart-empty">No latency data in this range — requests are counted, but no duration was parsed from the log lines.</div>`;
   }
-  const max = Math.max(...counts, 1);
   const rows = keys.map((k, i)=>{
     const c = counts[i];
     if(!c) return '';
-    const pct = Math.round((c / max) * 100);
+    // The bar IS the percentage printed beside it. It used to be drawn
+    // relative to the largest band instead, so two bands of 1 and 2 drew as
+    // 50% and 100% while the labels read 33.3% and 66.7% - the picture and
+    // the number disagreeing, in the same row, a centimetre apart.
     const share = Math.round((c / total) * 1000) / 10;
+    const pct = share;
     // Anything over a second is where a user starts noticing; colour the tail.
     const slow = k === 'inf' || Number(k) >= 1000;
     return `<div class="obs-histo-row" title="${labels[k]}: ${c.toLocaleString()} request(s), ${share}%">
