@@ -2039,7 +2039,21 @@ function renderObservability(main){
     // The stream replaces the 60s poll entirely; stop it so a page that is
     // already live-updating is not also refetching the whole workspace.
     stopObsAutoRefresh();
-    obsStartLive(()=> obsLoad({ quiet: true }));
+    obsStartLive(()=>{
+      obsLoad({ quiet: true });
+      // obsLoad() refreshes the KPIs, the charts and the endpoints table, but
+      // not the per-request rows - so the Log explorer, the one tab that reads
+      // like a live tail, was the only one a push did not reach. It sat frozen
+      // until you changed the range or switched tabs and back.
+      //
+      // Only on page 1: someone reading page 3 has scrolled back through
+      // history deliberately, and shuffling rows under them every few seconds
+      // is worse than leaving the page where they put it.
+      if(state.obsTab === 'logs' && (state.obsRecordsPage || 1) === 1
+         && typeof obsLoadRecordsPage === 'function'){
+        obsLoadRecordsPage();
+      }
+    });
   }else{
     renderConsole(body, metrics, agentHealth, logRecords);
     startObsAutoRefresh();
