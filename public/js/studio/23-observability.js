@@ -1566,6 +1566,7 @@ function obsScopeInfo(scope, metrics){
 // through, whether the control lives in the sidebar tree or here in the
 // content (Service health row, an alert, "Clear scope").
 function obsSetScope(scope, openProjectId){
+  const changed = JSON.stringify(state.obsScope || null) !== JSON.stringify(scope || null);
   state.obsScope = scope;
   if(openProjectId){
     state.obsOpenProjects = state.obsOpenProjects || {};
@@ -1573,6 +1574,18 @@ function obsSetScope(scope, openProjectId){
   }
   renderSidebar();
   renderMain();
+  // The rebuilt console computes nothing in the browser - every panel is a
+  // server query narrowed by the scope - so a scope change has to re-ask.
+  // Without this the sidebar highlighted the new selection while the page
+  // beside it kept showing the whole estate, which is worse than not having
+  // a scope picker at all.
+  if(changed && typeof obsLoad === 'function'){
+    state.obsRecords = null;
+    state.obsRecordsPage = 1;
+    state.obsEndpointPage = 1;
+    obsLoad({ quiet: true });
+    if(state.obsTab === 'logs' && typeof obsLoadRecordsPage === 'function') obsLoadRecordsPage();
+  }
 }
 
 function renderConsole(main, metrics, agentHealth, logRecords){
@@ -1971,8 +1984,15 @@ function renderObservability(main){
 
   main.innerHTML = `
     <div class="obs-header">
-      <h1>Observability</h1>
-      <p>${heroDesc}</p>
+      <div class="obs-header-text">
+        <h1>Observability</h1>
+        <p>${heroDesc}</p>
+      </div>
+      ${useTimeSeries && typeof renderObsLiveBadge === 'function'
+        // Top-right, at a size you can read across the room, because this is
+        // the first thing anyone checks when a figure looks wrong - and it
+        // was previously a 10px pill wrapped onto the end of the toolbar.
+        ? `<div class="obs-header-live">${renderObsLiveBadge()}</div>` : ''}
     </div>
     ${handoffNotice}
     ${useTimeSeries && !bridged ? '' : renderObsEnvironmentBar()}

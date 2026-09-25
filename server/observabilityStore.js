@@ -412,11 +412,20 @@ const ROLLUP_SOURCE = `(
 // `alias` qualifies the column names for queries that join this table against
 // something else (the histogram expansions below). Passing it is cleaner and
 // far less fragile than string-rewriting the finished clause.
-function whereClause(organisation, environment, from, to, alias = '') {
+function whereClause(organisation, environment, from, to, alias = '', endpointIds = null) {
   const col = (name) => (alias ? `${alias}.${name}` : name);
   const params = [organisation];
   const parts = [`${col('organisation')} = $1`];
   let i = 2;
+  // Scoping to the API or endpoint selected in the sidebar. `= ANY($n)` takes
+  // the whole list as ONE parameter, so a project with hundreds of endpoints
+  // costs one placeholder rather than hundreds, and the index on
+  // (organisation, environment, bucket_start, endpoint_id) still applies.
+  if (Array.isArray(endpointIds) && endpointIds.length) {
+    parts.push(`${col('endpoint_id')} = ANY($${i}::text[])`);
+    params.push(endpointIds);
+    i += 1;
+  }
   if (environment) {
     parts.push(`${col('environment')} = $${i}`);
     params.push(environment);
@@ -437,8 +446,8 @@ function whereClause(organisation, environment, from, to, alias = '') {
 
 // Everything the console's KPI row needs for one date range, computed in
 // Postgres over exact counts rather than in the browser over a sampled buffer.
-async function getSummary(organisation, { environment, from, to } = {}) {
-  const w = whereClause(organisation, environment, from, to);
+async function getSummary(organisation, { environment, from, to, endpointIds } = {}) {
+  const w = whereClause(organisation, environment, from, to, '', endpointIds);
   const { rows } = await pool.query(
     `SELECT
        COALESCE(SUM(request_count), 0)::bigint  AS total,
@@ -464,7 +473,7 @@ async function getSummary(organisation, { environment, from, to } = {}) {
   // would make the longest ranges - the whole point of keeping a year of
   // rollups - the slowest ones. Expanded with jsonb_each_text and grouped,
   // these return at most 11 and 10 rows respectively however long the range.
-  const wr = whereClause(organisation, environment, from, to, 'r');
+  const wr = whereClause(organisation, environment, from, to, 'r', endpointIds);
   const [{ rows: histoRows }, { rows: ipRows }] = await Promise.all([
     pool.query(
       `SELECT kv.key AS k, SUM(kv.value::numeric)::bigint AS v
@@ -521,8 +530,8 @@ async function getSummary(organisation, { environment, from, to } = {}) {
 // Time series for the charts, bucketed server-side to whatever resolution the
 // range warrants (date_trunc/ floor to `intervalSeconds`) so a 30-day view
 // returns a few hundred points instead of 43,200.
-async function getSeries(organisation, { environment, from, to, intervalSeconds = 300 } = {}) {
-  const w = whereClause(organisation, environment, from, to);
+async function getSeries(organisation, { environment, from, to, intervalSeconds = 300, endpointIds } = {}) {
+  const w = whereClause(organisation, environment, from, to, '', endpointIds);
   const seconds = Math.max(60, Math.min(86400, toInt(intervalSeconds, 300)));
   const params = w.params.concat([seconds]);
   const idx = w.nextIndex;
@@ -565,8 +574,8 @@ async function getSeries(organisation, { environment, from, to, intervalSeconds 
 
 // Per-endpoint totals for the range - drives the endpoints table and the
 // service-health ranking, sorted and paginated in SQL rather than in the page.
-async function getEndpointBreakdown(organisation, { environment, from, to, limit = 500 } = {}) {
-  const w = whereClause(organisation, environment, from, to);
+async function getEndpointBreakdown(organisation, { environment, from, to, limit = 500, endpointIds } = {}) {
+  const w = whereClause(organisation, environment, from, to, '', endpointIds);
   const params = w.params.concat([Math.max(1, Math.min(2000, toInt(limit, 500)))]);
 
   // Same reasoning as getSummary: the per-endpoint histogram is summed by
@@ -595,7 +604,7 @@ async function getEndpointBreakdown(organisation, { environment, from, to, limit
        FROM ${ROLLUP_SOURCE} r
        JOIN totals t ON t.endpoint_id = r.endpoint_id
        CROSS JOIN LATERAL jsonb_each_text(r.latency_buckets) kv
-       WHERE ${whereClause(organisation, environment, from, to, 'r').text}
+       WHERE ${whereClause(organisation, environment, from, to, 'r', endpointIds).text}
        GROUP BY r.endpoint_id, kv.key
      )
      SELECT totals.*,
@@ -643,7 +652,7 @@ async function getEndpointBreakdown(organisation, { environment, from, to, limit
 // column; the encrypted payload is decrypted only for the page actually being
 // returned, never across the whole range.
 async function getRecords(organisation, {
-  environment, from, to, endpointId, statusFamily, correlationId, clientIp,
+  environment, from, to, endpointId, endpointIds, statusFamily, correlationId, clientIp,
   minLatencyMs, limit = 100, offset = 0,
 } = {}) {
   const params = [organisation];
@@ -655,6 +664,10 @@ async function getRecords(organisation, {
   if (from) add('ts >= $?::timestamptz', from);
   if (to) add('ts < $?::timestamptz', to);
   if (endpointId) add('endpoint_id = $?', endpointId);
+  // The sidebar's API/endpoint scope, which narrows every panel on the page.
+  // Independent of `endpointId` above, which is the click-through drill-down -
+  // both apply when someone drills into one endpoint inside a scoped API.
+  if (Array.isArray(endpointIds) && endpointIds.length) add('endpoint_id = ANY($?::text[])', endpointIds);
   if (correlationId) add('correlation_id = $?', correlationId);
   if (clientIp) add('client_ip = $?', clientIp);
   if (isFiniteNum(Number(minLatencyMs)) && Number(minLatencyMs) > 0) add('latency_ms >= $?', toInt(minLatencyMs));

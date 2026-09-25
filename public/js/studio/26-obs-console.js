@@ -200,14 +200,15 @@ function renderObsToolbar(){
     `<button type="button" class="obs-range-pill${!custom && !bridged && sel.key === r.key ? ' active' : ''}"
        data-obs-range="${r.key}"${bridged ? ' disabled title="Date filtering needs the upgraded agent — these totals are cumulative"' : ''}>${r.label}</button>`).join('');
 
-  const envs = state.obsEnvOptions || [];
-  const currentEnv = state.obsEnvironment || '';
-  const envOptions = [
-    `<option value=""${currentEnv === '' ? ' selected' : ''}>Current environment (${escapeHtml(state.env || '—')})</option>`,
-    `<option value="__all"${currentEnv === '__all' ? ' selected' : ''}>All environments</option>`,
-  ].concat(envs.map(e =>
-    `<option value="${escapeHtml(e)}"${currentEnv === e ? ' selected' : ''}>${escapeHtml(e)}</option>`
-  )).join('');
+  // Removing this page's own environment dropdown removed the only place the
+  // OTHER environments were visible, and with them the explanation for an
+  // empty page: you are in an environment no agent reports. Said outright
+  // instead, still leaving the header switcher as the one way to change it.
+  const reported = state.obsEnvOptions || [];
+  const here = (state.env || '').trim();
+  const envGap = here && reported.length && !reported.includes(here)
+    ? `No agent reports ${here}. Reporting: ${reported.slice(0, 4).join(', ')}${reported.length > 4 ? '…' : ''}`
+    : '';
 
   const coverage = state.obsData && state.obsData.coverage;
   // Said plainly when it matters: a range reaching past the start of
@@ -237,11 +238,33 @@ function renderObsToolbar(){
       <input type="datetime-local" id="obsTo" value="${toLocalInput(custom ? sel.to : range.to)}" aria-label="Range end"${dis}>
       <button type="button" class="obs-range-pill${custom && !bridged ? ' active' : ''}" id="obsApplyRange"${dis}>Apply</button>
     </div>
-    <select class="obs-env-select" id="obsEnvSelect" aria-label="Environment"${bridged
-      ? ' disabled title="Scoped by the environment selected in the header until the upgraded agent is running"' : ''}>${envOptions}</select>
     <span class="obs-toolbar-spacer"></span>
+    ${envGap ? `<span class="obs-env-gap">${escapeHtml(envGap)}</span>` : ''}
     ${coverageNote ? `<span class="obs-coverage-note">${escapeHtml(coverageNote)}</span>` : ''}
-    ${renderObsLiveBadge()}
+  </div>`;
+}
+
+/* The API or endpoint the sidebar has selected, stated on the page itself.
+   A scope you set on the left and cannot see on the right is a scope you
+   forget you set - and then every number on the page is quietly answering a
+   narrower question than the one being asked of it. */
+function renderObsScopeBar(){
+  const scope = state.obsScope;
+  if(!scope || scope.type === 'all') return '';
+  const cov = typeof obsScopeCoverage === 'function' ? obsScopeCoverage() : null;
+  const title = scope.type === 'key'
+    ? scope.key
+    : (scope.name || 'Selected API');
+  const unresolved = cov ? cov.selected - cov.resolved : 0;
+  return `<div class="obs-scope-bar">
+    <span class="obs-scope-bar-label">Showing</span>
+    <span class="obs-scope-bar-name mono">${escapeHtml(title)}</span>
+    ${cov && scope.type !== 'key'
+      ? `<span class="obs-scope-bar-count">${cov.resolved} of ${cov.selected} endpoint(s)</span>` : ''}
+    ${unresolved > 0
+      ? `<span class="obs-scope-bar-warn" title="These endpoints have traffic but no document in this workspace, so there is no id to filter their rollups by.">${unresolved} not filterable</span>`
+      : ''}
+    <button type="button" class="obs-scope-bar-clear" id="obsClearScopeNew">Show all traffic</button>
   </div>`;
 }
 
@@ -366,9 +389,16 @@ function renderObsOverviewTab(){
         <div class="section-title">Status code breakdown</div>
         <div class="hint" style="margin-top:-4px;">${obsFormatCount(cur.total)} response(s) ${bridged ? 'in total' : 'in this range'} · click a row to drill in</div>
         ${(cur.statusBreakdown.unknown || 0) > 0 ? `<div class="hint" style="margin-top:6px;">
-          <b>Unclassified</b> is not a status code — it is a request whose log line carried no status
-          at all, so the outcome was never recorded. It is counted separately from 4xx and 5xx and is
+          Every status from 400–499 is counted as <b>4xx</b> and every status from 500–599 as
+          <b>5xx</b>, whatever the code — a 504 is a 5xx here, the same as a 500.
+          <b>Unclassified</b> is what is left: a request whose log line carried <i>no status at
+          all</i>, so its outcome was never written down. It is counted separately and is
           deliberately <b>not</b> part of the error rate. Click the row to list those exact requests.
+          <br>
+          One case worth knowing: these figures come from the <b>Mule application log</b>, so a
+          response produced <i>in front of</i> Mule — a gateway or load balancer returning 504
+          because it gave up waiting — is not in that log. What lands here is Mule's own eventual
+          outcome, or nothing at all if the flow never finished.
         </div>` : ''}
         ${renderObsStatusBreakdown(cur)}
       </div>
@@ -748,6 +778,7 @@ function renderObsConsoleV2(main, agentHealth){
 
   main.innerHTML = `
     ${renderObsToolbar()}
+    ${renderObsScopeBar()}
     ${renderObsTabs()}
     ${state.obsTab === 'logs' ? renderObsActiveFilters() : ''}
     ${state.obsError && d ? `<div class="obs-win-truncated">${escapeHtml(state.obsError)}</div>` : ''}
@@ -812,12 +843,8 @@ function wireObsConsoleV2(main){
     if(again){ again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
   });
 
-  const envSel = main.querySelector('#obsEnvSelect');
-  if(envSel) envSel.addEventListener('change', ()=>{
-    state.obsEnvironment = envSel.value;
-    state.obsRecords = null;
-    obsLoad();
-  });
+  const clearScope = main.querySelector('#obsClearScopeNew');
+  if(clearScope) clearScope.addEventListener('click', ()=> obsSetScope({ type:'all' }));
 
   main.querySelectorAll('[data-obs-filter-family]').forEach(el=>{
     el.addEventListener('click', ()=> obsDrillTo({ statusFamily: el.getAttribute('data-obs-filter-family') }));

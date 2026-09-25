@@ -70,21 +70,64 @@ function obsQuery(extra){
   params.set('to', range.to);
   const env = obsSelectedEnvironment();
   if(env) params.set('environment', env);
+  const ids = obsScopeEndpointIds();
+  if(ids && ids.length) params.set('endpointIds', ids.join(','));
   Object.entries(extra || {}).forEach(([k, v]) => {
     if(v !== null && v !== undefined && v !== '') params.set(k, String(v));
   });
   return params.toString();
 }
 
-/* The console's environment selector. Falls back to the workspace's current
-   environment so opening the page lands on the environment being worked in,
-   rather than pooling every environment's traffic into one number - the same
-   segregation rule the rest of the app follows. */
+/* The environment these figures cover. There is exactly ONE environment
+   switcher in this app - the one in the header - and this reads it. The
+   console used to carry a second dropdown of its own, which meant the page
+   could sit on PROD while the header said SIT, with nothing on screen
+   admitting the two disagreed. Environments stay segregated; which one you
+   are in is a property of the workspace, not of this page. */
 function obsSelectedEnvironment(){
-  if(state.obsEnvironment === '__all') return null;
-  if(state.obsEnvironment) return state.obsEnvironment;
   const envName = (state.env || '').trim();
   return envName || null;
+}
+
+/* --- Sidebar scope ---------------------------------------------------------
+   Selecting an API or an endpoint in the sidebar narrows this whole page, not
+   just the table at the bottom of it. Every panel goes through obsQuery(), so
+   scoping is applied once, here, and cannot be half-applied.
+
+   Rollup rows are keyed by the endpoint's stable id, which is exactly the id
+   the auto-discovered endpoint document carries - so resolving a scope is a
+   lookup, not a re-derivation of the hash. An endpoint with no document has no
+   id to filter on and is dropped from the scope; that is visible in the
+   toolbar rather than silent, because a scope that quietly matched nothing
+   looks identical to an API with no traffic. */
+const OBS_MAX_SCOPE_ENDPOINTS = 400;   // mirrors the server's own cap
+
+function obsScopeEndpointIds(){
+  const scope = state.obsScope;
+  if(!scope || scope.type === 'all') return null;
+  const keys = scope.type === 'key' ? [scope.key] : (scope.keys || []);
+  const ids = [];
+  keys.forEach(k => {
+    const found = typeof findDocumentedEndpointForMetricsKey === 'function'
+      ? findDocumentedEndpointForMetricsKey(k) : null;
+    if(found && found.ep && found.ep.id) ids.push(found.ep.id);
+  });
+  // An unresolvable scope must not fall through to "everything" - that would
+  // answer a narrower question with a wider number. A single impossible id
+  // returns an honestly empty result instead.
+  if(!ids.length) return ['__obs-scope-matches-nothing'];
+  return Array.from(new Set(ids)).slice(0, OBS_MAX_SCOPE_ENDPOINTS);
+}
+
+/* How much of the selected scope this page can actually filter on, for the
+   toolbar note. Returns null when nothing is scoped. */
+function obsScopeCoverage(){
+  const scope = state.obsScope;
+  if(!scope || scope.type === 'all') return null;
+  const keys = scope.type === 'key' ? [scope.key] : (scope.keys || []);
+  const ids = obsScopeEndpointIds() || [];
+  const resolved = ids[0] === '__obs-scope-matches-nothing' ? 0 : ids.length;
+  return { selected: keys.length, resolved };
 }
 
 async function obsApiGet(path, query){
@@ -251,20 +294,55 @@ let obsEventSource = null;
 let obsRefetchTimer = null;
 let obsLiveState = 'idle'; // idle | connecting | live | error
 
+/* The badge lives in the page header, outside the body the console re-renders,
+   so a state change repaints just this element rather than the page. */
+function obsRefreshLiveBadge(){
+  const badge = document.getElementById('obsLiveBadge');
+  if(badge) badge.outerHTML = renderObsLiveBadge();
+}
+
+/* The badge ages. Everything else on this page repaints when a push arrives -
+   which is exactly the event that stops happening when the collector dies, so
+   an agent that went down at 11:02 would still be reading "agent 1m ago" at
+   four in the afternoon. This is the one thing on the console that has to keep
+   its own clock. Cheap: it rewrites one element, and only while that element
+   is on screen and the tab is visible. */
+let obsBadgeClock = null;
+const OBS_BADGE_CLOCK_MS = 30000;
+
+function obsStartBadgeClock(){
+  if(obsBadgeClock) return;
+  obsBadgeClock = setInterval(()=>{
+    if(!document.getElementById('obsLiveBadge')){ obsStopBadgeClock(); return; }
+    if(document.hidden) return;
+    obsRefreshLiveBadge();
+  }, OBS_BADGE_CLOCK_MS);
+}
+
+function obsStopBadgeClock(){
+  if(obsBadgeClock){ clearInterval(obsBadgeClock); obsBadgeClock = null; }
+}
+
 function obsStartLive(onUpdate){
   if(obsEventSource) return;
   if(typeof EventSource === 'undefined') return; // no SSE support: poll path stays
   obsLiveState = 'connecting';
+  // Repainted here too, not only on 'open'. The badge is rendered before this
+  // runs, so without it the page sits on OFFLINE for the length of the
+  // handshake — and it is now large enough in the corner to be read and
+  // believed in that window.
+  obsRefreshLiveBadge();
+  obsStartBadgeClock();
   try{
     obsEventSource = new EventSource(`${OBS_API_BASE}/stream`, { withCredentials: true });
   }catch(e){
     obsLiveState = 'error';
+    obsRefreshLiveBadge();
     return;
   }
   obsEventSource.addEventListener('open', ()=>{
     obsLiveState = 'live';
-    const badge = document.getElementById('obsLiveBadge');
-    if(badge) badge.outerHTML = renderObsLiveBadge();
+    obsRefreshLiveBadge();
   });
   obsEventSource.addEventListener('metrics', (ev)=>{
     let payload = null;
@@ -281,26 +359,66 @@ function obsStartLive(onUpdate){
     // EventSource retries by itself; reflect the interruption without tearing
     // the connection down, or the browser's own backoff is lost.
     obsLiveState = obsEventSource && obsEventSource.readyState === 1 ? 'live' : 'error';
-    const badge = document.getElementById('obsLiveBadge');
-    if(badge) badge.outerHTML = renderObsLiveBadge();
+    obsRefreshLiveBadge();
   });
 }
 
 function obsStopLive(){
   if(obsEventSource){ obsEventSource.close(); obsEventSource = null; }
   clearTimeout(obsRefetchTimer);
+  obsStopBadgeClock();
   obsLiveState = 'idle';
+}
+
+/* --- "Is anything actually feeding this page?" -----------------------------
+   Two different things can be down and the answer matters, so the badge
+   reports both rather than averaging them into one green light:
+
+     the STREAM  - this browser's connection to DocTracker. Green means a push
+                   lands on screen without a reload.
+     the AGENT   - the collector on the Mule host. The stream can be perfectly
+                   healthy and carrying nothing because the agent stopped.
+
+   Liveness of the agent is judged from its own last push rather than from a
+   health check this page performs: the browser cannot reach the Mule host, and
+   a DocTracker server that answers is not evidence that anything is tailing. */
+function obsAgentFreshness(){
+  const health = (typeof observabilityData === 'function'
+    ? (observabilityData().agentHealth || null) : null);
+  const stamp = (health && health.generatedAt)
+    || (state.obsData && state.obsData.coverage && state.obsData.coverage.newest)
+    || null;
+  if(!stamp) return { level:'none', label:'no agent', title:'No agent has reported for this environment yet' };
+  const ageMs = Date.now() - new Date(stamp).getTime();
+  if(!isFinite(ageMs)) return null;
+  // Floor, not round: 30 seconds ago is "just now", not "1m ago". Rounding up
+  // makes a perfectly current agent look a minute behind.
+  const mins = Math.max(0, Math.floor(ageMs / 60000));
+  const ago = mins < 1 ? 'just now' : `${mins}m ago`;
+  // Scaled to how often this agent actually pushes, not a fixed guess: an
+  // agent on a 15-minute cycle is still healthy 14 minutes after its last one.
+  const intervalMs = (Number(health && health.pushIntervalSeconds) || 900) * 1000;
+  if(ageMs < intervalMs * 1.5) return { level:'ok',   label:`agent ${ago}`, title:`The collector last pushed ${ago}` };
+  if(ageMs < intervalMs * 3)   return { level:'warn', label:`agent ${ago}`, title:`The collector last pushed ${ago} — later than its ${Math.round(intervalMs/60000)}-minute cycle` };
+  return { level:'bad', label:`agent ${ago}`, title:`The collector last pushed ${ago} — it has probably stopped` };
 }
 
 function renderObsLiveBadge(){
   const map = {
-    live:       ['--post',   'LIVE',        'Streaming updates as the agent pushes them'],
-    connecting: ['--put',    'CONNECTING',  'Opening the live update stream'],
-    error:      ['--delete', 'RECONNECTING','The live stream dropped; retrying automatically'],
+    live:       ['--post',   'LIVE',         'Connected — pushes appear here without a reload'],
+    connecting: ['--put',    'CONNECTING',   'Opening the live update stream'],
+    error:      ['--delete', 'RECONNECTING', 'The live stream dropped; the browser is retrying'],
     idle:       ['--text-faint', 'OFFLINE',  'Live updates are not running'],
   };
   const [colorVar, label, title] = map[obsLiveState] || map.idle;
-  return `<span class="obs-live-badge" id="obsLiveBadge" title="${title}">
-    <span class="obs-live-dot${obsLiveState === 'live' ? ' pulsing' : ''}" style="background:var(${colorVar});"></span>${label}
+  const feed = obsAgentFreshness();
+  const full = feed ? `${title}. ${feed.title}.` : `${title}.`;
+  return `<span class="obs-live-badge obs-live-${obsLiveState}${feed ? ' obs-live-feed-' + feed.level : ''}"
+      id="obsLiveBadge" style="--obs-live: var(${colorVar});" title="${escapeHtml(full)}">
+    <span class="obs-live-dot${obsLiveState === 'live' ? ' pulsing' : ''}"></span>
+    <span class="obs-live-stack">
+      <span class="obs-live-label">${label}</span>
+      ${feed ? `<span class="obs-live-sub">${escapeHtml(feed.label)}</span>` : ''}
+    </span>
   </span>`;
 }

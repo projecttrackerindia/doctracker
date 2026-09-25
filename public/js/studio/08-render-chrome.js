@@ -134,6 +134,16 @@ function selectEnvironment(envId){
   renderSidebar();
   renderMain();
   renderRail();
+  // Observability is now scoped by this switcher alone — it used to carry a
+  // second environment dropdown of its own, which could disagree with the
+  // header. Its panels are server queries, so switching here has to re-ask for
+  // the new environment's data rather than just repaint the old answer.
+  if(state.selected && state.selected.type === 'observability' && typeof obsLoad === 'function'){
+    state.obsRecords = null;
+    state.obsRecordsPage = 1;
+    obsLoad({ quiet: true });
+    if(state.obsTab === 'logs' && typeof obsLoadRecordsPage === 'function') obsLoadRecordsPage();
+  }
 }
 
 function renderAll(){

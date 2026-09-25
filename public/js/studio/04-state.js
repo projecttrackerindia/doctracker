@@ -30,7 +30,6 @@ let state = {
   // ---- Observability console (time-series API — see 24-obs-api.js) ----
   obsTab: 'overview',               // 'overview' | 'performance' | 'errors' | 'logs' | 'agent'
   obsRange: { key: '24h' },         // { key } for a preset, or { from, to } ISO strings for a custom range
-  obsEnvironment: '',               // '' = follow state.env, '__all' = every environment, else a named one
   obsData: null,                    // last obsLoadAll() result — { current, previous, series, endpoints, coverage }
   obsStatus: 'idle',                // 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
   obsLastCheckedAt: 0,              // last availability probe — see OBS_AVAILABILITY_RECHECK_MS
@@ -42,5 +41,5 @@ let state = {
   obsRecordsPage: 1,
   obsEndpointPage: 1,             // All endpoints table pager
   obsEndpointSearch: '',          // All endpoints filter box
-  obsEnvOptions: [],                // environments that have actually reported — GET /observability/environments
+  obsEnvOptions: [],                // environments that have actually reported — GET /observability/environments. Not a picker: the header switcher is the only one. Used to say so when the environment you're in has no agent.
 };

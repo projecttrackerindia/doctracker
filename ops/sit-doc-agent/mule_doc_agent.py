@@ -1420,23 +1420,60 @@ def _is_suffix_hop(short_path, long_path):
     return bool(prefix) and not prefix.endswith("/")
 
 
-def collapse_duplicate_hops(observations):
-    """Finds the redundant half of a two-record request.
+def _same_endpoint_spelling(path_a, path_b):
+    """True when two paths logged under one correlation id name the same
+    endpoint - either character-for-character, or one being the other with a
+    listener base path stripped off the front."""
+    if not path_a or not path_b:
+        return False
+    if path_a == path_b:
+        return True
+    return _is_suffix_hop(path_a, path_b) or _is_suffix_hop(path_b, path_a)
 
-    One inbound call is logged twice by this deployment: the HTTP listener
+
+def _best_hop_record(observations, cluster):
+    """Which spelling of a duplicated request survives.
+
+    Preference order: the record that carries the outcome, then the one that
+    carries timings, then the longest path - which is the listener's full URI.
+    Ranking on the status code rather than assuming the longest path wins
+    means a deployment that logs the outcome on the OTHER half keeps its
+    classified record instead of its blank one.
+    """
+    def rank(i):
+        ob = observations[i]
+        return (
+            1 if ob.get("statusCode") is not None else 0,
+            1 if ob.get("latencyMs") is not None else 0,
+            len(ob.get("path") or ""),
+            -i,
+        )
+    return max(cluster, key=rank)
+
+
+def collapse_duplicate_hops(observations):
+    """Finds the redundant records of a request that was logged more than once.
+
+    One inbound call is logged repeatedly by this deployment: the HTTP listener
     writes the real request URI along with the status code and the entry/exit
     timings, and the APIkit router flow writes a FlowName that yields the same
     path with the listener's base path stripped - no status, no timings. They
     carry the SAME correlation id because they are one request.
 
-    Counted as two, they doubled every total, halved every error rate, and
-    filed the router's statusless half under "unclassified" - which is where
-    most of the unknown column was coming from.
+    It is not always a clean pair. A request that takes a slow path through the
+    flow logs its stripped spelling many times over - nine log lines for one
+    call was what the SIT console was showing - so this clusters every spelling
+    of one correlation id together and keeps exactly one, rather than matching
+    records off two at a time.
+
+    Counted as many, they multiplied every total, diluted every error rate, and
+    filed each statusless line under "unclassified" - which is where nearly all
+    of the unknown column was coming from.
 
     Returns the set of indexes that should still register their endpoint (it
     is a real path, and documentation may well be written against it) but must
     not count as traffic. Nothing collapses unless a correlation id actually
-    ties the two records together, so a deployment that logs differently is
+    ties the records together, so a deployment that logs differently is
     unaffected.
     """
     by_request = {}
@@ -1450,25 +1487,47 @@ def collapse_duplicate_hops(observations):
     for members in by_request.values():
         if len(members) < 2:
             continue
-        for pos, i in enumerate(members):
-            for j in members[pos + 1:]:
-                a, b = observations[i], observations[j]
-                if _is_suffix_hop(a.get("path"), b.get("path")):
-                    short_i, long_i = i, j
-                elif _is_suffix_hop(b.get("path"), a.get("path")):
-                    short_i, long_i = j, i
-                else:
+        # One correlation id can legitimately cover a genuine downstream call
+        # to an UNRELATED path, so the group is clustered by spelling rather
+        # than collapsed whole - "/api/1.0/ux/paymentReceipts" calling
+        # "/paymentReceipt" is two endpoints and both deserve their count.
+        clusters = []
+        for i in members:
+            joined = None
+            for cluster in clusters:
+                if not any(_same_endpoint_spelling(observations[i].get("path"),
+                                                   observations[j].get("path")) for j in cluster):
                     continue
-                # Keep whichever record actually carries the outcome. Usually
-                # that is the longer, listener-side path, but preferring the
-                # status code explicitly means a deployment that logs it the
-                # other way round keeps its classified half rather than its
-                # blank one.
-                short_ob, long_ob = observations[short_i], observations[long_i]
-                loser = short_i
-                if short_ob.get("statusCode") is not None and long_ob.get("statusCode") is None:
-                    loser = long_i
-                shadows.add(loser)
+                if joined is None:
+                    cluster.append(i)
+                    joined = cluster
+                else:
+                    # This record bridges two clusters: "/a/b/c", "/b/c" and
+                    # "/c" are one endpoint even though the outer two never
+                    # matched each other directly.
+                    joined.extend(cluster)
+                    del cluster[:]
+            if joined is None:
+                clusters.append([i])
+
+        for cluster in clusters:
+            if len(cluster) < 2:
+                continue
+            keeper = _best_hop_record(observations, cluster)
+            keeper_path = observations[keeper].get("path")
+            for i in cluster:
+                if i == keeper:
+                    continue
+                # A record spelled EXACTLY like the keeper that carries its own
+                # status code completed on its own and is a second real request
+                # - a client that reuses one correlation id across calls must
+                # not have its traffic silently folded into a single hit. The
+                # duplicates this exists to remove are the ones with no outcome
+                # at all, which cannot be a completed request by definition.
+                if observations[i].get("path") == keeper_path \
+                        and observations[i].get("statusCode") is not None:
+                    continue
+                shadows.add(i)
     return shadows
 
 
@@ -1505,7 +1564,14 @@ def aggregate(state, observations):
         if counts_as_request and obs.get("correlationId") and obs.get("path"):
             hop_key = "%s %s" % (obs.get("method") or "", obs["correlationId"])
             prior = counted_paths.get(hop_key)
-            if prior and (_is_suffix_hop(obs["path"], prior) or _is_suffix_hop(prior, obs["path"])):
+            # Same test the in-batch clustering applies, for the same reason:
+            # a differently-spelled record is always the same request, and an
+            # identically-spelled one only when it carries no outcome of its
+            # own (see collapse_duplicate_hops).
+            already_counted = bool(prior) and (
+                _is_suffix_hop(obs["path"], prior) or _is_suffix_hop(prior, obs["path"])
+                or (obs["path"] == prior and obs.get("statusCode") is None))
+            if already_counted:
                 counts_as_request = False
                 health["collapsedHopObservations"] = health.get("collapsedHopObservations", 0) + 1
         if obs.get("style") == "apikit":
@@ -1641,7 +1707,14 @@ def aggregate(state, observations):
                 bucket_iso = minute_bucket_iso
             accumulate_rollup(state, key, obs, bucket_iso)
 
-        if CAPTURE_MODE == "full" and key != OVERFLOW_KEY and should_capture_record(state, obs):
+        # Gated on counts_as_request for the same reason the rollup is: the Log
+        # explorer lists REQUESTS. A request logged nine times produced nine
+        # rows there - eight of them with no status, no latency and no source
+        # IP, because they were the same call's other log lines - which read as
+        # eight mystery requests rather than as one. Shape and field discovery
+        # above has already taken everything these lines carry.
+        if counts_as_request and CAPTURE_MODE == "full" and key != OVERFLOW_KEY \
+                and should_capture_record(state, obs):
             capture_log_record(state, key, obs)
 
 

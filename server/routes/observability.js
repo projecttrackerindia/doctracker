@@ -77,6 +77,28 @@ function envParam(req) {
   return raw && raw.toLowerCase() !== 'all' ? raw.slice(0, 32) : null;
 }
 
+// The API / endpoint the sidebar has selected, as the endpoint ids it resolves
+// to. Every read route takes it so that scoping one panel cannot leave another
+// showing the whole estate beside it.
+//
+// Capped at MAX_SCOPE_ENDPOINTS because this arrives in a query string: the
+// page is expected to send tens (one Mule app's endpoints), and a caller that
+// sends thousands would build a URL no proxy will forward. Ids are validated
+// rather than passed through - they reach a query as an array parameter, but
+// they are also what an empty-looking result gets blamed on, and a silently
+// mangled id is a bad way to spend someone's afternoon.
+const MAX_SCOPE_ENDPOINTS = 400;
+
+function endpointIdsParam(req) {
+  const raw = req.query.endpointIds;
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  const ids = raw.split(',')
+    .map((s) => s.trim())
+    .filter((s) => /^[A-Za-z0-9_-]{1,64}$/.test(s));
+  if (!ids.length) return null;
+  return Array.from(new Set(ids)).slice(0, MAX_SCOPE_ENDPOINTS);
+}
+
 // --- Ingest (agent -> server) -----------------------------------------------
 // The agent posts pre-aggregated 1-minute buckets and, only under
 // CAPTURE_MODE=full, the raw records captured since its last successful push.
@@ -140,7 +162,10 @@ router.get('/summary', async (req, res) => {
   if (range.error) return res.status(400).json({ error: range.error });
   try {
     const environment = envParam(req);
-    const opts = { environment, from: range.from, to: range.to };
+    const endpointIds = endpointIdsParam(req);
+    const opts = {
+      environment, from: range.from, to: range.to, endpointIds,
+    };
 
     // The comparison window is the same length immediately before this one -
     // what the KPI deltas are measured against. Only computed when the range
@@ -150,6 +175,7 @@ router.get('/summary', async (req, res) => {
       const span = Date.parse(range.to) - Date.parse(range.from);
       previous = await store.getSummary(req.authUser.organisation, {
         environment,
+        endpointIds,
         from: new Date(Date.parse(range.from) - span).toISOString(),
         to: range.from,
       });
@@ -175,6 +201,7 @@ router.get('/series', async (req, res) => {
       : autoInterval(range.from, range.to);
     const series = await store.getSeries(req.authUser.organisation, {
       environment: envParam(req),
+      endpointIds: endpointIdsParam(req),
       from: range.from,
       to: range.to,
       intervalSeconds,
@@ -192,6 +219,7 @@ router.get('/endpoints', async (req, res) => {
   try {
     const endpoints = await store.getEndpointBreakdown(req.authUser.organisation, {
       environment: envParam(req),
+      endpointIds: endpointIdsParam(req),
       from: range.from,
       to: range.to,
       limit: req.query.limit,
@@ -212,6 +240,7 @@ router.get('/records', async (req, res) => {
       from: range.from,
       to: range.to,
       endpointId: typeof req.query.endpointId === 'string' ? req.query.endpointId.slice(0, 64) : null,
+      endpointIds: endpointIdsParam(req),
       statusFamily: typeof req.query.statusFamily === 'string' ? req.query.statusFamily : null,
       correlationId: typeof req.query.correlationId === 'string' ? req.query.correlationId.slice(0, 128) : null,
       clientIp: typeof req.query.clientIp === 'string' ? req.query.clientIp.slice(0, 64) : null,
