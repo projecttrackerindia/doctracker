@@ -672,6 +672,89 @@ finally:
     agent.CURSOR_FILE = saved_cursor_file
     shutil.rmtree(state_tmp, ignore_errors=True)
 
+print("Success sampling - keep every error, sample the rest")
+# The rule that makes full capture affordable at production volume. The
+# property that matters most: sampling must NEVER touch the rollup counters,
+# or every number on the page becomes a guess.
+saved_rate = agent.CAPTURE_SUCCESS_SAMPLE_RATE
+saved_mode3 = agent.CAPTURE_MODE
+try:
+    agent.CAPTURE_MODE = "full"
+
+    agent.CAPTURE_SUCCESS_SAMPLE_RATE = 1
+    st_s = {}
+    check("a rate of 1 keeps everything",
+          all(agent.should_capture_record(st_s, {"statusCode": 200}) for _ in range(20)))
+
+    agent.CAPTURE_SUCCESS_SAMPLE_RATE = 10
+    st_s = {}
+    kept = sum(1 for _ in range(100) if agent.should_capture_record(st_s, {"statusCode": 200}))
+    check("a rate of 10 keeps about a tenth of successes", kept == 10, "kept %d of 100" % kept)
+
+    st_s = {}
+    check("EVERY 4xx is kept regardless of the rate",
+          all(agent.should_capture_record(st_s, {"statusCode": 404}) for _ in range(50)))
+    st_s = {}
+    check("EVERY 5xx is kept regardless of the rate",
+          all(agent.should_capture_record(st_s, {"statusCode": 503}) for _ in range(50)))
+
+    st_s = {}
+    check("a request with no status code is kept - that is itself unusual",
+          all(agent.should_capture_record(st_s, {"statusCode": None}) for _ in range(10)))
+    st_s = {}
+    check("an unparseable status code is kept rather than silently sampled",
+          agent.should_capture_record(st_s, {"statusCode": "weird"}))
+
+    st_s = {}
+    for _ in range(30):
+        agent.should_capture_record(st_s, {"statusCode": 500})
+    check("errors do not consume the success sampling counter",
+          st_s.get("captureSuccessCounter", 0) == 0,
+          "errors advanced the counter to %r" % st_s.get("captureSuccessCounter"))
+
+    # Sampling is deterministic so the page never goes thousands of requests
+    # with nothing captured, which reads as a broken agent.
+    agent.CAPTURE_SUCCESS_SAMPLE_RATE = 100
+    st_s = {}
+    gaps = []
+    last = None
+    for i in range(1000):
+        if agent.should_capture_record(st_s, {"statusCode": 200}):
+            if last is not None:
+                gaps.append(i - last)
+            last = i
+    check("sampling is evenly spaced, never a long silent gap",
+          gaps and max(gaps) == min(gaps) == 100, "gaps seen: %r" % sorted(set(gaps)))
+
+    # THE property: rollups are computed before sampling and stay exact.
+    agent.CAPTURE_SUCCESS_SAMPLE_RATE = 50
+    st_both = {}
+    BK2 = "2026-09-24T11:00:00.000Z"
+    captured = 0
+    for i in range(200):
+        o = {"method": "GET", "path": "/x", "statusCode": 200, "latencyMs": 20,
+             "clientIp": "10.0.0.5", "correlationId": None, "body": None}
+        agent.accumulate_rollup(st_both, "GET /x", o, BK2)
+        if agent.should_capture_record(st_both, o):
+            agent.capture_log_record(st_both, "GET /x", o)
+            captured += 1
+    bucket2 = list(st_both["rollups"].values())[0]
+    check("the rollup counts EVERY request even when records are sampled",
+          bucket2["requestCount"] == 200, "counted %d" % bucket2["requestCount"])
+    check("only the sampled share is kept as raw records",
+          captured == 4, "captured %d, expected 200/50" % captured)
+    check("latency counters are also unaffected by sampling",
+          bucket2["latencyCount"] == 200)
+
+    health3 = agent.build_agent_health({"health": {}, "endpoints": {}, "files": {}})
+    check("agent health reports the sample rate so the page can say so",
+          health3.get("captureSuccessSampleRate") == 50
+          and health3.get("captureMode") == "full",
+          repr({k: health3.get(k) for k in ("captureMode", "captureSuccessSampleRate")}))
+finally:
+    agent.CAPTURE_SUCCESS_SAMPLE_RATE = saved_rate
+    agent.CAPTURE_MODE = saved_mode3
+
 print()
 if FAILURES:
     print("FAILED (%d): %s" % (len(FAILURES), ", ".join(FAILURES)))

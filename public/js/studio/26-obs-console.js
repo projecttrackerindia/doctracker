@@ -442,6 +442,18 @@ function renderObsLogsTab(){
 
   const r = state.obsRecords;
   const pages = Math.max(1, Math.ceil(r.total / (r.limit || 50)));
+
+  // If the agent is sampling successes, say so here rather than letting
+  // someone count these rows and draw a conclusion from a number that was
+  // never meant to be the total. Errors are never sampled and the counters
+  // above are exact, so the caveat belongs on this panel only.
+  const health = (state.endpointMetrics && state.endpointMetrics.agentHealth) || {};
+  const sampleRate = Number(health.captureSuccessSampleRate) || 1;
+  const samplingNote = sampleRate > 1
+    ? `<div class="obs-win-truncated">Showing <b>1 in ${sampleRate}</b> successful requests — every 4xx and 5xx is kept in full.
+       Totals, error rates and latency percentiles above are exact and unaffected by this.</div>`
+    : '';
+
   return `
     <div class="obs-panel">
       <div class="section-head">
@@ -451,6 +463,7 @@ function renderObsLogsTab(){
         </div>
         <span class="obs-drill-hint">Newest first</span>
       </div>
+      ${samplingNote}
       ${r.records.length ? `<div class="obs-table-scroll"><table class="data-table obs-data-table">
         <thead><tr><th>When</th><th>Endpoint</th><th class="num">Status</th><th class="num">Latency</th><th>Source</th><th>Correlation</th></tr></thead>
         <tbody>

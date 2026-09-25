@@ -186,6 +186,27 @@ if CAPTURE_MODE not in ("aggregate", "full"):
 MAX_LOG_RECORDS_PER_ENDPOINT = int(os.environ.get("MAX_LOG_RECORDS_PER_ENDPOINT", "200"))
 MAX_LOG_RECORDS_TOTAL = int(os.environ.get("MAX_LOG_RECORDS_TOTAL", "3000"))
 
+# --- Success sampling (CAPTURE_MODE=full only) -------------------------------
+# At production volume, capturing every successful request is neither
+# affordable nor useful: a million identical 200s tell you nothing that the
+# exact rollup counters do not already say, and each one carries real field
+# values that then have to be stored and protected.
+#
+# So the standard split: EVERY error is kept, successes are sampled 1-in-N.
+# Errors are what anyone opens the log explorer to find, they are rare by
+# definition, and a sampled error log is close to useless - you look for the
+# one failing call and it is the one that was dropped.
+#
+# This affects ONLY the raw per-request records. Rollup counters are computed
+# before sampling and stay exact, so traffic totals, error rates and latency
+# percentiles are unaffected no matter how aggressively this is set. That
+# separation is the point: sample the expensive, redundant tier; never the
+# tier the numbers come from.
+#
+# 1 = keep every success (the default, correct for SIT volume). 100 = keep
+# one in a hundred. Errors ignore this entirely.
+CAPTURE_SUCCESS_SAMPLE_RATE = max(1, int(os.environ.get("CAPTURE_SUCCESS_SAMPLE_RATE", "1")))
+
 # One sample appended per push (every PUSH_INTERVAL_SECONDS, ~15 min by
 # default) rather than per poll cycle - this is what the Observability
 # page's "Log volume" chart is built from, and a ~15-min cadence keeps a
@@ -1452,7 +1473,7 @@ def aggregate(state, observations):
                 bucket_iso = minute_bucket_iso
             accumulate_rollup(state, key, obs, bucket_iso)
 
-        if CAPTURE_MODE == "full" and key != OVERFLOW_KEY:
+        if CAPTURE_MODE == "full" and key != OVERFLOW_KEY and should_capture_record(state, obs):
             capture_log_record(state, key, obs)
 
 
@@ -1574,6 +1595,38 @@ def accumulate_rollup(state, key, obs, bucket_iso):
 # global) keep this bounded; oldest records are dropped first, same
 # trade-off the aggregate side already makes for correlationIds/sourceIps.
 # ============================================================================
+def should_capture_record(state, obs):
+    """Keep every error; sample successes 1-in-CAPTURE_SUCCESS_SAMPLE_RATE.
+
+    Deterministic counter rather than random(): at a 1-in-100 rate a random
+    choice can easily go several thousand requests without keeping one, which
+    looks exactly like "capture is broken" to whoever is reading the page. A
+    counter keeps a steady, predictable sample.
+
+    The counter is per-agent rather than per-endpoint on purpose - a per
+    endpoint counter would over-sample the long tail of endpoints that see one
+    request an hour, which is the traffic least worth capturing.
+
+    NOTE: this gates the RAW RECORD only. accumulate_rollup() has already run
+    by this point, so every request - sampled or not - is counted exactly in
+    the rollup tier that the charts and KPIs read.
+    """
+    if CAPTURE_SUCCESS_SAMPLE_RATE <= 1:
+        return True
+    sc = obs.get("statusCode")
+    if sc:
+        try:
+            if int(str(sc)[0]) in (4, 5):
+                return True   # errors are never sampled away
+        except (ValueError, IndexError):
+            return True       # unparseable status: keep it, it is unusual
+    else:
+        return True           # no status logged at all is itself worth seeing
+    seen = state.get("captureSuccessCounter", 0) + 1
+    state["captureSuccessCounter"] = seen
+    return seen % CAPTURE_SUCCESS_SAMPLE_RATE == 0
+
+
 def capture_log_record(state, key, obs):
     records = state.setdefault("logRecords", [])
     # Monotonic, persisted across restarts (part of state.json) - lets the
@@ -2003,6 +2056,15 @@ def build_agent_health(state):
         # spent most of every 15-minute cycle reading DELAYED or STALE on a
         # perfectly healthy agent).
         "pushIntervalSeconds": PUSH_INTERVAL_SECONDS,
+        # So the Log explorer can say plainly that it is showing a SAMPLE of
+        # successful requests rather than all of them. A page that silently
+        # shows 1-in-100 successes as though it were the full set is worse
+        # than one that shows nothing - someone counts the rows and draws a
+        # conclusion from a number that was never the truth. Errors are never
+        # sampled, and the rollup counters are exact regardless, so only this
+        # one panel needs the caveat.
+        "captureMode": CAPTURE_MODE,
+        "captureSuccessSampleRate": CAPTURE_SUCCESS_SAMPLE_RATE,
         "cyclesRun": health.get("cyclesRun", 0),
         "linesProcessedTotal": health.get("linesProcessedTotal", 0),
         "requestsProcessedTotal": health.get("requestsProcessedTotal", 0),
