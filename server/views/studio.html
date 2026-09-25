@@ -1951,7 +1951,11 @@ pre.code-block{
 .obs-alert-live-row:hover .obs-alert-goto-ic, .obs-alert-live-row:focus-visible .obs-alert-goto-ic{
   opacity:1; color:var(--accent);
 }
-@media (max-width:640px){ .obs-alert-goto-ic{ display:none; } }
+@media (max-width:640px){
+  .obs-alert-goto-ic{ display:none; }
+  .obs-alert-live-row{ flex-wrap:wrap; }
+  .obs-alert-ack-btn, .obs-alert-acked{ flex-basis:100%; margin-top:4px; }
+}
 .obs-alert-pip{
   width:8px; height:8px; border-radius:50%; flex:0 0 auto;
   background:var(--obs-alert-color, var(--put));
@@ -1970,6 +1974,22 @@ pre.code-block{
 }
 .obs-alert-tag.crit{ color:var(--delete); border-color:color-mix(in srgb, var(--delete) 45%, transparent); }
 .obs-alert-sub{ font-size:10.5px; color:var(--text-faint); margin:16px 0 0; text-transform:uppercase; letter-spacing:.5px; font-weight:700; }
+.obs-alert-ack-btn{
+  flex:0 0 auto; font-size:10.5px; font-weight:600; padding:5px 10px; border-radius:6px;
+  border:1px solid var(--border); background:var(--surface); color:var(--text-dim); cursor:pointer;
+  transition:background-color .12s ease, color .12s ease, border-color .12s ease;
+}
+.obs-alert-ack-btn:hover, .obs-alert-ack-btn:focus-visible{ background:var(--accent-soft); color:var(--accent); border-color:var(--accent); outline:none; }
+.obs-alert-ack-btn:disabled{ opacity:.6; cursor:default; }
+.obs-alert-acked{
+  flex:0 0 auto; display:flex; align-items:center; gap:5px;
+  font-size:10.5px; font-weight:600; color:var(--post); white-space:nowrap;
+}
+/* Still fully visible — never hidden or collapsed, only visually quieter -
+   an acknowledged-but-still-broken collector disappearing from view would
+   be worse than one nobody has acknowledged yet. */
+.obs-alert-live-row.obs-alert-acked-row{ opacity:.78; }
+.obs-alert-live-row.obs-alert-acked-row:hover, .obs-alert-live-row.obs-alert-acked-row:focus-visible{ opacity:1; }
 
 .obs-alert-rules{ margin-top:10px; }
 .obs-alert-rule{

@@ -64,6 +64,30 @@ A **resolved** notification is sent when a firing alert recovers, so the inbox
 tells a whole story instead of an open-ended one. A *pending* alert that clears
 says nothing, because nobody was told it started.
 
+### Acknowledging
+
+A firing alert's row carries an **Acknowledge** button. It says "a person has
+seen this and is on it" — nothing more. It does **not** silence the alert: it
+keeps being evaluated, keeps re-notifying on schedule, and the row keeps
+showing exactly where it was, just visually quieter. An acknowledged-but-
+still-broken collector disappearing from view would be worse than one nobody
+has acknowledged yet, so acknowledging only ever changes one thing: it drops
+that alert out of the **Alerts** tab's badge count, so the badge reflects what
+still needs someone's attention rather than what is merely still true.
+
+Anyone who can see what is firing can acknowledge it — unlike every other
+write in this file, acknowledging is deliberately **not** Admin-only, because
+gating it to Admins would mean the engineer actually responding to the
+incident cannot mark it as theirs. Only changing what fires is Admin-only.
+
+An acknowledgment belongs to one continuous incident, not to the rule
+forever: it clears itself the moment that incident resolves, and clears again
+if a fresh breach starts afterward — a later, unrelated incident must never
+silently inherit an old "somebody's on it." It survives a re-notify of the
+*same* still-firing incident, because that is not a new incident. A pending
+alert cannot be acknowledged at all: nobody has been notified about it yet,
+so there is nothing to acknowledge.
+
 ---
 
 ## 2. What you can alert on
@@ -156,19 +180,22 @@ every quiet spell.
 
 ## 5. Who can do what
 
-| | Read what is firing | Read the rules | Change rules & settings |
-|---|---|---|---|
-| Admin | yes | yes | yes |
-| Everyone else | yes | yes | no |
+| | Read what is firing | Read the rules | Acknowledge | Change rules & settings |
+|---|---|---|---|---|
+| Admin | yes | yes | yes | yes |
+| Everyone else | yes | yes | yes | no |
 
 Rules are readable by everyone deliberately. A threshold you cannot see is
 indistinguishable from no threshold, and *"why didn't we get alerted?"* should
-not be a question that requires an Admin to answer.
+not be a question that requires an Admin to answer. Acknowledging is open to
+everyone for the same reason attention-tracking always should be: the person
+actually responding is often not an Admin.
 
 Every change is written to the audit log: `ALERT_RULE_CREATED`,
-`ALERT_RULE_UPDATED`, `ALERT_RULE_DELETED`, `ADMIN_SETTING_CHANGED`. Disabling
-or deleting a rule is recorded at `critical` severity, because that is how a
-system silently stops watching for something.
+`ALERT_RULE_UPDATED`, `ALERT_RULE_DELETED`, `ADMIN_SETTING_CHANGED`,
+`ALERT_ACKNOWLEDGED`. Disabling or deleting a rule is recorded at `critical`
+severity, because that is how a system silently stops watching for
+something.
 
 ---
 

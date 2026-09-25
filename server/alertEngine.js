@@ -579,13 +579,21 @@ async function applyState(organisation, rule, environment, row, now, settings) {
     }, decision.action === 'resolve' ? 'resolve' : 'fire', settings);
   }
 
+  // A brand-new incident (action 'fire') or a recovery (action 'resolve')
+  // starts a new chapter this row's history: any earlier acknowledgment was
+  // about a DIFFERENT breach (the previous one, now over) and must not
+  // silently cover this one. A re-notify of the SAME still-firing incident,
+  // or no change at all, leaves it exactly as it was.
+  const clearAck = decision.action === 'fire' || decision.action === 'resolve';
+
   await pool.query(
     `INSERT INTO alert_state (rule_id, organisation, environment, endpoint_id, status,
-        breached_since, firing_since, last_value, last_sample, last_notified_at, notify_count, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+        breached_since, firing_since, last_value, last_sample, last_notified_at, notify_count,
+        acknowledged_at, acknowledged_by, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
      ON CONFLICT (rule_id, environment, endpoint_id) DO UPDATE SET
        status=$5, breached_since=$6, firing_since=$7, last_value=$8, last_sample=$9,
-       last_notified_at=$10, notify_count=$11, updated_at=now()`,
+       last_notified_at=$10, notify_count=$11, acknowledged_at=$12, acknowledged_by=$13, updated_at=now()`,
     [
       rule.id, organisation, environment, key, decision.status,
       decision.status === 'pending' ? (decision.breachedSince ? new Date(decision.breachedSince) : (prev && prev.breached_since) || new Date(now)) : null,
@@ -597,6 +605,8 @@ async function applyState(organisation, rule, environment, row, now, settings) {
       // alert would go quiet for an hour having never spoken.
       notified && notifyResult && notifyResult.notified ? new Date(now) : (prev && prev.last_notified_at) || null,
       (prev ? prev.notify_count : 0) + (notified && notifyResult && notifyResult.notified ? 1 : 0),
+      clearAck ? null : (prev && prev.acknowledged_at) || null,
+      clearAck ? null : (prev && prev.acknowledged_by) || null,
     ]
   );
   return { rule: rule.name, environment, endpointId: key, action: decision.action, value: row.value, notifyResult };
@@ -627,7 +637,27 @@ async function currentAlerts(organisation) {
     since: r.firing_since || r.breached_since,
     notifyCount: r.notify_count,
     display: formatValue(r.metric, r.last_value === null ? null : Number(r.last_value)),
+    acknowledgedAt: r.acknowledged_at,
+    acknowledgedBy: r.acknowledged_by || null,
   }));
+}
+
+// Records that a person has seen this incident and is on it. Anyone who can
+// SEE what is firing may acknowledge it - the same "everyone reads, only
+// editing rules is Admin-only" split the rest of this file uses, because an
+// acknowledgment is a statement about attention, not a configuration change,
+// and gating it to Admins would mean the engineer actually responding
+// cannot mark it as theirs. Only applies to a FIRING row - a pending one has
+// notified nobody yet, so there is nothing to acknowledge.
+async function acknowledgeAlert(organisation, ruleId, environment, endpointId, actor) {
+  const key = endpointId || '';
+  const { rows } = await pool.query(
+    `UPDATE alert_state SET acknowledged_at = now(), acknowledged_by = $4, updated_at = now()
+     WHERE rule_id = $1 AND organisation = $2 AND environment = $3 AND endpoint_id = $5 AND status = 'firing'
+     RETURNING rule_id`,
+    [ruleId, organisation, environment, actor || 'unknown', key]
+  );
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -697,6 +727,7 @@ module.exports = {
   formatValue,
   evaluateOrganisation,
   currentAlerts,
+  acknowledgeAlert,
   runAlertSweep,
   startAlertSchedule,
   evaluateAfterIngest,

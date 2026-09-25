@@ -40,6 +40,42 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Acknowledging is deliberately NOT requireAdmin, unlike every route below -
+// it says "a person has seen this and is on it", not "change what fires".
+// Gating it to Admins would mean the engineer actually responding to an
+// incident cannot mark it as theirs. It only touches a FIRING row (a
+// pending one has notified nobody yet); acknowledging never hides the row,
+// stops re-evaluation, or suppresses the next re-notify - it only drops the
+// row out of the tab badge, and clears itself the moment this incident
+// resolves or a fresh one starts (see applyState() in alertEngine.js).
+router.post('/active/acknowledge', async (req, res) => {
+  const { ruleId, environment, endpointId } = req.body || {};
+  if (!ruleId || typeof environment !== 'string' || !environment.trim()) {
+    return res.status(400).json({ error: 'ruleId and environment are required.' });
+  }
+  try {
+    const org = req.authUser.organisation;
+    const ok = await engine.acknowledgeAlert(org, ruleId, environment, endpointId || null, req.authUser.username);
+    if (!ok) return res.status(404).json({ error: 'No firing alert matches that rule/environment/endpoint.' });
+    const active = await engine.currentAlerts(org);
+    const target = active.find((a) => a.ruleId === String(ruleId) && a.environment === environment
+      && (a.endpointId || null) === (endpointId || null));
+    await recordAuditEvent(req.authUser, req, {
+      action: 'ALERT_ACKNOWLEDGED',
+      resourceType: 'alert_state',
+      resourceId: String(ruleId),
+      entityName: target ? target.name : null,
+      details: `Acknowledged "${target ? target.name : ruleId}" in ${environment}`
+        + (endpointId ? ` (endpoint ${endpointId})` : ''),
+      severity: 'info',
+    });
+    res.json({ active });
+  } catch (err) {
+    console.error('POST /api/workspace/alerts/active/acknowledge failed:', err);
+    res.status(500).json({ error: 'Could not acknowledge the alert.' });
+  }
+});
+
 router.put('/settings', requireAdmin, async (req, res) => {
   try {
     const settings = await engine.saveSettings(req.authUser.organisation, req.body || {});

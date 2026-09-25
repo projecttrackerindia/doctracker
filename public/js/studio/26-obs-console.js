@@ -307,8 +307,12 @@ function renderObsTabs(){
   const errCount = d && d.current ? d.current.errCount : 0;
   // Only FIRING alerts get a badge. A pending one has notified nobody, and a
   // count that included them would claim an incident that may never happen.
-  const firing = ((state.obsAlerts && state.obsAlerts.active) || [])
-    .filter(a => a.status === 'firing').length;
+  // Acknowledged ones are excluded too - acknowledging says "someone is on
+  // this", and the badge exists to draw attention to what nobody has picked
+  // up yet, not to nag about something already being worked.
+  const allFiring = ((state.obsAlerts && state.obsAlerts.active) || []).filter(a => a.status === 'firing');
+  const firing = allFiring.filter(a => !a.acknowledgedAt).length;
+  const acked = allFiring.length - firing;
   const counts = {
     errors: errCount ? obsFormatCount(errCount) : '',
     alerts: firing ? String(firing) : '',
@@ -320,7 +324,8 @@ function renderObsTabs(){
   const countTitle = `${errCount.toLocaleString()} error(s) in the selected range`;
   const titles = {
     errors: countTitle,
-    alerts: `${firing} alert(s) firing right now — independent of the range above`,
+    alerts: `${firing} unacknowledged alert(s) firing right now — independent of the range above`
+      + (acked ? ` (${acked} more firing but already acknowledged)` : ''),
   };
   return `<div class="obs-tabs" role="tablist">
     ${OBS_TABS.map(t => `<button type="button" role="tab" class="obs-tab${state.obsTab === t.key ? ' active' : ''}"
@@ -899,11 +904,25 @@ function renderObsActiveAlerts(d){
     // itself, not left to a bare cursor change, since a row that merely
     // LOOKED clickable and did nothing is exactly the complaint this fixes.
     const destTab = OBS_TABS.find(t => t.key === obsAlertDrillDownTab(a.metric));
+    const acked = a.status === 'firing' && !!a.acknowledgedAt;
+    // Acknowledging is its own click target inside a row that is otherwise
+    // one big click target (the drill-down) - it stops that click from also
+    // propagating up and navigating away, see wireObsAlerts() below.
+    const ackControl = a.status !== 'firing' ? ''
+      : acked
+        ? `<div class="obs-alert-acked" title="Acknowledged ${escapeHtml(formatDateTime(a.acknowledgedAt))}">
+             <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+             Acknowledged by ${escapeHtml(a.acknowledgedBy || 'someone')}
+           </div>`
+        : `<button type="button" class="obs-alert-ack-btn" data-obs-alert-ack
+             data-obs-alert-ack-rule="${escapeHtml(a.ruleId)}" data-obs-alert-ack-env="${escapeHtml(a.environment || '')}"
+             data-obs-alert-ack-epid="${escapeHtml(a.endpointId || '')}"
+             title="Mark that someone has seen this and is on it. Does not silence it — it keeps being evaluated and re-notifying, this only clears the tab badge.">Acknowledge</button>`;
     // NOT .obs-alert-row — that class name is already used by 23-observability.js's
     // unrelated legacy anomaly digest and carries its own conflicting :hover rule
     // (different padding/margin/radius), which would fight this row's layout on
     // hover. .obs-alert-live-row is this panel's own, so the two never collide.
-    return `<div class="obs-alert-live-row obs-alert-${a.status}" style="--obs-alert-color:var(${color});"
+    return `<div class="obs-alert-live-row obs-alert-${a.status}${acked ? ' obs-alert-acked-row' : ''}" style="--obs-alert-color:var(${color});"
       role="button" tabindex="0"
       data-obs-alert-goto data-obs-alert-env="${escapeHtml(a.environment || '')}"
       data-obs-alert-metric="${escapeHtml(a.metric)}" data-obs-alert-epid="${escapeHtml(a.endpointId || '')}"
@@ -925,6 +944,7 @@ function renderObsActiveAlerts(d){
           : `<span class="obs-alert-tag crit">firing</span><div class="hint">since ${escapeHtml(formatDateTime(a.since))}${
               a.notifyCount ? ` · ${a.notifyCount} notification(s)` : ''}</div>`}
       </div>
+      ${ackControl}
       <span class="obs-alert-goto-ic" aria-hidden="true">${destTab ? escapeHtml(destTab.label) : 'Investigate'} →</span>
     </div>`;
   };
@@ -1157,6 +1177,28 @@ function wireObsAlerts(main){
     );
     row.addEventListener('click', go);
     row.addEventListener('keydown', (e)=>{ if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); go(); } });
+  });
+
+  main.querySelectorAll('[data-obs-alert-ack]').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      // The button sits inside the row's own click target (the drill-down
+      // navigation) - without this, acknowledging would also navigate away
+      // from the tab you're looking at.
+      e.stopPropagation();
+      btn.disabled = true; btn.textContent = 'Acknowledging…';
+      try{
+        const active = await obsAlertApi('POST', '/active/acknowledge', {
+          ruleId: btn.getAttribute('data-obs-alert-ack-rule'),
+          environment: btn.getAttribute('data-obs-alert-ack-env') || null,
+          endpointId: btn.getAttribute('data-obs-alert-ack-epid') || null,
+        });
+        state.obsAlerts = { ...state.obsAlerts, active: active.active };
+        renderMain();
+      }catch(err){
+        toast(err.message || 'Could not acknowledge the alert.');
+        btn.disabled = false; btn.textContent = 'Acknowledge';
+      }
+    });
   });
 
   const evalNow = main.querySelector('#obsAlertEvalNow');

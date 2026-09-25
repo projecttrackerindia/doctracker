@@ -596,10 +596,22 @@ async function initDb() {
       last_sample INTEGER,
       last_notified_at TIMESTAMPTZ,
       notify_count INTEGER NOT NULL DEFAULT 0,
+      -- Acknowledging says "a person has seen this and is on it" - it does
+      -- NOT stop evaluation, does NOT suppress re-notification, and does
+      -- NOT hide the row (an acknowledged-but-still-broken collector
+      -- disappearing from view would be worse than an unacknowledged one).
+      -- All it does is drop the row out of the tab badge count. Cleared
+      -- automatically whenever a FRESH incident starts (applyState() in
+      -- alertEngine.js) - an old acknowledgment must not silently cover a
+      -- new breach after the old one resolved.
+      acknowledged_at TIMESTAMPTZ,
+      acknowledged_by TEXT,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (rule_id, environment, endpoint_id)
     );
   `);
+  await pool.query(`ALTER TABLE alert_state ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE alert_state ADD COLUMN IF NOT EXISTS acknowledged_by TEXT;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_alert_state_firing ON alert_state (organisation, status) WHERE status <> 'ok';`);
 
   // Org-wide switches that sit ABOVE the individual rules: the master on/off,
