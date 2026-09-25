@@ -814,6 +814,37 @@ check("agent health reports both cadences so the page can size its badge",
       health5.get("pushMinIntervalSeconds") == agent.PUSH_MIN_INTERVAL_SECONDS
       and health5.get("pollIntervalActiveSeconds") == agent.POLL_INTERVAL_ACTIVE_SECONDS)
 
+print("Adaptive polling must not silently shorten history or thrash the disk")
+# Both of these were regressions introduced BY adaptive polling: work that was
+# correctly tied to "once per cycle" while the loop ran every 60s becomes
+# 30x more frequent once the loop can run every 2s.
+src_agent = io.open(os.path.join(AGENT_DIR, "mule_doc_agent.py"), encoding="utf-8").read()
+
+check("host metrics sample on a wall-clock cadence, not once per cycle",
+      "due_for_host_sample" in src_agent
+      and "HOST_SAMPLE_INTERVAL_SECONDS" in src_agent,
+      "tied to the cycle, the 720-sample CPU history shrinks from ~12h to ~24m under load")
+check("the host-sample interval defaults to the old per-cycle rate",
+      agent.HOST_SAMPLE_INTERVAL_SECONDS == 60,
+      "got %r" % agent.HOST_SAMPLE_INTERVAL_SECONDS)
+check("the host sample stamps when it last ran, or the gate never closes",
+      'state["lastHostSampleAt"] = time.time()' in src_agent)
+
+check("the cursor file is only rewritten when the cycle actually read lines",
+      re.search(r"if lines:\s*\n\s*save_state\(state, full=False\)", src_agent) is not None,
+      "otherwise adaptive polling rewrites it every 2s to store an unchanged offset")
+
+# The push gate must consider BOTH new data and the heartbeat, or a quiet
+# agent stops proving it is alive and the liveness badge goes stale.
+check("the push gate fires on new data OR the heartbeat ceiling",
+      "due_for_data or due_for_heartbeat" in src_agent)
+check("the heartbeat ceiling is the configured push interval",
+      "since_push >= PUSH_INTERVAL_SECONDS" in src_agent)
+check("new data still waits for the minimum push interval",
+      "since_push >= PUSH_MIN_INTERVAL_SECONDS" in src_agent)
+check("pending rollups count as new data worth pushing",
+      'has_new_data = bool(state.get("rollups"))' in src_agent)
+
 print()
 if FAILURES:
     print("FAILED (%d): %s" % (len(FAILURES), ", ".join(FAILURES)))

@@ -167,6 +167,12 @@ POLL_INTERVAL_ACTIVE_SECONDS = max(1, int(os.environ.get("POLL_INTERVAL_ACTIVE_S
 # between fast and slow on any gap between requests.
 POLL_IDLE_CYCLES_BEFORE_BACKOFF = max(1, int(os.environ.get("POLL_IDLE_CYCLES_BEFORE_BACKOFF", "5")))
 
+# Host metrics are sampled on this WALL-CLOCK cadence, independently of how
+# often the loop runs. Tied to the cycle it would follow the adaptive poll
+# rate, and MAX_HOST_SAMPLES worth of history would shrink from ~12 hours to
+# ~24 minutes the moment traffic picked up.
+HOST_SAMPLE_INTERVAL_SECONDS = max(1, int(os.environ.get("HOST_SAMPLE_INTERVAL_SECONDS", "60")))
+
 # --- Push cadence ------------------------------------------------------------
 # PUSH_INTERVAL_SECONDS is now a HEARTBEAT ceiling rather than the cadence:
 # the agent pushes as soon as it has something new, subject to this floor, and
@@ -3000,11 +3006,17 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
         samples.append([time.time(), health["requestsProcessedTotal"]])
         if len(samples) > 30:
             del samples[0]
-        # Host pressure, sampled per cycle rather than per push - see
-        # MAX_HOST_SAMPLES for why CPU needs the finer cadence. Kept even
-        # when a cycle read no lines at all: "the box was pegged while
-        # nothing was being logged" is itself a finding.
-        if HOST_METRICS_ENABLED:
+        # Host pressure, sampled on a fixed WALL-CLOCK cadence rather than
+        # once per cycle. This used to be per-cycle, which was the same thing
+        # while the loop ran every 60s - but adaptive polling can now run it
+        # every 2s while traffic flows, which would fill the 720-sample ring
+        # buffer in 24 minutes instead of 12 hours and quietly shorten the CPU
+        # history to almost nothing exactly when it is most worth having.
+        # Kept even when a cycle read no lines at all: "the box was pegged
+        # while nothing was being logged" is itself a finding.
+        due_for_host_sample = (time.time() - state.get("lastHostSampleAt", 0)) >= HOST_SAMPLE_INTERVAL_SECONDS
+        if HOST_METRICS_ENABLED and due_for_host_sample:
+            state["lastHostSampleAt"] = time.time()
             host_sample, host_static = sample_host_metrics(health, time.time())
             if host_sample:
                 host_samples = health.setdefault("hostSamples", [])
@@ -3024,7 +3036,14 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
                   f"to catch up, see Agent Health on the Observability page")
         # Cursors only. The bulky aggregates are written on the push cycle
         # below, right after they have been durably sent - see save_state().
-        save_state(state, full=False)
+        #
+        # Skipped entirely when the cycle read nothing: the offsets cannot
+        # have moved, so there is nothing new to persist. Without this,
+        # adaptive polling would rewrite the cursor file every 2 seconds while
+        # traffic flows - thirty times more often than before, to save a value
+        # that is usually identical to the one already on disk.
+        if lines:
+            save_state(state, full=False)
 
         # Push as soon as there is something new (subject to the floor), and
         # push anyway once the heartbeat ceiling elapses so a quiet agent
