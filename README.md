@@ -44,9 +44,13 @@ with a plain HTML/CSS/vanilla-JS frontend (no framework, no bundler).
   gives per-environment traffic charts, a log explorer, and live status.
   `server/alertEngine.js` evaluates threshold rules (error rate, latency,
   request rate) and absence rules (collector gone silent) as a per-rule
-  state machine — with hold times, cooldowns, and quiet hours, so one
-  incident produces one notification, not a flood. See `ALERTING.md` for
-  the full reference.
+  state machine, advisory-locked so only one app instance evaluates per
+  sweep tick — with hold times, cooldowns, and quiet hours, so one incident
+  produces one notification, not a flood. Firing/resolving optionally POSTs
+  a signed (HMAC-SHA256) webhook alongside the in-app notification
+  (`server/webhookDelivery.js`), and every incident's start/resolve is kept
+  as durable history (`GET /api/workspace/alerts/history`), not just current
+  state. See `ALERTING.md` for the full reference.
 - **Doc-access requests** — non-admins request time-boxed access to an
   endpoint's documentation in a given environment; admins/project owners
   approve, deny, or revoke from the Security Center
@@ -68,10 +72,11 @@ with a plain HTML/CSS/vanilla-JS frontend (no framework, no bundler).
 - **Audit log** — server-recorded, not client-writable; every security-
   relevant action (approvals, key rotation, user role changes, etc.) lands
   here.
-- **Notifications** — in-app, polled every 25s (`public/js/studio/03-notifications.js`)
-  for unread count and doc-access status changes. Live-tab push (so an open
-  tab picks up a revoke without a full reload) is a known gap — see
-  "Known gaps" below.
+- **Notifications** — in-app, pushed live over SSE (`server/notificationsBus.js`,
+  `GET /api/notifications/stream`, `public/js/studio/03-notifications.js`)
+  for unread count, doc-access status changes, and alert firing — an open
+  tab picks up a revoke or approval immediately, not on the next poll or
+  reload. Falls back to polling if the browser has no `EventSource` support.
 - **Attachments** — inline (base64, encrypted, in the project's own JSON
   blob) by default; optionally offloaded to S3-compatible object storage
   once `S3_*` env vars are set, still encrypted client-side before upload.
@@ -133,14 +138,17 @@ doctracker-main/
 │   ├── cache.js                   # Optional Redis-backed cache in front of GET /api/workspace
 │   ├── rateLimitStore.js          # Rate limiting; Redis-shared across instances if REDIS_URL is set, else per-instance in-memory
 │   ├── storage.js                 # Optional S3-compatible attachment storage (encrypted client-side before upload)
-│   ├── notifications.js           # Notification creation/listing/read-state
-│   ├── auditService.js            # Server-side audit event recording
+│   ├── notifications.js           # Notification creation/listing/read-state; publishes each one to notificationsBus.js
+│   ├── notificationsBus.js        # Per-recipient (org:userId) pub/sub for live notification push — see routes/notifications.js's /stream
+│   ├── auditService.js            # Server-side audit event recording (recordAuditEvent for requests, recordSystemAuditEvent for background processes)
 │   ├── accessSchedule.js          # Per-user access-time-window evaluation
 │   ├── projectAccess.js           # Project-level access checks
 │   ├── openapiExport.js           # Builds masked OpenAPI YAML for a project
 │   ├── piiMasking.js              # Server-enforced PII masking, mirrors the client-side masker
 │   ├── breakingChangeDetector.js  # Flags client-breaking changes between two endpoint versions, for the Release Pipeline
-│   ├── alertEngine.js             # Alert rule state machine + evaluation (ingest-triggered and 60s sweep) — see ALERTING.md
+│   ├── alertEngine.js             # Alert rule state machine + evaluation (ingest-triggered and advisory-locked 60s sweep) — see ALERTING.md
+│   ├── webhookDelivery.js         # Signs + sends one alert webhook delivery; SSRF-validates and audits every outcome
+│   ├── outboundHttp.js            # Generic SSRF-safe outbound sender (validate → manual re-validated redirect loop → timeout) webhookDelivery.js is built on
 │   ├── observabilityBus.js        # In-process pub/sub fanning live ingests out to open Observability tabs
 │   ├── observabilityStore.js      # Rollup read/write, agent heartbeat tracking
 │   ├── retention.js               # Time-based cleanup of aged observability/audit data
@@ -158,8 +166,8 @@ doctracker-main/
 │   │   ├── security.js            # Admin: encryption key status + rotation
 │   │   ├── liveMode.js            # Live-mode request proxying
 │   │   ├── observability.js       # Agent ingest endpoint + console read APIs
-│   │   ├── alerts.js              # Alert rule CRUD + read/acknowledge
-│   │   └── notifications.js       # List/unread-count/mark-read
+│   │   ├── alerts.js              # Alert rule CRUD, read/acknowledge, webhook config + test, incident history
+│   │   └── notifications.js       # List/unread-count/mark-read + live SSE stream
 │   └── views/                     # Server-rendered HTML shells (studio, editor, architecture-studio, auditlog, release-pipeline) — injected with a fresh CSP nonce + signed-in user per request
 ├── public/
 │   ├── login.html / register.html / dashboard.html
@@ -213,28 +221,37 @@ and defaults — it's kept in sync with what the code actually reads
 
 `npm test` runs the `node:test` suite in `test/`: the alert engine's state
 machine, breaking-change detection, access-schedule evaluation, discovery
-reconciliation, the observability charts/rollups, and validators. Core
-CRUD/permission routes (`auth.js`, `users.js`, `workspace.js`,
-`docAccess.js`, `crypto.js`) have no coverage yet — see "Known gaps." The
-log agent has its own Python suite under `ops/sit-doc-agent/tests/` (pytest).
+reconciliation, the observability charts/rollups, validators, and — as of
+this pass — the doc-access request permission/status/pagination rules
+(`docAccess.test.js`) and the account-lockout rules (`auth.test.js`). All
+of it is zero-DB: pure functions to begin with, or pure decision functions
+deliberately extracted from a route handler and exported off its router
+(see `CONTRIBUTING.md`'s "Tests" section for the pattern) so the *decision*
+is testable even though the DB write around it isn't. Full route-level
+integration coverage (`users.js`, `workspace.js`'s CRUD, `crypto.js`) still
+doesn't exist — see "Known gaps." The log agent has its own Python suite
+under `ops/sit-doc-agent/tests/` (pytest).
 
 ## Known gaps
 
-- **Test coverage is partial.** See "Testing" above — the newer subsystems
-  (alerting, observability, breaking-change detection) are covered; core
-  auth/permission/workspace logic isn't, so regressions there (the kind #6
-  and #7 were) still rely on manual review to catch.
-- **No live push for doc-access revoke.** An open tab only picks up a
-  revoked grant on full reload; the 25s notification poll is the natural
-  place to extend this (see `03-notifications.js`), but hasn't been done.
+- **Test coverage is still partial.** The permission/status logic most
+  likely to regress silently (doc-access transitions, login lockout,
+  cursor pagination) now has unit coverage — see "Testing" above — but
+  full route-level integration tests (a real request hitting a real DB)
+  don't exist for any route, and `users.js`/`workspace.js`'s CRUD and
+  `crypto.js` have no coverage of any kind yet.
 - **Password reset isn't link-based self-serve.** A locked-out user can
   request one (`POST /api/auth/request-password-reset`), but it only
   notifies an Admin to verify identity and complete it — there's no
   outbound-email service, so there's no emailed reset link.
-- **Alerting is in-app only and single-process.** No email/webhook delivery
-  channel, no historical "incidents over time" view, and no advisory lock —
-  two app instances would each run the alert sweep independently and could
-  double-notify. See "Known limits" in `ALERTING.md`.
+- **The alert-engine's ingest-triggered throttle is still per-process.**
+  The sweep itself is now advisory-locked across instances (see
+  `ALERTING.md`), but `evaluateAfterIngest()`'s per-org-per-environment
+  rate limit is an in-memory `Map`, so two instances could each
+  independently evaluate the same org's ingest-driven path within the
+  throttle window. Lower-stakes than the sweep was — see `ALERTING.md`'s
+  "Known limits" for the full picture, including the webhook delivery
+  channel's lack of a retry queue.
 - **Frontend has no build step.** `public/js/studio/*.js` are loaded as 26
   separate, order-dependent `<script>` tags with implicit shared global
   scope — no bundling, minification, or per-file isolation for testing.

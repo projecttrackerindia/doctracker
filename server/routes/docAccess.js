@@ -34,33 +34,76 @@ async function loadRequestWithProjectOwner(requestId, organisation) {
   return rows[0] || null;
 }
 
+// Pure decision functions — kept separate from the route handlers below so
+// the permission/status rules that caused past regressions ("the kind #6
+// and #7 were", per README's Known gaps) can be unit-tested without a DB
+// round-trip. Exported as properties on the router (module.exports.*, see
+// the bottom of this file), the same pattern server/routes/workspace.js
+// already uses for its own pure helpers.
+
+// Admin, or the request's own project owner — and never the requester
+// themselves, regardless of role. Low-impact today: an Admin/editor already
+// has full doc access regardless of any grant (see userHasFullDocAccess in
+// workspace.js), and a project owner is never locked out of their own
+// project's endpoints in the first place (see applyDocLock there), so this
+// mostly guards against someone hitting the API directly rather than a
+// reachable UI path. It matters more once approval authority gets
+// delegated more broadly than "Admin or owner."
+function canActOnDocAccessRequest(row, authUser) {
+  if (authUser.role !== 'admin' && row.project_owner_id !== authUser.sub) {
+    return { allowed: false, reason: "Only an Admin or this project's owner can do that." };
+  }
+  if (row.requested_by === authUser.sub) {
+    return { allowed: false, reason: 'You cannot act on your own documentation access request.' };
+  }
+  return { allowed: true, reason: null };
+}
+
 // Attaches `req._docAccessRequest` (already fetched — approve/deny/revoke/
 // delete all need the row anyway, so this avoids fetching it twice) and lets
-// the request through only for an Admin or that request's project owner.
+// the request through only when canActOnDocAccessRequest() allows it.
 async function requireAdminOrProjectOwner(req, res, next) {
   try {
     const row = await loadRequestWithProjectOwner(req.params.id, req.authUser.organisation);
     if (!row) return res.status(404).json({ error: 'Request not found.' });
-    if (req.authUser.role !== 'admin' && row.project_owner_id !== req.authUser.sub) {
-      return res.status(403).json({ error: 'Only an Admin or this project\'s owner can do that.' });
-    }
-    // Nobody acts on their own request — not even an Admin or the project
-    // owner. Low-impact today: an Admin/editor already has full doc access
-    // regardless of any grant (see userHasFullDocAccess in workspace.js), and
-    // a project owner is never locked out of their own project's endpoints
-    // in the first place (see applyDocLock there), so this mostly guards
-    // against someone hitting the API directly rather than a reachable UI
-    // path. It matters more once approval authority gets delegated more
-    // broadly than "Admin or owner."
-    if (row.requested_by === req.authUser.sub) {
-      return res.status(403).json({ error: 'You cannot act on your own documentation access request.' });
-    }
+    const decision = canActOnDocAccessRequest(row, req.authUser);
+    if (!decision.allowed) return res.status(403).json({ error: decision.reason });
     req._docAccessRequest = row;
     next();
   } catch (err) {
     console.error('requireAdminOrProjectOwner failed:', err);
     res.status(500).json({ error: 'Could not verify permission.' });
   }
+}
+
+// A grant can only be revoked while it is the current approved grant —
+// revoking an already-denied/revoked/pending request is meaningless.
+function canRevokeDocAccessRequest(status) {
+  return status === 'approved';
+}
+
+// Deleting is housekeeping on a CLOSED-OUT request only: a pending request
+// must be denied first (so the requester gets an answer, not silence), and
+// a currently-active approved grant must be revoked first (revoking is
+// always the one path that actually ends live access, never a delete).
+function canDeleteDocAccessRequest({ status, is_active }) {
+  return !(status === 'pending' || is_active);
+}
+
+// What GET /endpoint-status shows for one environment. 'active' wins over
+// everything else (an approved grant whose date range covers today); an
+// 'approved' row OUTSIDE its date range reads as 'expired' rather than
+// staying 'approved' — is_active is a derived column, not a stored one, so
+// without this a grant would go stale with no background job ever marking
+// it, and the two words would otherwise mean the same thing to a caller.
+function deriveDocAccessDisplayStatus(row) {
+  if (!row) return { status: 'none', endDate: null };
+  if (row.is_active) return { status: 'active', endDate: row.end_date };
+  if (row.status === 'pending') return { status: 'pending', endDate: null };
+  if (row.status === 'denied') return { status: 'denied', endDate: null };
+  if (row.status === 'approved') return { status: 'expired', endDate: null };
+  if (row.status === 'revoked') return { status: 'revoked', endDate: null };
+  return { status: 'none', endDate: null };
 }
 
 // A defensive cap, not a realistic ceiling — this is time-boxed
@@ -278,14 +321,7 @@ router.get('/endpoint-status', async (req, res) => {
 
     const environments = stages.map((s) => {
       const row = byEnv.get(s.id) || legacyRow || null;
-      let status = 'none', endDate = null;
-      if (row) {
-        if (row.is_active) { status = 'active'; endDate = row.end_date; }
-        else if (row.status === 'pending') status = 'pending';
-        else if (row.status === 'denied') status = 'denied';
-        else if (row.status === 'approved') status = 'expired';
-        else if (row.status === 'revoked') status = 'revoked';
-      }
+      const { status, endDate } = deriveDocAccessDisplayStatus(row);
       return { id: s.id, label: s.label, status, endDate };
     });
 
@@ -555,7 +591,7 @@ router.post('/:id/deny', requireAdminOrProjectOwner, async (req, res) => {
 router.post('/:id/revoke', requireAdminOrProjectOwner, async (req, res) => {
   try {
     const existing = req._docAccessRequest;
-    if (existing.status !== 'approved') return res.status(400).json({ error: 'Only an approved grant can be revoked.' });
+    if (!canRevokeDocAccessRequest(existing.status)) return res.status(400).json({ error: 'Only an approved grant can be revoked.' });
 
     await pool.query(
       `UPDATE doc_access_requests
@@ -603,7 +639,7 @@ router.delete('/:id', requireAdminOrProjectOwner, async (req, res) => {
       [req.params.id]
     );
     const existing = { ...req._docAccessRequest, ...statusRows[0] };
-    if (existing.status === 'pending' || existing.is_active) {
+    if (!canDeleteDocAccessRequest(existing)) {
       return res.status(400).json({ error: 'Deny or revoke this request before deleting it.' });
     }
 
@@ -633,3 +669,9 @@ router.delete('/:id', requireAdminOrProjectOwner, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.canActOnDocAccessRequest = canActOnDocAccessRequest;
+module.exports.canRevokeDocAccessRequest = canRevokeDocAccessRequest;
+module.exports.canDeleteDocAccessRequest = canDeleteDocAccessRequest;
+module.exports.deriveDocAccessDisplayStatus = deriveDocAccessDisplayStatus;
+module.exports.parsePageParams = parsePageParams;
+module.exports.parseCursorPending = parseCursorPending;

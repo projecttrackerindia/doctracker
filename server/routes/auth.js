@@ -33,6 +33,39 @@ const authLimiter = createRateLimiter({
 const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 
+// Pure decision functions for the two lockout checkpoints below — kept
+// separate from the DB writes around them so the boundary cases (exactly at
+// the threshold, a lock that just expired, the "at least 1 minute" rounding
+// on the message) can be unit-tested without a database. Exported as
+// properties on the router (see module.exports at the bottom of this file),
+// the same pattern server/routes/workspace.js already uses.
+
+// Given the account's stored locked_until and the current time, says
+// whether it's still locked and, if so, how many whole minutes are left to
+// show in the message. A locked_until in the past (the lock expired) or
+// null (never locked) both read as not locked — this function doesn't clear
+// the column, the caller's normal login-success path already does that.
+function checkAccountLockout(lockedUntil, now = Date.now()) {
+  if (!lockedUntil) return { locked: false, minutesLeft: 0 };
+  const untilMs = new Date(lockedUntil).getTime();
+  if (untilMs <= now) return { locked: false, minutesLeft: 0 };
+  // Rounded UP and floored at 1: "0 minutes left" would read as "not
+  // locked" to someone glancing at the message, even with 40 seconds
+  // actually remaining.
+  return { locked: true, minutesLeft: Math.max(1, Math.ceil((untilMs - now) / 60000)) };
+}
+
+// Given a wrong password and the account's CURRENT failed-attempt count,
+// decides whether this failure is the one that crosses LOCKOUT_THRESHOLD.
+// `failedCount` in the non-locking branch is what the caller should write
+// back as the new count; in the locking branch the caller resets it to 0
+// (the counter's job ends once a lock starts — see the route below).
+function nextFailedLoginState(currentFailedCount) {
+  const nextCount = (currentFailedCount || 0) + 1;
+  if (nextCount >= LOCKOUT_THRESHOLD) return { shouldLock: true, failedCount: 0 };
+  return { shouldLock: false, failedCount: nextCount };
+}
+
 // SECURITY (Finding F-04 — MFA): the second factor is only required once a
 // password has already been verified correct, so the challenge token below
 // deliberately can't be used to skip the password step — it's issued FROM a
@@ -239,24 +272,23 @@ router.post('/login', authLimiter, async (req, res) => {
     const ok = await bcrypt.compare(password, user.password_hash);
 
     const now = Date.now();
-    const isLocked = user.locked_until && new Date(user.locked_until).getTime() > now;
-    if (isLocked) {
-      const minutesLeft = Math.max(1, Math.ceil((new Date(user.locked_until).getTime() - now) / 60000));
+    const lockout = checkAccountLockout(user.locked_until, now);
+    if (lockout.locked) {
       return res.status(423).json({
         error: 'account_locked',
-        message: `Too many failed sign-in attempts. This account is temporarily locked — try again in about ${minutesLeft} minute${minutesLeft === 1 ? '' : 's'}.`,
+        message: `Too many failed sign-in attempts. This account is temporarily locked — try again in about ${lockout.minutesLeft} minute${lockout.minutesLeft === 1 ? '' : 's'}.`,
       });
     }
 
     if (!ok) {
-      const nextCount = user.failed_login_count + 1;
-      if (nextCount >= LOCKOUT_THRESHOLD) {
+      const { shouldLock, failedCount } = nextFailedLoginState(user.failed_login_count);
+      if (shouldLock) {
         await pool.query(
           'UPDATE users SET failed_login_count = 0, locked_until = now() + ($1 * interval \'1 millisecond\') WHERE id = $2',
           [LOCKOUT_DURATION_MS, user.id]
         );
       } else {
-        await pool.query('UPDATE users SET failed_login_count = $1 WHERE id = $2', [nextCount, user.id]);
+        await pool.query('UPDATE users SET failed_login_count = $1 WHERE id = $2', [failedCount, user.id]);
       }
       return res.status(401).json(genericError);
     }
@@ -498,3 +530,5 @@ router.get('/me', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.checkAccountLockout = checkAccountLockout;
+module.exports.nextFailedLoginState = nextFailedLoginState;
