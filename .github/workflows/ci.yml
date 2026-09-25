@@ -1,0 +1,49 @@
+# CI — implements what CONTRIBUTING.md already documented (that file
+# described this workflow's exact steps and semantics before the workflow
+# itself existed). Runs on every push/PR to main; deliberately no deploy
+# step — Railway already auto-deploys main independently (see railway.json
+# and README's "Deploy on Railway"), so this only gates what merges, not
+# what ships.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Formatting check
+        # Informational only, per CONTRIBUTING.md's "Formatting" section:
+        # the codebase predates Prettier and hasn't taken the one-time
+        # reformat diff yet, so ~55 files currently report as non-conforming
+        # — expected, not a bug. Remove continue-on-error once that diff
+        # lands (CONTRIBUTING.md spells out the exact steps).
+        run: npm run format:check
+        continue-on-error: true
+
+      - name: Dependency audit
+        # Blocking, but only on what the script itself treats as blocking —
+        # `npm audit --omit=dev --audit-level=high` (see package.json)
+        # already ignores low/moderate advisories, so this step failing
+        # always means something CI should actually stop for.
+        run: npm run audit:check

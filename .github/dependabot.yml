@@ -1,0 +1,23 @@
+# Weekly dependency-update PRs, grouped by minor/patch so a routine bump
+# isn't a dozen separate PRs — see CONTRIBUTING.md's "Dependency updates"
+# section, which documented this exact config before the file existed.
+# `npm run audit:check` (in ci.yml) is the other half of this: Dependabot
+# says a newer version exists, `npm audit` says which currently-installed
+# version has a known vulnerability, right now.
+version: 2
+updates:
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    groups:
+      npm-minor-patch:
+        update-types: ['minor', 'patch']
+
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    groups:
+      actions-minor-patch:
+        update-types: ['minor', 'patch']

@@ -2,6 +2,7 @@ const express = require('express');
 const { authenticate, requireAdmin } = require('../middleware/authGuard');
 const engine = require('../alertEngine');
 const { recordAuditEvent } = require('../auditService');
+const { deliverAlertWebhook } = require('../webhookDelivery');
 
 const router = express.Router();
 router.use(authenticate);
@@ -25,7 +26,9 @@ router.get('/', async (req, res) => {
     ]);
     res.json({
       rules,
-      settings,
+      // Never the raw settings object — that carries webhook.secretEnc.
+      // toClientSettings() reduces it to { url, enabled, hasSecret }.
+      settings: engine.toClientSettings(settings),
       active,
       // The catalogue travels with the response so the UI's rule editor
       // cannot drift out of step with what the engine will actually accept.
@@ -83,14 +86,70 @@ router.put('/settings', requireAdmin, async (req, res) => {
       action: 'ADMIN_SETTING_CHANGED',
       resourceType: 'alert_settings',
       details: `Alerting ${settings.enabled ? 'enabled' : 'DISABLED'}`
-        + (settings.quietHours.enabled ? `, quiet hours on (${settings.quietHours.timezone})` : ''),
+        + (settings.quietHours.enabled ? `, quiet hours on (${settings.quietHours.timezone})` : '')
+        + (settings.webhook.enabled ? ', webhook on' : ''),
       severity: 'warning',
-      metadata: { enabled: settings.enabled, quietHours: settings.quietHours.enabled },
+      metadata: { enabled: settings.enabled, quietHours: settings.quietHours.enabled, webhook: settings.webhook.enabled },
     });
-    res.json({ settings });
+    res.json({ settings: engine.toClientSettings(settings) });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ error: err.message });
     console.error('PUT /api/workspace/alerts/settings failed:', err);
     res.status(500).json({ error: 'Could not save alert settings.' });
+  }
+});
+
+// Lets an Admin confirm a webhook URL/secret actually works before relying
+// on it to fire during a real incident, without waiting for (or faking) an
+// actual breach. Uses whatever is currently SAVED (the request body isn't
+// trusted for the URL/secret — same "read the stored config, don't trust
+// what the client claims it is" posture as every other admin action here),
+// so this only works after Save, not as a pre-save preview.
+router.post('/webhook/test', requireAdmin, async (req, res) => {
+  try {
+    const settings = await engine.getSettings(req.authUser.organisation);
+    if (!settings.webhook || !settings.webhook.url) {
+      return res.status(400).json({ error: 'Save a webhook URL first.' });
+    }
+    const result = await deliverAlertWebhook(req.authUser.organisation, { ...settings.webhook, enabled: true }, {
+      rule: 'Test alert',
+      ruleId: 'test',
+      metric: 'error_rate',
+      severity: 'warning',
+      status: 'firing',
+      environment: 'TEST',
+      endpointId: null,
+      value: 0,
+      threshold: 0,
+      comparison: 'above',
+      sample: 0,
+      title: 'DocTracker test webhook',
+      body: `Sent by ${req.authUser.username} from Observability ▸ Alerts ▸ Webhook.`,
+      timestamp: new Date().toISOString(),
+    });
+    if (result.blocked) return res.status(400).json({ error: `Blocked: ${result.reason}` });
+    if (result.failed) return res.status(502).json({ error: `Could not reach the webhook: ${result.error}` });
+    res.json({ status: result.status, ok: result.status >= 200 && result.status < 300 });
+  } catch (err) {
+    console.error('POST /api/workspace/alerts/webhook/test failed:', err);
+    res.status(500).json({ error: 'Could not send the test webhook.' });
+  }
+});
+
+// Cursor-paginated incident history — see engine.listIncidents(). Readable
+// by everyone, same as GET / above (the active-alerts read) and for the
+// same reason: a threshold or a past incident you cannot see is not
+// meaningfully different from one that never happened.
+router.get('/history', async (req, res) => {
+  try {
+    const { incidents, hasMore } = await engine.listIncidents(req.authUser.organisation, {
+      limit: req.query.limit,
+      beforeId: req.query.beforeId ? Number(req.query.beforeId) : null,
+    });
+    res.json({ incidents, hasMore });
+  } catch (err) {
+    console.error('GET /api/workspace/alerts/history failed:', err);
+    res.status(500).json({ error: 'Could not load alert history.' });
   }
 });
 

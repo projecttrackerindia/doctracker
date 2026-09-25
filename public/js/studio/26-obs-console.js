@@ -885,7 +885,8 @@ function renderObsAlertsTab(){
   if(!d) return '';
   return renderObsActiveAlerts(d)
     + renderObsAlertRules(d)
-    + (d.canEdit ? renderObsAlertSettings(d) : '');
+    + (d.canEdit ? renderObsAlertSettings(d) : '')
+    + renderObsAlertHistory();
 }
 
 function renderObsActiveAlerts(d){
@@ -1087,6 +1088,7 @@ function renderObsAlertEditor(d, r){
 function renderObsAlertSettings(d){
   const s = d.settings || {};
   const q = s.quietHours || {};
+  const w = s.webhook || {};
   const hhmm = (mins)=>{
     const m = Math.max(0, Math.min(1439, Number(mins) || 0));
     return `${String(Math.floor(m / 60)).padStart(2,'0')}:${String(m % 60).padStart(2,'0')}`;
@@ -1130,10 +1132,78 @@ function renderObsAlertSettings(d){
         <span>Critical alerts ignore quiet hours</span>
         <em>Leave on unless you genuinely want a 5xx storm to wait until morning.</em>
       </label>
+      <label class="obs-alert-field check">
+        <input type="checkbox" id="obsAlertWebhookEnabled"${w.enabled ? ' checked' : ''}>
+        <span>Webhook</span>
+        <em>POSTs a signed JSON payload on every fire/resolve — independent of who is
+            subscribed to in-app notifications above. See ALERTING.md § Webhook delivery.</em>
+      </label>
+      <label class="obs-alert-field wide">
+        <span>Webhook URL</span>
+        <input type="url" id="obsAlertWebhookUrl" value="${escapeHtml(w.url || '')}"
+               placeholder="https://example.com/hooks/doctracker">
+      </label>
+      <label class="obs-alert-field wide">
+        <span>Webhook secret</span>
+        <input type="password" id="obsAlertWebhookSecret" autocomplete="new-password"
+               placeholder="${w.hasSecret ? 'Set — leave blank to keep it' : 'Not set — leave blank to send unsigned'}">
+        <em>Signs each delivery (X-DocTracker-Signature). Write-only — never shown again once saved.</em>
+      </label>
     </div>
     <div class="obs-alert-editor-actions">
       <button type="button" class="obs-ip-more" id="obsAlertSaveSettings">Save settings</button>
+      <button type="button" class="obs-ip-more" id="obsAlertWebhookTest"${w.url ? '' : ' disabled title="Save a webhook URL first"'}>Send test webhook</button>
     </div>
+  </div>`;
+}
+
+// The "incidents over time" view — alert_state only ever holds CURRENT
+// state, so without this a resolved incident left no trace once the next
+// evaluation overwrote its row. Readable by everyone, same as the active-
+// alerts panel above (see ALERTING.md § Who can do what) — not gated by
+// d.canEdit. Reuses .obs-alert-rule's row styling from renderObsAlertRules()
+// rather than inventing new markup for what is visually the same kind of row.
+function renderObsAlertHistory(){
+  const h = state.obsAlertHistory;
+  if(state.obsAlertHistoryStatus === 'idle'){
+    return `<div class="obs-panel">
+      <div class="section-head">
+        <div>
+          <div class="section-title">Incident history</div>
+          <div class="hint" style="margin-top:-4px;">Past incidents, most recent first</div>
+        </div>
+        <button type="button" class="obs-ip-more" id="obsAlertHistoryLoad">Load history</button>
+      </div>
+    </div>`;
+  }
+  if(state.obsAlertHistoryStatus === 'loading' && !h){
+    return `<div class="obs-panel"><span class="obs-skeleton-line short"></span></div>`;
+  }
+  if(state.obsAlertHistoryStatus === 'error' && !h){
+    return `<div class="obs-panel"><div class="obs-empty">
+      <div class="obs-empty-title">Could not load history</div>
+      <div class="obs-empty-body">${escapeHtml(state.obsAlertHistoryError)}</div>
+    </div></div>`;
+  }
+  const incidents = (h && h.incidents) || [];
+  return `<div class="obs-panel">
+    <div class="section-title">Incident history</div>
+    <div class="hint" style="margin-top:-4px;">Past incidents, most recent first — resolved and still-open</div>
+    ${!incidents.length ? `<div class="obs-empty"><div class="obs-empty-title">No incidents yet</div></div>` : `
+    <div class="obs-alert-rules">
+      ${incidents.map(i => `<div class="obs-alert-rule">
+        <span class="obs-alert-sev" style="background:var(${OBS_ALERT_SEV[i.severity] || '--put'});"
+              title="${i.severity === 'critical' ? 'Critical' : 'Warning'}"></span>
+        <div class="obs-alert-rule-main">
+          <div class="obs-alert-rule-name">${escapeHtml(i.ruleName)}${
+            i.resolvedAt ? '' : ' <span class="obs-alert-off-tag">still open</span>'}</div>
+          <div class="obs-alert-rule-def mono">${escapeHtml([i.environment, i.endpointId ? obsEndpointLabel(i.endpointId) : null].filter(Boolean).join(' · '))} · ${escapeHtml(i.display)}</div>
+        </div>
+        <div class="obs-alert-rule-cool hint">${escapeHtml(formatDateTime(i.startedAt))}${
+          i.resolvedAt ? ` → ${escapeHtml(formatDateTime(i.resolvedAt))}` : ''}</div>
+      </div>`).join('')}
+    </div>`}
+    ${h && h.hasMore ? `<div class="obs-alert-editor-actions"><button type="button" class="obs-ip-more" id="obsAlertHistoryLoad">Load more</button></div>` : ''}
   </div>`;
 }
 
@@ -1289,8 +1359,17 @@ function wireObsAlerts(main){
       return (h || 0) * 60 + (m || 0);
     };
     const on = (id)=>{ const el = main.querySelector('#' + id); return el ? el.checked : false; };
+    const val = (id)=>{ const el = main.querySelector('#' + id); return el ? el.value : ''; };
     saveSettings.disabled = true;
     try{
+      // The secret field is write-only and starts blank every render (see
+      // renderObsAlertSettings) whether or not one is already saved, so a
+      // blank field here means "leave it as-is", not "clear it" — only send
+      // `secret` at all when the admin actually typed something. See
+      // buildWebhookPatch() in alertEngine.js for the server-side contract.
+      const webhookSecret = val('obsAlertWebhookSecret');
+      const webhook = { url: val('obsAlertWebhookUrl'), enabled: on('obsAlertWebhookEnabled') };
+      if(webhookSecret) webhook.secret = webhookSecret;
       await obsAlertApi('PUT', '/settings', {
         enabled: on('obsAlertEnabledAll'),
         notifyAdmins: on('obsAlertNotifyAdmins'),
@@ -1301,11 +1380,30 @@ function wireObsAlerts(main){
           timezone: (main.querySelector('#obsAlertQuietTz') || {}).value || 'Asia/Kolkata',
           allowCritical: on('obsAlertQuietCrit'),
         },
+        webhook,
       });
       toast('Notification settings saved.');
     }catch(err){ toast(err.message || 'Could not save settings.'); }
     saveSettings.disabled = false;
     obsLoadAlerts();
+  });
+
+  const webhookTest = main.querySelector('#obsAlertWebhookTest');
+  if(webhookTest) webhookTest.addEventListener('click', async ()=>{
+    webhookTest.disabled = true;
+    const original = webhookTest.textContent;
+    webhookTest.textContent = 'Sending…';
+    try{
+      const result = await obsAlertApi('POST', '/webhook/test');
+      toast(result.ok ? `Test delivered — the target responded ${result.status}.` : `Target responded ${result.status} (not 2xx).`);
+    }catch(err){ toast(err.message || 'Could not send the test webhook.'); }
+    webhookTest.disabled = false;
+    webhookTest.textContent = original;
+  });
+
+  const historyLoad = main.querySelector('#obsAlertHistoryLoad');
+  if(historyLoad) historyLoad.addEventListener('click', ()=>{
+    obsLoadAlertHistory(state.obsAlertHistoryStatus === 'idle');
   });
 }
 

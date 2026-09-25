@@ -306,13 +306,6 @@ function healthKpi(label, value, sub, accentVar){
   </div>`;
 }
 
-function formatBytes(n){
-  if(n === null || n === undefined) return '—';
-  if(n < 1024) return `${n} B`;
-  if(n < 1024*1024) return `${(n/1024).toFixed(1)} KB`;
-  return `${(n/1024/1024).toFixed(1)} MB`;
-}
-
 function formatDuration(seconds){
   if(seconds === null || seconds === undefined) return '—';
   if(seconds < 60) return `${seconds}s`;

@@ -46,10 +46,19 @@ references read as false positives to a per-file linter).
 ## Tests
 
 `test/*.test.js`, run via Node's built-in test runner (`node --test`, no
-extra dependency). Currently covers the pure-logic modules
-(`server/validators.js`, `server/accessSchedule.js`) — anything with no DB
-or network dependency is fair game to add here the same way. Route-level
-tests would need a real or mocked Postgres and aren't set up yet.
+extra dependency). Every file in here is zero-DB, zero-network: either a
+module that's pure to begin with (`server/validators.js`,
+`server/accessSchedule.js`, the alert engine's state machine), or a handful
+of pure decision functions deliberately extracted from a route file and
+exported as properties on its router (`server/routes/docAccess.js`'s
+permission/status/pagination rules, `server/routes/auth.js`'s lockout
+rules) so the DB write stays in the route but the *decision* is testable —
+see either of those two files for the pattern before adding a third. Route
+files needing full DATABASE_URL/MASTER_KEY/JWT_SECRET env vars stub them
+with unreachable/dummy values before requiring the module, purely so import
+doesn't warn — no test in here ever makes a real network call. Full
+route-level integration tests would need a real or mocked Postgres and
+aren't set up yet.
 
 ## Schema changes
 

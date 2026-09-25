@@ -13,6 +13,7 @@ __pycache__/
 # of the sort belongs in source control.
 .env
 .env.*
+!.env.example
 creds.json
 ops/sit-doc-agent/creds.json
 

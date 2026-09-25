@@ -42,6 +42,14 @@ something **absent**: *the collector stopped*. That one can never be
 event-driven, because the event it would react to is precisely the event that
 is no longer happening. Silence has to be noticed by a clock.
 
+Running more than one app instance, each would run this same 60s sweep
+independently and could double-notify — so `runAlertSweep()` wraps itself in
+a `pg_try_advisory_lock`: whichever instance's tick gets there first evaluates
+every organisation; every other instance's tick for that interval finds the
+lock held and no-ops rather than waiting for it (a fixed-interval sweep that
+blocks defeats the point). Nothing is lost by an instance skipping a tick —
+the next tick, 60s later, runs uncontended the same way.
+
 That is the whole reason `runAlertSweep()` exists, and it also handles the
 mirror case: an environment whose traffic stops entirely stops producing
 ingests, so without the sweep a firing alert could never **resolve**.
@@ -139,13 +147,46 @@ is indistinguishable from one nobody called.
 |---|---|---|
 | **Alerting is on** | on | Master switch. Off means nothing is evaluated and nothing is ever raised |
 | **Notify every Admin** | on | The default recipient set. Rules can add specific people on top |
-| **Quiet hours** | off | Suppresses **notification only**. Rules keep being evaluated and the console still shows what is firing — nothing is lost, it is just not announced |
+| **Quiet hours** | off | Suppresses **notification only**, both in-app and webhook. Rules keep being evaluated and the console still shows what is firing — nothing is lost, it is just not announced |
 | **From / Until** | 22:00–07:00 | Wraps midnight correctly |
 | **Time zone** | `Asia/Kolkata` | An IANA zone. An unrecognised one **disables** quiet hours rather than silencing everything |
 | **Critical ignores quiet hours** | on | Leave on unless you genuinely want a 5xx storm to wait until morning |
+| **Webhook URL** | off | A POST target for every fire/resolve — see "Webhook delivery" below |
+| **Webhook secret** | — | Write-only. Used to HMAC-sign each delivery; never re-displayed once saved, same as every other secret this app stores |
 
 A suppressed notification deliberately does **not** start the cooldown —
 otherwise an alert would go quiet for an hour having never spoken.
+
+### Webhook delivery
+
+Configured in **Observability ▸ Alerts**, Admin only. Independent of the
+in-app recipient list: an org can have `Notify every Admin` off and still
+get every fire/resolve on its webhook, since a webhook target isn't a
+"recipient" in the same sense a user id is. Every delivery:
+
+- Is **SSRF-validated** immediately before sending, the same
+  `validateOutboundUrlAsync` / manual-redirect-revalidation approach Live
+  Mode's real outbound calls already use (`server/urlSafety.js`,
+  `server/outboundHttp.js`) — a webhook URL can no more reach an internal
+  address than a Live Mode base URL can.
+- Is **HMAC-SHA256 signed** (`X-DocTracker-Signature: sha256=<hex>`) over
+  the raw JSON body, using the org's own secret — same shape as
+  Stripe/GitHub webhook signing, so a receiver can verify a payload actually
+  came from this server and wasn't forged. The secret is envelope-encrypted
+  at rest (`server/crypto.js`, same mechanism as the MFA secret) and never
+  re-exposed to the browser, not even to the admin who set it — the
+  settings response only ever says `hasSecret: true/false`.
+- Is **audited**, always: `ALERT_WEBHOOK_DELIVERED` (2xx), `ALERT_WEBHOOK_FAILED`
+  (non-2xx, timeout, or network error), `ALERT_WEBHOOK_BLOCKED` (the SSRF
+  check rejected it — a webhook URL edited after saving to point somewhere
+  internal is caught the same way a Live Mode base URL would be).
+- **Never blocks evaluation.** Delivery is fire-and-forget from
+  `emitNotification()`; a slow or unreachable webhook target adds zero
+  latency to the alert pipeline.
+
+A "Send test" button (`POST /api/workspace/alerts/webhook/test`) fires one
+synthetic delivery through the exact same path, so a URL/secret can be
+verified without waiting for, or faking, a real breach.
 
 ### Environment variables (deployment)
 
@@ -193,9 +234,18 @@ actually responding is often not an Admin.
 
 Every change is written to the audit log: `ALERT_RULE_CREATED`,
 `ALERT_RULE_UPDATED`, `ALERT_RULE_DELETED`, `ADMIN_SETTING_CHANGED`,
-`ALERT_ACKNOWLEDGED`. Disabling or deleting a rule is recorded at `critical`
-severity, because that is how a system silently stops watching for
-something.
+`ALERT_ACKNOWLEDGED`, `ALERT_WEBHOOK_DELIVERED`, `ALERT_WEBHOOK_FAILED`,
+`ALERT_WEBHOOK_BLOCKED`. Disabling or deleting a rule is recorded at
+`critical` severity, because that is how a system silently stops watching
+for something. The three webhook events are written by
+`recordSystemAuditEvent()` rather than the usual `recordAuditEvent()` — a
+delivery fires from the sweep timer or the ingest path, with no signed-in
+user or HTTP request to attribute it to, so it's recorded with `role:
+'system'` instead of a real user's identity.
+
+Incident history is readable the same way: Admin and everyone else both see
+`GET /api/workspace/alerts/history` — no separate permission from reading
+what's currently firing.
 
 ---
 
@@ -203,9 +253,12 @@ something.
 
 | File | What |
 |---|---|
-| `server/alertEngine.js` | Metric catalogue, state machine, evaluation, sweep |
-| `server/routes/alerts.js` | `/api/workspace/alerts` — read, CRUD, "evaluate now" |
+| `server/alertEngine.js` | Metric catalogue, state machine, evaluation, sweep, incident-history writes |
+| `server/routes/alerts.js` | `/api/workspace/alerts` — read, CRUD, "evaluate now", webhook test, history |
+| `server/webhookDelivery.js` | Signs and sends one webhook delivery; SSRF-validates, audits every outcome |
+| `server/outboundHttp.js` | Generic SSRF-safe sender (validate → manual redirect loop, re-validated → timeout) webhookDelivery.js is built on |
 | `server/db.js` | `alert_rule`, `alert_state`, `org_workspace.alert_settings`, `agent_heartbeat` |
+| `server/migrations/sql/0003_alert_incident_history.sql` | `alert_incident` — the durable history table |
 | `server/observabilityStore.js` | `touchHeartbeat()` / `getHeartbeat()` — the collector's own liveness signal, separate from traffic coverage |
 | `public/js/studio/26-obs-console.js` | The Alerts tab |
 | `test/alerting.test.js` | State machine, quiet hours, validation |
@@ -214,17 +267,23 @@ something.
 is edited by people, rarely; state is written by the engine many times a
 minute. One row for both would mean an Admin's edit contending with the
 engine's writes, and a rule's audit trail churning every few seconds.
+`alert_incident` is a third, append-mostly table alongside them: `alert_state`
+is overwritten in place and only ever describes *now*, so without a separate
+table a resolved incident left no trace once the next evaluation ran.
 
 ---
 
 ## 7. Known limits
 
-- **In-app notifications only.** There is no email or webhook channel — this
-  deployment has no SMTP configuration and no outbound-webhook story. Adding
-  one means a delivery abstraction plus SSRF controls on the webhook URL;
-  `emitNotification()` in `alertEngine.js` is the single place it would hook in.
-- **No alert history.** `alert_state` holds *current* state; the notification
-  rows are the record of what fired. There is no "incidents over time" view.
-- **Evaluation is per-process.** Two app instances would each run the sweep and
-  could double-notify. Fine on a single Railway instance; needs an advisory
-  lock before scaling out.
+- **Evaluation is per-process beyond the sweep lock.** The advisory lock
+  (§1) only serializes `runAlertSweep()`; `evaluateAfterIngest()`'s
+  per-org-per-environment throttle (`lastEvaluated`, §3's
+  `ALERT_MIN_EVAL_INTERVAL_MS`) is still an in-memory `Map`, so two
+  instances could each independently evaluate the same org's ingest-driven
+  path within the throttle window. Lower-stakes than the sweep (worst case
+  is a slightly-early re-notify, not a duplicate silent-collector alert),
+  but not fully closed.
+- **A webhook target sees the same payload every retry has no backoff for.**
+  There is no retry queue — a delivery that times out or 5xxs is logged
+  (`ALERT_WEBHOOK_FAILED`) and not attempted again until the next state
+  change (fire/renotify/resolve) naturally produces one.

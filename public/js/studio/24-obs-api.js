@@ -262,6 +262,33 @@ async function obsLoadAlerts(){
   renderMain();
 }
 
+// Loaded on demand (a "Load history" button, not auto-fetched with the rest
+// of the tab) since past incidents are supplementary to the day-to-day
+// alerts workflow — no reason to cost every Alerts-tab visit an extra query
+// for something most visits won't look at. `reset` starts over from page 1
+// (first load, or a fresh env switch); omitted, it appends the next page
+// onto what is already loaded, same cursor idiom as loadMoreNotifs() in
+// 03-notifications.js.
+async function obsLoadAlertHistory(reset){
+  if(reset){ state.obsAlertHistory = null; state.obsAlertHistoryOldestId = null; }
+  state.obsAlertHistoryStatus = 'loading';
+  try{
+    const qs = state.obsAlertHistoryOldestId
+      ? `?limit=20&beforeId=${encodeURIComponent(state.obsAlertHistoryOldestId)}`
+      : '?limit=20';
+    const { incidents, hasMore } = await obsAlertApi('GET', `/history${qs}`);
+    const existing = (state.obsAlertHistory && state.obsAlertHistory.incidents) || [];
+    state.obsAlertHistory = { incidents: reset ? incidents : existing.concat(incidents), hasMore };
+    state.obsAlertHistoryOldestId = incidents.length ? incidents[incidents.length - 1].id : state.obsAlertHistoryOldestId;
+    state.obsAlertHistoryStatus = 'ready';
+    state.obsAlertHistoryError = '';
+  }catch(err){
+    state.obsAlertHistoryStatus = 'error';
+    state.obsAlertHistoryError = err.message || 'Could not load alert history.';
+  }
+  renderMain();
+}
+
 /* True once this org has ANY rollup data. Drives the fallback: false means the
    agent hasn't been upgraded yet and the page should keep using the blob. */
 function obsDataAvailable(){
