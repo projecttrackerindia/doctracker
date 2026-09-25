@@ -26,6 +26,7 @@ const aiRoutes = require('./routes/ai');
 const notificationRoutes = require('./routes/notifications');
 const observabilityRoutes = require('./routes/observability');
 const alertRoutes = require('./routes/alerts');
+const adminAnalyticsRoutes = require('./routes/adminAnalytics');
 const compressionMiddleware = require('./middleware/compress');
 const { verifySession, IdleTimeoutError } = require('./middleware/authGuard');
 const { assignRequestId } = require('./requestId');
@@ -186,6 +187,7 @@ app.use('/api/workspace/observability', observabilityRoutes);
 app.use('/api/workspace/alerts', alertRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/admin/analytics', adminAnalyticsRoutes);
 
 // Previously just `{ ok: true }` unconditionally — a deploy platform's
 // health check would keep reporting this instance as healthy even while its
