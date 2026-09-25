@@ -6,18 +6,27 @@
 // long note above their CREATE TABLE in server/db.js for why the blob could
 // not do this job).
 //
-// Two tiers, deliberately:
+// Three tiers, deliberately:
 //
-//   endpoint_metrics_rollup   1-minute buckets, 13-month retention.
-//                             EXACT counts - every request is counted, nothing
-//                             is ever evicted. This is what every chart, KPI
-//                             and date-range filter reads from.
+//   endpoint_metrics_rollup         1-minute buckets, ~30 days. EXACT counts -
+//                                   every request counted, nothing evicted.
 //
-//   endpoint_log_records      individual requests, 7-day retention, daily
-//                             partitions. Only populated when the agent runs
-//                             with CAPTURE_MODE=full. This is for drill-down
-//                             ("show me the actual failing calls"), never for
-//                             aggregates.
+//   endpoint_metrics_rollup_hourly  the same counters folded to the hour once
+//                                   minute rows age out, kept ~400 days. Still
+//                                   exact: folding sums, it does not sample.
+//                                   Without this, a year of 1-minute rows runs
+//                                   to tens of GB at production volume, held at
+//                                   a resolution no chart can draw.
+//
+//   endpoint_log_records            individual requests, 7-day retention, daily
+//                                   partitions. Only populated under
+//                                   CAPTURE_MODE=full. For drill-down ("show me
+//                                   the actual failing calls"), never for
+//                                   aggregates.
+//
+// The two rollup tiers are DISJOINT - the downsample deletes the minute rows
+// it folds, in the same transaction - so reads UNION them (see ROLLUP_SOURCE)
+// with no de-duplication and no risk of double counting.
 //
 // The important consequence: a month of accurate, date-filtered metrics needs
 // ONLY the rollup tier, which contains no captured field values at all. Full
@@ -371,6 +380,25 @@ async function ingestRecordChunk(organisation, environment, capped, runner) {
 // Read
 // ---------------------------------------------------------------------------
 
+// Reads span BOTH rollup tiers. The downsample job deletes the minute rows it
+// folds into hourly ones (in one transaction - see downsampleOldRollups), so
+// the two tables never describe the same interval and a plain UNION ALL is
+// exactly right: no de-duplication needed, no risk of double counting.
+//
+// Queries therefore select from this instead of naming a table, which keeps
+// "where does the data live" in one place rather than in five query strings.
+const ROLLUP_SOURCE = `(
+  SELECT organisation, environment, endpoint_id, bucket_start, request_count,
+         status_2xx, status_3xx, status_4xx, status_5xx, status_unknown,
+         latency_sum, latency_count, latency_min, latency_max, latency_buckets, source_ips
+  FROM endpoint_metrics_rollup
+  UNION ALL
+  SELECT organisation, environment, endpoint_id, bucket_start, request_count,
+         status_2xx, status_3xx, status_4xx, status_5xx, status_unknown,
+         latency_sum, latency_count, latency_min, latency_max, latency_buckets, source_ips
+  FROM endpoint_metrics_rollup_hourly
+)`;
+
 // `alias` qualifies the column names for queries that join this table against
 // something else (the histogram expansions below). Passing it is cleaner and
 // far less fragile than string-rewriting the finished clause.
@@ -415,7 +443,7 @@ async function getSummary(organisation, { environment, from, to } = {}) {
        MAX(latency_max)                          AS latency_max,
        COUNT(DISTINCT endpoint_id)::int          AS endpoint_count,
        MAX(bucket_start)                         AS last_seen_at
-     FROM endpoint_metrics_rollup WHERE ${w.text}`,
+     FROM ${ROLLUP_SOURCE} rollup WHERE ${w.text}`,
     w.params
   );
   const r = rows[0] || {};
@@ -430,14 +458,14 @@ async function getSummary(organisation, { environment, from, to } = {}) {
   const [{ rows: histoRows }, { rows: ipRows }] = await Promise.all([
     pool.query(
       `SELECT kv.key AS k, SUM(kv.value::numeric)::bigint AS v
-       FROM endpoint_metrics_rollup r, LATERAL jsonb_each_text(r.latency_buckets) kv
+       FROM ${ROLLUP_SOURCE} r, LATERAL jsonb_each_text(r.latency_buckets) kv
        WHERE ${wr.text}
        GROUP BY kv.key`,
       wr.params
     ),
     pool.query(
       `SELECT kv.key AS ip, SUM(kv.value::numeric)::bigint AS n
-       FROM endpoint_metrics_rollup r, LATERAL jsonb_each_text(r.source_ips) kv
+       FROM ${ROLLUP_SOURCE} r, LATERAL jsonb_each_text(r.source_ips) kv
        WHERE ${wr.text}
        GROUP BY kv.key ORDER BY 2 DESC LIMIT 10`,
       wr.params
@@ -503,7 +531,7 @@ async function getSeries(organisation, { environment, from, to, intervalSeconds 
        SUM(status_unknown)::bigint AS sunknown,
        SUM(latency_sum)::bigint    AS latency_sum,
        SUM(latency_count)::bigint  AS latency_count
-     FROM endpoint_metrics_rollup WHERE ${w.text}
+     FROM ${ROLLUP_SOURCE} rollup WHERE ${w.text}
      GROUP BY 1 ORDER BY 1 ASC`,
     params
   );
@@ -547,14 +575,14 @@ async function getEndpointBreakdown(organisation, { environment, from, to, limit
               SUM(latency_sum)::bigint    AS latency_sum,
               SUM(latency_count)::bigint  AS latency_count,
               MAX(bucket_start)           AS last_seen_at
-       FROM endpoint_metrics_rollup WHERE ${w.text}
+       FROM ${ROLLUP_SOURCE} rollup WHERE ${w.text}
        GROUP BY endpoint_id
        ORDER BY SUM(request_count) DESC
        LIMIT $${w.nextIndex}
      ),
      histos AS (
        SELECT r.endpoint_id, kv.key AS k, SUM(kv.value::numeric)::bigint AS v
-       FROM endpoint_metrics_rollup r
+       FROM ${ROLLUP_SOURCE} r
        JOIN totals t ON t.endpoint_id = r.endpoint_id
        CROSS JOIN LATERAL jsonb_each_text(r.latency_buckets) kv
        WHERE ${whereClause(organisation, environment, from, to, 'r').text}
@@ -676,7 +704,7 @@ async function getRecords(organisation, {
 
 async function getEnvironments(organisation) {
   const { rows } = await pool.query(
-    `SELECT DISTINCT environment FROM endpoint_metrics_rollup WHERE organisation = $1 ORDER BY environment`,
+    `SELECT DISTINCT environment FROM ${ROLLUP_SOURCE} rollup WHERE organisation = $1 ORDER BY environment`,
     [organisation]
   );
   return rows.map((r) => r.environment).filter(Boolean);
@@ -691,7 +719,7 @@ async function getCoverage(organisation, environment) {
   const { rows } = await pool.query(
     `SELECT MIN(bucket_start) AS oldest, MAX(bucket_start) AS newest,
             COUNT(*)::bigint AS buckets
-     FROM endpoint_metrics_rollup WHERE ${text}`,
+     FROM ${ROLLUP_SOURCE} rollup WHERE ${text}`,
     params
   );
   const r = rows[0] || {};

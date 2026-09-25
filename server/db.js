@@ -741,6 +741,51 @@ async function initDb() {
     ON endpoint_metrics_rollup (organisation, bucket_start DESC);
   `);
 
+  // ---- Hourly tier -------------------------------------------------------
+  // 1-minute buckets are the right resolution for recent data and the wrong
+  // one for a year of it: at sustained production volume, 1-minute rows for
+  // 400 days runs to tens of gigabytes, nearly all of it read at a resolution
+  // no chart can draw (a 90-day view at 1-minute is 129,600 points for ~400
+  // pixels).
+  //
+  // So minute rows are rolled up into hourly ones once they age past
+  // OBS_ROLLUP_MINUTE_RETENTION_DAYS and the minute rows are then deleted -
+  // see downsampleOldRollups() in server/retention.js. The two tables are
+  // therefore DISJOINT by construction, which is what lets every read query
+  // simply UNION them without risking double-counting.
+  //
+  // Same columns as the minute table so the union needs no column mapping,
+  // and so the downsample is a plain aggregate rather than a reshaping.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS endpoint_metrics_rollup_hourly (
+      organisation   TEXT NOT NULL,
+      environment    TEXT NOT NULL,
+      endpoint_id    TEXT NOT NULL,
+      bucket_start   TIMESTAMPTZ NOT NULL,
+      request_count  INTEGER NOT NULL DEFAULT 0,
+      status_2xx     INTEGER NOT NULL DEFAULT 0,
+      status_3xx     INTEGER NOT NULL DEFAULT 0,
+      status_4xx     INTEGER NOT NULL DEFAULT 0,
+      status_5xx     INTEGER NOT NULL DEFAULT 0,
+      status_unknown INTEGER NOT NULL DEFAULT 0,
+      latency_sum    BIGINT  NOT NULL DEFAULT 0,
+      latency_count  INTEGER NOT NULL DEFAULT 0,
+      latency_min    INTEGER,
+      latency_max    INTEGER,
+      latency_buckets JSONB NOT NULL DEFAULT '{}',
+      source_ips     JSONB NOT NULL DEFAULT '{}',
+      PRIMARY KEY (organisation, environment, endpoint_id, bucket_start)
+    );
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_rollup_hourly_org_env_bucket
+    ON endpoint_metrics_rollup_hourly (organisation, environment, bucket_start DESC);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_rollup_hourly_org_bucket
+    ON endpoint_metrics_rollup_hourly (organisation, bucket_start DESC);
+  `);
+
   // Raw per-request records. RANGE-partitioned by day so retention is a
   // DROP TABLE of one partition (instant, no bloat, no vacuum storm) rather
   // than a DELETE of millions of rows on a schedule, which would slowly

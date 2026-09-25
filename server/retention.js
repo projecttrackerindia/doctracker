@@ -133,9 +133,150 @@ async function pruneOldNotifications() {
 const ROLLUP_RETENTION_DAYS = parseInt(process.env.OBS_ROLLUP_RETENTION_DAYS || '400', 10);
 const RECORD_RETENTION_DAYS = parseInt(process.env.OBS_RECORD_RETENTION_DAYS || '7', 10);
 
+// Rolls minute buckets older than the cutoff up into hourly ones, then
+// deletes the minute rows that were folded in. The two tables stay DISJOINT,
+// which is what lets the read queries union them without double counting.
+//
+// Runs inside one transaction per batch: if the insert succeeded and the
+// delete did not, the same minutes would be added to the hourly row AGAIN on
+// the next sweep, permanently inflating them. Batched by day so a first run
+// against a long backlog does not hold one enormous transaction open.
+const ROLLUP_MINUTE_RETENTION_DAYS = parseInt(process.env.OBS_ROLLUP_MINUTE_RETENTION_DAYS || '30', 10);
+
+async function downsampleOldRollups() {
+  if (!ROLLUP_MINUTE_RETENTION_DAYS || ROLLUP_MINUTE_RETENTION_DAYS <= 0) return { folded: 0 };
+  let foldedTotal = 0;
+  try {
+    // At most 30 day-batches per sweep; a longer backlog drains over
+    // subsequent nightly runs rather than in one very long transaction.
+    for (let batch = 0; batch < 30; batch += 1) {
+      const client = await pool.connect();
+      let foldedThisBatch = 0;
+      try {
+        await client.query('BEGIN');
+        // The oldest day that still has minute rows past the cutoff.
+        const { rows: dayRows } = await client.query(
+          `SELECT date_trunc('day', MIN(bucket_start) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS day
+           FROM endpoint_metrics_rollup
+           WHERE bucket_start < now() - ($1 || ' days')::interval`,
+          [ROLLUP_MINUTE_RETENTION_DAYS]
+        );
+        const day = dayRows[0] && dayRows[0].day;
+        if (!day) { await client.query('ROLLBACK'); break; }
+
+        const { rowCount } = await client.query(
+          `WITH src AS (
+             SELECT * FROM endpoint_metrics_rollup
+             WHERE bucket_start >= $1::timestamptz
+               AND bucket_start <  $1::timestamptz + interval '1 day'
+           ),
+           totals AS (
+             SELECT organisation, environment, endpoint_id,
+                    date_trunc('hour', bucket_start AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS h,
+                    SUM(request_count)::int  AS request_count,
+                    SUM(status_2xx)::int     AS status_2xx,
+                    SUM(status_3xx)::int     AS status_3xx,
+                    SUM(status_4xx)::int     AS status_4xx,
+                    SUM(status_5xx)::int     AS status_5xx,
+                    SUM(status_unknown)::int AS status_unknown,
+                    SUM(latency_sum)::bigint AS latency_sum,
+                    SUM(latency_count)::int  AS latency_count,
+                    MIN(latency_min)         AS latency_min,
+                    MAX(latency_max)         AS latency_max
+             FROM src GROUP BY 1,2,3,4
+           ),
+           histos AS (
+             SELECT organisation, environment, endpoint_id, h,
+                    jsonb_object_agg(k, v) AS latency_buckets
+             FROM (
+               SELECT organisation, environment, endpoint_id,
+                      date_trunc('hour', bucket_start AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS h,
+                      kv.key AS k, SUM(kv.value::numeric) AS v
+               FROM src, LATERAL jsonb_each_text(latency_buckets) kv
+               GROUP BY 1,2,3,4,5
+             ) x GROUP BY 1,2,3,4
+           ),
+           ips AS (
+             SELECT organisation, environment, endpoint_id, h,
+                    jsonb_object_agg(k, v) AS source_ips
+             FROM (
+               SELECT organisation, environment, endpoint_id,
+                      date_trunc('hour', bucket_start AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS h,
+                      kv.key AS k, SUM(kv.value::numeric) AS v
+               FROM src, LATERAL jsonb_each_text(source_ips) kv
+               GROUP BY 1,2,3,4,5
+             ) y GROUP BY 1,2,3,4
+           )
+           INSERT INTO endpoint_metrics_rollup_hourly (
+             organisation, environment, endpoint_id, bucket_start,
+             request_count, status_2xx, status_3xx, status_4xx, status_5xx, status_unknown,
+             latency_sum, latency_count, latency_min, latency_max, latency_buckets, source_ips
+           )
+           SELECT t.organisation, t.environment, t.endpoint_id, t.h,
+                  t.request_count, t.status_2xx, t.status_3xx, t.status_4xx,
+                  t.status_5xx, t.status_unknown, t.latency_sum, t.latency_count,
+                  t.latency_min, t.latency_max,
+                  COALESCE(hs.latency_buckets, '{}'::jsonb),
+                  COALESCE(ip.source_ips, '{}'::jsonb)
+           FROM totals t
+           LEFT JOIN histos hs USING (organisation, environment, endpoint_id, h)
+           LEFT JOIN ips    ip USING (organisation, environment, endpoint_id, h)
+           ON CONFLICT (organisation, environment, endpoint_id, bucket_start) DO UPDATE SET
+             request_count  = endpoint_metrics_rollup_hourly.request_count  + EXCLUDED.request_count,
+             status_2xx     = endpoint_metrics_rollup_hourly.status_2xx     + EXCLUDED.status_2xx,
+             status_3xx     = endpoint_metrics_rollup_hourly.status_3xx     + EXCLUDED.status_3xx,
+             status_4xx     = endpoint_metrics_rollup_hourly.status_4xx     + EXCLUDED.status_4xx,
+             status_5xx     = endpoint_metrics_rollup_hourly.status_5xx     + EXCLUDED.status_5xx,
+             status_unknown = endpoint_metrics_rollup_hourly.status_unknown + EXCLUDED.status_unknown,
+             latency_sum    = endpoint_metrics_rollup_hourly.latency_sum    + EXCLUDED.latency_sum,
+             latency_count  = endpoint_metrics_rollup_hourly.latency_count  + EXCLUDED.latency_count,
+             latency_min    = LEAST(endpoint_metrics_rollup_hourly.latency_min, EXCLUDED.latency_min),
+             latency_max    = GREATEST(endpoint_metrics_rollup_hourly.latency_max, EXCLUDED.latency_max),
+             latency_buckets = jsonb_counter_merge(endpoint_metrics_rollup_hourly.latency_buckets, EXCLUDED.latency_buckets),
+             source_ips      = jsonb_counter_merge(endpoint_metrics_rollup_hourly.source_ips, EXCLUDED.source_ips)`,
+          [day]
+        );
+        foldedThisBatch = rowCount;
+
+        await client.query(
+          `DELETE FROM endpoint_metrics_rollup
+           WHERE bucket_start >= $1::timestamptz
+             AND bucket_start <  $1::timestamptz + interval '1 day'`,
+          [day]
+        );
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
+      foldedTotal += foldedThisBatch;
+      if (!foldedThisBatch) break;
+    }
+    if (foldedTotal) {
+      console.log(`Retention: folded ${foldedTotal} minute bucket group(s) into hourly rows (minute data kept for ${ROLLUP_MINUTE_RETENTION_DAYS} days).`);
+    }
+    return { folded: foldedTotal };
+  } catch (err) {
+    console.error('downsampleOldRollups failed (will retry next sweep):', err.message);
+    return { folded: foldedTotal };
+  }
+}
+
+// The final horizon, applied to BOTH tiers. Minute rows this old would
+// normally have been folded into hourly ones already; the minute sweep is
+// kept anyway so that a deployment which had downsampling disabled, or which
+// fell far behind, still has its oldest data bounded.
 async function pruneOldRollups() {
   if (!ROLLUP_RETENTION_DAYS || ROLLUP_RETENTION_DAYS <= 0) return { deleted: 0 };
   try {
+    const { rowCount: hourlyDeleted } = await pool.query(
+      `DELETE FROM endpoint_metrics_rollup_hourly
+       WHERE bucket_start < now() - ($1 || ' days')::interval`,
+      [ROLLUP_RETENTION_DAYS]
+    );
+    if (hourlyDeleted) console.log(`Retention: deleted ${hourlyDeleted} hourly rollup bucket(s) older than ${ROLLUP_RETENTION_DAYS} days.`);
     const { rowCount } = await pool.query(
       `DELETE FROM endpoint_metrics_rollup
        WHERE bucket_start < now() - ($1 || ' days')::interval`,
@@ -205,6 +346,9 @@ async function runRetentionSweep() {
   // Creating the next few days' partitions runs BEFORE the drop, so a sweep
   // that fails partway still leaves somewhere for tomorrow's data to land.
   await ensureUpcomingPartitions();
+  // Fold before pruning: a minute row that is past the MINUTE horizon but
+  // inside the overall one must end up in the hourly tier, not be deleted.
+  await downsampleOldRollups();
   await pruneOldRollups();
   await dropOldRecordPartitions();
 }
@@ -225,6 +369,7 @@ module.exports = {
   archiveOldAuditLogs,
   pruneOldNotifications,
   pruneOldRollups,
+  downsampleOldRollups,
   dropOldRecordPartitions,
   ensureUpcomingPartitions,
 };
