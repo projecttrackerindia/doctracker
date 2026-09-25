@@ -293,6 +293,12 @@ function obsRestoreView(){
 let obsEventSource = null;
 let obsRefetchTimer = null;
 let obsLiveState = 'idle'; // idle | connecting | live | error
+// When the stream was last actually open, and when the current outage began.
+// A dropped stream is not one condition but two: the second or two a deploy
+// takes, and DocTracker being down. They need different words, and the only
+// thing that separates them is how long it has been going on.
+let obsLastConnectedAt = 0;
+let obsDownSince = 0;
 
 /* The badge lives in the page header, outside the body the console re-renders,
    so a state change repaints just this element rather than the page. */
@@ -308,19 +314,27 @@ function obsRefreshLiveBadge(){
    its own clock. Cheap: it rewrites one element, and only while that element
    is on screen and the tab is visible. */
 let obsBadgeClock = null;
-const OBS_BADGE_CLOCK_MS = 30000;
+// Slow while everything is fine; quick while something is wrong, so a dropped
+// stream escalates from "retrying" to "server down" while you are still
+// looking at it rather than half a minute later. EventSource fires an error
+// per failed retry and usually repaints sooner than either of these - this is
+// the floor, for when the browser's backoff stretches out or it gives up.
+const OBS_BADGE_CLOCK_OK_MS = 30000;
+const OBS_BADGE_CLOCK_DOWN_MS = 5000;
 
 function obsStartBadgeClock(){
   if(obsBadgeClock) return;
-  obsBadgeClock = setInterval(()=>{
+  const tick = ()=>{
     if(!document.getElementById('obsLiveBadge')){ obsStopBadgeClock(); return; }
-    if(document.hidden) return;
-    obsRefreshLiveBadge();
-  }, OBS_BADGE_CLOCK_MS);
+    if(!document.hidden) obsRefreshLiveBadge();
+    obsBadgeClock = setTimeout(tick, obsLiveState === 'live' || obsLiveState === 'idle'
+      ? OBS_BADGE_CLOCK_OK_MS : OBS_BADGE_CLOCK_DOWN_MS);
+  };
+  obsBadgeClock = setTimeout(tick, OBS_BADGE_CLOCK_DOWN_MS);
 }
 
 function obsStopBadgeClock(){
-  if(obsBadgeClock){ clearInterval(obsBadgeClock); obsBadgeClock = null; }
+  if(obsBadgeClock){ clearTimeout(obsBadgeClock); obsBadgeClock = null; }
 }
 
 function obsStartLive(onUpdate){
@@ -337,11 +351,14 @@ function obsStartLive(onUpdate){
     obsEventSource = new EventSource(`${OBS_API_BASE}/stream`, { withCredentials: true });
   }catch(e){
     obsLiveState = 'error';
+    obsDownSince = obsDownSince || Date.now();
     obsRefreshLiveBadge();
     return;
   }
   obsEventSource.addEventListener('open', ()=>{
     obsLiveState = 'live';
+    obsLastConnectedAt = Date.now();
+    obsDownSince = 0;
     obsRefreshLiveBadge();
   });
   obsEventSource.addEventListener('metrics', (ev)=>{
@@ -357,8 +374,13 @@ function obsStartLive(onUpdate){
   });
   obsEventSource.addEventListener('error', ()=>{
     // EventSource retries by itself; reflect the interruption without tearing
-    // the connection down, or the browser's own backoff is lost.
-    obsLiveState = obsEventSource && obsEventSource.readyState === 1 ? 'live' : 'error';
+    // the connection down, or the browser's own backoff is lost. It fires this
+    // on every failed retry, which is what escalates RECONNECTING into
+    // DISCONNECTED without needing a timer of its own.
+    const open = obsEventSource && obsEventSource.readyState === 1;
+    obsLiveState = open ? 'live' : 'error';
+    if(open){ obsLastConnectedAt = Date.now(); obsDownSince = 0; }
+    else if(!obsDownSince){ obsDownSince = Date.now(); }
     obsRefreshLiveBadge();
   });
 }
@@ -368,6 +390,20 @@ function obsStopLive(){
   clearTimeout(obsRefetchTimer);
   obsStopBadgeClock();
   obsLiveState = 'idle';
+  obsDownSince = 0;
+}
+
+/* How long the stream has been down, and whether this browser has any network
+   at all. A page that blames the server for the viewer's own dropped wifi
+   sends someone to check the wrong thing. */
+const OBS_RECONNECT_GRACE_MS = 20000;
+
+function obsStreamOutage(){
+  if(obsLiveState !== 'error') return null;
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+  const since = obsDownSince || obsLastConnectedAt || Date.now();
+  const downMs = Math.max(0, Date.now() - since);
+  return { offline, downMs, since };
 }
 
 /* --- "Is anything actually feeding this page?" -----------------------------
@@ -407,13 +443,50 @@ function renderObsLiveBadge(){
   const map = {
     live:       ['--post',   'LIVE',         'Connected — pushes appear here without a reload'],
     connecting: ['--put',    'CONNECTING',   'Opening the live update stream'],
-    error:      ['--delete', 'RECONNECTING', 'The live stream dropped; the browser is retrying'],
     idle:       ['--text-faint', 'OFFLINE',  'Live updates are not running'],
   };
-  const [colorVar, label, title] = map[obsLiveState] || map.idle;
-  const feed = obsAgentFreshness();
-  const full = feed ? `${title}. ${feed.title}.` : `${title}.`;
-  return `<span class="obs-live-badge obs-live-${obsLiveState}${feed ? ' obs-live-feed-' + feed.level : ''}"
+  let [colorVar, label, title] = map[obsLiveState] || map.idle;
+  // What the second line says. Normally it is the collector's freshness; while
+  // the stream is down it is the outage, because the collector's state is
+  // something this page LEARNS FROM THE SERVER - with the server unreachable,
+  // "agent 2m ago" is not a reading, it is the last thing we happened to hear,
+  // and it would keep ageing into a red warning about the wrong machine.
+  let feed = obsAgentFreshness();
+
+  const outage = obsStreamOutage();
+  if(outage){
+    const secs = Math.round(outage.downMs / 1000);
+    const forHow = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m`;
+    if(outage.offline){
+      // Not the server's fault, and saying otherwise sends someone to check
+      // the wrong machine.
+      colorVar = '--delete';
+      label = 'NO NETWORK';
+      title = 'This browser is offline, so nothing can reach DocTracker';
+      feed = { level:'bad', label:'check your connection', title:'' };
+    }else if(outage.downMs < OBS_RECONNECT_GRACE_MS){
+      // A restart or a deploy takes a second or two. Shouting DISCONNECTED
+      // every time DocTracker ships would teach people to ignore the badge.
+      colorVar = '--put';
+      label = 'RECONNECTING';
+      title = 'The live stream dropped; the browser is retrying';
+      // "retrying 0s" is what a counter reads at the instant it starts, and it
+      // looks like a stuck clock rather than a fresh event.
+      feed = { level:'warn', label: secs < 3 ? 'retrying…' : `retrying ${forHow}`, title:'' };
+    }else{
+      colorVar = '--delete';
+      label = 'DISCONNECTED';
+      title = `DocTracker has been unreachable for ${forHow}. The figures on this page are `
+        + 'frozen at the moment the stream dropped and are not updating';
+      feed = { level:'bad', label:`server down ${forHow}`, title:'' };
+    }
+  }
+
+  const stateClass = outage
+    ? (outage.offline ? 'nonetwork' : (outage.downMs < OBS_RECONNECT_GRACE_MS ? 'retrying' : 'down'))
+    : obsLiveState;
+  const full = feed && feed.title ? `${title}. ${feed.title}.` : `${title}.`;
+  return `<span class="obs-live-badge obs-live-${stateClass}${feed ? ' obs-live-feed-' + feed.level : ''}"
       id="obsLiveBadge" style="--obs-live: var(${colorVar});" title="${escapeHtml(full)}">
     <span class="obs-live-dot${obsLiveState === 'live' ? ' pulsing' : ''}"></span>
     <span class="obs-live-stack">

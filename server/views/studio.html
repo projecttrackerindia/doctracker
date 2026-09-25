@@ -1621,9 +1621,24 @@ pre.code-block{
 .obs-live-feed-warn .obs-live-sub{ color:var(--put); }
 .obs-live-feed-bad .obs-live-sub,
 .obs-live-feed-none .obs-live-sub{ color:var(--delete); }
+/* A stream that is DOWN rather than merely blinking. The badge is the only
+   thing on a frozen page that can still tell you it is frozen, so this one
+   state is allowed to be louder than the rest of the console. */
+.obs-live-down,
+.obs-live-nonetwork{
+  background:color-mix(in srgb, var(--delete) 18%, transparent);
+  border-color:var(--delete);
+}
+.obs-live-down .obs-live-dot,
+.obs-live-nonetwork .obs-live-dot{ animation:obsAlarm 1.4s ease-in-out infinite; }
+@keyframes obsAlarm{ 0%,100%{ transform:scale(1); opacity:1; } 50%{ transform:scale(.72); opacity:.5; } }
 .obs-live-dot.pulsing{ animation:obsPulse 2s ease-in-out infinite; }
 @keyframes obsPulse{ 0%,100%{ opacity:1; } 50%{ opacity:.35; } }
-@media (prefers-reduced-motion: reduce){ .obs-live-dot.pulsing{ animation:none; } }
+@media (prefers-reduced-motion: reduce){
+  .obs-live-dot.pulsing,
+  .obs-live-down .obs-live-dot,
+  .obs-live-nonetwork .obs-live-dot{ animation:none; }
+}
 
 /* The sidebar's selection, restated on the page it narrows. */
 .obs-scope-bar{
