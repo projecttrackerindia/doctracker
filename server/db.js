@@ -537,6 +537,77 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications (user_id, created_at DESC) WHERE read_at IS NULL;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_id, created_at DESC);`);
 
+  // ---- Alerting (see server/alertEngine.js and ALERTING.md) ----
+  // Observability alerts were computed in the BROWSER and rendered on a page
+  // someone had to be looking at. An error rate of 40% at 2am produced
+  // nothing at all; the page simply showed it to whoever opened it next
+  // morning. These two tables move the evaluation server-side, where it can
+  // run whether or not anyone is watching.
+  //
+  // Split deliberately into configuration and state:
+  //
+  //   alert_rule   what an Admin configured. Edited by people, rarely.
+  //   alert_state  where each rule currently IS. Written by the engine on
+  //                every evaluation, many times a minute.
+  //
+  // Keeping them in one row would mean an Admin's edit and the engine's state
+  // write contending for the same row, and a rule's audit trail churning
+  // every few seconds. It also lets one rule hold INDEPENDENT state per
+  // endpoint: "error rate above 10% on any endpoint" is one rule and a
+  // hundred separate state machines, which is the only way a second endpoint
+  // going bad can raise its own alert while the first is still firing.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS alert_rule (
+      id BIGSERIAL PRIMARY KEY,
+      organisation TEXT NOT NULL,
+      name TEXT NOT NULL,
+      metric TEXT NOT NULL,
+      comparison TEXT NOT NULL DEFAULT 'above',
+      threshold DOUBLE PRECISION NOT NULL,
+      window_minutes INTEGER NOT NULL DEFAULT 10,
+      min_requests INTEGER NOT NULL DEFAULT 20,
+      for_minutes INTEGER NOT NULL DEFAULT 5,
+      cooldown_minutes INTEGER NOT NULL DEFAULT 60,
+      severity TEXT NOT NULL DEFAULT 'warning',
+      environment TEXT,
+      scope TEXT NOT NULL DEFAULT 'environment',
+      endpoint_id TEXT,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      notify_admins BOOLEAN NOT NULL DEFAULT true,
+      notify_user_ids JSONB NOT NULL DEFAULT '[]',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_by TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_alert_rule_org ON alert_rule (organisation) WHERE enabled;`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS alert_state (
+      rule_id BIGINT NOT NULL REFERENCES alert_rule(id) ON DELETE CASCADE,
+      organisation TEXT NOT NULL,
+      environment TEXT NOT NULL,
+      endpoint_id TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'ok',
+      breached_since TIMESTAMPTZ,
+      firing_since TIMESTAMPTZ,
+      last_value DOUBLE PRECISION,
+      last_sample INTEGER,
+      last_notified_at TIMESTAMPTZ,
+      notify_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (rule_id, environment, endpoint_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_alert_state_firing ON alert_state (organisation, status) WHERE status <> 'ok';`);
+
+  // Org-wide switches that sit ABOVE the individual rules: the master on/off,
+  // who hears about it by default, and quiet hours. Plaintext JSONB on
+  // org_workspace, same as branding/custom_icons - none of it is secret, and
+  // ALTER because org_workspace rows already exist in deployed databases.
+  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS alert_settings JSONB NOT NULL DEFAULT '{}';`);
+
   // ---- Environment promotion history (append-only) ----
   // `project_env_versions` above is deliberately a single overwritten row per
   // (project, environment) — "what's live there right now." This table is

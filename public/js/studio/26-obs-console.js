@@ -13,6 +13,12 @@ const OBS_TABS = [
   { key: 'performance', label: 'Performance' },
   { key: 'errors',      label: 'Errors' },
   { key: 'logs',        label: 'Log explorer' },
+  // Alert RULES live beside the metrics they watch, not under Security: a
+  // threshold is observability configuration, not an access-control decision.
+  // Everyone can read what is firing — an alert exists to be seen, and an
+  // engineer who has to ask an Admin what is wrong is back where this
+  // started. Only editing is Admin-only.
+  { key: 'alerts',      label: 'Alerts' },
   { key: 'agent',       label: 'Agent & host' },
 ];
 
@@ -240,8 +246,36 @@ function renderObsToolbar(){
     </div>
     <span class="obs-toolbar-spacer"></span>
     ${envGap ? `<span class="obs-env-gap">${escapeHtml(envGap)}</span>` : ''}
+    ${renderObsDuplicateWarning()}
     ${coverageNote ? `<span class="obs-coverage-note">${escapeHtml(coverageNote)}</span>` : ''}
   </div>`;
+}
+
+/* Buckets written before the agent stopped counting one request several times
+   keep their inflated numbers, because a rollup row is immutable by design -
+   the whole tier works by summing on conflict, so there is no "correct it
+   later" operation and adding one would break the property that makes ingest
+   lock-free.
+
+   They also outlive the fix by more than a year: minute rollups are folded
+   into HOURLY rollups at 30 days, and those are kept for 400.
+
+   Retroactively halving them was considered and rejected. The duplication
+   factor was not constant - two log lines for most requests, nine for one
+   observed case - so any arithmetic correction would be a guess presented as
+   data, which is worse than an inflated number that says it is inflated. */
+const OBS_DUP_FIX_ISO = '2026-09-25T08:00:00.000Z';
+
+function obsRangeReachesDuplicates(){
+  if(typeof obsResolvedRange !== 'function') return false;
+  const r = obsResolvedRange();
+  const from = Date.parse(r.from);
+  return isFinite(from) && from < Date.parse(OBS_DUP_FIX_ISO);
+}
+
+function renderObsDuplicateWarning(){
+  if(obsIsBridged() || !obsRangeReachesDuplicates()) return '';
+  return `<span class="obs-dup-note" title="The collector used to count each request once per log line it produced, and this deployment logs most requests at least twice. Counts, error rates and source-IP totals from before ${formatDateTime(OBS_DUP_FIX_ISO)} are inflated by roughly that factor. Rollup rows are immutable, so they cannot be corrected in place — and the duplication factor varied per request, so estimating a correction would be a guess presented as data.">Includes pre-${formatDateTime(OBS_DUP_FIX_ISO)} counts, which are inflated by duplicate log lines</span>`;
 }
 
 /* The API or endpoint the sidebar has selected, stated on the page itself.
@@ -271,19 +305,29 @@ function renderObsScopeBar(){
 function renderObsTabs(){
   const d = state.obsData;
   const errCount = d && d.current ? d.current.errCount : 0;
+  // Only FIRING alerts get a badge. A pending one has notified nobody, and a
+  // count that included them would claim an incident that may never happen.
+  const firing = ((state.obsAlerts && state.obsAlerts.active) || [])
+    .filter(a => a.status === 'firing').length;
   const counts = {
     errors: errCount ? obsFormatCount(errCount) : '',
+    alerts: firing ? String(firing) : '',
   };
   // The figure is how many errors fall in the SELECTED RANGE, not how many
   // are unread — it does not clear by visiting the tab, it clears when the
   // range holds no errors. Said in the tooltip because the shape of a
   // number beside a tab name implies otherwise.
   const countTitle = `${errCount.toLocaleString()} error(s) in the selected range`;
+  const titles = {
+    errors: countTitle,
+    alerts: `${firing} alert(s) firing right now — independent of the range above`,
+  };
   return `<div class="obs-tabs" role="tablist">
     ${OBS_TABS.map(t => `<button type="button" role="tab" class="obs-tab${state.obsTab === t.key ? ' active' : ''}"
       data-obs-tab="${t.key}" aria-selected="${state.obsTab === t.key}">${t.label}${
-        counts[t.key] ? `<span class="obs-tab-count${t.key === 'errors' && errCount ? ' crit' : ''}"
-          title="${escapeHtml(countTitle)}">${counts[t.key]}</span>` : ''
+        counts[t.key] ? `<span class="obs-tab-count${
+          (t.key === 'errors' && errCount) || t.key === 'alerts' ? ' crit' : ''}"
+          title="${escapeHtml(titles[t.key] || '')}">${counts[t.key]}</span>` : ''
       }</button>`).join('')}
   </div>`;
 }
@@ -737,6 +781,415 @@ function renderObsLogsTab(){
     </div>`;
 }
 
+/* --- Alerts ---------------------------------------------------------------
+   Three panels, in the order the questions get asked:
+
+     1. What is wrong RIGHT NOW          (everyone)
+     2. What are we watching for         (everyone reads, Admin edits)
+     3. Who hears about it, and when     (Admin only)
+
+   Rules are shown to non-Admins deliberately. A threshold you cannot see is
+   indistinguishable from no threshold, and "why didn't we get alerted?" is
+   not a question that should require an Admin to answer. */
+
+const OBS_ALERT_SEV = { critical: '--delete', warning: '--put' };
+
+function obsAlertMetricMeta(key){
+  const list = (state.obsAlerts && state.obsAlerts.metrics) || [];
+  return list.find(m => m.key === key) || { key, label: key, unit: '', kind: 'gauge', help: '' };
+}
+
+function obsAlertRuleSummary(r){
+  const m = obsAlertMetricMeta(r.metric);
+  const where = r.scope === 'endpoint'
+    ? (r.endpointId ? obsEndpointLabel(r.endpointId) : 'any endpoint')
+    : (r.environment || 'every environment');
+  if(m.kind === 'absence'){
+    return `${m.label} ${r.comparison} ${r.threshold}${m.unit} · ${where}`;
+  }
+  return `${m.label} ${r.comparison} ${r.threshold}${m.unit} for ${r.forMinutes}m `
+    + `· ${r.windowMinutes}m window · min ${r.minRequests} req · ${where}`;
+}
+
+function renderObsAlertsTab(){
+  const d = state.obsAlerts;
+  if(state.obsAlertsStatus === 'idle' || (state.obsAlertsStatus === 'loading' && !d)){
+    return `<div class="obs-panel"><span class="obs-skeleton-line short"></span>
+      <div class="obs-skeleton-chart"></div></div>`;
+  }
+  if(state.obsAlertsStatus === 'error' && !d){
+    return `<div class="obs-panel"><div class="obs-empty">
+      <div class="obs-empty-title">Could not load alert configuration</div>
+      <div class="obs-empty-body">${escapeHtml(state.obsAlertsError)}</div>
+    </div></div>`;
+  }
+  if(!d) return '';
+  return renderObsActiveAlerts(d)
+    + renderObsAlertRules(d)
+    + (d.canEdit ? renderObsAlertSettings(d) : '');
+}
+
+function renderObsActiveAlerts(d){
+  const active = d.active || [];
+  const firing = active.filter(a => a.status === 'firing');
+  const pending = active.filter(a => a.status === 'pending');
+
+  if(!active.length){
+    return `<div class="obs-panel">
+      <div class="section-title">Currently firing</div>
+      <div class="hint" style="margin-top:-4px;">Evaluated on the server every minute, whether or not this page is open</div>
+      <div class="obs-alert-clear">
+        <span class="obs-alert-clear-dot"></span>
+        <div>
+          <b>Nothing is firing.</b>
+          ${d.settings && d.settings.enabled === false
+            ? '<span class="obs-alert-off"> — but alerting is switched OFF, so nothing would fire either way.</span>'
+            : ` ${(d.rules || []).filter(r => r.enabled).length} rule(s) are being evaluated.`}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  const row = (a)=>{
+    const m = obsAlertMetricMeta(a.metric);
+    const color = OBS_ALERT_SEV[a.severity] || '--put';
+    const where = [a.environment, a.endpointId ? obsEndpointLabel(a.endpointId) : null].filter(Boolean).join(' · ');
+    return `<div class="obs-alert-row obs-alert-${a.status}" style="--obs-alert-color:var(${color});">
+      <span class="obs-alert-pip"></span>
+      <div class="obs-alert-main">
+        <div class="obs-alert-name">${escapeHtml(a.name)}</div>
+        <div class="obs-alert-where mono">${escapeHtml(where)}</div>
+      </div>
+      <div class="obs-alert-value">
+        <div class="obs-alert-now mono">${escapeHtml(a.display)}</div>
+        <div class="obs-alert-thresh">${escapeHtml(a.comparison)} ${escapeHtml(String(a.threshold))}${escapeHtml(m.unit)}</div>
+      </div>
+      <div class="obs-alert-since">
+        ${a.status === 'pending'
+          // Said plainly: a pending alert has NOT notified anyone, and a row
+          // that looked identical to a firing one would imply it had.
+          ? `<span class="obs-alert-tag">waiting to confirm</span><div class="hint">nobody notified yet</div>`
+          : `<span class="obs-alert-tag crit">firing</span><div class="hint">since ${escapeHtml(formatDateTime(a.since))}${
+              a.notifyCount ? ` · ${a.notifyCount} notification(s)` : ''}</div>`}
+      </div>
+    </div>`;
+  };
+
+  return `<div class="obs-panel">
+    <div class="section-head">
+      <div>
+        <div class="section-title">Currently firing</div>
+        <div class="hint" style="margin-top:-4px;">Evaluated on the server every minute, whether or not this page is open</div>
+      </div>
+      ${d.canEdit ? `<button type="button" class="obs-ip-more" id="obsAlertEvalNow">Evaluate now</button>` : ''}
+    </div>
+    ${firing.map(row).join('')}
+    ${pending.length ? `<div class="obs-alert-sub">Breaching, but not yet held long enough to notify</div>` : ''}
+    ${pending.map(row).join('')}
+  </div>`;
+}
+
+function renderObsAlertRules(d){
+  const rules = d.rules || [];
+  const editing = state.obsAlertDraft;
+  return `<div class="obs-panel">
+    <div class="section-head">
+      <div>
+        <div class="section-title">Alert rules</div>
+        <div class="hint" style="margin-top:-4px;">What the server watches for${
+          d.canEdit ? '' : ' · only an Admin can change these'}</div>
+      </div>
+      ${d.canEdit ? `<button type="button" class="obs-ip-more" id="obsAlertNew">+ New rule</button>` : ''}
+    </div>
+    ${editing ? renderObsAlertEditor(d, editing) : ''}
+    ${!rules.length ? `<div class="obs-empty"><div class="obs-empty-title">No rules yet</div>
+      <div class="obs-empty-body">Nothing is being watched for. Add a rule to start.</div></div>` : ''}
+    <div class="obs-alert-rules">
+      ${rules.map(r => `<div class="obs-alert-rule${r.enabled ? '' : ' off'}">
+        <span class="obs-alert-sev" style="background:var(${OBS_ALERT_SEV[r.severity] || '--put'});"
+              title="${r.severity === 'critical' ? 'Critical' : 'Warning'}"></span>
+        <div class="obs-alert-rule-main">
+          <div class="obs-alert-rule-name">${escapeHtml(r.name)}${
+            r.enabled ? '' : ' <span class="obs-alert-off-tag">disabled</span>'}</div>
+          <div class="obs-alert-rule-def mono">${escapeHtml(obsAlertRuleSummary(r))}</div>
+        </div>
+        <div class="obs-alert-rule-cool hint">re-notify every ${r.cooldownMinutes}m</div>
+        ${d.canEdit ? `<div class="obs-alert-rule-actions">
+          <button type="button" class="obs-ip-more" data-obs-alert-edit="${escapeHtml(r.id)}">Edit</button>
+          <button type="button" class="obs-ip-more danger" data-obs-alert-del="${escapeHtml(r.id)}">Delete</button>
+        </div>` : ''}
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function renderObsAlertEditor(d, r){
+  const metrics = d.metrics || [];
+  const meta = obsAlertMetricMeta(r.metric);
+  const isAbsence = meta.kind === 'absence';
+  const envs = state.obsEnvOptions || [];
+  const num = (id, label, value, help)=>`<label class="obs-alert-field">
+    <span>${escapeHtml(label)}</span>
+    <input type="number" id="${id}" value="${value === null || value === undefined ? '' : escapeHtml(String(value))}" min="0">
+    ${help ? `<em>${escapeHtml(help)}</em>` : ''}
+  </label>`;
+  return `<div class="obs-alert-editor">
+    <div class="obs-alert-editor-head">${r.id ? 'Edit rule' : 'New rule'}</div>
+    <label class="obs-alert-field wide">
+      <span>Name</span>
+      <input type="text" id="obsAlertName" value="${escapeHtml(r.name || '')}" placeholder="What is this watching for?">
+    </label>
+    <label class="obs-alert-field wide">
+      <span>Measure</span>
+      <select id="obsAlertMetric">${metrics.map(m =>
+        `<option value="${escapeHtml(m.key)}"${m.key === r.metric ? ' selected' : ''}>${escapeHtml(m.label)} (${escapeHtml(m.unit)})</option>`).join('')}</select>
+      <em>${escapeHtml(meta.help || '')}</em>
+    </label>
+    <label class="obs-alert-field">
+      <span>When it goes</span>
+      <select id="obsAlertComparison">
+        <option value="above"${r.comparison !== 'below' ? ' selected' : ''}>above</option>
+        <option value="below"${r.comparison === 'below' ? ' selected' : ''}>below</option>
+      </select>
+    </label>
+    ${num('obsAlertThreshold', `Threshold (${meta.unit})`, r.threshold)}
+    ${isAbsence ? '' : num('obsAlertWindow', 'Measured over (min)', r.windowMinutes,
+      'How far back each evaluation looks')}
+    ${isAbsence ? '' : num('obsAlertMinReq', 'Ignore below (requests)', r.minRequests,
+      'A sample floor. Without it, one failed request at 3am is a 100% error rate.')}
+    ${isAbsence ? '' : num('obsAlertFor', 'Must hold for (min)', r.forMinutes,
+      'A deploy crosses most thresholds for a few seconds. This is what stops that waking anyone.')}
+    ${num('obsAlertCooldown', 'Re-notify every (min)', r.cooldownMinutes,
+      'While still firing. One incident should not be one notification per evaluation.')}
+    <label class="obs-alert-field">
+      <span>Severity</span>
+      <select id="obsAlertSeverity">
+        <option value="warning"${r.severity !== 'critical' ? ' selected' : ''}>Warning</option>
+        <option value="critical"${r.severity === 'critical' ? ' selected' : ''}>Critical</option>
+      </select>
+      <em>Critical can be set to ignore quiet hours.</em>
+    </label>
+    <label class="obs-alert-field">
+      <span>Environment</span>
+      <select id="obsAlertEnv">
+        <option value=""${!r.environment ? ' selected' : ''}>Every environment</option>
+        ${envs.map(e => `<option value="${escapeHtml(e)}"${r.environment === e ? ' selected' : ''}>${escapeHtml(e)}</option>`).join('')}
+      </select>
+    </label>
+    <label class="obs-alert-field">
+      <span>Applies to</span>
+      <select id="obsAlertScope"${isAbsence ? ' disabled title="Collector silence is a property of an environment, not of one endpoint"' : ''}>
+        <option value="environment"${r.scope !== 'endpoint' ? ' selected' : ''}>The environment as a whole</option>
+        <option value="endpoint"${r.scope === 'endpoint' ? ' selected' : ''}>Each endpoint separately</option>
+      </select>
+      <em>${isAbsence
+        ? 'Fixed for this measure.'
+        : 'Per endpoint means one rule and one independent alert per endpoint.'}</em>
+    </label>
+    <label class="obs-alert-field check">
+      <input type="checkbox" id="obsAlertEnabled"${r.enabled !== false ? ' checked' : ''}>
+      <span>Enabled</span>
+    </label>
+    <div class="obs-alert-editor-actions">
+      <button type="button" class="obs-ip-more" id="obsAlertSave">${r.id ? 'Save changes' : 'Create rule'}</button>
+      <button type="button" class="obs-ip-more" id="obsAlertCancel">Cancel</button>
+    </div>
+  </div>`;
+}
+
+function renderObsAlertSettings(d){
+  const s = d.settings || {};
+  const q = s.quietHours || {};
+  const hhmm = (mins)=>{
+    const m = Math.max(0, Math.min(1439, Number(mins) || 0));
+    return `${String(Math.floor(m / 60)).padStart(2,'0')}:${String(m % 60).padStart(2,'0')}`;
+  };
+  return `<div class="obs-panel">
+    <div class="section-title">Notification settings</div>
+    <div class="hint" style="margin-top:-4px;">Who hears about an alert, and when · organisation-wide</div>
+    <div class="obs-alert-settings">
+      <label class="obs-alert-field check">
+        <input type="checkbox" id="obsAlertEnabledAll"${s.enabled !== false ? ' checked' : ''}>
+        <span>Alerting is on</span>
+        <em>The master switch. Off means no rule is evaluated and nothing is ever raised.</em>
+      </label>
+      <label class="obs-alert-field check">
+        <input type="checkbox" id="obsAlertNotifyAdmins"${s.notifyAdmins !== false ? ' checked' : ''}>
+        <span>Notify every Admin</span>
+        <em>The default recipient set. Individual rules can add specific people on top.</em>
+      </label>
+      <label class="obs-alert-field check">
+        <input type="checkbox" id="obsAlertQuiet"${q.enabled ? ' checked' : ''}>
+        <span>Quiet hours</span>
+        <em>Suppresses notifications only — rules keep being evaluated, so this page still
+            shows what is firing. Nothing is lost, it is just not announced.</em>
+      </label>
+      <label class="obs-alert-field">
+        <span>From</span>
+        <input type="time" id="obsAlertQuietFrom" value="${hhmm(q.startMinute)}">
+      </label>
+      <label class="obs-alert-field">
+        <span>Until</span>
+        <input type="time" id="obsAlertQuietTo" value="${hhmm(q.endMinute)}">
+      </label>
+      <label class="obs-alert-field">
+        <span>Time zone</span>
+        <input type="text" id="obsAlertQuietTz" value="${escapeHtml(q.timezone || 'Asia/Kolkata')}"
+               placeholder="Asia/Kolkata">
+        <em>An IANA zone. An unrecognised one disables quiet hours rather than silencing everything.</em>
+      </label>
+      <label class="obs-alert-field check">
+        <input type="checkbox" id="obsAlertQuietCrit"${q.allowCritical !== false ? ' checked' : ''}>
+        <span>Critical alerts ignore quiet hours</span>
+        <em>Leave on unless you genuinely want a 5xx storm to wait until morning.</em>
+      </label>
+    </div>
+    <div class="obs-alert-editor-actions">
+      <button type="button" class="obs-ip-more" id="obsAlertSaveSettings">Save settings</button>
+    </div>
+  </div>`;
+}
+
+function obsAlertBlankRule(){
+  return {
+    id: null, name: '', metric: 'error_rate', comparison: 'above', threshold: 10,
+    windowMinutes: 10, minRequests: 20, forMinutes: 5, cooldownMinutes: 60,
+    severity: 'warning', environment: null, scope: 'environment', endpointId: null,
+    enabled: true, notifyAdmins: true, notifyUserIds: [],
+  };
+}
+
+function obsAlertReadEditor(main){
+  const val = (id)=>{ const el = main.querySelector('#' + id); return el ? el.value : null; };
+  const num = (id, dflt)=>{ const v = val(id); const n = parseInt(v, 10); return Number.isFinite(n) ? n : dflt; };
+  const on = (id)=>{ const el = main.querySelector('#' + id); return el ? el.checked : false; };
+  const draft = state.obsAlertDraft || obsAlertBlankRule();
+  return {
+    id: draft.id,
+    name: val('obsAlertName') || '',
+    metric: val('obsAlertMetric') || draft.metric,
+    comparison: val('obsAlertComparison') || 'above',
+    threshold: Number(val('obsAlertThreshold')),
+    windowMinutes: num('obsAlertWindow', draft.windowMinutes),
+    minRequests: num('obsAlertMinReq', draft.minRequests),
+    forMinutes: num('obsAlertFor', draft.forMinutes),
+    cooldownMinutes: num('obsAlertCooldown', draft.cooldownMinutes),
+    severity: val('obsAlertSeverity') || 'warning',
+    environment: val('obsAlertEnv') || null,
+    scope: val('obsAlertScope') || 'environment',
+    endpointId: draft.endpointId,
+    enabled: on('obsAlertEnabled'),
+    notifyAdmins: true,
+    notifyUserIds: draft.notifyUserIds || [],
+  };
+}
+
+function wireObsAlerts(main){
+  if(state.obsTab !== 'alerts') return;
+  // Loaded on first visit to the tab rather than with the console, so four
+  // extra queries are not on the path of every page load for people who
+  // never open it.
+  if(state.obsAlertsStatus === 'idle' && typeof obsLoadAlerts === 'function'){
+    state.obsAlertsStatus = 'loading';
+    obsLoadAlerts();
+    return;
+  }
+
+  const evalNow = main.querySelector('#obsAlertEvalNow');
+  if(evalNow) evalNow.addEventListener('click', async ()=>{
+    evalNow.disabled = true; evalNow.textContent = 'Evaluating…';
+    try{
+      await obsAlertApi('POST', '/evaluate');
+      toast('Rules evaluated against current data.');
+    }catch(err){ toast(err.message || 'Could not evaluate.'); }
+    obsLoadAlerts();
+  });
+
+  const newBtn = main.querySelector('#obsAlertNew');
+  if(newBtn) newBtn.addEventListener('click', ()=>{
+    state.obsAlertDraft = obsAlertBlankRule();
+    renderMain();
+  });
+
+  main.querySelectorAll('[data-obs-alert-edit]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const id = btn.getAttribute('data-obs-alert-edit');
+      const r = ((state.obsAlerts && state.obsAlerts.rules) || []).find(x => x.id === id);
+      if(r){ state.obsAlertDraft = { ...r }; renderMain(); }
+    });
+  });
+
+  main.querySelectorAll('[data-obs-alert-del]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const id = btn.getAttribute('data-obs-alert-del');
+      const r = ((state.obsAlerts && state.obsAlerts.rules) || []).find(x => x.id === id);
+      // Deleting a rule is how a system silently stops watching for something,
+      // so it asks first and the deletion is audited server-side.
+      if(!confirm(`Delete "${r ? r.name : 'this rule'}"? Nothing will watch for this any more.`)) return;
+      try{
+        await obsAlertApi('DELETE', `/rules/${encodeURIComponent(id)}`);
+        toast('Rule deleted.');
+      }catch(err){ toast(err.message || 'Could not delete the rule.'); }
+      obsLoadAlerts();
+    });
+  });
+
+  // Changing the measure re-renders the editor: the unit, the help text and
+  // whether the window/sample fields apply at all depend on it.
+  const metricSel = main.querySelector('#obsAlertMetric');
+  if(metricSel) metricSel.addEventListener('change', ()=>{
+    state.obsAlertDraft = obsAlertReadEditor(main);
+    renderMain();
+  });
+
+  const cancel = main.querySelector('#obsAlertCancel');
+  if(cancel) cancel.addEventListener('click', ()=>{ state.obsAlertDraft = null; renderMain(); });
+
+  const save = main.querySelector('#obsAlertSave');
+  if(save) save.addEventListener('click', async ()=>{
+    const body = obsAlertReadEditor(main);
+    save.disabled = true;
+    try{
+      if(body.id) await obsAlertApi('PUT', `/rules/${encodeURIComponent(body.id)}`, body);
+      else await obsAlertApi('POST', '/rules', body);
+      state.obsAlertDraft = null;
+      toast(body.id ? 'Rule saved.' : 'Rule created.');
+      obsLoadAlerts();
+    }catch(err){
+      save.disabled = false;
+      toast(err.message || 'Could not save the rule.');
+    }
+  });
+
+  const saveSettings = main.querySelector('#obsAlertSaveSettings');
+  if(saveSettings) saveSettings.addEventListener('click', async ()=>{
+    const toMinutes = (id)=>{
+      const el = main.querySelector('#' + id);
+      if(!el || !el.value) return 0;
+      const [h, m] = el.value.split(':').map(Number);
+      return (h || 0) * 60 + (m || 0);
+    };
+    const on = (id)=>{ const el = main.querySelector('#' + id); return el ? el.checked : false; };
+    saveSettings.disabled = true;
+    try{
+      await obsAlertApi('PUT', '/settings', {
+        enabled: on('obsAlertEnabledAll'),
+        notifyAdmins: on('obsAlertNotifyAdmins'),
+        quietHours: {
+          enabled: on('obsAlertQuiet'),
+          startMinute: toMinutes('obsAlertQuietFrom'),
+          endMinute: toMinutes('obsAlertQuietTo'),
+          timezone: (main.querySelector('#obsAlertQuietTz') || {}).value || 'Asia/Kolkata',
+          allowCritical: on('obsAlertQuietCrit'),
+        },
+      });
+      toast('Notification settings saved.');
+    }catch(err){ toast(err.message || 'Could not save settings.'); }
+    saveSettings.disabled = false;
+    obsLoadAlerts();
+  });
+}
+
 function renderObsAgentTab(agentHealth){
   return `
     ${typeof renderHostHealthSection === 'function' ? renderHostHealthSection(agentHealth) : ''}
@@ -771,6 +1224,7 @@ function renderObsConsoleV2(main, agentHealth){
       case 'performance': body = renderObsPerformanceTab(); break;
       case 'errors':      body = renderObsErrorsTab(); break;
       case 'logs':        body = renderObsLogsTab(); break;
+      case 'alerts':      body = renderObsAlertsTab(); break;
       case 'agent':       body = renderObsAgentTab(agentHealth); break;
       default:            body = renderObsOverviewTab();
     }
@@ -845,6 +1299,8 @@ function wireObsConsoleV2(main){
 
   const clearScope = main.querySelector('#obsClearScopeNew');
   if(clearScope) clearScope.addEventListener('click', ()=> obsSetScope({ type:'all' }));
+
+  wireObsAlerts(main);
 
   main.querySelectorAll('[data-obs-filter-family]').forEach(el=>{
     el.addEventListener('click', ()=> obsDrillTo({ statusFamily: el.getAttribute('data-obs-filter-family') }));

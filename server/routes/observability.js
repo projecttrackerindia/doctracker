@@ -17,6 +17,7 @@ const express = require('express');
 const { authenticate, blockIfScheduleLocked } = require('../middleware/authGuard');
 const store = require('../observabilityStore');
 const liveBus = require('../observabilityBus');
+const alertEngine = require('../alertEngine');
 
 const router = express.Router();
 router.use(authenticate);
@@ -135,6 +136,12 @@ router.put('/ingest', async (req, res) => {
     // a listener that reacts by re-querying must not race the data it is
     // being told about.
     if (rollupResult.written || recordResult.written) {
+      // Evaluate the org's alert rules against what just landed. Deliberately
+      // NOT awaited: the agent is waiting on this response, and an alert
+      // evaluation must never be the reason a push times out and gets
+      // retried. It is also throttled internally, so an agent pushing every
+      // five seconds does not mean an evaluation every five seconds.
+      alertEngine.evaluateAfterIngest(org, envRaw);
       liveBus.publish(org, {
         environment: envRaw,
         rollupsWritten: rollupResult.written,

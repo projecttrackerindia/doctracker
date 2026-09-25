@@ -10,6 +10,7 @@ const cookieParser = require('cookie-parser');
 const { initDb, pool } = require('./db');
 const { runMigrations } = require('./migrations/runner');
 const { startRetentionSchedule } = require('./retention');
+const { startAlertSchedule } = require('./alertEngine');
 const dataCrypto = require('./crypto');
 const workspaceCache = require('./cache');
 const openapiExport = require('./openapiExport');
@@ -24,6 +25,7 @@ const docAccessRoutes = require('./routes/docAccess');
 const aiRoutes = require('./routes/ai');
 const notificationRoutes = require('./routes/notifications');
 const observabilityRoutes = require('./routes/observability');
+const alertRoutes = require('./routes/alerts');
 const compressionMiddleware = require('./middleware/compress');
 const { verifySession, IdleTimeoutError } = require('./middleware/authGuard');
 
@@ -155,6 +157,9 @@ app.use('/api/workspace/doc-access', docAccessRoutes);
 // JSON limit set above applies (an agent's rollup push for a busy interval is
 // far larger than the 20kb default). Its own router/file, same as the others.
 app.use('/api/workspace/observability', observabilityRoutes);
+// Alert rules sit beside the metrics they watch rather than under /security:
+// a threshold is observability configuration, not an access-control decision.
+app.use('/api/workspace/alerts', alertRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/notifications', notificationRoutes);
 
@@ -542,6 +547,11 @@ initDb()
     app.listen(PORT, () => {
       console.log(`DocTracker auth service listening on port ${PORT}`);
       startRetentionSchedule();
+      // The alert sweep. Separate from ingest-triggered evaluation on
+      // purpose: a collector that has stopped sends nothing, so the one
+      // condition worth waking someone for is the one an event-driven
+      // evaluator can never see. See server/alertEngine.js.
+      startAlertSchedule();
     });
   })
   .catch((err) => {

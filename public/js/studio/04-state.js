@@ -41,5 +41,9 @@ let state = {
   obsRecordsPage: 1,
   obsEndpointPage: 1,             // All endpoints table pager
   obsEndpointSearch: '',          // All endpoints filter box
+  obsAlerts: null,                  // GET /api/workspace/alerts — { rules, settings, active, metrics, canEdit }
+  obsAlertsStatus: 'idle',          // 'idle' | 'loading' | 'ready' | 'error'
+  obsAlertsError: '',
+  obsAlertDraft: null,              // the rule currently open in the editor; null = editor closed
   obsEnvOptions: [],                // environments that have actually reported — GET /observability/environments. Not a picker: the header switcher is the only one. Used to say so when the environment you're in has no agent.
 };

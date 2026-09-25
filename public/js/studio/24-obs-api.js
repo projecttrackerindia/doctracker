@@ -224,6 +224,44 @@ async function obsLoadEnvironments(){
   return data.environments || [];
 }
 
+/* --- Alerting --------------------------------------------------------------
+   A separate router (/api/workspace/alerts) rather than more endpoints on the
+   observability one: these read and write CONFIGURATION, they are Admin-gated
+   for writes, and they are audited. Mixing them into the metric reads would
+   put a rate-limited, cache-friendly, everyone-can-read surface in the same
+   file as an Admin-only mutating one. */
+const OBS_ALERT_API = '/api/workspace/alerts';
+
+async function obsAlertApi(method, path, body){
+  const res = await fetch(`${OBS_ALERT_API}${path || ''}`, {
+    method: method || 'GET',
+    credentials: 'same-origin',
+    headers: body ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let payload = null;
+  try{ payload = await res.json(); }catch(e){ /* empty or non-JSON body */ }
+  if(!res.ok){
+    const err = new Error((payload && payload.error) || `Request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return payload || {};
+}
+
+async function obsLoadAlerts(){
+  state.obsAlertsStatus = 'loading';
+  try{
+    state.obsAlerts = await obsAlertApi('GET', '');
+    state.obsAlertsStatus = 'ready';
+    state.obsAlertsError = '';
+  }catch(err){
+    state.obsAlertsStatus = 'error';
+    state.obsAlertsError = err.message || 'Could not load alert configuration.';
+  }
+  renderMain();
+}
+
 /* True once this org has ANY rollup data. Drives the fallback: false means the
    agent hasn't been upgraded yet and the page should keep using the blob. */
 function obsDataAvailable(){

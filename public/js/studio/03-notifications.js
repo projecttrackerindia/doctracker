@@ -42,6 +42,19 @@ function navigateToNotifLink(link){
     // Security — see renderProfilePage() in 12-security-center.js.
     state.selected = { type:'profile' };
     renderMain();
+  } else if(link.view === 'observability'){
+    // An alert notification lands on the evidence, not on a home page: the
+    // console opens already scoped to the endpoint that fired, so the click
+    // answers "what is wrong" rather than starting the search over.
+    state.selected = { type:'observability' };
+    state.obsTab = link.tab || 'alerts';
+    if(link.endpointId){
+      state.obsFilters = { ...(state.obsFilters || {}), endpointId: link.endpointId };
+      state.obsRecords = null;
+      state.obsRecordsPage = 1;
+    }
+    renderSidebar();
+    renderMain();
   } else if(link.view === 'endpoint' && link.endpointId){
     state.selected = { type:'endpoint', id: link.endpointId };
     renderMain();
