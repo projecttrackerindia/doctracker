@@ -205,6 +205,11 @@ MAX_SOURCE_IPS_WATERMARK = int(os.environ.get("MAX_SOURCE_IPS_WATERMARK", "200")
 # one request produces are counted as one request. Sized for roughly a
 # cycle's worth of traffic plus margin - see aggregate().
 MAX_SEEN_EVENTS = int(os.environ.get("MAX_SEEN_EVENTS", "20000"))
+# Much smaller than MAX_SEEN_EVENTS on purpose. This one only has to bridge
+# the gap between a request's two log lines, which is seconds - not the whole
+# retention window that the event dedup covers. Keeping it small matters
+# because every entry is a correlation id plus a path.
+MAX_COUNTED_REQUEST_PATHS = int(os.environ.get("MAX_COUNTED_REQUEST_PATHS", "2000"))
 
 # --- Capture mode ------------------------------------------------------------
 # "aggregate" (the default, and what every earlier version of this agent
@@ -947,7 +952,13 @@ def load_state():
 # rollup buckets. Everything NOT listed here (file offsets and inodes, the
 # seen-event ids, push bookkeeping) is small, changes every cycle, and must
 # survive a crash or the agent would re-read and re-count log lines.
-BULKY_STATE_KEYS = ("endpoints", "logRecords", "logRecordKeyCounts", "rollups", "health")
+BULKY_STATE_KEYS = ("endpoints", "logRecords", "logRecordKeyCounts", "rollups", "health",
+                    # Thousands of correlation ids. It belongs with the other
+                    # bulky values in the file written on a full save, not in
+                    # the cursor file that is rewritten every couple of
+                    # seconds purely to keep read offsets current. Losing it
+                    # to a crash costs a handful of double-counted requests.
+                    "countedRequestPaths")
 
 # The small, write-every-cycle half lives in its own file so the bulky half
 # does not have to be re-serialised to update it.
@@ -1481,8 +1492,22 @@ def aggregate(state, observations):
     shadow_hops = collapse_duplicate_hops(observations)
     if shadow_hops:
         health["collapsedHopObservations"] = health.get("collapsedHopObservations", 0) + len(shadow_hops)
+
+    # A request's two log lines do not always arrive in one batch - polling is
+    # adaptive and a flush can land between them - and a pair split across two
+    # cycles was counted twice however good the in-batch rule was. This
+    # remembers which path a correlation id was already counted under, so the
+    # second half is recognised whenever it turns up.
+    counted_paths = state.setdefault("countedRequestPaths", {})
+
     for obs_index, obs in enumerate(observations):
         counts_as_request = obs_index not in shadow_hops
+        if counts_as_request and obs.get("correlationId") and obs.get("path"):
+            hop_key = "%s %s" % (obs.get("method") or "", obs["correlationId"])
+            prior = counted_paths.get(hop_key)
+            if prior and (_is_suffix_hop(obs["path"], prior) or _is_suffix_hop(prior, obs["path"])):
+                counts_as_request = False
+                health["collapsedHopObservations"] = health.get("collapsedHopObservations", 0) + 1
         if obs.get("style") == "apikit":
             if obs.get("isInventory"):
                 # A startup "Starting flow:" line proves the endpoint exists
@@ -1532,6 +1557,14 @@ def aggregate(state, observations):
             })
         if counts_as_request:
             ep["totalRequests"] += 1
+            # Remember the spelling this request was counted under, so the
+            # other half recognises itself whenever it arrives. Bounded the
+            # same way seenEvents is: oldest dropped once over the cap.
+            if obs.get("correlationId") and obs.get("path"):
+                counted_paths["%s %s" % (obs.get("method") or "", obs["correlationId"])] = obs["path"]
+                if len(counted_paths) > MAX_COUNTED_REQUEST_PATHS:
+                    for dead in list(counted_paths.keys())[:len(counted_paths) - MAX_COUNTED_REQUEST_PATHS]:
+                        del counted_paths[dead]
         else:
             # Seen but not counted: a startup inventory line, or another line
             # belonging to a request already counted. Tracked so the Agent

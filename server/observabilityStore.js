@@ -331,6 +331,16 @@ async function ingestRecordChunk(organisation, environment, capped, runner) {
     let fieldsEnc = null;
     let keyVersion = null;
     const fields = {};
+    // The method and path travel INSIDE the encrypted payload, never as
+    // columns. endpoint_id is a hash precisely so no API surface sits in an
+    // indexed plaintext column, and that holds - but a log explorer whose
+    // every row reads "auto-ad0a5a390a" cannot be used, and the id resolves
+    // to a name only for endpoints the viewer's project list already
+    // contains, which a freshly discovered one does not. Carrying the name
+    // in the ciphertext costs nothing: the payload is decrypted only for the
+    // page actually being returned.
+    if (typeof r.method === 'string' && r.method) fields.method = r.method.slice(0, 10).toUpperCase();
+    if (typeof r.path === 'string' && r.path) fields.path = r.path.slice(0, 512);
     if (r.requestFields && typeof r.requestFields === 'object') fields.requestFields = r.requestFields;
     if (r.responseFields && typeof r.responseFields === 'object') fields.responseFields = r.responseFields;
     if (Object.keys(fields).length) {
@@ -688,6 +698,10 @@ async function getRecords(organisation, {
       id: String(r.id),
       ts: new Date(r.ts).toISOString(),
       endpointId: r.endpoint_id,
+      // Null for records written before the name was carried in the payload;
+      // the page falls back to resolving the id, then to showing it raw.
+      method: fields?.method || null,
+      path: fields?.path || null,
       statusCode: r.status_code === null ? null : Number(r.status_code),
       latencyMs: r.latency_ms === null ? null : Number(r.latency_ms),
       clientIp: r.client_ip,

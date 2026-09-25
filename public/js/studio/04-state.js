@@ -40,5 +40,7 @@ let state = {
   obsFilters: {},                   // drill-down: { statusFamily, endpointId, clientIp, correlationId, minLatencyMs }
   obsRecords: null,                 // last /records page — { records, total, limit, offset }
   obsRecordsPage: 1,
+  obsEndpointPage: 1,             // All endpoints table pager
+  obsEndpointSearch: '',          // All endpoints filter box
   obsEnvOptions: [],                // environments that have actually reported — GET /observability/environments
 };

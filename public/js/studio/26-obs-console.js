@@ -109,6 +109,15 @@ function obsClearAllFilters(){
    only in the (encrypted) project documents. This resolves an id back to
    something a human recognises, falling back to the id when the endpoint
    isn't documented in this workspace. */
+/* A log row's own name beats resolving its id. The id is a hash, and it
+   resolves only for endpoints already in this viewer's project list - which
+   a just-discovered one is not, so the row rendered as "auto-ad0a5a390a"
+   exactly when it was most interesting. */
+function obsRecordLabel(rec){
+  if(rec && rec.method && rec.path) return `${rec.method} ${rec.path}`;
+  return obsEndpointLabel(rec ? rec.endpointId : '');
+}
+
 function obsEndpointLabel(endpointId){
   if(!state._obsEndpointNames){
     const map = {};
@@ -356,6 +365,11 @@ function renderObsOverviewTab(){
       <div class="obs-panel obs-panel-fill">
         <div class="section-title">Status code breakdown</div>
         <div class="hint" style="margin-top:-4px;">${obsFormatCount(cur.total)} response(s) ${bridged ? 'in total' : 'in this range'} · click a row to drill in</div>
+        ${(cur.statusBreakdown.unknown || 0) > 0 ? `<div class="hint" style="margin-top:6px;">
+          <b>Unclassified</b> is not a status code — it is a request whose log line carried no status
+          at all, so the outcome was never recorded. It is counted separately from 4xx and 5xx and is
+          deliberately <b>not</b> part of the error rate. Click the row to list those exact requests.
+        </div>` : ''}
         ${renderObsStatusBreakdown(cur)}
       </div>
       <div class="obs-panel obs-panel-fill">
@@ -461,15 +475,53 @@ function renderObsPerformanceTab(){
     <div class="obs-panel">
       <div class="section-title">All endpoints</div>
       <div class="hint" style="margin-top:-4px;">${(d.endpoints||[]).length} endpoint(s) with traffic ${bridged ? 'since the agent started' : 'in this range'} · click a row to drill in</div>
-      ${renderObsEndpointTable(d.endpoints || [])}
+      ${renderObsEndpointTable(d.endpoints || [], { paged: true })}
     </div>`;
 }
 
-function renderObsEndpointTable(endpoints){
+const OBS_ENDPOINT_PAGE_SIZE = 25;
+
+/* Paged and searchable. 382 endpoints in one unbroken table is not a table
+   anyone reads - and rendering every row on every re-render, several times a
+   minute under the live stream, is work nobody asked for. `opts.paged` is
+   false for the Errors tab, which is already a short filtered list. */
+function renderObsEndpointTable(endpoints, opts){
+  const o = opts || {};
   if(!endpoints.length){
     return `<div class="obs-empty"><div class="obs-empty-title">No endpoints reported traffic</div>
       <div class="obs-empty-body">${obsEmptyRangeHint()}</div></div>`;
   }
+
+  let rows = endpoints;
+  let pager = '';
+  let search = '';
+  if(o.paged){
+    const q = (state.obsEndpointSearch || '').trim().toLowerCase();
+    if(q) rows = rows.filter(e => obsEndpointLabel(e.endpointId).toLowerCase().includes(q));
+    const pages = Math.max(1, Math.ceil(rows.length / OBS_ENDPOINT_PAGE_SIZE));
+    // A filter that shrinks the list below the current page would otherwise
+    // leave someone staring at an empty table on page 7 of 1.
+    const page = Math.min(Math.max(1, state.obsEndpointPage || 1), pages);
+    state.obsEndpointPage = page;
+    const start = (page - 1) * OBS_ENDPOINT_PAGE_SIZE;
+    search = `<input type="search" id="obsEndpointSearch" class="obs-table-search"
+      placeholder="Filter by method or path…" value="${escapeHtml(state.obsEndpointSearch || '')}"
+      aria-label="Filter endpoints">`;
+    pager = `<div class="obs-health-pager">
+      <button type="button" class="obs-health-pager-page" id="obsEpPrev" ${page <= 1 ? 'disabled' : ''}>Previous</button>
+      <span class="obs-health-pager-label">${rows.length
+        ? `${(start + 1).toLocaleString()}–${Math.min(start + OBS_ENDPOINT_PAGE_SIZE, rows.length).toLocaleString()} of ${rows.length.toLocaleString()}`
+        : 'No matches'}${q ? ` (filtered from ${endpoints.length.toLocaleString()})` : ''} · page ${page} of ${pages}</span>
+      <button type="button" class="obs-health-pager-page" id="obsEpNext" ${page >= pages ? 'disabled' : ''}>Next</button>
+    </div>`;
+    rows = rows.slice(start, start + OBS_ENDPOINT_PAGE_SIZE);
+  }
+
+  if(!rows.length){
+    return `${search}<div class="obs-empty"><div class="obs-empty-title">No endpoint matches that filter</div>
+      <div class="obs-empty-body">Clear the filter to see all ${endpoints.length.toLocaleString()} endpoint(s).</div></div>${pager}`;
+  }
+  endpoints = rows;
   /* 4xx, 5xx and unclassified each get their own column rather than being
      folded into one "Errors" number. They are not interchangeable: a 4xx is
      usually the caller's problem, a 5xx is ours, and an unclassified
@@ -480,7 +532,7 @@ function renderObsEndpointTable(endpoints){
     ? `<td class="num" style="color:var(${colorVar});font-weight:700;">${obsFormatCount(n)}</td>`
     : `<td class="num" style="color:var(--text-faint);opacity:.45;">0</td>`;
 
-  return `<div class="obs-table-scroll"><table class="data-table obs-data-table">
+  return `${search}<div class="obs-table-scroll"><table class="data-table obs-data-table">
     <thead><tr>
       <th>Endpoint</th><th class="num">Requests</th>
       <th class="num" title="Successful responses">2xx</th>
@@ -511,7 +563,7 @@ function renderObsEndpointTable(endpoints){
         </tr>`;
       }).join('')}
     </tbody>
-  </table></div>`;
+  </table></div>${pager}`;
 }
 
 function renderObsErrorsTab(){
@@ -635,7 +687,7 @@ function renderObsLogsTab(){
             const fam = rec.statusCode ? String(rec.statusCode)[0] + 'xx' : 'unknown';
             return `<tr>
               <td class="mono">${formatDateTime(rec.ts)}</td>
-              <td class="mono">${escapeHtml(obsEndpointLabel(rec.endpointId))}</td>
+              <td class="mono">${escapeHtml(obsRecordLabel(rec))}</td>
               <td class="num mono" style="color:${OBS_STATUS_COLORS[fam]};font-weight:700;">${rec.statusCode || '—'}</td>
               <td class="num mono">${rec.latencyMs === null ? '—' : rec.latencyMs + 'ms'}</td>
               <td class="mono">${escapeHtml(rec.clientIp || '—')}</td>
@@ -647,9 +699,9 @@ function renderObsLogsTab(){
         <div class="obs-empty-title">No requests match these filters</div>
         <div class="obs-empty-body">Try clearing a filter above, or widening the date range.</div>
       </div>`}
-      ${pages > 1 ? `<div class="obs-health-pager">
+      ${r.records.length ? `<div class="obs-health-pager">
         <button type="button" class="obs-health-pager-page" id="obsRecPrev" ${state.obsRecordsPage <= 1 ? 'disabled' : ''}>Previous</button>
-        <span class="obs-health-pager-label">Page ${state.obsRecordsPage} of ${pages}</span>
+        <span class="obs-health-pager-label">${(r.offset + 1).toLocaleString()}–${(r.offset + r.records.length).toLocaleString()} of ${r.total.toLocaleString()} · page ${state.obsRecordsPage} of ${pages}</span>
         <button type="button" class="obs-health-pager-page" id="obsRecNext" ${state.obsRecordsPage >= pages ? 'disabled' : ''}>Next</button>
       </div>` : ''}
     </div>`;
@@ -737,6 +789,27 @@ function wireObsConsoleV2(main){
     state.obsRange = { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() };
     obsLoad();
     if(state.obsTab === 'logs') obsLoadRecordsPage();
+  });
+
+  const epPrev = main.querySelector('#obsEpPrev');
+  if(epPrev) epPrev.addEventListener('click', ()=>{
+    state.obsEndpointPage = Math.max(1, (state.obsEndpointPage || 1) - 1);
+    renderMain();
+  });
+  const epNext = main.querySelector('#obsEpNext');
+  if(epNext) epNext.addEventListener('click', ()=>{
+    state.obsEndpointPage = (state.obsEndpointPage || 1) + 1;
+    renderMain();
+  });
+  const epSearch = main.querySelector('#obsEndpointSearch');
+  if(epSearch) epSearch.addEventListener('input', ()=>{
+    state.obsEndpointSearch = epSearch.value;
+    state.obsEndpointPage = 1;
+    renderMain();
+    // The re-render replaces the input, so put the caret back where it was
+    // or typing a second character loses focus.
+    const again = document.getElementById('obsEndpointSearch');
+    if(again){ again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
   });
 
   const envSel = main.querySelector('#obsEnvSelect');

@@ -15,7 +15,10 @@ const OBS_STATUS_COLORS = {
   '3xx': 'var(--st-3)',
   '4xx': 'var(--st-4)',
   '5xx': 'var(--st-5)',
-  unknown: 'var(--text-faint)',
+  // Its own colour, not --text-faint: a 68%-of-traffic band rendered in the
+  // same grey as an empty track read as "nothing here" on the one row that
+  // most needed looking at.
+  unknown: 'var(--st-u)',
 };
 
 const OBS_STATUS_FAMILIES = ['2xx', '3xx', '4xx', '5xx', 'unknown'];

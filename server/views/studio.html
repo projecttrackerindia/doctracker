@@ -60,6 +60,10 @@
 
   /* status codes */
   --st-2:#35c491; --st-3:#4fa3f7; --st-4:#e0a83e; --st-5:#ef5c6e;
+  /* Unclassified: a real, visible colour. It used to borrow --text-faint,
+     which on a bar sits a shade off the empty track behind it - so the
+     largest family on the page routinely looked like an unfilled bar. */
+  --st-u:#98a2bd;
 
   --radius-sm:6px; --radius-md:10px; --radius-lg:14px;
   --shadow-modal:0 24px 60px -20px rgba(0,0,0,.55);
@@ -106,6 +110,7 @@
   --env-dr:#9c3a79;       --env-dr-bg:rgba(156,58,121,.10);
 
   --st-2:#1c8f66; --st-3:#1f6fd6; --st-4:#a06f10; --st-5:#d13750;
+  --st-u:#737e99;
 
   --shadow-modal:0 24px 60px -20px rgba(20,25,40,.25);
 
@@ -779,6 +784,7 @@ kbd{
   --env-prod:#d13750; --env-prod-bg:rgba(209,55,80,.10);
   --env-dr:#9c3a79; --env-dr-bg:rgba(156,58,121,.10);
   --st-2:#1c8f66; --st-3:#1f6fd6; --st-4:#a06f10; --st-5:#d13750;
+  --st-u:#737e99;
 }
 .pdf-print-root *{ box-sizing:border-box; }
 .pdf-print-root .pdf-cover-blank{ display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; gap:28px; padding:36px 20px; }
@@ -1262,10 +1268,20 @@ pre.code-block{
    different tint - the fill was there, it just could not be told apart from
    the track behind it. */
 .obs-ip-bar-track{
-  height:8px; background:transparent; border:1px solid var(--border);
-  border-radius:4px; overflow:hidden;
+  height:12px; background:color-mix(in srgb, var(--text) 9%, transparent);
+  border-radius:6px; overflow:hidden;
 }
-.obs-ip-bar{ height:100%; border-radius:3px; min-width:3px; }
+.obs-ip-bar{ height:100%; border-radius:6px; min-width:3px; display:block; }
+
+/* Filter box above a paged table. Sized to the column it filters rather than
+   stretched across the panel, so it reads as a control on the table. */
+.obs-table-search{
+  appearance:none; width:min(320px, 100%); margin:14px 0 2px;
+  background:var(--surface-2); border:1px solid var(--border); border-radius:8px;
+  color:var(--text); font:inherit; font-size:12px; padding:7px 11px;
+}
+.obs-table-search:focus{ outline:none; border-color:var(--accent); }
+.obs-table-search::placeholder{ color:var(--text-faint); }
 .obs-ip-count{ font-size:10.5px; color:var(--text-faint); white-space:nowrap; text-align:right; font-variant-numeric:tabular-nums; }
 .obs-ip-more{
   font-size:10px; font-weight:700; color:var(--accent); cursor:pointer; background:var(--accent-soft);
