@@ -1860,6 +1860,12 @@ function renderObservability(main){
   if(typeof obsLoad === 'function'){
     const stale = state.obsStatus === 'unavailable'
       && (Date.now() - (state.obsLastCheckedAt || 0)) > OBS_AVAILABILITY_RECHECK_MS;
+    if(state.obsStatus === 'idle'){
+      // Restore the tab and range BEFORE the first load, so the request that
+      // load makes is for the window being returned to rather than for the
+      // default one, followed by a second request correcting it.
+      if(typeof obsRestoreView === 'function') obsRestoreView();
+    }
     if(state.obsStatus === 'idle' || stale){
       state.obsLastCheckedAt = Date.now();
       obsLoad({ quiet: state.obsStatus !== 'idle' });

@@ -1390,6 +1390,77 @@ def parse_line(line):
 OVERFLOW_KEY = "* OVERFLOW - too many distinct endpoints"
 
 
+def _is_suffix_hop(short_path, long_path):
+    """True when `short_path` is `long_path` with a leading base path removed.
+
+    "/loanLienLinking" against "/internal/1.0/loanLienLinking": the same
+    endpoint named two ways, not two endpoints. The split has to fall on a
+    segment boundary, which it does automatically because the short path
+    carries its own leading slash - so the remaining prefix must be non-empty
+    and must not itself end in a slash, or "/a//b" would match "/b".
+    """
+    if not short_path or not long_path or short_path == long_path:
+        return False
+    if not short_path.startswith("/") or not long_path.startswith("/"):
+        return False
+    if len(short_path) >= len(long_path) or not long_path.endswith(short_path):
+        return False
+    prefix = long_path[:len(long_path) - len(short_path)]
+    return bool(prefix) and not prefix.endswith("/")
+
+
+def collapse_duplicate_hops(observations):
+    """Finds the redundant half of a two-record request.
+
+    One inbound call is logged twice by this deployment: the HTTP listener
+    writes the real request URI along with the status code and the entry/exit
+    timings, and the APIkit router flow writes a FlowName that yields the same
+    path with the listener's base path stripped - no status, no timings. They
+    carry the SAME correlation id because they are one request.
+
+    Counted as two, they doubled every total, halved every error rate, and
+    filed the router's statusless half under "unclassified" - which is where
+    most of the unknown column was coming from.
+
+    Returns the set of indexes that should still register their endpoint (it
+    is a real path, and documentation may well be written against it) but must
+    not count as traffic. Nothing collapses unless a correlation id actually
+    ties the two records together, so a deployment that logs differently is
+    unaffected.
+    """
+    by_request = {}
+    for i, ob in enumerate(observations):
+        corr = ob.get("correlationId")
+        if not corr or not ob.get("path"):
+            continue
+        by_request.setdefault((str(corr), ob.get("method")), []).append(i)
+
+    shadows = set()
+    for members in by_request.values():
+        if len(members) < 2:
+            continue
+        for pos, i in enumerate(members):
+            for j in members[pos + 1:]:
+                a, b = observations[i], observations[j]
+                if _is_suffix_hop(a.get("path"), b.get("path")):
+                    short_i, long_i = i, j
+                elif _is_suffix_hop(b.get("path"), a.get("path")):
+                    short_i, long_i = j, i
+                else:
+                    continue
+                # Keep whichever record actually carries the outcome. Usually
+                # that is the longer, listener-side path, but preferring the
+                # status code explicitly means a deployment that logs it the
+                # other way round keeps its classified half rather than its
+                # blank one.
+                short_ob, long_ob = observations[short_i], observations[long_i]
+                loser = short_i
+                if short_ob.get("statusCode") is not None and long_ob.get("statusCode") is None:
+                    loser = long_i
+                shadows.add(loser)
+    return shadows
+
+
 def aggregate(state, observations):
     endpoints = state.setdefault("endpoints", {})
     health = state.setdefault("health", {})
@@ -1405,8 +1476,13 @@ def aggregate(state, observations):
     # two poll cycles, and it is capped so it can't grow without bound.
     seen_events = state.setdefault("seenEvents", [])
     seen_lookup = set(seen_events)
-    for obs in observations:
-        counts_as_request = True
+    # Computed once for the whole batch: the same request logged twice under
+    # two spellings of its path. See collapse_duplicate_hops().
+    shadow_hops = collapse_duplicate_hops(observations)
+    if shadow_hops:
+        health["collapsedHopObservations"] = health.get("collapsedHopObservations", 0) + len(shadow_hops)
+    for obs_index, obs in enumerate(observations):
+        counts_as_request = obs_index not in shadow_hops
         if obs.get("style") == "apikit":
             if obs.get("isInventory"):
                 # A startup "Starting flow:" line proves the endpoint exists
@@ -2220,6 +2296,12 @@ def build_agent_health(state):
         "trackedEndpointCount": len([k for k in endpoints if k != OVERFLOW_KEY]),
         "maxTrackedEndpoints": MAX_TRACKED_ENDPOINTS,
         "overflowObservations": health.get("overflowObservations", 0),
+        # How many log records were recognised as the second half of a request
+        # already counted under its other path spelling. Surfaced because it
+        # is the difference between "we serve twice as much traffic as we
+        # thought" and "we log every request twice" - see
+        # collapse_duplicate_hops().
+        "collapsedHopObservations": health.get("collapsedHopObservations", 0),
         "maxLinesPerCycle": MAX_LINES_PER_CYCLE,
         "lastPushAt": health.get("lastPushAt"),
         "lastPushOk": health.get("lastPushOk"),

@@ -396,13 +396,13 @@ function renderObsTopIps(cur){
       <div class="obs-empty-body">The agent records caller addresses when the log line carries one.</div></div>`;
   }
   const max = Math.max(...ips.map(x=>x.count), 1);
-  return `<div class="obs-histo" style="margin-top:22px;">
+  return `<div class="obs-histo obs-histo-wide" style="margin-top:22px;">
     ${ips.map(x=>{
       const cls = typeof classifyIp === 'function' ? classifyIp(x.ip) : 'unknown';
       const dot = cls === 'internal' ? 'var(--accent)' : cls === 'external' ? 'var(--put)' : 'var(--text-faint)';
       const share = cur.total ? Math.round((x.count/cur.total)*1000)/10 : 0;
-      return `<div class="obs-histo-row obs-clickable" data-obs-filter-ip="${escapeHtml(x.ip)}" title="Show requests from ${escapeHtml(x.ip)}">
-        <span class="obs-histo-label mono" style="text-align:left;">${escapeHtml(x.ip)}</span>
+      return `<div class="obs-histo-row obs-clickable" data-obs-filter-ip="${escapeHtml(x.ip)}" title="${escapeHtml(x.ip)} — ${x.count.toLocaleString()} request(s)">
+        <span class="obs-histo-label mono">${escapeHtml(x.ip)}</span>
         <span class="obs-ip-bar-track"><span class="obs-ip-bar" style="width:${Math.max(Math.round(x.count/max*100),2)}%;background:${dot};"></span></span>
         <span class="obs-ip-count">${obsFormatCount(x.count)} <span style="opacity:.7;">(${share}%)</span></span>
       </div>`;
@@ -433,13 +433,13 @@ function renderObsPerformanceTab(){
       <div class="obs-panel">
         <div class="section-title">Slowest endpoints</div>
         <div class="hint" style="margin-top:-4px;">By p95 ${bridged ? '— not available yet' : 'in this range · click to filter'}</div>
-        ${bridged ? latencyPending : slowest.length ? `<div class="obs-histo" style="margin-top:18px;">
+        ${bridged ? latencyPending : slowest.length ? `<div class="obs-histo obs-histo-wide" style="margin-top:18px;">
           ${(()=>{
             const max = Math.max(...slowest.map(e=>e.latency.p95||0), 1);
             return slowest.map(e=>`
               <div class="obs-histo-row obs-clickable" data-obs-filter-endpoint="${escapeHtml(e.endpointId)}"
                    title="${escapeHtml(obsEndpointLabel(e.endpointId))} — p95 ${e.latency.p95}ms over ${e.total.toLocaleString()} request(s)">
-                <span class="obs-histo-label mono" style="text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60px;">${escapeHtml(obsEndpointLabel(e.endpointId))}</span>
+                <span class="obs-histo-label mono">${escapeHtml(obsEndpointLabel(e.endpointId))}</span>
                 <span class="obs-ip-bar-track"><span class="obs-ip-bar" style="width:${Math.max(Math.round((e.latency.p95||0)/max*100),2)}%;background:${(e.latency.p95||0) >= 1000 ? 'var(--st-4)' : 'var(--accent)'};"></span></span>
                 <span class="obs-ip-count">${e.latency.p95}ms</span>
               </div>`).join('');
@@ -677,6 +677,7 @@ function wireObsConsoleV2(main){
   main.querySelectorAll('[data-obs-tab]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       state.obsTab = btn.getAttribute('data-obs-tab');
+      obsSaveView();
       renderMain();
       if(state.obsTab === 'logs' && state.obsRecords === null) obsLoadRecordsPage();
     });
@@ -685,6 +686,7 @@ function wireObsConsoleV2(main){
   main.querySelectorAll('[data-obs-range]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       state.obsRange = { key: btn.getAttribute('data-obs-range') };
+      obsSaveView();
       obsLoad();
       if(state.obsTab === 'logs') obsLoadRecordsPage();
     });

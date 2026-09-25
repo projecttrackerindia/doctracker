@@ -1627,6 +1627,17 @@ pre.code-block{
 .obs-histo{ display:flex; flex-direction:column; gap:7px; }
 .obs-histo-row{ display:grid; grid-template-columns:60px 1fr auto; align-items:center; gap:10px; }
 .obs-histo-label{ font-family:var(--mono); font-size:10.5px; color:var(--text-faint); text-align:right; }
+/* 60px fits "2xx" and nothing else. An IP address or a method+path needs a
+   real column, so the lists that carry one opt into a wider, ellipsised
+   label instead of overflowing under the bar next to it. */
+.obs-histo-wide .obs-histo-row{ grid-template-columns:minmax(0, 168px) 1fr auto; }
+.obs-histo-wide .obs-histo-label{
+  text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--text); font-size:11px;
+}
+@media (max-width: 900px){
+  .obs-histo-wide .obs-histo-row{ grid-template-columns:minmax(0, 120px) 1fr auto; }
+}
 .obs-histo-marks{
   display:flex; gap:16px; flex-wrap:wrap; margin-top:12px; padding-top:10px;
   border-top:1px solid var(--border); font-size:11.5px; color:var(--text-faint); font-family:var(--mono);

@@ -203,6 +203,41 @@ function obsRememberedAvailability(){
   try{ return localStorage.getItem(OBS_SEEN_KEY); }catch(e){ return null; }
 }
 
+/* --- Remembering where you were --------------------------------------------
+   A reload used to drop you back on Overview at 24 hours no matter which tab
+   and range you were reading, which makes refreshing to check a live number
+   cost two clicks every time. Kept per viewer alongside the theme and the
+   selected environment, which this app already persists the same way.
+
+   Only a PRESET range is restored. Restoring an absolute custom window would
+   silently reopen a stale one - come back tomorrow and you would be looking
+   at yesterday while the page insists it is current. */
+const OBS_VIEW_KEY = 'doctracker.obsView';
+
+function obsSaveView(){
+  try{
+    const sel = state.obsRange || {};
+    localStorage.setItem(OBS_VIEW_KEY, JSON.stringify({
+      tab: state.obsTab,
+      rangeKey: sel.from && sel.to ? null : (sel.key || null),
+    }));
+  }catch(e){ /* storage unavailable */ }
+}
+
+function obsRestoreView(){
+  let saved = null;
+  try{ saved = JSON.parse(localStorage.getItem(OBS_VIEW_KEY) || 'null'); }catch(e){ return; }
+  if(!saved || typeof saved !== 'object') return;
+  // Validated against the current lists, so a tab or preset removed in a
+  // later build cannot leave someone on a view that no longer renders.
+  if(typeof OBS_TABS !== 'undefined' && OBS_TABS.some(t => t.key === saved.tab)){
+    state.obsTab = saved.tab;
+  }
+  if(saved.rangeKey && OBS_RANGES.some(r => r.key === saved.rangeKey)){
+    state.obsRange = { key: saved.rangeKey };
+  }
+}
+
 /* --- Live updates (SSE) ---------------------------------------------------
    Replaces the 60s poll. The server pushes an event the moment an agent
    ingests, so the console updates in step with collection instead of on a
