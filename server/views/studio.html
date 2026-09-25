@@ -1571,6 +1571,18 @@ pre.code-block{
    the same time printed at both ends of the axis. */
 .obs-chart-axis-single{ justify-content:center; }
 
+/* The part of the window that predates this environment's recording. Hatched,
+   not filled: it has to read as "unknown", which is neither the plot's
+   background (nothing happened) nor a data band (something did). */
+.obs-chart-uncollected{
+  fill:url(#obsHatch); stroke:var(--border); stroke-width:1; stroke-dasharray:3 3;
+}
+.obs-chart-hatch-line{ stroke:var(--border); stroke-width:1.4; }
+.obs-chart-uncollected-label{
+  fill:var(--text-faint); font-size:11px; text-anchor:middle;
+  font-family:var(--mono); letter-spacing:.04em;
+}
+
 /* Shown for the moment between a reload and the first response. Shaped like
    the real content so nothing shifts when the data lands. */
 .obs-skeleton-line{

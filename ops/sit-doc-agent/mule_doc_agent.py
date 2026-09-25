@@ -391,6 +391,8 @@ CLIENT_IP_KEY_PATTERN = re.compile(r'x-forwarded-for|clientip|remoteaddr|^ip$', 
 # their own TimestampIST and FlowName - used for real per-request latency
 # (exit minus entry) and for grouping in the log explorer, when
 # CAPTURE_MODE=full. Never used in default (aggregate-only) mode.
+# Set only by --diagnose-latency; see the note where it is read.
+DIAGNOSE_LATENCY = False
 ENTRY_BLOCK_PATTERN = re.compile(r'^entry$', re.IGNORECASE)
 EXIT_BLOCK_PATTERN = re.compile(r'^exit$', re.IGNORECASE)
 TIMESTAMP_KEY_PATTERN = re.compile(r'timestamp', re.IGNORECASE)
@@ -837,7 +839,7 @@ def _finish_block(carry, observations):
             latency_ms = round(exit_ts - entry_ts) if (entry_ts is not None and exit_ts is not None and exit_ts >= entry_ts) else None
             flow_name = (exit_block and _find_key_value(exit_block, FLOWNAME_KEY_PATTERN)) or \
                         (entry_block and _find_key_value(entry_block, FLOWNAME_KEY_PATTERN))
-            observations.append({
+            ob = {
                 "method": carry["method"],
                 "path": path,
                 "statusCode": _find_key_value(obj, STATUS_KEY_PATTERN),
@@ -848,7 +850,22 @@ def _finish_block(carry, observations):
                 "latencyMs": latency_ms,
                 "flowName": str(flow_name) if flow_name else None,
                 "exitTsMs": exit_ts,
-            })
+            }
+            # Off in every real run (one bool test per block). Latency is the
+            # one field whose absence has several indistinguishable causes -
+            # no entry block, no exit block, both present but an unparseable
+            # timestamp - and "p95 shows a dash" looks the same for all of
+            # them. --diagnose-latency turns this on to tell them apart
+            # against the real logs instead of guessing at their shape.
+            if DIAGNOSE_LATENCY:
+                ob["_latencyDebug"] = {
+                    "hasEntry": entry_block is not None,
+                    "hasExit": exit_block is not None,
+                    "entryTs": entry_ts is not None,
+                    "exitTs": exit_ts is not None,
+                    "keys": sorted(set(_all_keys(obj)))[:40],
+                }
+            observations.append(ob)
     carry["method"] = None
 
 # ============================================================================
@@ -2743,6 +2760,99 @@ def seed_state_from_history(state, log_paths, max_lines):
           + (f" {failed} file(s) unreadable." if failed else ""))
 
 
+def diagnose_latency(sample_lines):
+    """Explains why latency is or is not being recorded, against the real logs.
+
+    Latency is computed as exit-timestamp minus entry-timestamp, both read
+    from blocks INSIDE a single JSON log record. When a deployment logs entry
+    and exit as two separate records, or names those blocks differently, the
+    agent records every request correctly and still has no duration for any
+    of them - and the console can only say "no durations parsed", which does
+    not tell anyone what to change.
+
+    This reads the end of each log file, parses it with the real parser, and
+    reports which of the possible causes is actually happening.
+    """
+    global DIAGNOSE_LATENCY
+    DIAGNOSE_LATENCY = True
+
+    paths = resolve_log_paths(MULE_LOG_PATH)
+    per_file = max(1, sample_lines // max(1, len(paths)))
+    print(f"[info] latency diagnosis: ~{per_file} line(s) from the end of each of "
+          f"{len(paths)} file(s)\n")
+
+    tally = {"observations": 0, "with_latency": 0, "no_entry": 0, "no_exit": 0,
+             "neither": 0, "both_but_unparsed": 0}
+    by_file = {}
+    key_samples = []
+
+    for p in paths:
+        lines = read_last_lines(p, per_file)
+        if not lines:
+            continue
+        carry = {"method": None, "buffer": "", "in_json": False, "depth": 0}
+        for pre in lines:
+            parse_line(pre)
+        obs_list = assemble_multiline_observations(lines, carry)
+        name = os.path.basename(p)
+        for ob in obs_list:
+            d = ob.get("_latencyDebug")
+            if d is None:
+                continue
+            tally["observations"] += 1
+            hit = by_file.setdefault(name, {"n": 0, "lat": 0})
+            hit["n"] += 1
+            if ob.get("latencyMs") is not None:
+                tally["with_latency"] += 1
+                hit["lat"] += 1
+            elif d["hasEntry"] and d["hasExit"]:
+                tally["both_but_unparsed"] += 1
+            elif d["hasEntry"]:
+                tally["no_exit"] += 1
+            elif d["hasExit"]:
+                tally["no_entry"] += 1
+            else:
+                tally["neither"] += 1
+                if len(key_samples) < 5:
+                    key_samples.append((name, d["keys"]))
+
+    print(f"parsed request records : {tally['observations']}")
+    print(f"  with a real latency  : {tally['with_latency']}")
+    print(f"  entry block, no exit : {tally['no_exit']}")
+    print(f"  exit block, no entry : {tally['no_entry']}")
+    print(f"  neither block        : {tally['neither']}")
+    print(f"  both, timestamp bad  : {tally['both_but_unparsed']}")
+
+    if by_file:
+        print("\nper file (records / with latency):")
+        for name, h in sorted(by_file.items(), key=lambda kv: -kv[1]["n"])[:15]:
+            print(f"  {name:<52} {h['n']:>5} / {h['lat']}")
+
+    if tally["observations"] == 0:
+        print("\nNo request records were parsed at all from these samples - this is a "
+              "parsing question, not a latency one. Run --sample-lines first.")
+    elif tally["with_latency"] == 0:
+        print("\nNo latency anywhere. The cause above says what to do:")
+        if tally["neither"]:
+            print("  * 'neither block' dominates: these records carry no entry/exit blocks at all.")
+            print("    The key names actually present are printed below. If a timing pair exists")
+            print("    under different names, ENTRY_BLOCK_PATTERN / EXIT_BLOCK_PATTERN need to match them.")
+        if tally["no_exit"] or tally["no_entry"]:
+            print("  * entry and exit are being logged as SEPARATE records, so no single block")
+            print("    holds both. Pairing them by correlation id across records is the fix.")
+        if tally["both_but_unparsed"]:
+            print("  * both blocks are present but the timestamp value did not parse - send one")
+            print("    sample value so _parse_timestamp_ms() can be taught its format.")
+    else:
+        pct = 100.0 * tally["with_latency"] / tally["observations"]
+        print(f"\nLatency is being recorded for {pct:.1f}% of parsed records.")
+
+    for name, keys in key_samples:
+        print(f"\nkeys seen in a record with no timing blocks ({name}):\n  {keys}")
+
+    DIAGNOSE_LATENCY = False
+
+
 def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed_from_history=None):
     state = load_state()
 
@@ -3256,6 +3366,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="Parse and aggregate, but never call DocTracker.")
     ap.add_argument("--sample-lines", type=int, default=None, help="Print N parsed lines and exit (for validating the log parser).")
+    ap.add_argument("--diagnose-latency", type=int, nargs="?", const=20000, default=None, metavar="N",
+                    help="Explain why request durations are or are not being recorded, against the real "
+                         "logs. Reads the last N lines (default 20000, split across files), never writes "
+                         "state and never calls DocTracker. Use when the console shows no p50/p95/p99.")
     ap.add_argument("--seed-from-history", type=int, default=None, metavar="N",
                     help="On first start only, backfill the endpoint inventory by reading the last N "
                          "lines (total, split across files) of existing logs before tailing. Without "
@@ -3268,5 +3382,10 @@ if __name__ == "__main__":
                      help="With --local-html, also serve the report over http://127.0.0.1:PORT (localhost-only, "
                           "never externally reachable). View from your own machine via an SSH tunnel.")
     args = ap.parse_args()
+    if args.diagnose_latency is not None:
+        # Read-only and self-contained: no state is loaded or written, so this
+        # is safe to run against a node with the agent already tailing.
+        diagnose_latency(args.diagnose_latency)
+        sys.exit(0)
     run(dry_run=args.dry_run, sample_lines=args.sample_lines, local_html=args.local_html,
         serve_port=args.serve_port, seed_from_history=args.seed_from_history)

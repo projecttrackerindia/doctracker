@@ -137,6 +137,37 @@ function renderTrafficChart(series, opts){
     ? (()=>{ const y = padT + plotH - rateAt(series[0]) * plotH; return `${barX},${y} ${barX + barW},${y}`; })()
     : series.map((p, i)=> `${xAt(i)},${padT + plotH - rateAt(p) * plotH}`).join(' ');
 
+  /* "Nothing happened" and "we were not watching" are different facts, and a
+     zero-filled grid renders them identically - a flat line along the axis
+     for both. Anything before collection started is therefore shaded and
+     labelled as uncollected, so a quiet morning cannot be mistaken for an
+     outage, or an agent that was not running yet for a quiet morning. */
+  const coverageStart = o.coverageStart ? Date.parse(o.coverageStart) : NaN;
+  let uncollected = '';
+  if(isFinite(coverageStart) && series.length > 1){
+    const firstTs = Date.parse(series[0].ts);
+    const lastTs = Date.parse(series[series.length - 1].ts);
+    if(coverageStart > firstTs && lastTs > firstTs){
+      const frac = Math.min(1, (coverageStart - firstTs) / (lastTs - firstTs));
+      const w = plotW * frac;
+      if(w > 1){
+        // The hatch is defined inline rather than in the stylesheet: an SVG
+        // paint server has to exist in the document to be referenced, and
+        // only one traffic chart is on screen at a time, so it travels with
+        // the chart that uses it.
+        uncollected = `<defs>
+            <pattern id="obsHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <line x1="0" y1="0" x2="0" y2="6" class="obs-chart-hatch-line"></line>
+            </pattern>
+          </defs>
+          <rect x="${padL}" y="${padT}" width="${w}" height="${plotH}"
+            class="obs-chart-uncollected"></rect>
+          ${w > 150 ? `<text x="${padL + w / 2}" y="${padT + plotH / 2}"
+            class="obs-chart-uncollected-label">not collected yet</text>` : ''}`;
+      }
+    }
+  }
+
   const gridLines = obsGridFractions(yMax).map(f=>{
     const y = padT + plotH - f * plotH;
     return `<line x1="${padL}" y1="${y}" x2="${padL + plotW}" y2="${y}" class="obs-chart-grid"></line>
@@ -155,7 +186,13 @@ function renderTrafficChart(series, opts){
     const when = formatDateTime(p.ts);
     const latency = p.meanLatencyMs === null || p.meanLatencyMs === undefined
       ? '' : ` — mean ${p.meanLatencyMs}ms`;
-    const title = `${when}\n${p.total.toLocaleString()} request(s)${latency}\n${parts.join(' · ') || 'no responses classified'}\nerror rate ${rate}%`;
+    // A zero here means one of two different things; say which.
+    const before = isFinite(coverageStart) && Date.parse(p.ts) < coverageStart;
+    const title = before
+      ? `${when}\nNot collected — the agent was not reporting this environment yet`
+      : p.total === 0
+        ? `${when}\nNo requests`
+        : `${when}\n${p.total.toLocaleString()} request(s)${latency}\n${parts.join(' · ') || 'no responses classified'}\nerror rate ${rate}%`;
     const w = Math.max(stepX, 2);
     return `<rect x="${xAt(i) - w / 2}" y="${padT}" width="${w}" height="${plotH}"
       class="obs-chart-hover" data-obs-point="${i}"><title>${escapeHtml(title)}</title></rect>`;
@@ -184,6 +221,7 @@ function renderTrafficChart(series, opts){
   return `<div class="obs-chart-wrap">
     <svg viewBox="0 0 ${width} ${height}" class="obs-chart" preserveAspectRatio="none" role="img"
          aria-label="Requests over time by status family, with error rate">
+      ${uncollected}
       ${gridLines}
       ${bands.join('')}
       <polyline points="${errPoints}" class="obs-chart-errline"></polyline>

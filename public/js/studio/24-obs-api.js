@@ -102,6 +102,54 @@ async function obsApiGet(path, query){
   return res.json();
 }
 
+/* A chart must cover the range that was ASKED for, not the range that
+   happens to hold data.
+
+   The series endpoint returns only buckets that exist. Ask for 24 hours while
+   holding 13 minutes of traffic and it returns two points - and a chart drawn
+   from those two points silently re-scopes its own x-axis to 13 minutes while
+   the toolbar above it still says "24 hours". The picture and the label
+   disagree, and the picture is the one people believe.
+
+   Filling the grid here rather than in SQL keeps one definition of "the
+   window" on the client that already resolved it, and costs nothing: every
+   range the picker offers lands between 15 and a few hundred slots, because
+   the interval is chosen to target ~200 points in the first place. */
+const OBS_MAX_SERIES_POINTS = 2000;
+
+function obsFillSeries(series, fromIso, toIso, intervalSeconds){
+  const step = Math.max(60, Number(intervalSeconds) || 300) * 1000;
+  const from = Date.parse(fromIso);
+  const to = Date.parse(toIso);
+  if(!isFinite(from) || !isFinite(to) || to <= from) return series || [];
+
+  // The same grid the server floors onto - multiples of the interval since
+  // the epoch - so a filled slot lines up exactly with a returned bucket
+  // instead of sitting one slot beside it.
+  const first = Math.floor(from / step) * step;
+  const last = Math.floor(to / step) * step;
+  const count = Math.floor((last - first) / step) + 1;
+  if(count < 1 || count > OBS_MAX_SERIES_POINTS) return series || [];
+
+  const bySlot = new Map();
+  (series || []).forEach(p =>{
+    const t = Date.parse(p.ts);
+    if(isFinite(t)) bySlot.set(Math.floor(t / step) * step, p);
+  });
+
+  const out = [];
+  for(let i = 0; i < count; i++){
+    const t = first + i * step;
+    out.push(bySlot.get(t) || {
+      ts: new Date(t).toISOString(),
+      total: 0,
+      statusBreakdown: { '2xx':0, '3xx':0, '4xx':0, '5xx':0, unknown:0 },
+      meanLatencyMs: null,
+    });
+  }
+  return out;
+}
+
 /* One round trip per panel group, in parallel. Kept as a single entry point so
    the page has exactly one place that knows what a "refresh" means - the SSE
    handler, the range picker and the manual reload all call this. */
@@ -111,12 +159,13 @@ async function obsLoadAll(){
     obsApiGet('/series', obsQuery()),
     obsApiGet('/endpoints', obsQuery({ limit: 500 })),
   ]);
+  const range = series.range || summary.range || {};
   return {
     range: summary.range,
     current: summary.current,
     previous: summary.previous,
     coverage: summary.coverage,
-    series: series.series || [],
+    series: obsFillSeries(series.series || [], range.from, range.to, series.intervalSeconds),
     intervalSeconds: series.intervalSeconds,
     endpoints: endpoints.endpoints || [],
     loadedAt: Date.now(),

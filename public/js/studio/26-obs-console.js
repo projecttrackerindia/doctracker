@@ -133,6 +133,38 @@ function obsIsBridged(){
   return !!(state.obsData && state.obsData.source === 'blob');
 }
 
+/* When this environment's time-series record actually begins. Everything
+   before it is unobserved, not quiet - a distinction the charts draw and the
+   empty states have to make too, because "no errors in this range" is a very
+   different claim when most of the range predates collection. */
+function obsCoverageStart(){
+  const c = state.obsData && state.obsData.coverage;
+  return (c && c.oldest) || null;
+}
+
+/* True when the selected range starts before this environment was being
+   recorded — i.e. an empty panel may only mean "we weren't looking". */
+function obsRangeOutrunsCoverage(){
+  const start = obsCoverageStart();
+  if(!start) return false;
+  const from = state.obsData && state.obsData.range && state.obsData.range.from;
+  if(!from) return false;
+  const startMs = Date.parse(start);
+  const fromMs = Date.parse(from);
+  if(!isFinite(startMs) || !isFinite(fromMs)) return false;
+  // A minute of slack: a bucket boundary is not a gap worth mentioning.
+  return startMs - fromMs > 60e3;
+}
+
+/* The honest second line under an empty panel. Telling someone to widen a
+   range that already extends past the start of collection sends them looking
+   for data that cannot exist. */
+function obsEmptyRangeHint(){
+  return obsRangeOutrunsCoverage()
+    ? `Recording for this environment starts ${escapeHtml(formatDateTime(obsCoverageStart()))}. Nothing before that was captured, so widening the range will not reach further back.`
+    : 'Widen the date range to look further back.';
+}
+
 /* One shape for "this panel is real, it just needs the upgraded agent" — so
    the three places it appears read as the same deliberate state rather than
    three different kinds of blank. */
@@ -169,9 +201,14 @@ function renderObsToolbar(){
   )).join('');
 
   const coverage = state.obsData && state.obsData.coverage;
+  // Said plainly when it matters: a range reaching past the start of
+  // recording will show flat zero for the part nobody was watching, and
+  // "Data from ..." is too quiet a way to explain an empty chart.
   const coverageNote = bridged
     ? 'Cumulative since the agent started'
-    : (coverage && coverage.oldest ? `Data from ${formatDateTime(coverage.oldest)}` : '');
+    : obsRangeOutrunsCoverage()
+      ? `Recording starts ${formatDateTime(coverage.oldest)} — earlier is not in view`
+      : (coverage && coverage.oldest ? `Data from ${formatDateTime(coverage.oldest)}` : '');
 
   // datetime-local wants a local, second-less value; the state holds ISO.
   const toLocalInput = (iso)=>{
@@ -301,11 +338,12 @@ function renderObsOverviewTab(){
       </div>
       ${bridged
         ? obsPendingPanel('Traffic over time starts the moment the agent pushes',
+
             `The current agent reports one running total per endpoint, so there is nothing to plot against a clock — `
             + `the ${obsFormatCount(cur.total)} requests below are real, but they're a sum, not a history. `
             + `The upgraded agent writes one bucket per minute, and this becomes a stacked chart by status family `
             + `with error rate on the right axis.`)
-        : renderTrafficChart(d.series || [])}
+        : renderTrafficChart(d.series || [], { coverageStart: obsCoverageStart() })}
     </div>
 
     <div class="grid2">
@@ -329,7 +367,7 @@ function renderObsStatusBreakdown(cur){
   const present = fams.filter((f,i)=>counts[i] > 0);
   if(!present.length){
     return `<div class="obs-empty"><div class="obs-empty-title">No responses in this range</div>
-      <div class="obs-empty-body">Widen the date range, or check that the agent is still pushing.</div></div>`;
+      <div class="obs-empty-body">${obsEmptyRangeHint()}</div></div>`;
   }
   return `<div class="obs-statusbreakdown-body">
     <div class="obs-statusbar">${present.map(f =>
@@ -421,7 +459,7 @@ function renderObsPerformanceTab(){
 function renderObsEndpointTable(endpoints){
   if(!endpoints.length){
     return `<div class="obs-empty"><div class="obs-empty-title">No endpoints reported traffic</div>
-      <div class="obs-empty-body">Try a wider date range, or a different environment.</div></div>`;
+      <div class="obs-empty-body">${obsEmptyRangeHint()}</div></div>`;
   }
   return `<div class="obs-table-scroll"><table class="data-table obs-data-table">
     <thead><tr>
@@ -455,7 +493,7 @@ function renderObsErrorsTab(){
   if(!cur.errCount){
     return `<div class="obs-panel"><div class="obs-empty">
       <div class="obs-empty-title">No errors ${bridged ? 'recorded' : 'in this range'}</div>
-      <div class="obs-empty-body">Every classified response was 2xx or 3xx.${bridged ? '' : ' Widen the range to look further back.'}</div>
+      <div class="obs-empty-body">Every classified response was 2xx or 3xx.${bridged ? '' : ' ' + obsEmptyRangeHint()}</div>
     </div></div>`;
   }
 
@@ -477,7 +515,7 @@ function renderObsErrorsTab(){
             `The ${obsFormatCount(cur.errCount)} errors below are real and attributed to the right endpoints. `
             + `What a running total can't answer is <i>when</i> — whether this is a steady trickle or one bad `
             + `ten minutes. That's the question the upgraded agent's per-minute buckets answer.`)
-        : renderTrafficChart(errSeries, { hideLegend: true })}
+        : renderTrafficChart(errSeries, { hideLegend: true, coverageStart: obsCoverageStart() })}
     </div>
 
     <div class="obs-panel">

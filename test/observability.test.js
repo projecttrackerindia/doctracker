@@ -144,7 +144,11 @@ test('CONTRACT: the agent and server agree on the latency histogram bands', () =
 });
 
 test('CONTRACT: every rollup field the server reads is one the agent sets', () => {
-  const bucketLiteral = /b = \{([\s\S]*?)\n        \}/.exec(agentSrc);
+  // Anchored to the newline and its exact indentation on purpose. An
+  // unanchored /b = \{/ also matches any identifier ENDING in b — it started
+  // matching an unrelated `ob = {` the moment one was added earlier in the
+  // file, and silently compared the wrong literal.
+  const bucketLiteral = /\n {8}b = \{([\s\S]*?)\n {8}\}/.exec(agentSrc);
   assert.ok(bucketLiteral, 'could not locate the rollup bucket literal in the agent');
   const agentKeys = new Set([...bucketLiteral[1].matchAll(/"([a-zA-Z0-9_]+)":/g)].map((m) => m[1]));
 
@@ -169,7 +173,7 @@ test('CONTRACT: every rollup field maps to a real column', () => {
   // [a-z0-9_] - the digits matter: status_2xx and status_5xx are column names.
   const columns = new Set([...table[1].matchAll(/^\s{6}([a-z0-9_]+)\s+[A-Z]/gm)].map((m) => m[1]));
 
-  const bucketLiteral = /b = \{([\s\S]*?)\n        \}/.exec(agentSrc);
+  const bucketLiteral = /\n {8}b = \{([\s\S]*?)\n {8}\}/.exec(agentSrc);
   const agentKeys = [...bucketLiteral[1].matchAll(/"([a-zA-Z0-9_]+)":/g)].map((m) => m[1]);
   const toSnake = (s) => s.replace(/([a-z])([A-Z0-9])/g, '$1_$2').toLowerCase();
 
