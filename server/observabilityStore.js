@@ -35,6 +35,7 @@
 // ============================================================================
 const { pool } = require('./db');
 const dataCrypto = require('./crypto');
+const obsCache = require('./obsCache');
 
 // Prometheus-style cumulative-friendly boundaries, in milliseconds. Stored per
 // rollup bucket as {"10": n, "25": n, ..., "inf": n} where n is the count of
@@ -446,7 +447,22 @@ function whereClause(organisation, environment, from, to, alias = '', endpointId
 
 // Everything the console's KPI row needs for one date range, computed in
 // Postgres over exact counts rather than in the browser over a sampled buffer.
-async function getSummary(organisation, { environment, from, to, endpointIds } = {}) {
+// Cache wrapper — see server/obsCache.js for why this is a flat short TTL
+// rather than the write-invalidated pattern server/cache.js uses for
+// workspace reads. endpointIds is an array, so it's joined into the key
+// rather than passed as-is (a fresh array reference on every call would
+// otherwise never hit the same String(parts) key twice).
+async function getSummary(organisation, opts = {}) {
+  const { environment, from, to, endpointIds } = opts;
+  const key = [organisation, environment, from, to, endpointIds && endpointIds.join(',')];
+  const cached = await obsCache.get('summary', key);
+  if (cached !== undefined) return cached;
+  const result = await getSummaryUncached(organisation, opts);
+  await obsCache.set('summary', key, result);
+  return result;
+}
+
+async function getSummaryUncached(organisation, { environment, from, to, endpointIds } = {}) {
   const w = whereClause(organisation, environment, from, to, '', endpointIds);
   const { rows } = await pool.query(
     `SELECT
@@ -530,7 +546,17 @@ async function getSummary(organisation, { environment, from, to, endpointIds } =
 // Time series for the charts, bucketed server-side to whatever resolution the
 // range warrants (date_trunc/ floor to `intervalSeconds`) so a 30-day view
 // returns a few hundred points instead of 43,200.
-async function getSeries(organisation, { environment, from, to, intervalSeconds = 300, endpointIds } = {}) {
+async function getSeries(organisation, opts = {}) {
+  const { environment, from, to, intervalSeconds = 300, endpointIds } = opts;
+  const key = [organisation, environment, from, to, intervalSeconds, endpointIds && endpointIds.join(',')];
+  const cached = await obsCache.get('series', key);
+  if (cached !== undefined) return cached;
+  const result = await getSeriesUncached(organisation, opts);
+  await obsCache.set('series', key, result);
+  return result;
+}
+
+async function getSeriesUncached(organisation, { environment, from, to, intervalSeconds = 300, endpointIds } = {}) {
   const w = whereClause(organisation, environment, from, to, '', endpointIds);
   const seconds = Math.max(60, Math.min(86400, toInt(intervalSeconds, 300)));
   const params = w.params.concat([seconds]);
