@@ -149,6 +149,7 @@ function renderSecurityCenter(main){
     { id:'livemode', label:'Live Mode Access', icon:SEC_TAB_ICON.livemode },
     { id:'docaccess', label:'Documentation Access', icon:SEC_TAB_ICON.docaccess },
     { id:'ai', label:'AI Studio', icon:SEC_TAB_ICON.ai },
+    { id:'usage', label:'Usage', icon:SEC_TAB_ICON.usage },
   ];
   const tabs = isAdmin() ? allTabs : allTabs.filter(t=>t.id==='docaccess');
 
@@ -208,6 +209,7 @@ function renderSecurityCenter(main){
   else if(tab === 'livemode') renderLiveModeAccessTab(body);
   else if(tab === 'docaccess') renderDocAccessTab(body);
   else if(tab === 'ai') renderAiSettingsTab(body);
+  else if(tab === 'usage') renderUsageTab(body);
   else renderStorageScanTab(body);
 
   // Auto-scan once per session, in the background, the first time this page
@@ -243,6 +245,7 @@ const SEC_TAB_ICON = {
   livemode: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"></path></svg>',
   docaccess: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>',
   ai: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z"></path><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15z"></path></svg>',
+  usage: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><rect x="7" y="13" width="3" height="5"></rect><rect x="12" y="9" width="3" height="9"></rect><rect x="17" y="5" width="3" height="13"></rect></svg>',
 };
 
 // Rollup of the SAME SecOps/VAPT/Log Mgmt review gate the Production
@@ -1271,6 +1274,88 @@ function renderEncryptionKeysTab(body){
     });
   }).catch(e=>{
     body.innerHTML = `<div class="al-loading" style="padding:40px 0;text-align:center;color:var(--text-faint);font-size:13px;">Could not load encryption key status. ${escapeHtml(e.message||'')}</div>`;
+  });
+}
+
+async function adminAnalyticsApi(path){
+  const res = await fetch('/api/admin/analytics'+path, { credentials:'same-origin' });
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || ('Request failed ('+res.status+')'));
+  return data;
+}
+
+// Admin-only view of DocTracker's OWN usage — distinct from the
+// Observability console (which is entirely about monitored Mule
+// endpoints). Sourced from audit_logs via GET /api/admin/analytics/overview,
+// which only counts audit-worthy actions (endpoint edits, PII reveals,
+// logins, ...), not every HTTP request — the labels here say "activity",
+// not "requests", so the tab doesn't claim to measure more than it does.
+let usageTabState = { days: 30 };
+function renderUsageTab(body){
+  body.innerHTML = `<div class="al-loading" style="padding:40px 0;text-align:center;color:var(--text-faint);font-size:13px;">Loading usage…</div>`;
+  adminAnalyticsApi('/overview?days='+usageTabState.days).then((d)=>{
+    const maxDaily = Math.max(1, ...d.dailySeries.map(x=>x.total));
+    const rangeBtn = (n, label)=>`<button type="button" class="sec-tab" data-usage-range="${n}" style="padding:6px 14px;font-size:12px;${usageTabState.days===n?'background:var(--accent-soft);color:var(--accent);border-color:var(--accent);':''}">${label}</button>`;
+    body.innerHTML = `
+      <div class="sec-grid" style="margin-bottom:26px;">
+        <div class="sec-card" style="--sc-accent:var(--accent);">
+          <div class="k">Activity events</div>
+          <div class="v"><span class="dot"></span>${d.totalEvents.toLocaleString()}</div>
+          <div class="s">Audit-worthy actions (edits, reveals, logins, ...) over the last ${d.rangeDays} day${d.rangeDays===1?'':'s'} — not raw HTTP request volume.</div>
+        </div>
+        <div class="sec-card" style="--sc-accent:${d.failureRate>0.1?'var(--delete)':'var(--post)'};">
+          <div class="k">Failure rate</div>
+          <div class="v"><span class="dot"></span>${(d.failureRate*100).toFixed(1)}%</div>
+          <div class="s">Share of activity events recorded with a failure result.</div>
+        </div>
+        <div class="sec-card" style="--sc-accent:var(--put);">
+          <div class="k">Active users</div>
+          <div class="v"><span class="dot"></span>${d.activeUsers}</div>
+          <div class="s">Distinct people with at least one recorded action in this range.</div>
+        </div>
+      </div>
+
+      <div class="section" style="margin-bottom:26px;">
+        <div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
+          <span>Daily activity</span>
+          <span style="display:flex;gap:6px;">${rangeBtn(7,'7d')}${rangeBtn(30,'30d')}${rangeBtn(90,'90d')}</span>
+        </div>
+        <div class="sec-card" style="display:flex;align-items:flex-end;gap:2px;height:120px;padding:16px 14px;">
+          ${d.dailySeries.length ? d.dailySeries.map(x=>`
+            <div title="${escapeHtml(x.date)}: ${x.total} event${x.total===1?'':'s'}${x.failures?', '+x.failures+' failed':''}" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;">
+              <div style="background:var(--delete);opacity:.85;border-radius:2px 2px 0 0;height:${x.total? (x.failures/maxDaily*100) : 0}%;"></div>
+              <div style="background:var(--accent);opacity:.55;height:${x.total? ((x.total-x.failures)/maxDaily*100) : 0}%;"></div>
+            </div>`).join('') : `<div class="empty-field" style="padding:0;">No activity recorded in this range.</div>`}
+        </div>
+      </div>
+
+      <div class="sec-grid" style="grid-template-columns:1fr 1fr;">
+        <div class="section">
+          <div class="section-title">Top actions</div>
+          <div class="al-table-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">
+            ${d.topActions.length ? `<table style="width:100%;border-collapse:collapse;font-size:12.5px;"><tbody>
+              ${d.topActions.map(a=>`<tr><td style="padding:9px 14px;border-bottom:1px solid var(--border);font-family:var(--mono);">${escapeHtml(a.action)}</td><td style="padding:9px 14px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-dim);">${a.count}</td></tr>`).join('')}
+            </tbody></table>` : `<div class="empty-field" style="padding:16px 14px;">No actions recorded in this range.</div>`}
+          </div>
+        </div>
+        <div class="section">
+          <div class="section-title">Most active users</div>
+          <div class="al-table-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">
+            ${d.topUsers.length ? `<table style="width:100%;border-collapse:collapse;font-size:12.5px;"><tbody>
+              ${d.topUsers.map(u=>`<tr><td style="padding:9px 14px;border-bottom:1px solid var(--border);">${escapeHtml(u.username)}</td><td style="padding:9px 14px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-dim);">${u.count}</td></tr>`).join('')}
+            </tbody></table>` : `<div class="empty-field" style="padding:16px 14px;">No users recorded in this range.</div>`}
+          </div>
+        </div>
+      </div>
+    `;
+    body.querySelectorAll('[data-usage-range]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        usageTabState.days = parseInt(btn.getAttribute('data-usage-range'), 10);
+        renderUsageTab(body);
+      });
+    });
+  }).catch(e=>{
+    body.innerHTML = `<div class="al-loading" style="padding:40px 0;text-align:center;color:var(--text-faint);font-size:13px;">Could not load usage analytics. ${escapeHtml(e.message||'')}</div>`;
   });
 }
 
