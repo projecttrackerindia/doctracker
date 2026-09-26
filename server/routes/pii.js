@@ -4,6 +4,7 @@ const { authenticate, requireAdmin, blockIfScheduleLocked } = require('../middle
 const { recordAuditEvent } = require('../auditService');
 const { createRateLimiter } = require('../rateLimitStore');
 const workspace = require('./workspace');
+const { grantCoversEnvironment } = require('../projectAccess');
 
 const router = express.Router();
 router.use(authenticate);
@@ -294,11 +295,8 @@ router.post('/reveal/:projectId', revealLimiter, requireAdmin, async (req, res) 
     if (!isOwner && !grant && project.visibility !== 'public' && !project.has_public_endpoint) {
       return res.status(404).json({ error: 'Project not found.' });
     }
-    if (grant) {
-      const envs = Array.isArray(grant.environments) ? grant.environments : [];
-      if (!envs.includes('*') && !envs.includes(environmentId)) {
-        return res.status(403).json({ error: 'You do not have access to this environment for this project.' });
-      }
+    if (grant && !grantCoversEnvironment(grant.environments, environmentId)) {
+      return res.status(403).json({ error: 'You do not have access to this environment for this project.' });
     }
 
     const allEnvs = await workspace.getOrgEnvironments(project.organisation);

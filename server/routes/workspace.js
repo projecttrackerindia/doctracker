@@ -6,7 +6,7 @@ const { recordAuditEvent } = require('../auditService');
 const dataCrypto = require('../crypto');
 const storage = require('../storage');
 const cache = require('../cache');
-const { resolveAccessById, environmentAllowed } = require('../projectAccess');
+const { resolveAccessById, environmentAllowed, grantCoversEnvironment } = require('../projectAccess');
 const { notifyUser, notifyUsers, adminUserIds } = require('../notifications');
 const { detectBreakingChanges } = require('../breakingChangeDetector');
 const piiMasking = require('../piiMasking');
@@ -3038,11 +3038,8 @@ router.get('/projects/:id/snapshot', async (req, res) => {
     // A project_access grant also names which environments this person may
     // browse for this project (see projectForViewer's _grantedEnvironments) —
     // enforce that here too, not just for Try It/Live Mode.
-    if (grant) {
-      const envs = Array.isArray(grant.environments) ? grant.environments : [];
-      if (!envs.includes('*') && !envs.includes(envKey)) {
-        return res.status(403).json({ error: 'You do not have access to this environment for this project.' });
-      }
+    if (grant && !grantCoversEnvironment(grant.environments, envKey)) {
+      return res.status(403).json({ error: 'You do not have access to this environment for this project.' });
     }
 
     const isDraft = idx === 0;
@@ -3144,11 +3141,8 @@ router.get('/projects/:id/diff', async (req, res) => {
     if (!stageById.has(fromKey) || !stageById.has(toKey)) {
       return res.status(400).json({ error: 'Unknown environment.' });
     }
-    if (grant) {
-      const envs = Array.isArray(grant.environments) ? grant.environments : [];
-      if (!envs.includes('*') && (!envs.includes(fromKey) || !envs.includes(toKey))) {
-        return res.status(403).json({ error: 'You do not have access to these environments for this project.' });
-      }
+    if (grant && (!grantCoversEnvironment(grant.environments, fromKey) || !grantCoversEnvironment(grant.environments, toKey))) {
+      return res.status(403).json({ error: 'You do not have access to these environments for this project.' });
     }
 
     const [fromData, toData] = await Promise.all([
