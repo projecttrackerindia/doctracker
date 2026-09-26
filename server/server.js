@@ -27,6 +27,7 @@ const notificationRoutes = require('./routes/notifications');
 const observabilityRoutes = require('./routes/observability');
 const alertRoutes = require('./routes/alerts');
 const adminAnalyticsRoutes = require('./routes/adminAnalytics');
+const ssoRoutes = require('./routes/sso');
 const compressionMiddleware = require('./middleware/compress');
 const { verifySession, IdleTimeoutError } = require('./middleware/authGuard');
 const { assignRequestId } = require('./requestId');
@@ -188,6 +189,12 @@ app.use('/api/workspace/alerts', alertRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin/analytics', adminAnalyticsRoutes);
+// Two separate mounts, not one: the SSO login redirect dance (start/callback)
+// has to be reachable by a browser that isn't authenticated yet, so it can't
+// sit behind /api/workspace's authenticate() gate the way the settings CRUD
+// (adminRouter) needs to.
+app.use('/api/auth/sso', ssoRoutes.publicRouter);
+app.use('/api/workspace/sso', ssoRoutes.adminRouter);
 
 // Previously just `{ ok: true }` unconditionally — a deploy platform's
 // health check would keep reporting this instance as healthy even while its
