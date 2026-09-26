@@ -1883,6 +1883,15 @@ function renderObservability(main){
       // load makes is for the window being returned to rather than for the
       // default one, followed by a second request correcting it.
       if(typeof obsRestoreView === 'function') obsRestoreView();
+      // obsRestoreView() can land state.obsTab on 'logs' before any request
+      // has ever been fetched - a hard refresh restoring straight onto the
+      // Log explorer tab, with no click event to trigger anything. Every
+      // OTHER path that switches onto this tab (a tab click, an environment
+      // change, a scope change) already kicks off its own records fetch;
+      // this is the one path that changes the tab without a click, so
+      // without this it's stuck on "Loading requests..." forever - nothing
+      // else was ever going to ask.
+      if(state.obsTab === 'logs' && typeof obsLoadRecordsPage === 'function') obsLoadRecordsPage();
     }
     if(state.obsStatus === 'idle' || stale){
       state.obsLastCheckedAt = Date.now();
