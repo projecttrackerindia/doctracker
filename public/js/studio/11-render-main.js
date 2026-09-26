@@ -42,6 +42,22 @@ function syncUrlToSelection(){
 
 function renderMain(){
   syncUrlToSelection();
+  // Observability opens a live SSE stream (obsStartLive(), called every time
+  // renderObservability() runs - see 23-observability.js). Nothing ever
+  // closed it on navigating away: obsStopLive() existed but had no call
+  // site anywhere in the app, so leaving the page left the stream open,
+  // still calling renderMain() (force-re-rendering whatever page is
+  // currently on screen) and firing background refetches, for the rest of
+  // the session - only a full page reload actually stopped it. This is the
+  // one place every navigation path funnels through regardless of which of
+  // the ~30 call sites set state.selected, so it's the one place that can
+  // reliably catch "we just left Observability" without hooking each of
+  // them individually.
+  const nowType = state.selected && state.selected.type;
+  if(state._obsStreamOpen && nowType !== 'observability' && typeof obsStopLive === 'function'){
+    obsStopLive();
+  }
+  state._obsStreamOpen = nowType === 'observability';
   const main = document.getElementById('main');
   const authorBtn = document.getElementById('btnAuthor');
   if(authorBtn) authorBtn.classList.toggle('active', !!state.selected && state.selected.type === 'profile');

@@ -2041,8 +2041,7 @@ function renderObservability(main){
     // The stream replaces the 60s poll entirely; stop it so a page that is
     // already live-updating is not also refetching the whole workspace.
     stopObsAutoRefresh();
-    obsStartLive(()=>{
-      obsLoad({ quiet: true });
+    obsStartLive(async ()=>{
       // obsLoad() refreshes the KPIs, the charts and the endpoints table, but
       // not the per-request rows - so the Log explorer, the one tab that reads
       // like a live tail, was the only one a push did not reach. It sat frozen
@@ -2051,10 +2050,16 @@ function renderObservability(main){
       // Only on page 1: someone reading page 3 has scrolled back through
       // history deliberately, and shuffling rows under them every few seconds
       // is worse than leaving the page where they put it.
-      if(state.obsTab === 'logs' && (state.obsRecordsPage || 1) === 1
-         && typeof obsLoadRecordsPage === 'function'){
-        obsLoadRecordsPage();
-      }
+      const onLogsPage1 = state.obsTab === 'logs' && (state.obsRecordsPage || 1) === 1
+        && typeof obsLoadRecordsPage === 'function';
+      // Both fetches skip their own render and this awaits both before doing
+      // exactly ONE narrow console re-render - previously each fired its own
+      // independent full-page rebuild, so a single push on the Log explorer
+      // tab meant two of them back to back.
+      const tasks = [obsLoad({ quiet: true, skipRender: true })];
+      if(onLogsPage1) tasks.push(obsLoadRecordsPage({ skipRender: true }));
+      await Promise.all(tasks);
+      if(typeof obsRerenderLiveConsole === 'function') obsRerenderLiveConsole();
     });
   }else{
     renderConsole(body, metrics, agentHealth, logRecords);

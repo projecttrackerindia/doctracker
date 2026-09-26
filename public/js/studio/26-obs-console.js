@@ -26,6 +26,15 @@ const OBS_TABS = [
 
 async function obsLoad(opts){
   const quiet = opts && opts.quiet;   // a live-stream refresh must not flash a spinner
+  const skipRender = opts && opts.skipRender;  // caller will render once, after its own other fetches
+  // NOT the same thing as `quiet`. renderObservability() has its own quiet
+  // recheck ("has this org's agent started pushing rollups yet") that must
+  // still go through the full renderMain() - it can flip useTimeSeries from
+  // false to true, or decide the live stream needs to START for the first
+  // time, neither of which the narrow console-only patch below can do. Only
+  // the SSE onUpdate callback - which can only ever fire after the stream is
+  // already open and rendering the time-series console - sets this.
+  const liveUpdate = opts && opts.liveUpdate;
   if(!quiet){ state.obsStatus = 'loading'; renderMain(); }
   try{
     const [data, envs] = await Promise.all([
@@ -47,13 +56,28 @@ async function obsLoad(opts){
     state.obsStatus = state.obsData ? 'ready' : 'error';
     state.obsError = err && err.message ? err.message : 'Could not load observability data.';
   }
-  renderMain();
+  if(skipRender) return;
+  // A live-stream-driven refresh patches just the console's own content
+  // instead of going through renderMain() -> renderObservability(), which
+  // tears down and rebuilds the page header/environment-bar/#obsBody wrapper
+  // on every call with no in-place-update path. One SSE push while parked on
+  // the console used to mean a full page-shell rebuild for what's
+  // conceptually "the numbers changed" - see obsRerenderLiveConsole(). Every
+  // other quiet caller (renderObservability()'s own availability recheck)
+  // still needs the full path, so this checks liveUpdate, not quiet.
+  if(liveUpdate && typeof obsRerenderLiveConsole === 'function'){
+    obsRerenderLiveConsole();
+  }else{
+    renderMain();
+  }
 }
 
-async function obsLoadRecordsPage(){
+async function obsLoadRecordsPage(opts){
   // Nothing writes records before the upgraded agent, so this would be a round
   // trip that can only come back empty. The Log explorer tab says why instead.
   if(obsIsBridged()) return;
+  const liveUpdate = opts && opts.liveUpdate;  // see the note on obsLoad()'s own liveUpdate flag
+  const skipRender = opts && opts.skipRender;
   const filters = state.obsFilters || {};
   const limit = 50;
   try{
@@ -69,7 +93,30 @@ async function obsLoadRecordsPage(){
   }catch(err){
     state.obsRecords = { records: [], total: 0, limit, offset: 0, error: err.message };
   }
-  renderMain();
+  if(skipRender) return;
+  if(liveUpdate && typeof obsRerenderLiveConsole === 'function'){
+    obsRerenderLiveConsole();
+  }else{
+    renderMain();
+  }
+}
+
+// The narrow live-update path both functions above use instead of
+// renderMain(): re-renders ONLY the console's own content into the #obsBody
+// wrapper that's already in the DOM, not the header/live-badge/environment-
+// bar around it. Safe to assume the time-series console (not the legacy
+// blob-backed one) is what's showing, because a live SSE push can only ever
+// arrive after obsStartLive() already ran once from inside that branch (see
+// 23-observability.js) - the legacy console never opens the stream at all.
+// If #obsBody isn't in the DOM, the viewer has navigated away since the
+// fetch started; renderMain() itself now closes the stream on navigation
+// (11-render-main.js), so this is a narrow in-flight-request window, not a
+// leak - there's simply nothing to patch.
+function obsRerenderLiveConsole(){
+  const body = document.getElementById('obsBody');
+  if(!body) return;
+  const { agentHealth } = observabilityData();
+  renderObsConsoleV2(body, agentHealth);
 }
 
 /* --- Drill-down --------------------------------------------------------- */
