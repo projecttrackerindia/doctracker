@@ -27,6 +27,14 @@ const OBS_TABS = [
 async function obsLoad(opts){
   const quiet = opts && opts.quiet;   // a live-stream refresh must not flash a spinner
   const skipRender = opts && opts.skipRender;  // caller will render once, after its own other fetches
+  // NOT the same thing as `quiet`. renderObservability() has its own quiet
+  // recheck ("has this org's agent started pushing rollups yet") that must
+  // still go through the full renderMain() - it can flip useTimeSeries from
+  // false to true, or decide the live stream needs to START for the first
+  // time, neither of which the narrow console-only patch below can do. Only
+  // the SSE onUpdate callback - which can only ever fire after the stream is
+  // already open and rendering the time-series console - sets this.
+  const liveUpdate = opts && opts.liveUpdate;
   if(!quiet){ state.obsStatus = 'loading'; renderMain(); }
   try{
     const [data, envs] = await Promise.all([
@@ -49,13 +57,15 @@ async function obsLoad(opts){
     state.obsError = err && err.message ? err.message : 'Could not load observability data.';
   }
   if(skipRender) return;
-  // A quiet (live-stream) refresh patches just the console's own content
+  // A live-stream-driven refresh patches just the console's own content
   // instead of going through renderMain() -> renderObservability(), which
   // tears down and rebuilds the page header/environment-bar/#obsBody wrapper
   // on every call with no in-place-update path. One SSE push while parked on
   // the console used to mean a full page-shell rebuild for what's
-  // conceptually "the numbers changed" - see obsRerenderLiveConsole().
-  if(quiet && typeof obsRerenderLiveConsole === 'function'){
+  // conceptually "the numbers changed" - see obsRerenderLiveConsole(). Every
+  // other quiet caller (renderObservability()'s own availability recheck)
+  // still needs the full path, so this checks liveUpdate, not quiet.
+  if(liveUpdate && typeof obsRerenderLiveConsole === 'function'){
     obsRerenderLiveConsole();
   }else{
     renderMain();
@@ -66,7 +76,7 @@ async function obsLoadRecordsPage(opts){
   // Nothing writes records before the upgraded agent, so this would be a round
   // trip that can only come back empty. The Log explorer tab says why instead.
   if(obsIsBridged()) return;
-  const quiet = opts && opts.quiet;
+  const liveUpdate = opts && opts.liveUpdate;  // see the note on obsLoad()'s own liveUpdate flag
   const skipRender = opts && opts.skipRender;
   const filters = state.obsFilters || {};
   const limit = 50;
@@ -84,7 +94,7 @@ async function obsLoadRecordsPage(opts){
     state.obsRecords = { records: [], total: 0, limit, offset: 0, error: err.message };
   }
   if(skipRender) return;
-  if(quiet && typeof obsRerenderLiveConsole === 'function'){
+  if(liveUpdate && typeof obsRerenderLiveConsole === 'function'){
     obsRerenderLiveConsole();
   }else{
     renderMain();
