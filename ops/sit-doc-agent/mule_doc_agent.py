@@ -954,16 +954,20 @@ def load_state():
 
 
 # The BULKY state keys - the aggregates, the captured records, the pending
-# rollup buckets. Everything NOT listed here (file offsets and inodes, the
-# seen-event ids, push bookkeeping) is small, changes every cycle, and must
-# survive a crash or the agent would re-read and re-count log lines.
+# rollup buckets. Everything NOT listed here (file offsets and inodes, push
+# bookkeeping) is small, changes every cycle, and must survive a crash or the
+# agent would re-read and re-count log lines.
 BULKY_STATE_KEYS = ("endpoints", "logRecords", "logRecordKeyCounts", "rollups", "health",
-                    # Thousands of correlation ids. It belongs with the other
-                    # bulky values in the file written on a full save, not in
-                    # the cursor file that is rewritten every couple of
-                    # seconds purely to keep read offsets current. Losing it
-                    # to a crash costs a handful of double-counted requests.
-                    "countedRequestPaths")
+                    # Thousands of correlation ids/event ids apiece. Both
+                    # belong with the other bulky values in the file written
+                    # on a full save, not in the cursor file that is
+                    # rewritten every couple of seconds purely to keep read
+                    # offsets current - losing either to a crash (or a
+                    # SIGTERM between push cycles; see run()'s handler, which
+                    # deliberately only flushes the cheap cursor half) costs
+                    # at most a handful of double-counted requests until the
+                    # next push, not a correctness problem.
+                    "countedRequestPaths", "seenEvents")
 
 # The small, write-every-cycle half lives in its own file so the bulky half
 # does not have to be re-serialised to update it.
@@ -985,13 +989,15 @@ def save_state(state, full=True):
     real field values. A multi-megabyte rewrite every minute, forever, most of
     it re-writing bytes that had not changed.
 
-    Now the cheap half (cursors: file offsets, inodes, seen-event ids) goes to
-    its own small file every cycle, and the expensive half (aggregates,
-    records, pending rollups) is written only on push cycles - by which point
-    it has just been durably sent to DocTracker anyway. Losing the bulky half
-    to an unclean shutdown costs at most one push interval of aggregates; the
-    log POSITION, which is the thing that must never be wrong, is always
-    current.
+    Now the cheap half (cursors: file offsets, inodes, push bookkeeping) goes
+    to its own small file every cycle, and the expensive half (aggregates,
+    records, pending rollups, the seen-event/counted-path dedup lists) is
+    written only on push cycles - by which point it has just been durably
+    sent to DocTracker anyway. Losing the bulky half to an unclean shutdown
+    costs at most one push interval of aggregates (and a handful of
+    double-counted requests straddling the restart, from the dedup lists
+    resetting slightly stale - not silence, not a crash); the log POSITION,
+    which is the thing that must never be wrong, is always current.
     """
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     cursor = {k: v for k, v in state.items() if k not in BULKY_STATE_KEYS}
@@ -1000,7 +1006,7 @@ def save_state(state, full=True):
         _atomic_write_json(STATE_FILE, {k: state[k] for k in BULKY_STATE_KEYS if k in state})
 
 
-def tail_new_lines(path, state, max_lines=None):
+def tail_new_lines(path, state, max_lines=None, stat_cache=None):
     """Reads any lines appended since the last recorded offset. Detects log
     rotation (inode change or file shrank) and restarts from the top of the
     new file rather than crashing or silently missing the rotated-out tail.
@@ -1011,6 +1017,18 @@ def tail_new_lines(path, state, max_lines=None):
     one poll cycle into one huge blocking read-and-process pass - see
     MAX_LINES_PER_CYCLE and run()'s catch-up loop, which calls this
     repeatedly in bounded chunks instead of once unbounded.
+
+    `stat_cache`, when given, is a plain dict shared across every file this
+    poll cycle touches (see run()'s main loop): a brand-new file's discovery
+    stat is reused for its first read here instead of stat'ing it twice, and
+    build_agent_health()'s backlog calculation reuses this cycle's stats
+    instead of taking its own independent os.stat() pass over every tailed
+    file afterwards. It is deliberately NOT reused for a SECOND call to this
+    function against a path whose state["offset"] this cycle already
+    advanced (see tail_all_logs()'s hungry-files pass) - `st.st_size` there
+    has to reflect the file's real size at the moment of THIS read, not an
+    earlier snapshot, or a file that simply grew in between can look like it
+    shrank and trigger a spurious, offset-resetting "truncated" reset.
 
     CONFIRMED bug found against the real, actively-growing jwt-token-api.log:
     the original version used `for line in f: ...` then `f.tell()` at the
@@ -1024,7 +1042,12 @@ def tail_new_lines(path, state, max_lines=None):
     committing the offset past a line that actually ends in "\\n" - an
     incomplete trailing line is left unread and picked up whole next cycle."""
     try:
-        st = os.stat(path)
+        if stat_cache is not None and path in stat_cache:
+            st = stat_cache[path]
+        else:
+            st = os.stat(path)
+            if stat_cache is not None:
+                stat_cache[path] = st
     except (FileNotFoundError, PermissionError) as e:
         # A glob can match a file that disappears between expansion and read
         # (rotation), or one this unprivileged user can't open. Neither is
@@ -1146,7 +1169,7 @@ def resolve_log_paths(spec):
     return unique
 
 
-def tail_all_logs(paths, state, total_budget):
+def tail_all_logs(paths, state, total_budget, stat_cache=None):
     """Read new lines from EVERY tailed file, sharing one line budget.
 
     Returns {path: [lines]} so the caller can keep each file's multi-line
@@ -1158,7 +1181,17 @@ def tail_all_logs(paths, state, total_budget):
     so one very busy log can't starve the other 69. Any budget the quiet
     files don't use is handed to the remaining ones in a second pass, so a
     single busy file still gets the full budget when it's the only one with
-    a backlog."""
+    a backlog.
+
+    `stat_cache` is forwarded to tail_new_lines() - see its docstring - but
+    ONLY for the fair-share pass below, not the hungry-files redistribution
+    pass (see that pass's own comment for why reusing a stat across a
+    mutated offset is unsafe there specifically). The saving here is
+    real but narrower: a brand-new file's discovery stat (above) is reused
+    by its first read instead of stat'ing it twice, and this whole cycle's
+    stats are available to build_agent_health()'s backlog estimate
+    afterwards instead of it taking its own independent pass over every
+    file."""
     files_state = state.setdefault("files", {})
     if not paths:
         return {}
@@ -1202,6 +1235,8 @@ def tail_all_logs(paths, state, total_budget):
             continue
         try:
             st = os.stat(path)
+            if stat_cache is not None:
+                stat_cache[path] = st  # pass 1 below will otherwise re-stat this same brand-new file
         except OSError:
             continue
         inode = getattr(st, "st_ino", None)
@@ -1255,7 +1290,7 @@ def tail_all_logs(paths, state, total_budget):
     # Pass 1: fair share.
     for path in paths:
         fstate = files_state.setdefault(path, {"offset": 0, "inode": None})
-        lines = tail_new_lines(path, fstate, max_lines=per_file)
+        lines = tail_new_lines(path, fstate, max_lines=per_file, stat_cache=stat_cache)
         if lines:
             out[path] = lines
             used += len(lines)
@@ -1271,6 +1306,21 @@ def tail_all_logs(paths, state, total_budget):
                 if leftover <= 0:
                     break
                 fstate = files_state[path]
+                # Deliberately NOT stat_cache here, unlike pass 1 above.
+                # This re-reads a path pass 1 already advanced state["offset"]
+                # for moments ago - reusing pass 1's now-stale st.st_size
+                # against that NEWLY-advanced offset could make a file that's
+                # simply still growing look like it shrank (a real writer can
+                # append between pass 1's stat and this read, especially
+                # under the exact sustained-load conditions that make a file
+                # "hungry" enough to reach pass 2 at all), spuriously
+                # triggering tail_new_lines()'s truncation check and
+                # resetting the offset to 0 - re-reading and double-counting
+                # everything already read this cycle. A stale stat is only
+                # safe to reuse where nothing downstream mutates the offset
+                # it's being compared against (pass 1's first read of a path,
+                # or build_agent_health()'s read-only backlog estimate) - not
+                # here.
                 more = tail_new_lines(path, fstate, max_lines=min(extra, leftover))
                 if more:
                     out.setdefault(path, []).extend(more)
@@ -2405,12 +2455,23 @@ def sample_host_metrics(health, now):
     return [round(now)] + values, static
 
 
-def build_agent_health(state):
+def build_agent_health(state, stat_cache=None):
     """Self-monitoring for the agent itself - throughput, backlog, and how
     close it is to the scale safeguards' caps. This is what answers "is this
     keeping up, or quietly falling behind / dropping things" - shown as its
     own card on the Observability page rather than only being visible in
-    stdout logs on a server the reviewer isn't logged into."""
+    stdout logs on a server the reviewer isn't logged into.
+
+    `stat_cache`, when given, is the SAME dict tail_all_logs() populated
+    earlier this cycle (see run()'s main loop) - the backlog estimate below
+    just needs each tailed file's size, which this cycle's tailing pass
+    already has fresh, so reusing it here avoids a THIRD independent
+    os.stat() pass over every tailed file on top of tail_all_logs()'s own.
+    Safe even when slightly stale (unlike tail_new_lines()'s use of a cached
+    stat): this only ever reads st.st_size to estimate a backlog for
+    display, never to decide whether to reset an offset, so the worst case
+    of a stale size is an backlog number that's very slightly low for one
+    report - not a correctness bug."""
     health = state.get("health", {})
     now = time.time()
     started_at = health.get("startedAtEpoch") or now
@@ -2428,7 +2489,8 @@ def build_agent_health(state):
     backlog_bytes = 0
     for path, fstate in tailed.items():
         try:
-            backlog_bytes += max(0, os.stat(path).st_size - fstate.get("offset", 0))
+            st = stat_cache[path] if stat_cache is not None and path in stat_cache else os.stat(path)
+            backlog_bytes += max(0, st.st_size - fstate.get("offset", 0))
         except OSError:
             continue
 
@@ -3363,11 +3425,16 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
     # hadn't yet been written to the cursor file (up to one poll interval's
     # worth - 60s idle, as little as 2s under load) silently re-read and
     # re-counted on the next start. A cursor-only save is deliberately cheap
-    # (file offsets, seen-event ids, push bookkeeping - not the bulky
-    # aggregates/captured records) so a clean shutdown stays fast even mid-
-    # cycle. Registered here, not at the top of run(), so the one-shot modes
-    # above (--sample-lines, --dry-run, seeding) keep Python's normal SIGTERM
-    # behavior - there is no long-lived state in those paths worth flushing.
+    # (just file offsets, inodes, push bookkeeping - not the bulky
+    # aggregates/captured records/dedup lists) so a clean shutdown stays fast
+    # even mid-cycle. This means a SIGTERM restart can lose up to one push
+    # interval's worth of seenEvents/countedRequestPaths (see
+    # BULKY_STATE_KEYS) - the same handful-of-double-counted-requests cost as
+    # an unclean crash would have anyway, not a new risk this handler
+    # introduces. Registered here, not at the top of run(), so the one-shot
+    # modes above (--sample-lines, --dry-run, seeding) keep Python's normal
+    # SIGTERM behavior - there is no long-lived state in those paths worth
+    # flushing.
     def _handle_sigterm(signum, frame):
         print("[info] SIGTERM received - saving tailing progress before exit.", file=sys.stderr)
         try:
@@ -3380,6 +3447,13 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
 
     while True:
         cycle_start = time.time()
+        # Fresh every cycle, thrown away at the end of it - shared between
+        # tail_all_logs() (which populates it) and build_agent_health()
+        # (which reuses it) below, so this cycle's file sizes get stat'd
+        # once instead of the two-then-three independent passes this used
+        # to be. See both functions' docstrings for exactly which reads are
+        # safe to share and which aren't.
+        stat_cache = {}
         # Bounded read: at most MAX_LINES_PER_CYCLE lines per call, so one
         # poll cycle can never block for an unbounded amount of time no
         # matter how large the backlog is (a burst of traffic, or the agent
@@ -3400,7 +3474,7 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
                 log_paths = new_paths
             last_glob_scan = time.time()
 
-        by_file = tail_all_logs(log_paths, state, MAX_LINES_PER_CYCLE)
+        by_file = tail_all_logs(log_paths, state, MAX_LINES_PER_CYCLE, stat_cache=stat_cache)
         lines = [l for file_lines in by_file.values() for l in file_lines]
         caught_up = len(lines) < MAX_LINES_PER_CYCLE
         observations = []
@@ -3543,7 +3617,7 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
             metrics_payload = {
                 "environment": ENVIRONMENT or None,
                 "endpoints": build_endpoint_metrics(state),
-                "agentHealth": build_agent_health(state),
+                "agentHealth": build_agent_health(state, stat_cache=stat_cache),
                 "logRecords": new_log_records,
                 "logRecordsDelta": CAPTURE_MODE == "full",
             }

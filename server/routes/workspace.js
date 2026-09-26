@@ -1177,11 +1177,32 @@ function composeOneEnvironment(entries) {
   logRecords.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
   logRecords = logRecords.slice(0, 5000);
 
+  // Two agents on different hosts (or the same host tailing genuinely
+  // different apps) are a normal, supported deployment - their counters
+  // above are meant to sum. Two agents that ended up with the SAME
+  // sourceFingerprint (hostname + exact set of tailed files - see
+  // source_fingerprint() in mule_doc_agent.py) are reading the identical
+  // files, which means every merge above just doubled real numbers instead
+  // of correctly summing two independent nodes' traffic. The fingerprint
+  // has been computed and sent since the agent-side fix shipped, but
+  // nothing ever consumed it - this is that consumer, so the duplicate
+  // shows up as a visible warning (see 23-observability.js) instead of a
+  // silently-inflated request count nobody can explain.
+  const byFingerprint = new Map();
+  for (const a of agents) {
+    if (!a.sourceFingerprint) continue;
+    if (!byFingerprint.has(a.sourceFingerprint)) byFingerprint.set(a.sourceFingerprint, []);
+    byFingerprint.get(a.sourceFingerprint).push(a.writerId);
+  }
+  const duplicateWriterGroups = [...byFingerprint.values()].filter((ids) => ids.length > 1);
+
   // The page renders one agentHealth card; give it the most recently
   // generated one, and attach every writer's own health beside it so a
   // multi-server deployment can still see each agent individually.
   agents.sort((a, b) => String(b.generatedAt || '').localeCompare(String(a.generatedAt || '')));
-  const agentHealth = agents.length ? { ...agents[0], writers: agents } : null;
+  const agentHealth = agents.length
+    ? { ...agents[0], writers: agents, ...(duplicateWriterGroups.length ? { duplicateWriterGroups } : {}) }
+    : null;
 
   return { endpoints, agentHealth, logRecords };
 }
@@ -3528,3 +3549,5 @@ module.exports.loadStageData = loadStageData;
 module.exports.projectForViewer = projectForViewer;
 module.exports.applyDocLock = applyDocLock;
 module.exports.userHasFullDocAccess = userHasFullDocAccess;
+module.exports.composeWriterSegments = composeWriterSegments;
+module.exports.composeOneEnvironment = composeOneEnvironment;
