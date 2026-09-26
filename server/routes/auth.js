@@ -451,7 +451,15 @@ router.post('/request-password-reset', authLimiter, async (req, res) => {
   const { identifier } = req.body || {};
   const genericResponse = { message: "If that account exists, your organisation's Admin has been notified and will help you regain access." };
   try {
-    if (!identifier) return res.json(genericResponse);
+    // QA regression (2026-09-26, bug #8): an empty identifier used to get
+    // the same silent "success" response as a real-but-nonexistent one.
+    // That's fine for a nonexistent identifier (that distinction is exactly
+    // what anti-enumeration requires hiding) but an outright EMPTY field
+    // reveals nothing about any account's existence either way, so there's
+    // no enumeration risk in saying so plainly instead.
+    if (!identifier || !String(identifier).trim()) {
+      return res.status(400).json({ error: 'Enter your email or username.' });
+    }
     const result = await pool.query(
       'SELECT id, username, organisation FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)',
       [String(identifier).trim()]

@@ -60,6 +60,7 @@ a{ color:inherit; }
   padding:7px 9px; border-radius:8px; font-family:var(--sans);
 }
 .al-date-range input[type="date"]:focus{ outline:none; border-color:var(--accent); }
+.al-date-range input[type="date"].al-date-invalid{ border-color:var(--danger); }
 .al-date-sep{ color:var(--text-faint); font-size:11px; }
 .al-date-clear{
   background:var(--bg-elevated); border:1px solid var(--border); color:var(--text-faint); border-radius:8px;
@@ -307,8 +308,35 @@ tbody tr.al-hidden{ display:none; }
     return matchesSearch && matchesAction && matchesEntity && matchesActor && matchesFrom && matchesTo;
   }
 
+  // QA regression (2026-09-26, bug #14): a From date after the To date used
+  // to just silently match nothing (matchesFrom/matchesTo above can never
+  // both be true when the range is backwards) - "0 changes" with no
+  // indication WHY, easy to mistake for "nothing happened in this range"
+  // rather than "the range itself doesn't make sense."
+  function dateRangeInvalid(){
+    if(!els.from.value || !els.to.value) return false;
+    return new Date(els.from.value + 'T00:00:00').getTime() > new Date(els.to.value + 'T23:59:59.999').getTime();
+  }
+
   function applyFilters(resetPage){
     if(resetPage) currentPage = 1;
+    const rangeInvalid = dateRangeInvalid();
+    els.from.classList.toggle('al-date-invalid', rangeInvalid);
+    els.to.classList.toggle('al-date-invalid', rangeInvalid);
+    if(rangeInvalid){
+      // Hide every row rather than clearing els.body - the <tr> elements are
+      // the only copy of what renderAll() loaded; wiping them here would
+      // leave nothing to show again once the range is fixed.
+      els.body.querySelectorAll('tr[data-ts]').forEach(r=>r.classList.add('al-hidden'));
+      els.empty.classList.remove('hidden');
+      els.empty.textContent = 'The "From" date is after the "To" date — swap them or clear the range.';
+      els.pagination.classList.add('hidden');
+      els.count.textContent = 'Invalid date range';
+      els.pageIndicator.textContent = '';
+      return;
+    }
+    els.empty.classList.add('hidden');
+    els.empty.textContent = 'No changes recorded yet — this log fills in as endpoints, projects, environments, and documents are created, edited, or deleted.';
     const allRows = Array.from(els.body.querySelectorAll('tr[data-ts]'));
     const matched = allRows.filter(rowMatches);
     const pageSize = parseInt(els.pageSize.value || '50', 10) || 50;
