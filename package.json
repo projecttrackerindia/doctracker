@@ -12,7 +12,7 @@
     "migrate": "node server/migrations/cli.js up",
     "migrate:down": "node server/migrations/cli.js down",
     "migrate:status": "node server/migrations/cli.js status",
-    "test": "node --test test/**/*.test.js",
+    "test": "node --test test/",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
