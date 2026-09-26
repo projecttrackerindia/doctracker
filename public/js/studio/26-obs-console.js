@@ -436,6 +436,14 @@ function renderObsKpis(){
 
   const errPct = (cur.errorRate * 100);
   const errColor = errPct >= 25 ? '--delete' : errPct >= 5 ? '--put' : '--post';
+  // QA regression (2026-09-26): errorRate is 0 both when every classified
+  // request succeeded AND when there were no classified requests to rate at
+  // all (every request unclassified, or zero traffic) - those read very
+  // differently ("healthy" vs "nothing to measure"), but both showed the
+  // same "0.0%". Latency p95 already distinguishes "no data" with a dash;
+  // this now does too.
+  const classifiedTotal = cur.total - (cur.statusBreakdown.unknown || 0);
+  const hasErrorRateData = classifiedTotal > 0;
 
   /* deltaBadge() returns an empty string when there is nothing to compare
      against - most visibly when the previous window held zero requests,
@@ -449,10 +457,13 @@ function renderObsKpis(){
       sub(`${cur.endpointCount} endpoint(s)`,
           prev ? deltaBadge(cur.total, prev.total, 'pct', 'neutral') : '')
       + renderKpiSparkline(sparkTotals, '--accent'))}
-    ${healthKpi('Error rate', errPct.toFixed(1) + '%',
+    ${hasErrorRateData ? healthKpi('Error rate', errPct.toFixed(1) + '%',
       sub(`${obsFormatCount(cur.errCount)} error(s)`,
           prev ? deltaBadge(cur.errorRate, prev.errorRate, 'pp', 'down') : '')
-      + renderKpiSparkline(sparkErrs, errColor), errColor)}
+      + renderKpiSparkline(sparkErrs, errColor), errColor)
+      : healthKpi('Error rate', '—', cur.total
+          ? 'Every request is unclassified — no status code to rate'
+          : 'No requests in this range')}
     ${lat ? healthKpi('Latency p95', lat.p95 + 'ms',
       sub(`p50 ${lat.p50}ms`, `p99 ${lat.p99}ms`,
           prev && prev.latency ? deltaBadge(lat.p95, prev.latency.p95, 'pct', 'down') : ''))
@@ -462,7 +473,10 @@ function renderObsKpis(){
     ${healthKpi('Unclassified', obsFormatCount(cur.statusBreakdown.unknown || 0),
       (cur.statusBreakdown.unknown || 0) > 0
         ? 'Requests with no status code logged'
-        : 'Every request has a status code',
+        // QA regression (2026-09-26): with zero requests total, this said
+        // "Every request has a status code" - vacuously true, but reads as
+        // a claim about traffic that never happened.
+        : cur.total ? 'Every request has a status code' : 'No requests in this range',
       (cur.statusBreakdown.unknown || 0) > cur.total * 0.2 ? '--put' : '--post')}
   </div>`;
 }

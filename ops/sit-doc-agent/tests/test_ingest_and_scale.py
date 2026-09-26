@@ -834,6 +834,33 @@ check("agent health reports both cadences so the page can size its badge",
       health5.get("pushMinIntervalSeconds") == agent.PUSH_MIN_INTERVAL_SECONDS
       and health5.get("pollIntervalActiveSeconds") == agent.POLL_INTERVAL_ACTIVE_SECONDS)
 
+print("A heartbeat-only push must still reach the observability ingest route")
+# QA regression (2026-09-26): push_observability() used to return early
+# ("if not rollups and not records: return") without ever calling
+# _request() when there was nothing new to send. The SERVER's ingest route
+# calls touchHeartbeat() unconditionally specifically so a push with zero
+# new data still counts as "the agent is alive" for the agent_silent alert
+# (see touchHeartbeat()'s comment in observabilityStore.js) - but that only
+# works if the agent actually makes the call. A quiet environment (a
+# handful of requests a day is a real production case here) never called
+# this at all, so its heartbeat went stale and "Collector stopped
+# reporting" fired on a demonstrably live agent.
+client = agent.DocTrackerClient("https://example.invalid", "u", "p")
+calls = []
+client._request = lambda method, path, body=None, auth=True: (
+    calls.append((method, path, body)) or (200, {"ok": True, "rollupsWritten": 0, "recordsWritten": 0}, {})
+)
+client.push_observability("DEV", [], [])
+check("push_observability makes the HTTP request even with empty rollups AND records",
+      len(calls) == 1, calls)
+check("...and still sends the environment even though there's nothing else in the body",
+      calls[0][2]["environment"] == "DEV" if calls else False)
+
+calls.clear()
+client.push_observability("DEV", [{"key": "a"}], [])
+check("push_observability still makes the request when there IS real data (unchanged behavior)",
+      len(calls) == 1, calls)
+
 print("Adaptive polling must not silently shorten history or thrash the disk")
 # Both of these were regressions introduced BY adaptive polling: work that was
 # correctly tied to "once per cycle" while the loop ran every 60s becomes

@@ -513,11 +513,19 @@ async function getSummaryUncached(organisation, { environment, from, to, endpoin
   const total = Number(r.total || 0);
   const errCount = Number(r.s4 || 0) + Number(r.s5 || 0);
   const latencyCount = Number(r.latency_count || 0);
+  // QA regression (2026-09-26): the client's own copy (see
+  // renderObsOverviewTab/status-breakdown hint in 26-obs-console.js)
+  // explicitly tells the reader unclassified requests are "deliberately
+  // NOT part of the error rate" - but this was dividing errCount by `total`
+  // (every request, unclassified included), understating the rate among
+  // requests whose outcome is actually known. The denominator now matches
+  // what the UI already claims: classified requests only.
+  const classifiedTotal = total - Number(r.sunknown || 0);
 
   return {
     total,
     errCount,
-    errorRate: total ? errCount / total : 0,
+    errorRate: classifiedTotal > 0 ? errCount / classifiedTotal : 0,
     statusBreakdown: {
       '2xx': Number(r.s2 || 0),
       '3xx': Number(r.s3 || 0),
@@ -664,11 +672,14 @@ async function getEndpointBreakdownUncached(organisation, { environment, from, t
     const total = Number(r.total || 0);
     const errCount = Number(r.s4 || 0) + Number(r.s5 || 0);
     const latencyCount = Number(r.latency_count || 0);
+    // Same fix as getSummaryUncached above, for the same reason - see that
+    // comment for the full explanation.
+    const classifiedTotal = total - Number(r.sunknown || 0);
     return {
       endpointId: r.endpoint_id,
       total,
       errCount,
-      errorRate: total ? errCount / total : 0,
+      errorRate: classifiedTotal > 0 ? errCount / classifiedTotal : 0,
       statusBreakdown: {
         '2xx': Number(r.s2 || 0),
         '3xx': Number(r.s3 || 0),
