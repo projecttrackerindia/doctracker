@@ -600,7 +600,23 @@ async function getSeriesUncached(organisation, { environment, from, to, interval
 
 // Per-endpoint totals for the range - drives the endpoints table and the
 // service-health ranking, sorted and paginated in SQL rather than in the page.
-async function getEndpointBreakdown(organisation, { environment, from, to, limit = 500, endpointIds } = {}) {
+// Same cache wrapper as getSummary/getSeries above, and for the same reason:
+// obsLoadAll() (see 24-obs-api.js) fetches /summary, /series, AND /endpoints
+// together on every load, INCLUDING every SSE live push while the
+// Observability page is open - so this pays the same full-range aggregation
+// cost, at the same frequency, as the two it already sits next to in that
+// Promise.all. Cached here for the same reason it's cached there.
+async function getEndpointBreakdown(organisation, opts = {}) {
+  const { environment, from, to, limit = 500, endpointIds } = opts;
+  const key = [organisation, environment, from, to, limit, endpointIds && endpointIds.join(',')];
+  const cached = await obsCache.get('endpoints', key);
+  if (cached !== undefined) return cached;
+  const result = await getEndpointBreakdownUncached(organisation, opts);
+  await obsCache.set('endpoints', key, result);
+  return result;
+}
+
+async function getEndpointBreakdownUncached(organisation, { environment, from, to, limit = 500, endpointIds } = {}) {
   const w = whereClause(organisation, environment, from, to, '', endpointIds);
   const params = w.params.concat([Math.max(1, Math.min(2000, toInt(limit, 500)))]);
 
@@ -676,7 +692,16 @@ async function getEndpointBreakdown(organisation, { environment, from, to, limit
 
 // Paginated raw records for the Log Explorer. Every filter here is an indexed
 // column; the encrypted payload is decrypted only for the page actually being
-// returned, never across the whole range.
+// returned, never across the whole range - so unlike getSummary/getSeries/
+// getEndpointBreakdown above, this was never the expensive one (bounded by
+// `limit`, max 500 rows, not a full-range aggregation over the rollup table).
+// Deliberately NOT wrapped in obsCache despite sitting right next to three
+// functions that are: the Log Explorer's whole point is showing the newest
+// rows, and this is specifically what a live SSE push re-fetches (see
+// obsLoadRecordsPage() in 26-obs-console.js) to prove that push actually
+// happened. A 15s-stale cache here would silently undo that - trading a
+// real, already-verified live-update feature for a cache hit on a query
+// that wasn't the bottleneck to begin with.
 async function getRecords(organisation, {
   environment, from, to, endpointId, endpointIds, statusFamily, correlationId, clientIp,
   minLatencyMs, limit = 100, offset = 0,

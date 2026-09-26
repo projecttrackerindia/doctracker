@@ -644,30 +644,122 @@ async function evaluateOrganisation(organisation, { environments = null, include
           }));
       }
 
+      // Bulk-fetch every existing alert_state row for this (rule, environment)
+      // pair ONCE, instead of one SELECT per row below - `rows` can be up to
+      // ~2000 entries for a rule scoped to "every endpoint" (see METRICS/
+      // rule.scope above), and this ran inside that loop on every sweep tick
+      // for every org with an enabled rule. Same reasoning applies to the
+      // bulk upsert further down: the vast majority of rows on any given
+      // tick resolve to action:'none' (nothing changed), and none of THOSE
+      // writes depend on anything async (no notification is sent for
+      // action:'none' - see nextState() above), so they can be collapsed
+      // into one multi-row UPSERT. The minority that DID change (fire/
+      // renotify/resolve) keep the exact original one-row-at-a-time path,
+      // since those writes DO depend on emitNotification's outcome and are
+      // rare enough that batching them would add real complexity for
+      // negligible gain.
+      const { rows: prevRows } = await pool.query(
+        'SELECT * FROM alert_state WHERE rule_id=$1 AND environment=$2',
+        [rule.id, env]
+      );
+      const prevByEndpoint = new Map(prevRows.map((r) => [r.endpoint_id, r]));
+
+      const unchanged = [];
       for (const row of rows) {
         evaluated += 1;
-        const outcome = await applyState(organisation, rule, env, row, now, settings);
+        const key = row.endpointId || '';
+        const prev = prevByEndpoint.get(key) || null;
+        const decision = nextState(rule, prev, row.value, row.sample, now);
+
+        if (decision.action === 'none') {
+          // Same skip condition applyState() used to apply itself: nothing
+          // has ever happened for this target and nothing is happening now -
+          // don't write a row at all.
+          if (!prev && decision.status === 'ok') continue;
+          unchanged.push({ key, prev, decision, row });
+          continue;
+        }
+
+        const outcome = await applyState(organisation, rule, env, row, now, settings, prev, decision);
         if (outcome && outcome.action !== 'none') fired.push(outcome);
       }
+      if (unchanged.length) await bulkUpsertUnchangedAlertState(rule.id, organisation, env, unchanged);
     }
   }
   return { evaluated, changed: fired };
 }
 
-async function applyState(organisation, rule, environment, row, now, settings) {
-  const key = row.endpointId || '';
-  const { rows: prevRows } = await pool.query(
-    'SELECT * FROM alert_state WHERE rule_id=$1 AND environment=$2 AND endpoint_id=$3',
-    [rule.id, environment, key]
+// Batches every row this tick that resolved to action:'none' but still needs
+// its alert_state row written/refreshed (a brand-new 'pending' row, a
+// 'pending' row whose hold timer is still running, or a 'firing' row still
+// inside its cooldown) into ONE multi-row UPSERT via UNNEST, instead of one
+// UPSERT per row. Every column here is a straight passthrough for a
+// non-notifying write - see applyState()'s own UPSERT below for the columns
+// that DO depend on a fresh notification outcome, which is exactly why rows
+// that fired/renotified/resolved are never in this batch.
+async function bulkUpsertUnchangedAlertState(ruleId, organisation, environment, items) {
+  const endpointIds = [];
+  const statuses = [];
+  const breachedSinces = [];
+  const firingSinces = [];
+  const lastValues = [];
+  const lastSamples = [];
+  const lastNotifiedAts = [];
+  const notifyCounts = [];
+  const acknowledgedAts = [];
+  const acknowledgedBys = [];
+
+  for (const { key, prev, decision, row } of items) {
+    endpointIds.push(key);
+    statuses.push(decision.status);
+    breachedSinces.push(
+      decision.status === 'pending'
+        ? (decision.breachedSince ? new Date(decision.breachedSince) : (prev && prev.breached_since) || new Date())
+        : null
+    );
+    firingSinces.push(
+      decision.status === 'firing'
+        ? (decision.firingSince ? new Date(decision.firingSince) : (prev && prev.firing_since) || new Date())
+        : null
+    );
+    lastValues.push(Number.isFinite(row.value) ? row.value : null);
+    lastSamples.push(Number.isFinite(row.sample) ? row.sample : null);
+    // action is 'none' for every item in this batch (see caller) - none of
+    // these were notified, so every notification-related column is an
+    // untouched passthrough of whatever it already was.
+    lastNotifiedAts.push((prev && prev.last_notified_at) || null);
+    notifyCounts.push(prev ? prev.notify_count : 0);
+    acknowledgedAts.push((prev && prev.acknowledged_at) || null);
+    acknowledgedBys.push((prev && prev.acknowledged_by) || null);
+  }
+
+  await pool.query(
+    `INSERT INTO alert_state (rule_id, organisation, environment, endpoint_id, status,
+        breached_since, firing_since, last_value, last_sample, last_notified_at, notify_count,
+        acknowledged_at, acknowledged_by, updated_at)
+     SELECT $1, $2, $3, u.endpoint_id, u.status, u.breached_since, u.firing_since,
+            u.last_value, u.last_sample, u.last_notified_at, u.notify_count,
+            u.acknowledged_at, u.acknowledged_by, now()
+     FROM UNNEST($4::text[], $5::text[], $6::timestamptz[], $7::timestamptz[], $8::double precision[],
+                 $9::int[], $10::timestamptz[], $11::int[], $12::timestamptz[], $13::text[])
+          AS u(endpoint_id, status, breached_since, firing_since, last_value, last_sample,
+               last_notified_at, notify_count, acknowledged_at, acknowledged_by)
+     ON CONFLICT (rule_id, environment, endpoint_id) DO UPDATE SET
+        status=EXCLUDED.status, breached_since=EXCLUDED.breached_since, firing_since=EXCLUDED.firing_since,
+        last_value=EXCLUDED.last_value, last_sample=EXCLUDED.last_sample,
+        last_notified_at=EXCLUDED.last_notified_at, notify_count=EXCLUDED.notify_count,
+        acknowledged_at=EXCLUDED.acknowledged_at, acknowledged_by=EXCLUDED.acknowledged_by, updated_at=now()`,
+    [ruleId, organisation, environment, endpointIds, statuses, breachedSinces, firingSinces,
+      lastValues, lastSamples, lastNotifiedAts, notifyCounts, acknowledgedAts, acknowledgedBys]
   );
-  const prev = prevRows[0] || null;
-  const decision = nextState(rule, prev, row.value, row.sample, now);
+}
 
-  // Nothing has ever happened for this target and nothing is happening now -
-  // do not write a row. Otherwise one 'every endpoint' rule creates a state
-  // row per endpoint per environment on the first evaluation, for no reason.
-  if (!prev && decision.status === 'ok' && decision.action === 'none') return null;
-
+// Only ever called for a row whose decision.action is fire/renotify/resolve
+// (see evaluateOrganisation above) - an action:'none' row is always handled
+// by bulkUpsertUnchangedAlertState instead, since its write never depends on
+// emitNotification's outcome the way this one's does.
+async function applyState(organisation, rule, environment, row, now, settings, prev, decision) {
+  const key = row.endpointId || '';
   const notified = decision.action === 'fire' || decision.action === 'renotify' || decision.action === 'resolve';
   let notifyResult = null;
   if (notified) {
