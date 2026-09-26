@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { pool } = require('./db');
+const workspaceEventsBus = require('./workspaceEventsBus');
 
 // The single place that ever writes to `audit_logs`. Both the audit route
 // (frontend-triggered events like endpoint edits, PII reveals) and other
@@ -94,6 +95,20 @@ async function insertAuditRow(identity, fields = {}) {
       JSON.stringify(metadata && typeof metadata === 'object' ? metadata : {}),
     ]
   );
+
+  // Fire-and-forget: every open Audit Log tab and, once wired up, the
+  // Dashboard's home view for this organisation should hear about this
+  // immediately rather than waiting for a manual reload. Never awaited —
+  // this row is already durably committed by the time we get here, so a
+  // fan-out hiccup must never turn into a reported failure for the write
+  // that triggered it. See workspaceEventsBus.js for why this one hook
+  // covers nearly every "something changed" case in the app.
+  workspaceEventsBus.publish(identity.organisation, {
+    type: 'audit.appended',
+    action: String(action).slice(0, 64),
+    resourceType,
+    ts: new Date().toISOString(),
+  });
 
   return eventId;
 }
