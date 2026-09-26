@@ -202,16 +202,29 @@ function renderAgentLiveBadge(){
 
 // Names the environment these figures came from, and says plainly when the
 // header's environment has no agent reporting it.
+// Server-side bucket for writer segments from before environment scoping
+// existed (composeOneEnvironment's UNSCOPED_ENVIRONMENT, routes/workspace.js)
+// - real, but not a real environment: it's not in the header's own
+// dropdown, so "switch environment in the header to see them" is a false
+// promise for it specifically. Named consistently between the two spots
+// below that filter it out of what they tell the visitor is reachable that
+// way.
+const OBS_UNSCOPED_ENVIRONMENT_NAME = 'Unscoped';
+
 function renderObsEnvironmentBar(){
   const names = obsEnvironmentNames();
   const active = obsActiveEnvironment();
-  const header = escapeHtml(String(state.env || '—'));
+  // QA regression (2026-09-26): this used state.env directly - the
+  // environment's internal id (e.g. "PREPROD") - instead of its display
+  // label ("Staging"), so the "no agent reporting" banner named an id the
+  // header/dropdown never shows the visitor anywhere else on the page.
+  const header = escapeHtml(state.env ? (envMeta(state.env).label || state.env) : '—');
   if(!names.length){
     return `<div class="obs-env-bar obs-env-bar-single">These figures predate per-environment
       recording, so the environment they came from isn't known. The next agent push will label them.</div>`;
   }
   if(active){
-    const others = names.filter(n => n !== active);
+    const others = names.filter(n => n !== active && n !== OBS_UNSCOPED_ENVIRONMENT_NAME);
     return `<div class="obs-env-bar obs-env-bar-single">${renderAgentLiveBadge()}
       Showing <strong>${escapeHtml(active)}</strong>,
       from the environment selected in the header.${others.length
@@ -219,9 +232,10 @@ function renderObsEnvironmentBar(){
         : ''}
       <span class="obs-env-note">Figures are never summed across environments.</span></div>`;
   }
+  const reportingNames = names.filter(n => n !== OBS_UNSCOPED_ENVIRONMENT_NAME);
   return `<div class="obs-env-bar obs-env-bar-warn">No agent is reporting for <strong>${header}</strong>,
-    so there is nothing to show. Reporting environments: ${names.map(n => `<strong>${escapeHtml(n)}</strong>`).join(', ')}
-    — switch environment in the header to see them.</div>`;
+    so there is nothing to show.${reportingNames.length ? ` Reporting environments: ${reportingNames.map(n => `<strong>${escapeHtml(n)}</strong>`).join(', ')}
+    — switch environment in the header to see them.` : ''}</div>`;
 }
 
 const OBS_OVERFLOW_KEY = '* OVERFLOW - too many distinct endpoints';
@@ -374,10 +388,22 @@ function renderAgentHealth(health){
     healthKpi('Last push', health.lastPushAt ? formatDateTime(health.lastPushAt) : '—', health.lastPushOk === false ? 'Failed - retrying' : (health.lastPushOk ? 'Succeeded' : ''), health.lastPushOk === false ? '--delete' : (health.lastPushOk ? '--post' : undefined)),
   ];
 
+  // QA regression (2026-09-26): this only ever showed health.pollIntervalSeconds
+  // (the IDLE default, 60s by default) even though the agent adaptively polls
+  // much faster than that whenever it isn't yet "idle enough" (see
+  // POLL_INTERVAL_ACTIVE_SECONDS / POLL_IDLE_CYCLES_BEFORE_BACKOFF in
+  // mule_doc_agent.py) - build_agent_health() has always sent BOTH cadences
+  // (pollIntervalActiveSeconds too), nothing client-side ever read the second
+  // one. A busy environment's real cyclesRun growth rate could be 20-30x
+  // faster than the single number shown here claimed, with no indication
+  // anything adaptive was even happening.
+  const pollCadenceText = (health.pollIntervalActiveSeconds && health.pollIntervalActiveSeconds !== health.pollIntervalSeconds)
+    ? `polling every ${health.pollIntervalActiveSeconds}s while busy, backing off to every ${health.pollIntervalSeconds ?? '?'}s once idle`
+    : `polling every ${health.pollIntervalSeconds ?? '?'}s`;
   return `<div class="obs-panel">
     <div class="section-title">Agent health</div>
     <div class="hint" style="margin-top:-4px;">
-      Self-monitoring for the discovery agent itself (${escapeHtml(health.sourceLog || '')}, Python ${escapeHtml(health.pythonVersion || '?')}, polling every ${health.pollIntervalSeconds ?? '?'}s). The agent never sits in the request path - it only tails an already-written log file - so it cannot slow down or hang the real API server regardless of traffic volume; what it CAN do under enough volume is fall behind reading its own input or grow its own memory/storage, which is what this card tracks. Generated ${health.generatedAt ? formatDateTime(health.generatedAt) : '—'}.
+      Self-monitoring for the discovery agent itself (${escapeHtml(health.sourceLog || '')}, Python ${escapeHtml(health.pythonVersion || '?')}, ${pollCadenceText}). The agent never sits in the request path - it only tails an already-written log file - so it cannot slow down or hang the real API server regardless of traffic volume; what it CAN do under enough volume is fall behind reading its own input or grow its own memory/storage, which is what this card tracks. Generated ${health.generatedAt ? formatDateTime(health.generatedAt) : '—'}.
     </div>
     ${warnings.length ? `<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;">${warnings.map(w=>`<div style="font-size:11.5px;color:var(--put);background:var(--put-bg);border:1px solid color-mix(in srgb, var(--put) 35%, transparent);border-radius:8px;padding:8px 12px;">${w}</div>`).join('')}</div>` : ''}
     <div class="kpi-grid">${kpis.join('')}</div>

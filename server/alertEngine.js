@@ -55,21 +55,34 @@ const { log } = require('./logger');
 //   'absence'  evaluated from the CLOCK, not from a row of data. These are
 //              the ones the sweep exists for; see the note at the top.
 // ---------------------------------------------------------------------------
+// QA regression (2026-09-26): the Observability console's own status-
+// breakdown hint (26-obs-console.js) tells the reader unclassified requests
+// (no status code at all in the log line) are "deliberately NOT part of the
+// error rate" - a request whose outcome was never recorded is neither a
+// success nor a failure, so folding it into the denominator understates the
+// rate among requests whose outcome is actually known. error_rate/
+// server_error_rate/client_error_rate below used to divide by b.total
+// (every request, unclassified included) regardless of that stated policy -
+// same bug, same fix, as getSummaryUncached/getEndpointBreakdownUncached in
+// observabilityStore.js. unclassified_rate is deliberately NOT changed: it
+// exists specifically to measure unclassified as a share of ALL requests.
+function classifiedTotal(b) { return b.total - (b.unknown || 0); }
+
 const METRICS = {
   error_rate: {
     kind: 'ratio', unit: '%', label: 'Error rate',
     help: 'Share of requests answered 4xx or 5xx. The broad "something is wrong" signal.',
-    compute: (b) => pct(b.s4 + b.s5, b.total),
+    compute: (b) => pct(b.s4 + b.s5, classifiedTotal(b)),
   },
   server_error_rate: {
     kind: 'ratio', unit: '%', label: '5xx rate',
     help: 'Share answered 5xx only. A 4xx is usually the caller\'s problem; a 5xx is ours.',
-    compute: (b) => pct(b.s5, b.total),
+    compute: (b) => pct(b.s5, classifiedTotal(b)),
   },
   client_error_rate: {
     kind: 'ratio', unit: '%', label: '4xx rate',
     help: 'Share answered 4xx. Worth watching for a caller that has started sending bad requests.',
-    compute: (b) => pct(b.s4, b.total),
+    compute: (b) => pct(b.s4, classifiedTotal(b)),
   },
   unclassified_rate: {
     kind: 'ratio', unit: '%', label: 'Unclassified rate',

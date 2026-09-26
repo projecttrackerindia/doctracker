@@ -2283,9 +2283,27 @@ class DocTrackerClient:
         Rollup buckets are SUMMED server-side on conflict, which is what makes
         it safe to flush a partially-filled minute now and the rest of it on
         the next cycle: the stored total is exact either way.
+
+        QA regression (2026-09-26): this used to skip the request entirely
+        when there was nothing new to send (`if not rollups and not records:
+        return`) - which meant a genuinely quiet environment (SIT in
+        practice: a handful of requests a day) never called this at all
+        between real traffic. The SERVER's ingest route calls
+        touchHeartbeat() unconditionally alongside its writes SPECIFICALLY
+        so a heartbeat-only push still counts as "the agent is alive" for
+        agent_silent (see alertEngine.js and touchHeartbeat()'s own comment
+        in observabilityStore.js) - but that design only works if the agent
+        actually MAKES the call. Skipping it here defeated that, and
+        produced exactly the false "Collector stopped reporting" alert that
+        design was meant to prevent: the endpoint-metrics push (a separate
+        route) kept succeeding on schedule, proving the agent was alive,
+        while this route's own heartbeat signal silently went stale. This
+        function is only ever reached from run()'s own due_for_data/
+        due_for_heartbeat gate (already throttled to PUSH_MIN_INTERVAL_
+        SECONDS/PUSH_INTERVAL_SECONDS) - so always making the call here adds
+        one lightweight request per already-scheduled push cycle, not a new
+        unthrottled one.
         """
-        if not rollups and not records:
-            return {"rollupsWritten": 0, "recordsWritten": 0}
         body = {"environment": environment, "rollups": rollups, "records": records}
         status, data, _ = self._request("PUT", "/api/workspace/observability/ingest", body)
         if status != 200 or not data.get("ok"):
