@@ -67,6 +67,7 @@ import glob
 import gzip
 import json
 import time
+import signal
 import platform
 import calendar
 import hashlib
@@ -3355,6 +3356,27 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
         seed_state_from_history(state, log_paths, seed_from_history)
         state["seededFromHistory"] = True
         save_state(state)
+
+    # The deployment's own restart path is `kill <pid>` (SIGTERM) followed by
+    # a fresh start - there was previously no handler at all, so a restart
+    # simply killed the process mid-cycle with whatever tailing progress
+    # hadn't yet been written to the cursor file (up to one poll interval's
+    # worth - 60s idle, as little as 2s under load) silently re-read and
+    # re-counted on the next start. A cursor-only save is deliberately cheap
+    # (file offsets, seen-event ids, push bookkeeping - not the bulky
+    # aggregates/captured records) so a clean shutdown stays fast even mid-
+    # cycle. Registered here, not at the top of run(), so the one-shot modes
+    # above (--sample-lines, --dry-run, seeding) keep Python's normal SIGTERM
+    # behavior - there is no long-lived state in those paths worth flushing.
+    def _handle_sigterm(signum, frame):
+        print("[info] SIGTERM received - saving tailing progress before exit.", file=sys.stderr)
+        try:
+            save_state(state, full=False)
+        except Exception as e:
+            print(f"[warn] could not save state on shutdown: {e}", file=sys.stderr)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
 
     while True:
         cycle_start = time.time()
