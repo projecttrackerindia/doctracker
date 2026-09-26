@@ -709,16 +709,55 @@ async function getRecords(organisation, {
   const safeOffset = Math.max(0, toInt(offset, 0));
   const where = parts.join(' AND ');
 
+  // A single real request can produce more than one row here even from one
+  // well-behaved agent (see collapse_duplicate_hops() in mule_doc_agent.py),
+  // and that agent-side dedup is per-writer state - it cannot see what a
+  // SECOND agent (a different Mule node, e.g. a shared/mirrored log path
+  // across a cluster) independently pushed for the SAME request. Two writers
+  // is the normal case here (see agent health's writerCount), so this can't
+  // be treated as a rare edge case. Folding by correlation_id at read time,
+  // not at insert time, keeps the insert path a simple append (safe under
+  // retry) and lets every drill-down view share one fold instead of each
+  // needing its own de-dup pass.
+  //
+  // Rows with NO correlation id are never folded into each other - Postgres
+  // treats every NULL as equal for PARTITION BY, which would otherwise
+  // collapse every uncorrelated row in the whole result down to one.
+  //
+  // Preference mirrors the agent's own _best_hop_record(): the row that
+  // actually completed (has a status code) beats one that doesn't, then the
+  // one with a latency value, then the most recently written. Path length -
+  // the agent's last tiebreaker - isn't available here without decrypting
+  // fields_enc for every candidate row just to sort by it, so it's dropped;
+  // it only matters when status AND latency already tied, which the id
+  // tiebreaker resolves just as well for display purposes.
+  const rankedCte = `
+    WITH ranked AS (
+      SELECT id, ts, endpoint_id, status_code, latency_ms, client_ip,
+             correlation_id, flow_name, fields_enc,
+             ROW_NUMBER() OVER (
+               PARTITION BY correlation_id
+               ORDER BY (status_code IS NOT NULL) DESC, (latency_ms IS NOT NULL) DESC, id DESC
+             ) AS rn
+      FROM endpoint_log_records WHERE ${where}
+    )
+  `;
+
   const [{ rows }, { rows: countRows }] = await Promise.all([
     pool.query(
-      `SELECT id, ts, endpoint_id, status_code, latency_ms, client_ip,
+      `${rankedCte}
+       SELECT id, ts, endpoint_id, status_code, latency_ms, client_ip,
               correlation_id, flow_name, fields_enc
-       FROM endpoint_log_records WHERE ${where}
+       FROM ranked WHERE correlation_id IS NULL OR rn = 1
        ORDER BY ts DESC, id DESC
        LIMIT $${i} OFFSET $${i + 1}`,
       params.concat([safeLimit, safeOffset])
     ),
-    pool.query(`SELECT COUNT(*)::bigint AS n FROM endpoint_log_records WHERE ${where}`, params),
+    pool.query(
+      `${rankedCte}
+       SELECT COUNT(*)::bigint AS n FROM ranked WHERE correlation_id IS NULL OR rn = 1`,
+      params
+    ),
   ]);
 
   const records = rows.map((r) => {
