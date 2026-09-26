@@ -333,6 +333,16 @@ function renderAgentHealth(health){
   if(health.overflowObservations) warnings.push(`${health.overflowObservations} observation(s) folded into a shared overflow bucket because more than ${health.maxTrackedEndpoints} distinct endpoints were seen - see the "OVERFLOW" row below. Raise MAX_TRACKED_ENDPOINTS if this keeps growing, or check for path segments (ids) that should be templated out.`);
   if(health.lastPushOk === false) warnings.push(`Last push to DocTracker failed: ${escapeHtml(health.lastError || 'unknown error')}. The agent will retry automatically next cycle - nothing needs to be done on this page.`);
 
+  // Same staleness math as renderAgentLiveBadge/obsAgentFreshness — reused
+  // here because health.lastPushOk is a historical fact about whatever push
+  // last actually happened, not a live signal. Without this, an agent that
+  // stopped hours ago still shows a bright green "Succeeded" on its last
+  // (long-ago) push, which is exactly the "technically true, practically
+  // backwards" bug already fixed on the badge above this panel.
+  const pushAgeMs = health.generatedAt ? Date.now() - new Date(health.generatedAt).getTime() : null;
+  const pushIntervalMs = (Number(health.pushIntervalSeconds) || 900) * 1000;
+  const pushStale = pushAgeMs !== null && isFinite(pushAgeMs) && pushAgeMs >= pushIntervalMs * 3;
+
   const rpm = health.requestsPerMinute;
   const rpmDisplay = (rpm === null || rpm === undefined) ? '—' : (rpm >= 1000 ? `${(rpm/1000).toFixed(1)}k` : rpm);
   // At current rate, this is what 100k requests/30min (~55 req/s, the scale
@@ -361,7 +371,11 @@ function renderAgentHealth(health){
       health.collapsedHopObservations
         ? 'Same request logged under a second path spelling — counted once'
         : 'Every request is logged once'),
-    healthKpi('Last push', health.lastPushAt ? formatDateTime(health.lastPushAt) : '—', health.lastPushOk === false ? 'Failed - retrying' : (health.lastPushOk ? 'Succeeded' : ''), health.lastPushOk === false ? '--delete' : (health.lastPushOk ? '--post' : undefined)),
+    healthKpi('Last push', health.lastPushAt ? formatDateTime(health.lastPushAt) : '—',
+      health.lastPushOk === false ? 'Failed - retrying'
+        : pushStale ? 'Succeeded — but that was its last push; the agent has gone quiet since'
+        : (health.lastPushOk ? 'Succeeded' : ''),
+      health.lastPushOk === false ? '--delete' : pushStale ? '--delete' : (health.lastPushOk ? '--post' : undefined)),
   ];
 
   return `<div class="obs-panel">
