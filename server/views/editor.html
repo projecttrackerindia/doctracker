@@ -2281,10 +2281,22 @@ function blankProjectStub(name){
   };
 }
 
+// QA regression (2026-09-26, bugs #3/#4/#13): this used to only check the
+// path field wasn't EMPTY — a path with no leading slash, or containing a
+// space, or a 1000-character endpoint name all saved successfully. The
+// server now rejects all of these too (see endpointFieldsError() in
+// routes/workspace.js, which is the actual gate — this is only here so a
+// mistake is caught before the round trip, not after it).
+const MAX_ENDPOINT_NAME_LENGTH = 150;
 async function performSave(force){
   const projectName = document.getElementById('fProject').value.trim();
   if(!projectName){ toast('Project / API name is required.'); return; }
-  if(!document.getElementById('fPath').value.trim()){ toast('Path is required.'); return; }
+  const pathValue = document.getElementById('fPath').value.trim();
+  if(!pathValue){ toast('Path is required.'); return; }
+  if(!pathValue.startsWith('/')){ toast('Path must start with /.'); return; }
+  if(/\s/.test(pathValue)){ toast("Path can't contain spaces or other whitespace."); return; }
+  const nameValue = document.getElementById('fName').value;
+  if(nameValue.length > MAX_ENDPOINT_NAME_LENGTH){ toast(`Endpoint name is too long (${nameValue.length} characters, max ${MAX_ENDPOINT_NAME_LENGTH}).`); return; }
   if(saving) return;
   saving = true;
   document.getElementById('btnSave').disabled = true;

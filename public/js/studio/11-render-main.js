@@ -77,7 +77,7 @@ function renderMain(){
     main.innerHTML = `<div class="welcome">
       <div class="mark-lg">{ }</div>
       <h1>No endpoint selected</h1>
-      <p>Import a MuleSoft OpenAPI/Swagger export (JSON or YAML), or add an endpoint by hand if you don't have a full spec yet. Everything is saved locally in this browser — no server, no account.</p>
+      <p>Import a MuleSoft OpenAPI/Swagger export (JSON or YAML), or add an endpoint by hand if you don't have a full spec yet. If you switched environments, this can also just mean nothing has been promoted here yet.</p>
       <div class="actions">
         <button class="primary" id="btnImport2">Import spec file</button>
         <button id="btnAddManual2">Add endpoint manually</button>

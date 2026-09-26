@@ -229,6 +229,18 @@
   forgotForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     hideAlert();
+    // QA regression (2026-09-26, bug #8): this used to send the request
+    // regardless of whether the field was empty, and since the server's
+    // response is deliberately identical either way (anti-enumeration -
+    // see request-password-reset in routes/auth.js), an empty submission
+    // still showed "Sent". An empty field reveals nothing about whether any
+    // account exists, so catching it here first is safe and just saves a
+    // pointless request.
+    if (!forgotIdentifierInput.value.trim()) {
+      showAlert('Enter your email or username first.');
+      forgotIdentifierInput.focus();
+      return;
+    }
     forgotSubmitBtn.disabled = true;
     forgotSubmitBtn.classList.add('is-loading');
     forgotSubmitBtnLabel.textContent = 'Sending…';

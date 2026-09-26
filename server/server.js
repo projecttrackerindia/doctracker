@@ -569,9 +569,28 @@ app.get('/:orgToken/:projectSlug/:endpointSlug/edit.studio', requireAuth, (req, 
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-app.get('/', (req, res) => res.redirect('/login.html'));
+// QA regression (2026-09-26, bug #2): this used to redirect to /login.html
+// unconditionally, with no session check at all - a signed-in visitor who
+// opened the site's bare root address landed on the login FORM instead of
+// their dashboard. Their session cookie was never actually cleared by this
+// (nothing here ever called clearCookie for a still-valid session), but
+// being shown a login form while genuinely still signed in reads as "I got
+// logged out," which is what was reported. Same requireAuth() used by every
+// other protected page: a valid session redirects straight to /dashboard.html
+// (itself already redirecting to the org-tokenized URL - see the back-compat
+// route above), anything else (no session, revoked, idle-expired) falls
+// through to its own existing /login.html redirect.
+app.get('/', requireAuth, (req, res) => res.redirect('/dashboard.html'));
 
-app.use((req, res) => res.status(404).json({ error: 'Not found' }));
+// QA regression (2026-09-26, bug #9): an unmatched URL used to always get a
+// bare {"error":"Not found"} JSON body, including for a browser navigating
+// to a typo'd page address - correct for an API client, confusing for a
+// person. /api/* keeps the JSON shape API callers expect; everything else
+// (an actual page request) gets a real page.
+app.use((req, res) => {
+  if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
+  res.status(404).sendFile(path.join(__dirname, '..', 'public', '404.html'));
+});
 
 initDb()
   .then(() => runMigrations(pool))

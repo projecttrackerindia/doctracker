@@ -17,7 +17,17 @@ function renderMarkdown(str){
   const inline = s => s
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(?:^|\s)\*([^*\s][^*]*)\*(?=\s|$)/g, (m,g)=>m.replace('*'+g+'*','<em>'+g+'</em>'));
+    .replace(/(?:^|\s)\*([^*\s][^*]*)\*(?=\s|$)/g, (m,g)=>m.replace('*'+g+'*','<em>'+g+'</em>'))
+    // QA regression (2026-09-26, bug #11): standard markdown italics can be
+    // written with either *asterisks* or _underscores_ - only the asterisk
+    // form was ever handled, so _italic_ rendered as the literal characters.
+    // Same whitespace-boundary requirement as the asterisk version above,
+    // for the same reason: without it, every snake_case identifier
+    // (my_variable_name) would get partially italicized, since an
+    // unqualified /_(.+?)_/ would match the first two underscores in it.
+    // Requiring the opening _ to be preceded by whitespace/start-of-line
+    // means a word-internal underscore is never mistaken for emphasis.
+    .replace(/(?:^|\s)_([^_\s][^_]*)_(?=\s|$)/g, (m,g)=>m.replace('_'+g+'_','<em>'+g+'</em>'));
 
   const listItemRe = /^(\s*)([-*]|\d+[.)])\s+(.*)$/;
 
