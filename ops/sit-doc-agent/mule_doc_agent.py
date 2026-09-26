@@ -67,6 +67,7 @@ import glob
 import gzip
 import json
 import time
+import signal
 import platform
 import calendar
 import hashlib
@@ -1177,6 +1178,25 @@ def tail_all_logs(paths, state, total_budget):
     #   * a freshly rolled LIVE file has a recent mtime -> start at 0 and
     #     read it whole, so nothing written between rollover and discovery
     #     is missed.
+    #
+    # CONFIRMED real gap in the mtime heuristic alone: a %i rollover RENAMES
+    # app.log -> app-1.log, and a rename preserves the ORIGINAL mtime - the
+    # instant of its last write, which is "just now" for a file that was live
+    # seconds ago. If the periodic re-glob discovers app-1.log within the
+    # same NEW_FILE_MAX_AGE_SECONDS window (the common case - one hour is far
+    # longer than LOG_GLOB_RESCAN_SECONDS), the mtime check alone reads it as
+    # a fresh live file and starts it at 0, RE-INGESTING bytes already
+    # counted under the old path. A rename never changes the inode, though -
+    # so before trusting mtime, check whether this "new" path's inode is one
+    # this agent already has an offset for under a DIFFERENT (now vanished)
+    # path. If so, this isn't a new file at all: it's the same file, carry
+    # its already-recorded offset forward and retire the old path entry
+    # rather than re-reading anything.
+    by_inode = {}
+    for known_path, known in files_state.items():
+        if known.get("inode") is not None:
+            by_inode.setdefault(known["inode"], []).append(known_path)
+
     for path in paths:
         if path in files_state:
             continue
@@ -1184,10 +1204,39 @@ def tail_all_logs(paths, state, total_budget):
             st = os.stat(path)
         except OSError:
             continue
+        inode = getattr(st, "st_ino", None)
+        renamed_from = None
+        if inode is not None and inode in by_inode:
+            for candidate in by_inode[inode]:
+                # The candidate path string can still be in `paths` (glob
+                # results are paths, not identities) even though rotation has
+                # already put a BRAND NEW file there - e.g. app.log itself,
+                # freshly recreated after being renamed to app-1.log. What
+                # matters is whether the candidate's CURRENT on-disk inode
+                # still matches what was recorded for it, not whether the
+                # path string still resolves to something.
+                try:
+                    still_same = os.stat(candidate).st_ino == inode
+                except OSError:
+                    still_same = False
+                if not still_same:
+                    renamed_from = candidate
+                    break
+        if renamed_from is not None:
+            files_state[path] = {
+                "offset": files_state[renamed_from]["offset"],
+                "inode": inode,
+            }
+            del files_state[renamed_from]
+            print(f"[info] {os.path.basename(path)}: same inode as vanished "
+                  f"{os.path.basename(renamed_from)} - this is that file renamed by "
+                  f"rotation, not a new one. Carrying its offset forward instead of "
+                  f"re-reading it.")
+            continue
         stale = (time.time() - st.st_mtime) > NEW_FILE_MAX_AGE_SECONDS
         files_state[path] = {
             "offset": st.st_size if stale else 0,
-            "inode": getattr(st, "st_ino", None),
+            "inode": inode,
         }
         if stale:
             # Says "not recently written" rather than "rotated archive": a
@@ -3307,6 +3356,27 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
         seed_state_from_history(state, log_paths, seed_from_history)
         state["seededFromHistory"] = True
         save_state(state)
+
+    # The deployment's own restart path is `kill <pid>` (SIGTERM) followed by
+    # a fresh start - there was previously no handler at all, so a restart
+    # simply killed the process mid-cycle with whatever tailing progress
+    # hadn't yet been written to the cursor file (up to one poll interval's
+    # worth - 60s idle, as little as 2s under load) silently re-read and
+    # re-counted on the next start. A cursor-only save is deliberately cheap
+    # (file offsets, seen-event ids, push bookkeeping - not the bulky
+    # aggregates/captured records) so a clean shutdown stays fast even mid-
+    # cycle. Registered here, not at the top of run(), so the one-shot modes
+    # above (--sample-lines, --dry-run, seeding) keep Python's normal SIGTERM
+    # behavior - there is no long-lived state in those paths worth flushing.
+    def _handle_sigterm(signum, frame):
+        print("[info] SIGTERM received - saving tailing progress before exit.", file=sys.stderr)
+        try:
+            save_state(state, full=False)
+        except Exception as e:
+            print(f"[warn] could not save state on shutdown: {e}", file=sys.stderr)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
 
     while True:
         cycle_start = time.time()
