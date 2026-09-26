@@ -20,7 +20,7 @@
     "audit:check": "npm audit --omit=dev --audit-level=high"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.744.0",
+    "@aws-sdk/client-s3": "^3.1138.0",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
@@ -43,6 +43,6 @@
     "globals": "^15.15.0",
     "nodemon": "^3.1.0",
     "oidc-provider": "^9.12.2",
-    "prettier": "^3.9.6"
+    "prettier": "^3.9.8"
   }
 }
