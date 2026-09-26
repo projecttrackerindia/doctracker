@@ -456,6 +456,10 @@ def _parse_timestamp_ms(raw):
     if s.isdigit():
         n = int(s)
         return n if n > 10**12 else n * 1000
+    # log4j2's default layout separates millis with a comma, not a period
+    # (e.g. "2024-11-18 10:23:06,860") - strptime has no directive for that,
+    # so normalize it before trying the period-based formats below.
+    s = re.sub(r'(\d{2}:\d{2}:\d{2}),(\d{3})', r'\1.\2', s)
     for fmt in (
         "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%fZ",
         "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
@@ -1281,6 +1285,62 @@ MULE_EVENT_PATTERN = re.compile(r'event:\s*([0-9a-fA-F][0-9a-fA-F-]{7,})')
 # Startup inventory line.
 STARTING_FLOW_PATTERN = re.compile(r'Starting flow:\s*(\S+)')
 
+# A custom Logger component logging a human-readable ENTRY/EXIT breadcrumb
+# pair around a (sub)flow - CONFIRMED 2026-09-26 against s-portal-cmsapi-api's
+# real logs, e.g.:
+#   ... LoggerMessageProcessor: ENTRY  >>  Flow Name: send-otp-sub-flow, ...
+#   ... LoggerMessageProcessor: EXIT  >>  Flow Name: send-otp-sub-flow, ...
+# Neither line ever carries a status code - this app's Logger components
+# simply never log one, which is a real Mule-flow-instrumentation gap outside
+# this agent's control, not something any amount of regex tuning can recover.
+# But both lines share the SAME `event:` id MULE_EVENT_PATTERN above already
+# extracts, and each carries its own wall-clock timestamp at the front of the
+# line, so the backend processing latency (exit minus entry) genuinely IS
+# recoverable even though status isn't. See _logger_entry_exit_latency_ms().
+LOGGER_ENTRY_PATTERN = re.compile(r'LoggerMessageProcessor:\s*ENTRY\b', re.IGNORECASE)
+LOGGER_EXIT_PATTERN = re.compile(r'LoggerMessageProcessor:\s*EXIT\b', re.IGNORECASE)
+LEADING_TIMESTAMP_PATTERN = re.compile(r'(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}[,.]\d{3})')
+LEADING_TIMESTAMP_SEARCH_PREFIX_CHARS = 60
+
+# Pending ENTRY timestamps, keyed by correlation id, each a STACK (not a
+# scalar) so nested subflow calls sharing one top-level correlation id pair
+# up LIFO - the same way nested function calls actually nest - instead of an
+# outer flow's EXIT silently grabbing an inner subflow's ENTRY timestamp.
+# Bounded the same way _CORRID_METHOD is: an ENTRY with no matching EXIT
+# (e.g. the request crashed, or straddles a log rotation) must not grow this
+# without limit on a long-running agent.
+MAX_PENDING_LOGGER_ENTRIES = int(os.environ.get("MAX_PENDING_LOGGER_ENTRIES", "5000"))
+_PENDING_LOGGER_ENTRY = collections.OrderedDict()
+
+
+def _logger_entry_exit_latency_ms(stripped, corr_id):
+    """Returns the latency (ms) once this line is an EXIT whose correlation
+    id had a prior pending ENTRY, else None. An ENTRY line always returns
+    None itself - its timestamp is only remembered for a later EXIT."""
+    if not corr_id:
+        return None
+    is_entry = LOGGER_ENTRY_PATTERN.search(stripped)
+    is_exit = not is_entry and LOGGER_EXIT_PATTERN.search(stripped)
+    if not is_entry and not is_exit:
+        return None
+    ts_m = LEADING_TIMESTAMP_PATTERN.search(stripped[:LEADING_TIMESTAMP_SEARCH_PREFIX_CHARS])
+    ts_ms = _parse_timestamp_ms(ts_m.group(1)) if ts_m else None
+    if is_entry:
+        if ts_ms is not None:
+            _PENDING_LOGGER_ENTRY.setdefault(corr_id, []).append(ts_ms)
+            while len(_PENDING_LOGGER_ENTRY) > MAX_PENDING_LOGGER_ENTRIES:
+                _PENDING_LOGGER_ENTRY.popitem(last=False)
+        return None
+    stack = _PENDING_LOGGER_ENTRY.get(corr_id)
+    if not stack:
+        return None
+    entry_ts = stack.pop()
+    if not stack:
+        del _PENDING_LOGGER_ENTRY[corr_id]
+    if ts_ms is not None and ts_ms >= entry_ts:
+        return round(ts_ms - entry_ts)
+    return None
+
 
 def apikit_path_to_uri(raw):
     """`\\customers\\(customerId)\\orders` -> `/customers/{customerId}/orders`."""
@@ -1309,15 +1369,17 @@ def parse_apikit_line(stripped):
     is_inventory = bool(STARTING_FLOW_PATTERN.search(stripped))
     event_m = MULE_EVENT_PATTERN.search(stripped)
     status_m = STATUS_CODE_PATTERN.search(stripped)
+    corr_id = event_m.group(1) if event_m else None
     if event_m and not is_inventory:
         # So a structured JSON block logged later under this same correlation
         # id can recover the method without guessing it (see _finish_block).
-        remember_corrid_method(event_m.group(1), method, path)
+        remember_corrid_method(corr_id, method, path)
     return {
         "method": method,
         "path": path,
         "statusCode": int(status_m.group(1)) if status_m else None,
-        "correlationId": event_m.group(1) if event_m else None,
+        "correlationId": corr_id,
+        "latencyMs": _logger_entry_exit_latency_ms(stripped, corr_id) if not is_inventory else None,
         "body": None,
         "isInventory": is_inventory,
         "style": "apikit",
