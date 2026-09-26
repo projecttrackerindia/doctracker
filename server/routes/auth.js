@@ -216,7 +216,14 @@ const LOGIN_COLUMNS = `id, username, email, password_hash, organisation, role, c
 // and POST /mfa/challenge (the second step when MFA is enabled), so both
 // paths end up in exactly the same place rather than two hand-maintained
 // copies of "what a successful login does."
-async function finalizeLogin(user, res) {
+// `redirectTo` is only used by the SSO callback (server/routes/sso.js),
+// which lands here via a full-page browser redirect from the IdP rather
+// than an XHR call — it needs the browser to land on a real app page next,
+// not a bare JSON body. Everything else about issuing the session (the
+// last_login/last_activity update, the signed cookie, its options) is
+// identical either way; omitting redirectTo (every existing caller) keeps
+// the original JSON response exactly as it was.
+async function finalizeLogin(user, res, { redirectTo } = {}) {
   // Reset last_activity_at here too, not just last_login_at — verifySession()
   // (authGuard.js) checks last_activity_at on every subsequent request to
   // decide idle-timeout, and it doesn't know or care that a fresh login just
@@ -231,6 +238,7 @@ async function finalizeLogin(user, res) {
   };
   const token = signSession(user);
   res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
+  if (redirectTo) return res.redirect(redirectTo);
   res.json({ user: safeUser, orgToken: dataCrypto.encryptOrgToken(user.organisation) });
 }
 
@@ -533,3 +541,4 @@ router.get('/me', async (req, res) => {
 module.exports = router;
 module.exports.checkAccountLockout = checkAccountLockout;
 module.exports.nextFailedLoginState = nextFailedLoginState;
+module.exports.finalizeLogin = finalizeLogin;
