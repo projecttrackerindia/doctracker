@@ -22,13 +22,17 @@
   --border:#232b39; --border-strong:#2c3646;
   --text:#e8ecf3; --text-dim:#a9b3c4; --text-faint:#6c7789;
   --accent:#6d8dff; --accent-ink:#0b0e14; --accent-soft:rgba(109,141,255,.15); --accent-soft-strong:rgba(92,124,250,.22);
-  --danger:#ef5a6f; --danger-soft:rgba(239,90,111,.14);
+  --danger:#ef5c6e; --danger-soft:rgba(239,92,110,.14);
   --warn:#e8a33d; --warn-soft:rgba(232,163,61,.14);
   --ok:#38c793; --ok-soft:rgba(56,199,147,.14);
   --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
-  --get:#38c793; --post:#6d8dff; --put:#e8a33d; --delete:#ef5a6f; --patch:#b988f0;
-  --get-bg:rgba(56,199,147,.14); --post-bg:rgba(109,141,255,.14); --put-bg:rgba(232,163,61,.14);
-  --delete-bg:rgba(239,90,111,.14); --patch-bg:rgba(185,136,240,.14);
+  /* Method colors match Studio/audit-log/release-pipeline's canonical
+     values (design-tokens.css) — these used to be independently picked
+     here, so the same GET endpoint rendered blue on Studio and green on
+     this tab. Same meaning, must be the same color everywhere. */
+  --get:#4fa3f7; --post:#35c491; --put:#e0a83e; --delete:#ef5c6e; --patch:#b389f0;
+  --get-bg:rgba(79,163,247,.14); --post-bg:rgba(53,196,145,.14); --put-bg:rgba(224,168,62,.14);
+  --delete-bg:rgba(239,92,110,.14); --patch-bg:rgba(179,137,240,.14);
   --glass-strong:rgba(17,21,29,.94);
 }
 /* Same light palette as the main Studio tab (server/views/studio.html
