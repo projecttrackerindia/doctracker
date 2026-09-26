@@ -94,6 +94,7 @@ tbody tr.al-hidden{ display:none; }
 .al-ip{ color:var(--text-faint); font-family:var(--mono); font-size:11px; white-space:nowrap; }
 .al-empty{ padding:60px 20px; text-align:center; color:var(--text-faint); font-size:13px; }
 .al-loading{ padding:60px 20px; text-align:center; color:var(--text-faint); font-size:13px; }
+.al-error{ padding:60px 20px; text-align:center; color:var(--danger); font-size:13px; background:var(--danger-soft); }
 ::selection{ background:var(--accent-soft); }
 @media (max-width:900px){
   .al-details, .al-project, .al-ip{ display:none; }
@@ -409,7 +410,7 @@ tbody tr.al-hidden{ display:none; }
       hasMoreOnServer = !!data.hasMore;
       nextCursor = data.nextCursor || null;
     }catch(err){
-      els.body.innerHTML = '<tr><td colspan="8" class="al-loading">Could not load the audit log. Refresh to try again.</td></tr>';
+      els.body.innerHTML = '<tr><td colspan="8" class="al-error">Could not load the audit log. Refresh to try again.</td></tr>';
       return;
     }
     renderAll();

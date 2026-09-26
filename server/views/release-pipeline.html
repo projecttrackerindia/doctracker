@@ -55,6 +55,7 @@ a{ color:inherit; }
 .rp-section{ background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:20px; margin-bottom:20px; }
 .rp-section-title{ font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint); margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .rp-loading, .rp-empty{ padding:30px 0; text-align:center; color:var(--text-faint); font-size:13px; }
+.rp-error{ padding:20px 16px; text-align:center; color:var(--danger); font-size:13px; background:var(--danger-soft); border-radius:10px; }
 
 .field{ display:flex; flex-direction:column; gap:5px; }
 .field label{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--text-faint); }
@@ -381,7 +382,7 @@ async function renderReleasePipeline(){
   let data;
   try{ data = await apiGet(`/projects/${encodeURIComponent(proj.id)}/versions`); }
   catch(e){
-    section.innerHTML = `<div class="rp-loading">${escapeHtml(e.message || 'Could not load release pipeline status.')}</div>`;
+    section.innerHTML = `<div class="rp-error">${escapeHtml(e.message || 'Could not load release pipeline status.')}</div>`;
     return;
   }
   const stages = data.stages;
@@ -948,7 +949,7 @@ async function boot(){
     workspace = await apiGet('');
   }catch(e){
     console.error(e);
-    document.getElementById('rpPipelineSection').innerHTML = `<div class="rp-loading">Could not load your workspace — check your connection and reload.</div>`;
+    document.getElementById('rpPipelineSection').innerHTML = `<div class="rp-error">Could not load your workspace — check your connection and reload.</div>`;
     document.getElementById('rpMergeHistory').innerHTML = '';
     return;
   }
