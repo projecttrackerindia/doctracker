@@ -6,7 +6,10 @@
 <title>Endpoint Editor · DocTracker</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/css/doc-meta.css">
+<link rel="stylesheet" href="/css/components.css?v=__ASSET_VERSION__">
 <script src="/js/idle-session.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/shared/toast.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/shared/focus-trap.js?v=__ASSET_VERSION__"></script>
 <script nonce="__CSP_NONCE__">
 // Apply the theme before first paint (same localStorage key the main Studio
 // tab uses) so this tab never flashes dark when Studio is set to light, or
@@ -22,13 +25,17 @@
   --border:#232b39; --border-strong:#2c3646;
   --text:#e8ecf3; --text-dim:#a9b3c4; --text-faint:#6c7789;
   --accent:#6d8dff; --accent-ink:#0b0e14; --accent-soft:rgba(109,141,255,.15); --accent-soft-strong:rgba(92,124,250,.22);
-  --danger:#ef5a6f; --danger-soft:rgba(239,90,111,.14);
+  --danger:#ef5c6e; --danger-soft:rgba(239,92,110,.14);
   --warn:#e8a33d; --warn-soft:rgba(232,163,61,.14);
   --ok:#38c793; --ok-soft:rgba(56,199,147,.14);
   --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
-  --get:#38c793; --post:#6d8dff; --put:#e8a33d; --delete:#ef5a6f; --patch:#b988f0;
-  --get-bg:rgba(56,199,147,.14); --post-bg:rgba(109,141,255,.14); --put-bg:rgba(232,163,61,.14);
-  --delete-bg:rgba(239,90,111,.14); --patch-bg:rgba(185,136,240,.14);
+  /* Method colors match Studio/audit-log/release-pipeline's canonical
+     values (design-tokens.css) — these used to be independently picked
+     here, so the same GET endpoint rendered blue on Studio and green on
+     this tab. Same meaning, must be the same color everywhere. */
+  --get:#4fa3f7; --post:#35c491; --put:#e0a83e; --delete:#ef5c6e; --patch:#b389f0;
+  --get-bg:rgba(79,163,247,.14); --post-bg:rgba(53,196,145,.14); --put-bg:rgba(224,168,62,.14);
+  --delete-bg:rgba(239,92,110,.14); --patch-bg:rgba(179,137,240,.14);
   --glass-strong:rgba(17,21,29,.94);
 }
 /* Same light palette as the main Studio tab (server/views/studio.html
@@ -220,12 +227,10 @@ html{ scroll-behavior:smooth; }
 .md-list li{ margin-bottom:4px; }
 .md-list:last-child{ margin-bottom:0; }
 
-.badge{ font-family:var(--mono); font-size:10.5px; font-weight:800; padding:2px 7px; border-radius:5px; text-transform:uppercase; }
-.badge.get{ color:var(--get); background:rgba(56,199,147,.14); }
-.badge.post{ color:var(--post); background:rgba(109,141,255,.14); }
-.badge.put{ color:var(--put); background:rgba(232,163,61,.14); }
-.badge.delete{ color:var(--delete); background:rgba(239,90,111,.14); }
-.badge.patch{ color:var(--patch); background:rgba(185,136,240,.14); }
+/* .badge and its .get/.post/.put/.delete/.patch modifiers now in
+   components.css — this used to hardcode the pre-fix background colors
+   directly (bypassing the --*-bg tokens entirely), so a badge's text
+   read blue while its own background tint stayed the old green. */
 
 /* JSON paste box */
 .json-paste{
@@ -333,6 +338,10 @@ html{ scroll-behavior:smooth; }
   .add-block{ right:16px; bottom:82px; }
   .add-block-btn{ height:48px; padding:0 16px 0 14px; }
   .add-block-label{ display:none; }
+  /* The username chip was the one thing in the top bar not shrinking at
+     narrow widths, pushing the page 70px wider than the viewport. */
+  .user-chip #userLabel{ display:none; }
+  .user-chip{ padding:5px; }
 }
 
 /* Footer action bar */
@@ -342,18 +351,11 @@ html{ scroll-behavior:smooth; }
 }
 .footer-bar .spacer{ flex:1; }
 .footer-bar select{ background:var(--surface-2); border:1px solid var(--border-strong); border-radius:7px; padding:8px 10px; font-size:12.5px; }
-.btn-primary{ background:var(--accent); color:var(--accent-ink); border:none; border-radius:8px; padding:9px 18px; font-weight:700; font-size:12.5px; }
-.btn-primary:hover{ filter:brightness(1.08); }
-.btn-primary:disabled{ opacity:.5; cursor:not-allowed; }
-.btn-ghost{ background:none; border:1px solid var(--border-strong); color:var(--text-dim); border-radius:8px; padding:9px 16px; font-size:12.5px; }
-.btn-ghost:hover{ border-color:var(--accent); color:var(--accent); }
+/* .btn-primary/.btn-ghost/.badge now in components.css (already linked
+   above), byte-identical to what was here — shared with any new button
+   or badge elsewhere that wants the same base look. */
 
-#toast{
-  position:fixed; bottom:70px; left:50%; transform:translateX(-50%) translateY(12px); opacity:0; pointer-events:none;
-  background:var(--surface-2); border:1px solid var(--border-strong); color:var(--text); padding:9px 16px; border-radius:8px;
-  font-size:12.5px; transition:opacity .15s ease, transform .15s ease; z-index:60;
-}
-#toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+/* .toast/.toast.show now in components.css, shared with the other pages. */
 </style>
 </head>
 <body>
@@ -687,8 +689,6 @@ html{ scroll-behavior:smooth; }
   <div class="spacer"></div>
 </div>
 
-<div id="toast"></div>
-
 <!-- ==================== AI Studio modal ====================
      Two ways in: paste/draft freeform notes (BRD or technical, or both),
      or upload a text-based document — either way it goes through the same
@@ -696,13 +696,13 @@ html{ scroll-behavior:smooth; }
      freeform "custom" blocks as the model decided the content needed.
      A third tab turns the endpoint you're currently editing into an
      OpenAPI fragment + ready-to-run cURL commands. -->
-<div id="aiStudioOverlay" class="ai-overlay hidden">
+<div id="aiStudioOverlay" class="ai-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="aiModalTitleEl">
   <div class="ai-modal">
     <div class="ai-modal-head">
       <div class="ai-modal-head-left">
         <div class="ai-modal-badge">✨</div>
         <div>
-          <div class="ai-modal-title">AI Studio</div>
+          <div class="ai-modal-title" id="aiModalTitleEl">AI Studio</div>
           <div class="ai-modal-subtitle">Turn notes, docs, or an endpoint's fields into documentation</div>
         </div>
       </div>
@@ -828,13 +828,6 @@ function slugify(str){
   return String(str||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'x';
 }
 function endpointSlug(method, path){ return slugify((method||'get') + '-' + (path||'')); }
-function toast(msg){
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(t._timer);
-  t._timer = setTimeout(()=>t.classList.remove('show'), 2800);
-}
 function methodClass(m){ return (m||'get').toLowerCase(); }
 // Same 2xx/3xx/4xx/5xx → color mapping as the endpoint doc viewer's
 // respColorVar (studio.html) — 2xx green, 3xx blue, 4xx amber, 5xx+ red —
