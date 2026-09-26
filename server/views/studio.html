@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/css/components.css?v=__ASSET_VERSION__">
 <script src="/js/idle-session.js?v=__ASSET_VERSION__"></script>
 <script nonce="__CSP_NONCE__" src="/js/shared/toast.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/shared/focus-trap.js?v=__ASSET_VERSION__"></script>
 <script nonce="__CSP_NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
 <script nonce="__CSP_NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script nonce="__CSP_NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -4002,7 +4003,7 @@ pre.json-raw{ max-height:360px; margin:0; }
 <div class="rail-scrim" id="railScrim"></div>
 
 <!-- Manual add/edit endpoint modal -->
-<div class="modal-overlay" id="manualModal">
+<div class="modal-overlay" id="manualModal" role="dialog" aria-modal="true" aria-labelledby="epModalTitle">
   <div class="modal wide">
     <h2 id="epModalTitle">Add endpoint</h2>
     <div class="modal-sub">Document a MuleSoft API endpoint — request, headers, and responses.</div>
@@ -4313,7 +4314,7 @@ pre.json-raw{ max-height:360px; margin:0; }
 </div>
 
 <!-- Try it: send a documented request and see the sample response -->
-<div class="modal-overlay" id="confirmModal">
+<div class="modal-overlay" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
   <div class="modal" style="width:400px;">
     <h2 id="confirmModalTitle">Are you sure?</h2>
     <div class="modal-sub" id="confirmModalMsg" style="margin-bottom:22px;"></div>
@@ -4326,9 +4327,9 @@ pre.json-raw{ max-height:360px; margin:0; }
   </div>
 </div>
 
-<div class="modal-overlay" id="importConflictModal">
+<div class="modal-overlay" id="importConflictModal" role="dialog" aria-modal="true" aria-labelledby="importConflictModalTitle">
   <div class="modal" style="width:420px;">
-    <h2>Project already exists</h2>
+    <h2 id="importConflictModalTitle">Project already exists</h2>
     <div class="modal-sub" id="importConflictMsg" style="margin-bottom:22px;"></div>
     <div style="display:flex; flex-direction:column; gap:8px;">
       <button type="button" class="primary" id="importConflictNew" style="width:100%;">Import as a new project</button>
@@ -4338,14 +4339,14 @@ pre.json-raw{ max-height:360px; margin:0; }
   </div>
 </div>
 
-<div class="modal-overlay" id="piiRevealModal">
+<div class="modal-overlay" id="piiRevealModal" role="dialog" aria-modal="true" aria-labelledby="piiRevealModalTitle">
   <div class="modal" style="width:420px;">
     <div style="display:flex; gap:12px; align-items:flex-start; margin-bottom:18px;">
       <span style="flex-shrink:0; width:34px; height:34px; border-radius:9px; display:flex; align-items:center; justify-content:center; background:var(--put-bg); color:var(--put);">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>
       </span>
       <div>
-        <h2 style="margin-bottom:2px;">Reveal sensitive value?</h2>
+        <h2 id="piiRevealModalTitle" style="margin-bottom:2px;">Reveal sensitive value?</h2>
         <div class="modal-sub" style="margin-bottom:0;">You're about to unmask a protected field.</div>
       </div>
     </div>
@@ -4374,7 +4375,7 @@ pre.json-raw{ max-height:360px; margin:0; }
   </div>
 </div>
 
-<div class="modal-overlay" id="credentialModal">
+<div class="modal-overlay" id="credentialModal" role="dialog" aria-modal="true" aria-labelledby="credentialModalTitle">
   <div class="modal" style="width:420px;">
     <h2 id="credentialModalTitle">Account created</h2>
     <div class="modal-sub" id="credentialModalSubtitle" style="margin-bottom:16px;"></div>
@@ -4396,9 +4397,9 @@ pre.json-raw{ max-height:360px; margin:0; }
   </div>
 </div>
 
-<div class="modal-overlay" id="docAccessRequestModal">
+<div class="modal-overlay" id="docAccessRequestModal" role="dialog" aria-modal="true" aria-labelledby="docAccessRequestModalTitle">
   <div class="modal" style="width:460px;">
-    <h2>Request documentation access</h2>
+    <h2 id="docAccessRequestModalTitle">Request documentation access</h2>
     <div class="modal-sub" id="docAccessModalSubtitle" style="margin-bottom:18px;"></div>
     <div class="field" style="margin-bottom:14px;">
       <label>Which environment(s) do you need this for?</label>
@@ -4438,7 +4439,7 @@ pre.json-raw{ max-height:360px; margin:0; }
   </div>
 </div>
 
-<div class="modal-overlay" id="userModal">
+<div class="modal-overlay" id="userModal" role="dialog" aria-modal="true" aria-labelledby="userModalTitle">
   <div class="modal" style="width:520px;">
     <h2 id="userModalTitle">Invite user</h2>
     <div class="modal-sub" id="userModalSubtitle"></div>
@@ -4503,7 +4504,7 @@ pre.json-raw{ max-height:360px; margin:0; }
   <div class="tryit-sidebar-list" id="tryItSidebarList"></div>
 </div>
 
-<div class="modal-overlay" id="tryItModal">
+<div class="modal-overlay" id="tryItModal" role="dialog" aria-modal="true" aria-label="Try it">
   <div class="modal">
     <div class="tryit-urlbar">
       <span class="badge badge-lg" id="tryItMethodBadge"></span>
@@ -4694,9 +4695,9 @@ pre.json-raw{ max-height:360px; margin:0; }
   </div>
 </div>
 
-<div class="modal-overlay" id="tryItSaveReqModal">
+<div class="modal-overlay" id="tryItSaveReqModal" role="dialog" aria-modal="true" aria-labelledby="tryItSaveReqModalTitle">
   <div class="modal" style="width:420px;">
-    <h2>Save request</h2>
+    <h2 id="tryItSaveReqModalTitle">Save request</h2>
     <div class="modal-sub" style="margin-bottom:16px;">Saves the current params, headers, body and selected scenario as a reusable entry in your Collections sidebar.</div>
     <div class="field">
       <label for="tryItSaveReqName">Name</label>
@@ -4720,7 +4721,7 @@ pre.json-raw{ max-height:360px; margin:0; }
   </div>
 </div>
 
-<div class="modal-overlay" id="tryItRunnerModal">
+<div class="modal-overlay" id="tryItRunnerModal" role="dialog" aria-modal="true" aria-labelledby="tryItRunnerTitle">
   <div class="modal" style="width:460px;">
     <h2 id="tryItRunnerTitle">Running…</h2>
     <div class="modal-sub" style="margin-bottom:14px;">Each request is replayed Simulated — see the app's own docs for why Live can't run unattended.</div>
@@ -4735,9 +4736,9 @@ pre.json-raw{ max-height:360px; margin:0; }
   </div>
 </div>
 
-<div class="modal-overlay" id="tryItSaveVarModal">
+<div class="modal-overlay" id="tryItSaveVarModal" role="dialog" aria-modal="true" aria-labelledby="tryItSaveVarModalTitle">
   <div class="modal" style="width:420px;">
-    <h2>Save response field as variable</h2>
+    <h2 id="tryItSaveVarModalTitle">Save response field as variable</h2>
     <div class="modal-sub" style="margin-bottom:16px;">Pick a field from the last response, then name the variable it should be stored in — use it anywhere with <span class="mono">{{name}}</span>.</div>
     <div class="field">
       <label for="tryItSaveVarField">Field</label>
@@ -4784,9 +4785,9 @@ pre.json-raw{ max-height:360px; margin:0; }
 </div>
 
 <!-- Project settings modal -->
-<div class="modal-overlay" id="projectModal">
+<div class="modal-overlay" id="projectModal" role="dialog" aria-modal="true" aria-labelledby="projectModalTitle">
   <div class="modal xwide">
-    <h2>Project settings</h2>
+    <h2 id="projectModalTitle">Project settings</h2>
     <div class="modal-sub" id="projSubtitle">Release pipeline, documents and architecture for this project.</div>
     <div class="modal-tabs">
       <div class="modal-tab active" data-mtab="release">Release Pipeline</div>
@@ -4829,9 +4830,9 @@ pre.json-raw{ max-height:360px; margin:0; }
 </div>
 
 <!-- Import spec: environment mapping confirm -->
-<div class="modal-overlay" id="importModal">
+<div class="modal-overlay" id="importModal" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
   <div class="modal">
-    <h2>Spec imported</h2>
+    <h2 id="importModalTitle">Spec imported</h2>
     <div class="modal-sub" id="importSummary"></div>
     <div class="hint" style="margin-top:0;">Base URLs were auto-mapped where possible. Review them in project settings before sharing.</div>
     <div class="modal-actions">
@@ -4842,12 +4843,12 @@ pre.json-raw{ max-height:360px; margin:0; }
 </div>
 
 <!-- Export as PDF: endpoint picker -->
-<div class="modal-overlay" id="pdfExportModal">
+<div class="modal-overlay" id="pdfExportModal" role="dialog" aria-modal="true" aria-labelledby="pdfExportModalTitle">
   <div class="modal wide pdf-export-modal">
     <div class="pdf-export-head">
       <div class="pdf-export-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M9 15l3 3 3-3"></path><path d="M12 11v7"></path></svg></div>
       <div>
-        <h2 style="margin-bottom:2px;">Export as PDF</h2>
+        <h2 id="pdfExportModalTitle" style="margin-bottom:2px;">Export as PDF</h2>
         <div class="modal-sub" id="pdfExportSubtitle" style="margin-bottom:0;">Pick the endpoints to include — everything renders exactly as it looks in the app, with secure values masked the same way.</div>
       </div>
     </div>

@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/css/components.css?v=__ASSET_VERSION__">
 <script src="/js/idle-session.js?v=__ASSET_VERSION__"></script>
 <script nonce="__CSP_NONCE__" src="/js/shared/toast.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/shared/focus-trap.js?v=__ASSET_VERSION__"></script>
 <script nonce="__CSP_NONCE__">
 (function(){
   var t = localStorage.getItem('apiStudio_theme');
@@ -751,9 +752,9 @@ svg{ display:block; }
 
 <div class="ctx-menu hidden" id="ctxMenu"></div>
 
-<div class="modal-overlay" id="publishModal">
+<div class="modal-overlay" id="publishModal" role="dialog" aria-modal="true" aria-labelledby="publishModalTitle">
   <div class="modal">
-    <h2>Publish diagram</h2>
+    <h2 id="publishModalTitle">Publish diagram</h2>
     <p id="publishModalText">This replaces the architecture diagram shown on <b id="publishProjName">this project's</b> overview page for everyone who can view it. You can keep editing and publish again anytime.</p>
     <div class="modal-actions">
       <button id="publishCancel">Cancel</button>
@@ -762,9 +763,9 @@ svg{ display:block; }
   </div>
 </div>
 
-<div class="modal-overlay" id="customIconModal">
+<div class="modal-overlay" id="customIconModal" role="dialog" aria-modal="true" aria-labelledby="customIconModalTitle">
   <div class="modal">
-    <h2>Add a custom icon</h2>
+    <h2 id="customIconModalTitle">Add a custom icon</h2>
     <p>Drop in a logo (yours to use — PNG, JPEG, WebP or SVG, under 300KB) and give it a name. It's saved for your whole organisation, so it'll show up in every project's diagram from now on.</p>
     <div class="insp-field" id="ciDropZone" style="border:1.5px dashed var(--border-strong); border-radius:12px; padding:16px; text-align:center; cursor:pointer; margin-bottom:14px;">
       <div id="ciPreviewWrap" style="display:none; margin-bottom:8px;">
