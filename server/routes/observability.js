@@ -171,6 +171,33 @@ router.put('/ingest', async (req, res) => {
 
 // --- Read -------------------------------------------------------------------
 
+// The comparison window is the same length immediately before this one -
+// what the KPI deltas are measured against. Only returned when the range is
+// bounded ("all time" has nothing meaningful to compare to) AND the whole
+// comparison window falls within recorded history.
+//
+// QA regression (2026-09-26): this used to be computed unconditionally, so a
+// "24h" pill on an environment recording for only a few hours compared
+// today's real traffic against a "previous 24h" that was mostly (or
+// entirely) before the agent ever pushed a byte - real rows in the DB, just
+// not a fair baseline. deltaBadge() (26-obs-console.js) has no way to tell
+// "genuinely down 90%" apart from "compared against a window that couldn't
+// have had traffic," so it rendered the same misleading "▼ -90%" either way.
+// coverageOldest is exactly the boundary the toolbar's own "Recording
+// starts ..." note already uses for this same judgment - reusing it here
+// keeps the two claims consistent instead of one saying "nothing before X"
+// while the other quietly compares against before X anyway.
+//
+// Pure and DB-free on purpose so this exact judgment call has a real unit
+// test (test/observability.test.js) without pulling Postgres into `npm test`.
+function resolvePreviousWindow(range, coverageOldest) {
+  if (!range || !range.from) return null;
+  const span = Date.parse(range.to) - Date.parse(range.from);
+  const prevFrom = new Date(Date.parse(range.from) - span).toISOString();
+  const prevFromCovered = !coverageOldest || Date.parse(coverageOldest) <= Date.parse(prevFrom);
+  return prevFromCovered ? { from: prevFrom, to: range.from } : null;
+}
+
 router.get('/summary', async (req, res) => {
   const range = parseRange(req.query);
   if (range.error) return res.status(400).json({ error: range.error });
@@ -181,24 +208,16 @@ router.get('/summary', async (req, res) => {
       environment, from: range.from, to: range.to, endpointIds,
     };
 
-    // The comparison window is the same length immediately before this one -
-    // what the KPI deltas are measured against. Only computed when the range
-    // is bounded; "all time" has nothing meaningful to compare to.
-    let previous = null;
-    if (range.from) {
-      const span = Date.parse(range.to) - Date.parse(range.from);
-      previous = await store.getSummary(req.authUser.organisation, {
-        environment,
-        endpointIds,
-        from: new Date(Date.parse(range.from) - span).toISOString(),
-        to: range.from,
-      });
-    }
-
     const [current, coverage] = await Promise.all([
       store.getSummary(req.authUser.organisation, opts),
       store.getCoverage(req.authUser.organisation, environment),
     ]);
+
+    const prevWindow = resolvePreviousWindow(range, coverage.oldest);
+    const previous = prevWindow
+      ? await store.getSummary(req.authUser.organisation, { environment, endpointIds, ...prevWindow })
+      : null;
+
     res.json({ range, current, previous, coverage });
   } catch (err) {
     console.error('GET /api/observability/summary failed:', err);
@@ -293,3 +312,4 @@ router.get('/stream', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.resolvePreviousWindow = resolvePreviousWindow;

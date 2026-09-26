@@ -58,6 +58,29 @@ function renderMain(){
     obsStopLive();
   }
   state._obsStreamOpen = nowType === 'observability';
+  // QA regression (2026-09-26): the floating "New project"/"New endpoint" FAB
+  // is position:fixed at the bottom-right of the VIEWPORT on every page, and
+  // Observability's "Currently firing" alert rows put their own right-aligned
+  // "Acknowledged by ..." text in that exact corner - the two visibly
+  // overlapped. "New project" is also the least useful action on this page
+  // specifically (there's no project in view to disambiguate against), so
+  // it's hidden here rather than nudged aside.
+  document.body.classList.toggle('view-observability', nowType === 'observability');
+  // The code-samples rail is an off-canvas drawer opened explicitly from an
+  // endpoint page (see openCodeSamplesRail()) and never had anything closing
+  // it on navigation - so browsing an endpoint, opening it, then switching to
+  // Observability (or any other page) left it open showing a stale-looking
+  // "Select an endpoint ..." (renderRail() already re-renders that correctly
+  // for the new page - it just isn't the endpoint someone thinks they picked
+  // on THIS page, e.g. Observability's own unrelated endpoint-scope filter).
+  // Simplest honest fix: it only ever applies to an endpoint page, so it only
+  // stays open on one.
+  if(nowType !== 'endpoint'){
+    const rail = document.getElementById('rail');
+    const railScrim = document.getElementById('railScrim');
+    if(rail) rail.classList.remove('show');
+    if(railScrim) railScrim.classList.remove('show');
+  }
   // Home's "new changes — refresh" banner (see wsEventsStartLive() in
   // 03-notifications.js): the underlying flag is data-truth and persists
   // across navigation, but the banner itself should only be visible while
