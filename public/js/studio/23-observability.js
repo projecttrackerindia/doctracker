@@ -332,6 +332,16 @@ function renderAgentHealth(health){
   if(health.catchingUp) warnings.push(`Currently catching up on a backlog larger than one poll cycle (${health.maxLinesPerCycle} lines) - this is expected under a burst of traffic and resolves on its own; it does not mean anything was dropped.`);
   if(health.overflowObservations) warnings.push(`${health.overflowObservations} observation(s) folded into a shared overflow bucket because more than ${health.maxTrackedEndpoints} distinct endpoints were seen - see the "OVERFLOW" row below. Raise MAX_TRACKED_ENDPOINTS if this keeps growing, or check for path segments (ids) that should be templated out.`);
   if(health.lastPushOk === false) warnings.push(`Last push to DocTracker failed: ${escapeHtml(health.lastError || 'unknown error')}. The agent will retry automatically next cycle - nothing needs to be done on this page.`);
+  // Same fingerprint, different writerId = two agent PROCESSES reading the
+  // exact same log files on the exact same host - not two load-balanced
+  // nodes (those have different hostnames or different files), a mistake
+  // that silently doubles every counter on this page. See
+  // duplicateWriterGroups in composeOneEnvironment() (routes/workspace.js).
+  if(Array.isArray(health.duplicateWriterGroups)){
+    health.duplicateWriterGroups.forEach(group=>{
+      warnings.push(`${group.length} agents appear to be reading the EXACT SAME log files on the same host (${group.map(id=>`<code>${escapeHtml(id)}</code>`).join(', ')}) - this doubles every counter above. Check whether ${group.length} agent processes are genuinely running where only one should be.`);
+    });
+  }
 
   const rpm = health.requestsPerMinute;
   const rpmDisplay = (rpm === null || rpm === undefined) ? '—' : (rpm >= 1000 ? `${(rpm/1000).toFixed(1)}k` : rpm);

@@ -12,6 +12,7 @@ that drops new entries still renders a confident-looking "Top source IPs"
 panel. Neither raises anything.
 """
 import io
+import json
 import os
 import re
 import shutil
@@ -638,18 +639,34 @@ try:
     st_save = {"offset": 1234, "inode": 99, "last_push": 7,
                "endpoints": {"GET /x": {"totalRequests": 5}},
                "rollups": {"a|b": {"requestCount": 1}},
-               "health": {"linesProcessedTotal": 10}}
+               "health": {"linesProcessedTotal": 10},
+               "seenEvents": ["evt-1", "evt-2"],
+               "countedRequestPaths": {"GET evt-1": "/x"}}
     agent.save_state(st_save, full=True)
     check("a full save writes both files",
           os.path.exists(agent.STATE_FILE) and os.path.exists(agent.CURSOR_FILE))
     round_trip = agent.load_state()
     check("a full save round-trips every key",
           round_trip["offset"] == 1234 and round_trip["endpoints"]["GET /x"]["totalRequests"] == 5
-          and round_trip["rollups"]["a|b"]["requestCount"] == 1)
+          and round_trip["rollups"]["a|b"]["requestCount"] == 1
+          and round_trip["seenEvents"] == ["evt-1", "evt-2"])
+
+    # seenEvents/countedRequestPaths hold up to MAX_SEEN_EVENTS (20,000)
+    # strings apiece - large enough that rewriting them every cycle (rather
+    # than only on push cycles, like the other bulky keys) would mean real,
+    # avoidable disk I/O under sustained traffic. Confirmed directly against
+    # the cursor file's own raw content, not just round-trip behavior, so a
+    # future change that re-adds either key to the cheap half is caught here
+    # even if it happens to still round-trip correctly in this same test.
+    with open(agent.CURSOR_FILE, "r", encoding="utf-8") as fh:
+        cursor_on_disk = json.load(fh)
+    check("seenEvents is never written to the cursor file", "seenEvents" not in cursor_on_disk)
+    check("countedRequestPaths is never written to the cursor file", "countedRequestPaths" not in cursor_on_disk)
 
     bulky_before = os.path.getsize(agent.STATE_FILE)
     st_save["offset"] = 5678
     st_save["endpoints"]["GET /x"]["totalRequests"] = 999
+    st_save["seenEvents"].append("evt-3")
     agent.save_state(st_save, full=False)
     check("a cursor-only save does NOT rewrite the bulky file",
           os.path.getsize(agent.STATE_FILE) == bulky_before)
@@ -658,6 +675,9 @@ try:
     check("a cursor-only save leaves the last-written aggregates intact",
           reloaded["endpoints"]["GET /x"]["totalRequests"] == 5,
           "in-memory value was 999; on disk it stays at the last full save")
+    check("a cursor-only save leaves the last-written seenEvents intact too",
+          reloaded["seenEvents"] == ["evt-1", "evt-2"],
+          "in-memory value had evt-3 appended; on disk it stays at the last full save")
     check("the cursor file is much smaller than the bulky file it replaces per cycle",
           os.path.getsize(agent.CURSOR_FILE) < bulky_before)
 
