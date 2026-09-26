@@ -226,12 +226,10 @@ html{ scroll-behavior:smooth; }
 .md-list li{ margin-bottom:4px; }
 .md-list:last-child{ margin-bottom:0; }
 
-.badge{ font-family:var(--mono); font-size:10.5px; font-weight:800; padding:2px 7px; border-radius:5px; text-transform:uppercase; }
-.badge.get{ color:var(--get); background:rgba(56,199,147,.14); }
-.badge.post{ color:var(--post); background:rgba(109,141,255,.14); }
-.badge.put{ color:var(--put); background:rgba(232,163,61,.14); }
-.badge.delete{ color:var(--delete); background:rgba(239,90,111,.14); }
-.badge.patch{ color:var(--patch); background:rgba(185,136,240,.14); }
+/* .badge and its .get/.post/.put/.delete/.patch modifiers now in
+   components.css — this used to hardcode the pre-fix background colors
+   directly (bypassing the --*-bg tokens entirely), so a badge's text
+   read blue while its own background tint stayed the old green. */
 
 /* JSON paste box */
 .json-paste{
@@ -348,11 +346,9 @@ html{ scroll-behavior:smooth; }
 }
 .footer-bar .spacer{ flex:1; }
 .footer-bar select{ background:var(--surface-2); border:1px solid var(--border-strong); border-radius:7px; padding:8px 10px; font-size:12.5px; }
-.btn-primary{ background:var(--accent); color:var(--accent-ink); border:none; border-radius:8px; padding:9px 18px; font-weight:700; font-size:12.5px; }
-.btn-primary:hover{ filter:brightness(1.08); }
-.btn-primary:disabled{ opacity:.5; cursor:not-allowed; }
-.btn-ghost{ background:none; border:1px solid var(--border-strong); color:var(--text-dim); border-radius:8px; padding:9px 16px; font-size:12.5px; }
-.btn-ghost:hover{ border-color:var(--accent); color:var(--accent); }
+/* .btn-primary/.btn-ghost/.badge now in components.css (already linked
+   above), byte-identical to what was here — shared with any new button
+   or badge elsewhere that wants the same base look. */
 
 /* .toast/.toast.show now in components.css, shared with the other pages. */
 </style>
