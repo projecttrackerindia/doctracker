@@ -14,10 +14,12 @@
 // meant to feel closer to live) accepts brief staleness instead, the same
 // tradeoff any monitoring dashboard with a refresh interval already makes.
 //
-// Entirely optional: if REDIS_URL isn't set, every call below is a no-op
-// (get always misses, set does nothing) — observabilityStore.js behaves
-// exactly as it did with no cache at all.
+// If REDIS_URL isn't set, this now falls back to inMemoryStore.js (a capped
+// in-process Map) instead of a hard no-op — see cache.js's header comment
+// for the same reasoning, applied here identically. get/set below always go
+// through `store`, whichever backend it is.
 const TTL_SECONDS = 15;
+const inMemoryStore = require('./inMemoryStore');
 
 let redisClient = null;
 if (process.env.REDIS_URL) {
@@ -26,11 +28,15 @@ if (process.env.REDIS_URL) {
     redisClient = new Redis(process.env.REDIS_URL);
     redisClient.on('error', (err) => console.error('Redis (observability cache) connection error:', err.message));
   } catch (err) {
-    console.warn('REDIS_URL is set but ioredis failed to load — observability reads will not be cached.', err.message);
+    console.warn('REDIS_URL is set but ioredis failed to load — falling back to a per-instance in-memory observability cache.', err.message);
     redisClient = null;
   }
 }
 
+const store = redisClient || inMemoryStore;
+
+// Same meaning as cache.js's isEnabled(): real Redis specifically, not
+// whether caching happens at all (it always does now).
 function isEnabled() {
   return Boolean(redisClient);
 }
@@ -44,9 +50,8 @@ function buildKey(kind, parts) {
 }
 
 async function get(kind, parts) {
-  if (!redisClient) return undefined;
   try {
-    const raw = await redisClient.get(buildKey(kind, parts));
+    const raw = await store.get(buildKey(kind, parts));
     return raw ? JSON.parse(raw) : undefined;
   } catch (err) {
     console.error('Observability cache read failed (falling back to a live query):', err.message);
@@ -55,9 +60,8 @@ async function get(kind, parts) {
 }
 
 async function set(kind, parts, payload) {
-  if (!redisClient) return;
   try {
-    await redisClient.set(buildKey(kind, parts), JSON.stringify(payload), 'EX', TTL_SECONDS);
+    await store.set(buildKey(kind, parts), JSON.stringify(payload), 'EX', TTL_SECONDS);
   } catch (err) {
     console.error('Observability cache write failed (non-fatal):', err.message);
   }
