@@ -58,6 +58,17 @@ function renderMain(){
     obsStopLive();
   }
   state._obsStreamOpen = nowType === 'observability';
+  // Home's "new changes — refresh" banner (see wsEventsStartLive() in
+  // 03-notifications.js): the underlying flag is data-truth and persists
+  // across navigation, but the banner itself should only be visible while
+  // Home is actually on screen — show it immediately on arriving at Home if
+  // the update happened while looking at something else, hide it (without
+  // clearing the flag) the moment the visitor navigates away.
+  if(nowType === 'home'){
+    if(state._homeUpdatePending && typeof showHomeUpdateBanner === 'function') showHomeUpdateBanner();
+  } else if(typeof hideHomeUpdateBanner === 'function'){
+    hideHomeUpdateBanner();
+  }
   const main = document.getElementById('main');
   const authorBtn = document.getElementById('btnAuthor');
   if(authorBtn) authorBtn.classList.toggle('active', !!state.selected && state.selected.type === 'profile');

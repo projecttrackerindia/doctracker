@@ -449,6 +449,46 @@ tbody tr.al-hidden{ display:none; }
   if(deepLinkQ) els.search.value = deepLinkQ;
 
   load();
+
+  // Live updates: this page used to only ever refresh on a manual reload —
+  // one more entry could land the moment after load() ran and this tab would
+  // never know. GET /api/audit/stream (SSE, same cookie auth, same native
+  // auto-reconnect as the bell/Observability streams — see server/sseHelper.js)
+  // pushes a 'workspace' event any time ANY audit row is written for this
+  // organisation, by anyone. The event carries no data of its own — it's a
+  // hint to refetch, not the row — so on receiving one this re-fetches just
+  // page 1 (the newest events) and merges in only the ids not already in
+  // `rows`, prepending them. That deliberately leaves nextCursor/hasMoreOnServer
+  // (the "Load older events" pagination state) untouched, so a live push never
+  // resets how far back a visitor has already paged.
+  function startLiveAuditStream(){
+    if(typeof EventSource === 'undefined') return;
+    let es;
+    try{ es = new EventSource('/api/audit/stream', { withCredentials: true }); }
+    catch(e){ return; }
+    let refetchTimer = null;
+    es.addEventListener('workspace', ()=>{
+      clearTimeout(refetchTimer);
+      refetchTimer = setTimeout(mergeNewestEvents, 400);
+    });
+    es.addEventListener('error', ()=>{
+      // EventSource retries on its own — nothing to do here beyond letting it.
+    });
+  }
+
+  async function mergeNewestEvents(){
+    let data;
+    try{ data = await fetchPage(false); }catch(err){ return; }
+    if(!data) return;
+    const freshEntries = Array.isArray(data.entries) ? data.entries : [];
+    const knownIds = new Set(rows.map(r=>r.id));
+    const newOnes = freshEntries.filter(e=>!knownIds.has(e.id));
+    if(!newOnes.length) return;
+    rows = newOnes.concat(rows);
+    renderAll();
+  }
+
+  startLiveAuditStream();
 })();
 </script>
 </body>

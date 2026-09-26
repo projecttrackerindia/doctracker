@@ -3,6 +3,8 @@ const { createRateLimiter } = require('../rateLimitStore');
 const { pool } = require('../db');
 const { authenticate, blockIfScheduleLocked } = require('../middleware/authGuard');
 const { recordAuditEvent, toClientShape } = require('../auditService');
+const workspaceEventsBus = require('../workspaceEventsBus');
+const { attachSseStream } = require('../sseHelper');
 
 const router = express.Router();
 router.use(authenticate);
@@ -122,6 +124,20 @@ router.get('/events', async (req, res) => {
     console.error('GET /api/audit/events failed:', err);
     res.status(500).json({ error: 'Could not load audit log.' });
   }
+});
+
+// GET /api/audit/stream — SSE. Same plain-HTTP/cookie-auth/native-reconnect
+// pattern as /api/notifications/stream and /api/workspace/observability/stream
+// (see attachSseStream's own header comment for the shared connection-ceiling
+// and backpressure handling). Every 'workspace' event just means "re-check
+// the newest audit events" — the client decides what, if anything, to
+// refetch; the payload itself (see workspaceEventsBus.publish in
+// auditService.js) is a hint, not the data.
+router.get('/stream', async (req, res) => {
+  attachSseStream(req, res, {
+    eventName: 'workspace',
+    subscribe: (send) => workspaceEventsBus.subscribe(req.authUser.organisation, send),
+  });
 });
 
 module.exports = router;
