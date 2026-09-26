@@ -53,7 +53,7 @@ a{ color:inherit; }
 .al-search input{ flex:1; background:none; border:none; outline:none; color:var(--text); font-size:13px; font-family:var(--sans); }
 .al-toolbar select{ background:var(--bg-elevated); border:1px solid var(--border); color:var(--text); font-size:12.5px; padding:8px 10px; border-radius:8px; font-family:var(--sans); cursor:pointer; }
 .al-toolbar .al-count{ font-size:11.5px; color:var(--text-faint); white-space:nowrap; margin-left:auto; }
-.al-date-range{ display:flex; align-items:center; gap:6px; }
+.al-date-range{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
 .al-date-range .al-date-label{ font-size:10.5px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.4px; white-space:nowrap; }
 .al-date-range input[type="date"]{
   background:var(--bg-elevated); border:1px solid var(--border); color:var(--text); font-size:12px;
@@ -74,7 +74,10 @@ a{ color:inherit; }
 .al-page-nav button:hover:not(:disabled){ background:var(--surface-hover); }
 .al-page-nav button:disabled{ opacity:.4; cursor:not-allowed; }
 .al-page-indicator{ font-size:11.5px; color:var(--text-faint); font-family:var(--mono); min-width:96px; text-align:center; }
-.al-table-wrap{ background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+/* overflow-x:auto (not the old plain "hidden") so narrow screens can still
+   reach every column by scrolling horizontally within the table instead of
+   those columns being silently clipped off and unreachable. */
+.al-table-wrap{ background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow-x:auto; }
 table{ width:100%; border-collapse:collapse; font-size:12.5px; }
 thead th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint); font-weight:700; padding:12px 14px; border-bottom:1px solid var(--border); background:var(--surface-2); position:sticky; top:0; }
 tbody td{ padding:11px 14px; border-bottom:1px solid var(--border); vertical-align:top; }

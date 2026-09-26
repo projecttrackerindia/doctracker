@@ -338,6 +338,10 @@ html{ scroll-behavior:smooth; }
   .add-block{ right:16px; bottom:82px; }
   .add-block-btn{ height:48px; padding:0 16px 0 14px; }
   .add-block-label{ display:none; }
+  /* The username chip was the one thing in the top bar not shrinking at
+     narrow widths, pushing the page 70px wider than the viewport. */
+  .user-chip #userLabel{ display:none; }
+  .user-chip{ padding:5px; }
 }
 
 /* Footer action bar */

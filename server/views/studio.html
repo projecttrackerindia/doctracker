@@ -274,6 +274,9 @@ kbd{
   .fab-dd{ right:16px; bottom:16px; }
   .fab{ height:48px; padding:0 16px 0 14px; }
   .fab-label{ display:none; }
+  /* A keyboard-shortcut hint is meaningless on a touch device, and the ⌘K
+     pair pokes past the viewport edge on narrow screens. */
+  .search-trigger .kbd-hint{ display:none; }
 }
 /* Keep the FAB clear of the code-samples rail when it's open on the right */
 .app:has(.rail.show) .fab-dd{ right:424px; }
