@@ -18,6 +18,7 @@ const { authenticate, blockIfScheduleLocked } = require('../middleware/authGuard
 const store = require('../observabilityStore');
 const liveBus = require('../observabilityBus');
 const alertEngine = require('../alertEngine');
+const { attachSseStream } = require('../sseHelper');
 
 const router = express.Router();
 router.use(authenticate);
@@ -284,35 +285,10 @@ router.get('/environments', async (req, res) => {
 // other route here (EventSource cannot set an Authorization header, which is
 // why cookie auth matters).
 router.get('/stream', async (req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    // Tells nginx-style proxies not to buffer this response. Without it, a
-    // proxy can hold events until its buffer fills, which defeats the point.
-    'X-Accel-Buffering': 'no',
-  });
-  res.write(': connected\n\n');
-  if (typeof res.flushHeaders === 'function') res.flushHeaders();
-
   const org = req.authUser.organisation;
-  const send = (payload) => {
-    try {
-      res.write(`event: metrics\ndata: ${JSON.stringify(payload)}\n\n`);
-    } catch (err) { /* the socket is gone; the close handler below cleans up */ }
-  };
-  const unsubscribe = liveBus.subscribe(org, send);
-
-  // Railway (and most proxies/load balancers) will drop a connection that goes
-  // quiet. A comment line every 25s keeps it open and costs 15 bytes.
-  const heartbeat = setInterval(() => {
-    try { res.write(': ping\n\n'); } catch (err) { /* same as above */ }
-  }, 25000);
-
-  req.on('close', () => {
-    clearInterval(heartbeat);
-    unsubscribe();
-    try { res.end(); } catch (err) { /* already closed */ }
+  attachSseStream(req, res, {
+    eventName: 'metrics',
+    subscribe: (send) => liveBus.subscribe(org, send),
   });
 });
 
