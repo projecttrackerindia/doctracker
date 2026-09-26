@@ -196,14 +196,6 @@ function formatDateTime(iso){
     ', ' + d.toLocaleTimeString(undefined, { hour:'numeric', minute:'2-digit' });
 }
 
-function toast(msg){
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(t._timer);
-  t._timer = setTimeout(()=>t.classList.remove('show'), 2600);
-}
-
 function methodClass(m){ return (m||'get').toLowerCase(); }
 
 function respClass(code){

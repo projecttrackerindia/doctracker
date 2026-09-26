@@ -7,7 +7,9 @@
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/css/doc-meta.css">
 <link rel="stylesheet" href="/css/design-tokens.css?v=__ASSET_VERSION__">
+<link rel="stylesheet" href="/css/components.css?v=__ASSET_VERSION__">
 <script src="/js/idle-session.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/shared/toast.js?v=__ASSET_VERSION__"></script>
 <script nonce="__CSP_NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
 <script nonce="__CSP_NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script nonce="__CSP_NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -3219,15 +3221,9 @@ table.env-data-table th .sort-arrow{ font-size:9px; margin-left:3px; color:var(-
 
 
 /* ============================================================
-   TOAST
+   TOAST — canonical .toast/.toast.show rules now in components.css,
+   shared with the other pages instead of copy-pasted here.
    ============================================================ */
-.toast{
-  position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(20px);
-  background:var(--surface-2); border:1px solid var(--accent); color:var(--text);
-  padding:10px 18px; border-radius:9px; font-size:12.5px; opacity:0; transition:.25s ease; z-index:100;
-  box-shadow:var(--shadow-modal); max-width:80vw;
-}
-.toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
 
 /* ============================================================
    DYNAMIC BUILDER (params / headers / responses / architecture)
@@ -4914,8 +4910,6 @@ pre.json-raw{ max-height:360px; margin:0; }
     </div>
   </div>
 </div>
-
-<div class="toast" id="toast"></div>
 
 <!-- Render view: big presentation-quality single-endpoint view -->
 <div class="render-overlay" id="renderOverlay">

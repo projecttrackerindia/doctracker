@@ -6,7 +6,9 @@
 <title>Endpoint Editor · DocTracker</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/css/doc-meta.css">
+<link rel="stylesheet" href="/css/components.css?v=__ASSET_VERSION__">
 <script src="/js/idle-session.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/shared/toast.js?v=__ASSET_VERSION__"></script>
 <script nonce="__CSP_NONCE__">
 // Apply the theme before first paint (same localStorage key the main Studio
 // tab uses) so this tab never flashes dark when Studio is set to light, or
@@ -352,12 +354,7 @@ html{ scroll-behavior:smooth; }
 .btn-ghost{ background:none; border:1px solid var(--border-strong); color:var(--text-dim); border-radius:8px; padding:9px 16px; font-size:12.5px; }
 .btn-ghost:hover{ border-color:var(--accent); color:var(--accent); }
 
-#toast{
-  position:fixed; bottom:70px; left:50%; transform:translateX(-50%) translateY(12px); opacity:0; pointer-events:none;
-  background:var(--surface-2); border:1px solid var(--border-strong); color:var(--text); padding:9px 16px; border-radius:8px;
-  font-size:12.5px; transition:opacity .15s ease, transform .15s ease; z-index:60;
-}
-#toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+/* .toast/.toast.show now in components.css, shared with the other pages. */
 </style>
 </head>
 <body>
@@ -691,8 +688,6 @@ html{ scroll-behavior:smooth; }
   <div class="spacer"></div>
 </div>
 
-<div id="toast"></div>
-
 <!-- ==================== AI Studio modal ====================
      Two ways in: paste/draft freeform notes (BRD or technical, or both),
      or upload a text-based document — either way it goes through the same
@@ -832,13 +827,6 @@ function slugify(str){
   return String(str||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'x';
 }
 function endpointSlug(method, path){ return slugify((method||'get') + '-' + (path||'')); }
-function toast(msg){
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(t._timer);
-  t._timer = setTimeout(()=>t.classList.remove('show'), 2800);
-}
 function methodClass(m){ return (m||'get').toLowerCase(); }
 // Same 2xx/3xx/4xx/5xx → color mapping as the endpoint doc viewer's
 // respColorVar (studio.html) — 2xx green, 3xx blue, 4xx amber, 5xx+ red —
