@@ -360,7 +360,8 @@ function renderObsActiveFilters(){
   };
   return `<div class="obs-active-filters">
     ${entries.map(([k, v]) => {
-      const shown = k === 'endpointId' ? obsEndpointLabel(v) : (k === 'minLatencyMs' ? `${v}ms` : v);
+      const shown = k === 'endpointId' ? obsEndpointLabel(v) : (k === 'minLatencyMs' ? `${v}ms`
+        : (k === 'statusFamily' && v === 'known' ? 'has a status' : v));
       return `<button type="button" class="obs-filter-chip" data-obs-clear-filter="${k}"
         title="Remove this filter">${labelFor[k] || k}: ${escapeHtml(String(shown))} <span class="x">×</span></button>`;
     }).join('')}
@@ -769,7 +770,13 @@ function renderObsLogsTab(){
           <div class="section-title">Requests</div>
           <div class="hint" style="margin-top:-4px;">${r.total.toLocaleString()} matching request(s) in this range</div>
         </div>
-        <span class="obs-drill-hint">Newest first</span>
+        <div style="display:flex;align-items:center;gap:12px;">
+          ${filters.statusFamily === 'known'
+            ? `<button type="button" class="obs-ip-more" data-obs-clear-filter="statusFamily">Show all requests</button>`
+            : `<button type="button" class="obs-ip-more" data-obs-filter-family="known"
+                 title="Hide rows with no status, latency or source — these carry no diagnostic value on their own, whether they're a duplicate or a genuinely partial observation">Hide requests with no status</button>`}
+          <span class="obs-drill-hint">Newest first</span>
+        </div>
       </div>
       ${samplingNote}
       ${r.records.length ? `<div class="obs-table-scroll"><table class="data-table obs-data-table">

@@ -699,6 +699,16 @@ async function getRecords(organisation, {
   if (isFiniteNum(Number(minLatencyMs)) && Number(minLatencyMs) > 0) add('latency_ms >= $?', toInt(minLatencyMs));
   if (statusFamily === 'unknown') {
     parts.push('status_code IS NULL');
+  } else if (statusFamily === 'known') {
+    // The inverse of 'unknown' - hides rows with no status code at all,
+    // regardless of which family the real ones fall into. Exists for the Log
+    // explorer's "hide requests with no status" toggle: a row with no status
+    // carries none of the columns that make this table useful (status,
+    // latency, source), whether it's a genuinely partial observation or a
+    // cross-writer duplicate collapse_duplicate_hops()/the correlation fold
+    // above didn't catch (e.g. no correlation id was ever logged for it, so
+    // there was nothing to fold against).
+    parts.push('status_code IS NOT NULL');
   } else if (/^[1-5]xx$/.test(statusFamily || '')) {
     const base = Number(statusFamily[0]) * 100;
     add('status_code >= $?', base);
