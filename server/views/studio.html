@@ -1867,7 +1867,10 @@ pre.code-block{
   background:var(--obs-alert-color, var(--put));
 }
 .obs-alert-main{ min-width:0; flex:1 1 auto; }
-.obs-alert-name{ font-size:12.5px; font-weight:700; color:var(--text); }
+.obs-alert-name{
+  font-size:12.5px; font-weight:700; color:var(--text);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
 .obs-alert-where{ font-size:10.5px; color:var(--text-faint); margin-top:1px; }
 .obs-alert-value{ text-align:right; flex:0 0 auto; }
 .obs-alert-now{ font-size:14px; font-weight:800; color:var(--obs-alert-color, var(--put)); font-variant-numeric:tabular-nums; }
@@ -2344,6 +2347,14 @@ body.tryit-standalone .sidebar{ display:none; }
 body.tryit-standalone .rail{ display:none !important; }
 body.tryit-standalone .rail-scrim{ display:none !important; }
 body.tryit-standalone #fabDD{ display:none !important; }
+/* QA regression (2026-09-26): the FAB is fixed at the viewport's
+   bottom-right; Observability's own right-aligned alert-row content (e.g.
+   "Acknowledged by ...") lands in that same corner and the FAB visibly
+   covered it. "New project" is also the least useful action on this page -
+   there's no project in view to open an endpoint against - so it's hidden
+   outright rather than repositioned. See renderMain() (11-render-main.js)
+   for where this class is set. */
+body.view-observability #fabDD{ display:none !important; }
 body.tryit-standalone #tryItModal{
   position:fixed; inset:56px 0 0 0; background:var(--bg); backdrop-filter:none; -webkit-backdrop-filter:none;
   align-items:flex-start; justify-content:center; padding:40px clamp(16px,4vw,56px); overflow-y:auto;

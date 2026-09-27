@@ -376,6 +376,18 @@ function renderAgentHealth(health){
       // Uptime is per PROCESS, so a small figure beside a large lifetime
       // count means "restarted recently", not "lost its history".
       [health.cyclesRun ? `${health.cyclesRun.toLocaleString()} poll cycle(s) this run` : '',
+       // QA regression (2026-09-26): cyclesRun's real growth rate can run far
+       // faster than the configured poll interval shown in the card's own
+       // header text - a backlog larger than one cycle's line budget makes
+       // the NEXT cycle start immediately with no sleep at all (see run()'s
+       // main loop in mule_doc_agent.py), and that catch-up behaviour was
+       // invisible here: the header only ever showed the two CONFIGURED
+       // intervals, never what actually happened. uptimeSeconds/cyclesRun is
+       // the one number that's true regardless of how much of it was
+       // catch-up vs. idle/active sleeping.
+       health.cyclesRun > 0 && health.uptimeSeconds
+         ? `≈1 every ${(health.uptimeSeconds / health.cyclesRun).toFixed(1)}s measured`
+         : '',
        health.restartCount ? `${health.restartCount} restart(s) since install` : '']
         .filter(Boolean).join(' · ')),
     // Shown because "we serve twice the traffic we thought" and "we log every
@@ -484,12 +496,30 @@ function renderLogVolumeAndLevelsSection(agentHealth){
       <div class="obs-status-legend">${present.map(([lvl,cssVar])=>`<span class="k"><i style="background:var(${cssVar});"></i>${lvl} ${(counts[lvl]||0).toLocaleString()}</span>`).join('')}</div>`;
   }
 
+  // QA regression (2026-09-26): "8,409 raw log lines" beside "73,615 lines
+  // with a level tag" reads as impossible (a subset bigger than its whole)
+  // unless the reader already knows these are two different SCOPES - the
+  // chart above is only ever the last <=MAX_LOG_VOLUME_SAMPLES pushes
+  // (~a push interval each), while the level tally is a lifetime count that
+  // has never been windowed and survives every restart. Making that explicit
+  // here is the fix; computing a windowed level count to match would need
+  // the same per-push snapshotting the volume chart has and the agent
+  // doesn't do that for levels today. Also explains the volume figure
+  // "freezing" between two checks minutes apart: one sample is taken per
+  // push (pushIntervalSeconds, 15 min by default), not continuously.
+  const pushEvery = agentHealth && agentHealth.pushIntervalSeconds
+    ? formatDuration(agentHealth.pushIntervalSeconds) : null;
   return `<div class="obs-panel">
     <div class="section-title">Log volume</div>
-    <div class="hint" style="margin-top:-4px;">${bucketed && bucketed.totalLines>0 ? Math.round(bucketed.totalLines).toLocaleString()+' raw log line(s) over the sampled range' : 'Raw lines read by the agent, sampled once per push'}</div>
+    <div class="hint" style="margin-top:-4px;">${bucketed && bucketed.totalLines>0
+      ? Math.round(bucketed.totalLines).toLocaleString()+' raw log line(s) over the last '+samples.length+' push(es)'
+        +(pushEvery ? ` — one sample per push (every ${pushEvery}), so this only moves that often, not continuously` : '')
+      : 'Raw lines read by the agent, sampled once per push'}</div>
     ${volumeHtml}
     <div class="section-title" style="margin-top:18px;">Log level distribution</div>
-    <div class="hint" style="margin-top:-4px;">${matchedTotal>=LOG_LEVEL_MIN_MATCHES ? matchedTotal.toLocaleString()+' log line(s) with a detected level tag' : 'Best-effort — only shown once reliably detected in this log format'}</div>
+    <div class="hint" style="margin-top:-4px;">${matchedTotal>=LOG_LEVEL_MIN_MATCHES
+      ? matchedTotal.toLocaleString()+' log line(s) with a detected level tag — a lifetime total since this agent was installed, not windowed like the chart above, so it can be (and usually is) larger'
+      : 'Best-effort — only shown once reliably detected in this log format'}</div>
     ${levelsHtml}
   </div>`;
 }

@@ -219,3 +219,41 @@ test('CONTRACT: pending rollups are cleared only after a confirmed push', () => 
   const clearIdx = agentSrc.indexOf('state["rollups"] = {}');
   assert.ok(pushIdx > 0 && clearIdx > pushIdx, 'the clear must follow the push call');
 });
+
+// --- Previous-window comparison (the "▼ -90%" QA regression) ---------------
+
+process.env.MASTER_KEY = process.env.MASTER_KEY || Buffer.alloc(32, 9).toString('base64');
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'unused-test-secret';
+const { resolvePreviousWindow } = require('../server/routes/observability');
+
+test('no previous window for an unbounded ("all time") range', () => {
+  assert.equal(resolvePreviousWindow({ from: null, to: null }, null), null);
+});
+
+test('previous window is the same length immediately before the current one', () => {
+  const range = { from: '2026-09-26T00:00:00.000Z', to: '2026-09-27T00:00:00.000Z' };
+  const win = resolvePreviousWindow(range, null);
+  assert.deepEqual(win, { from: '2026-09-25T00:00:00.000Z', to: '2026-09-26T00:00:00.000Z' });
+});
+
+test('computed when coverage started at or before the previous window', () => {
+  const range = { from: '2026-09-26T00:00:00.000Z', to: '2026-09-27T00:00:00.000Z' };
+  // Coverage starts exactly at the previous window's start - fully covered.
+  const win = resolvePreviousWindow(range, '2026-09-25T00:00:00.000Z');
+  assert.deepEqual(win, { from: '2026-09-25T00:00:00.000Z', to: '2026-09-26T00:00:00.000Z' });
+});
+
+test('suppressed when the previous window would reach before recording started', () => {
+  // The real SIT case: a "24h" pill on an environment that only started
+  // recording a few hours ago. Coverage starts inside what would have been
+  // the previous window, so comparing against it is not a fair baseline.
+  const range = { from: '2026-09-26T00:00:00.000Z', to: '2026-09-27T00:00:00.000Z' };
+  const win = resolvePreviousWindow(range, '2026-09-25T18:00:00.000Z');
+  assert.equal(win, null);
+});
+
+test('suppressed when coverage only starts after the whole previous window', () => {
+  const range = { from: '2026-09-26T00:00:00.000Z', to: '2026-09-27T00:00:00.000Z' };
+  const win = resolvePreviousWindow(range, '2026-09-27T00:00:00.000Z');
+  assert.equal(win, null);
+});

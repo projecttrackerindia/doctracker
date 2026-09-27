@@ -326,11 +326,22 @@ function renderObsToolbar(){
    data, which is worse than an inflated number that says it is inflated. */
 const OBS_DUP_FIX_ISO = '2026-09-25T08:00:00.000Z';
 
+// QA regression (2026-09-26): this only checked the SELECTED range's start
+// against the fixed cutoff, not whether this org+environment has any actual
+// data before it. A "7 days"/"30 days"/"90 days" pill always resolves to a
+// `from` before OBS_DUP_FIX_ISO once that date is a few days in the past,
+// so the note fired even for an environment whose recording only started
+// AFTER the fix - contradicting the toolbar's own "Recording starts ..."
+// note next to it, which (correctly) says nothing exists before that. Both
+// now agree: the note only appears when real rows this org+environment
+// wrote actually predate the fix.
 function obsRangeReachesDuplicates(){
   if(typeof obsResolvedRange !== 'function') return false;
   const r = obsResolvedRange();
   const from = Date.parse(r.from);
-  return isFinite(from) && from < Date.parse(OBS_DUP_FIX_ISO);
+  const coverageStart = Date.parse(obsCoverageStart());
+  return isFinite(from) && from < Date.parse(OBS_DUP_FIX_ISO)
+    && isFinite(coverageStart) && coverageStart < Date.parse(OBS_DUP_FIX_ISO);
 }
 
 function renderObsDuplicateWarning(){
@@ -1011,7 +1022,7 @@ function renderObsActiveAlerts(d){
       title="Open ${escapeHtml(destTab ? destTab.label : 'Observability')}${a.environment ? ' for ' + escapeHtml(a.environment) : ''}">
       <span class="obs-alert-pip"></span>
       <div class="obs-alert-main">
-        <div class="obs-alert-name">${escapeHtml(a.name)}</div>
+        <div class="obs-alert-name" title="${escapeHtml(a.name)}">${escapeHtml(a.name)}</div>
         <div class="obs-alert-where mono">${escapeHtml(where)}</div>
       </div>
       <div class="obs-alert-value">
