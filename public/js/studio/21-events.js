@@ -373,7 +373,7 @@ document.getElementById('envSwitcher').addEventListener('keydown', (e)=>{
   if(e.key === 'ArrowDown' || e.key === 'ArrowUp'){
     e.preventDefault();
     if(!isOpen){ openEnvDropdown(); return; }
-    let next = focusedIdx;
+    let next;
     if(e.key === 'ArrowDown') next = focusedIdx < 0 ? 0 : Math.min(opts.length-1, focusedIdx+1);
     else next = focusedIdx < 0 ? opts.length-1 : Math.max(0, focusedIdx-1);
     opts.forEach(o=>o.classList.remove('kbd-focus'));

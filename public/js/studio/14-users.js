@@ -1220,7 +1220,7 @@ async function openDocAccessRequestModal(proj, ep){
   // Fetched fresh every time the modal opens (rather than reusing whatever's
   // in state) so a grant approved five minutes ago already shows as
   // "Already have access" instead of letting the person re-request it.
-  let envStatuses = [];
+  let envStatuses;
   try{
     const data = await apiGet(`/doc-access/endpoint-status?projectId=${encodeURIComponent(proj.id)}&endpointId=${encodeURIComponent(ep.id)}`);
     envStatuses = data.environments || [];
