@@ -26,8 +26,13 @@ const aiRoutes = require('./routes/ai');
 const notificationRoutes = require('./routes/notifications');
 const observabilityRoutes = require('./routes/observability');
 const alertRoutes = require('./routes/alerts');
+const adminAnalyticsRoutes = require('./routes/adminAnalytics');
+const ssoRoutes = require('./routes/sso');
 const compressionMiddleware = require('./middleware/compress');
 const { verifySession, IdleTimeoutError } = require('./middleware/authGuard');
+const { assignRequestId } = require('./requestId');
+const { log } = require('./logger');
+const { createRateLimiter } = require('./rateLimitStore');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -65,6 +70,10 @@ app.set('trust proxy', 2);
 // script loaded from cdnjs. Everything else in that file is wired up with
 // addEventListener, not inline handlers, so we don't need 'unsafe-inline' —
 // a per-request nonce covers the inline block, and cdnjs is explicitly allowed.
+// Mounted before everything else: helmet/cors/error handlers further down
+// can all assume req.id already exists.
+app.use(assignRequestId);
+
 app.use((req, res, next) => {
   res.locals.cspNonce = crypto.randomBytes(16).toString('base64');
   next();
@@ -128,6 +137,23 @@ app.use(cookieParser());
 // see server/middleware/compress.js.
 app.use('/api', compressionMiddleware);
 
+// General backstop, layered ahead of every route-specific limiter (login,
+// AI generate, live-call, etc. all still have their own tighter ones). This
+// one is deliberately generous — its job is only to bound a runaway/buggy
+// client or a genuine flood, never to be felt by real usage. Per-IP rather
+// than per-org/user (matching every other limiter in this codebase), so it's
+// sized to tolerate many users and a few observability agents (pushing every
+// ~5s) sharing one corporate NAT IP: 1200 requests/minute is ~20/s, an order
+// of magnitude above what that traffic pattern needs.
+const generalApiLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 1200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down and try again shortly.' },
+});
+app.use('/api', generalApiLimiter);
+
 // Workspace payloads carry base64-encoded document attachments, so they need a
 // much larger body limit than auth/user requests — scoped to this path only,
 // mounted ahead of the tighter global limit below.
@@ -162,6 +188,13 @@ app.use('/api/workspace/observability', observabilityRoutes);
 app.use('/api/workspace/alerts', alertRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/admin/analytics', adminAnalyticsRoutes);
+// Two separate mounts, not one: the SSO login redirect dance (start/callback)
+// has to be reachable by a browser that isn't authenticated yet, so it can't
+// sit behind /api/workspace's authenticate() gate the way the settings CRUD
+// (adminRouter) needs to.
+app.use('/api/auth/sso', ssoRoutes.publicRouter);
+app.use('/api/workspace/sso', ssoRoutes.adminRouter);
 
 // Previously just `{ ok: true }` unconditionally — a deploy platform's
 // health check would keep reporting this instance as healthy even while its
@@ -185,7 +218,7 @@ app.get('/api/health', async (req, res) => {
   } catch (err) {
     health.ok = false;
     health.db = 'unreachable';
-    console.error('Health check: DB ping failed:', err.message);
+    log.error('Health check: DB ping failed', { requestId: req.id, err });
   }
   res.status(health.ok ? 200 : 503).json(health);
 });
@@ -226,7 +259,7 @@ app.get('/public/openapi/:token', async (req, res) => {
     res.set('Content-Type', 'text/yaml; charset=utf-8');
     res.send(specYaml);
   } catch (err) {
-    console.error('GET /public/openapi failed:', err);
+    log.error('GET /public/openapi failed', { requestId: req.id, err });
     res.status(500).type('text/plain').send('Could not generate this spec.');
   }
 });
@@ -250,7 +283,7 @@ async function requireAuth(req, res, next) {
       res.clearCookie(COOKIE_NAME, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
       return res.redirect('/login.html?reason=idle');
     }
-    console.error('requireAuth() failed:', err);
+    log.error('requireAuth() failed', { requestId: req.id, err });
     res.redirect('/login.html');
   }
 }
@@ -536,9 +569,28 @@ app.get('/:orgToken/:projectSlug/:endpointSlug/edit.studio', requireAuth, (req, 
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-app.get('/', (req, res) => res.redirect('/login.html'));
+// QA regression (2026-09-26, bug #2): this used to redirect to /login.html
+// unconditionally, with no session check at all - a signed-in visitor who
+// opened the site's bare root address landed on the login FORM instead of
+// their dashboard. Their session cookie was never actually cleared by this
+// (nothing here ever called clearCookie for a still-valid session), but
+// being shown a login form while genuinely still signed in reads as "I got
+// logged out," which is what was reported. Same requireAuth() used by every
+// other protected page: a valid session redirects straight to /dashboard.html
+// (itself already redirecting to the org-tokenized URL - see the back-compat
+// route above), anything else (no session, revoked, idle-expired) falls
+// through to its own existing /login.html redirect.
+app.get('/', requireAuth, (req, res) => res.redirect('/dashboard.html'));
 
-app.use((req, res) => res.status(404).json({ error: 'Not found' }));
+// QA regression (2026-09-26, bug #9): an unmatched URL used to always get a
+// bare {"error":"Not found"} JSON body, including for a browser navigating
+// to a typo'd page address - correct for an API client, confusing for a
+// person. /api/* keeps the JSON shape API callers expect; everything else
+// (an actual page request) gets a real page.
+app.use((req, res) => {
+  if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
+  res.status(404).sendFile(path.join(__dirname, '..', 'public', '404.html'));
+});
 
 initDb()
   .then(() => runMigrations(pool))

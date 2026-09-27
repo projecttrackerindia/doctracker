@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const { pool } = require('../db');
 const { evaluateAccessSchedule } = require('../accessSchedule');
+const { log } = require('../logger');
 
 const COOKIE_NAME = 'as_session';
 
@@ -73,7 +74,7 @@ async function verifySession(token) {
     // fail the request it's piggybacking on.
     pool
       .query('UPDATE users SET last_activity_at = now() WHERE id = $1', [user.id])
-      .catch((err) => console.error('Idle-activity touch failed (non-fatal):', err.message));
+      .catch((err) => log.warn('Idle-activity touch failed (non-fatal)', { err }));
   }
 
   // Re-evaluated fresh against the server clock on every request — never
@@ -110,7 +111,7 @@ async function authenticate(req, res, next) {
       res.clearCookie(COOKIE_NAME, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
       return res.status(401).json({ error: 'idle_timeout', message: "You've been signed out after 30 minutes of inactivity." });
     }
-    console.error('authenticate() failed:', err);
+    log.error('authenticate() failed', { requestId: req.id, err });
     res.status(500).json({ error: 'Could not verify your session. Please try again.' });
   }
 }

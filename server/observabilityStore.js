@@ -35,6 +35,7 @@
 // ============================================================================
 const { pool } = require('./db');
 const dataCrypto = require('./crypto');
+const obsCache = require('./obsCache');
 
 // Prometheus-style cumulative-friendly boundaries, in milliseconds. Stored per
 // rollup bucket as {"10": n, "25": n, ..., "inf": n} where n is the count of
@@ -446,7 +447,22 @@ function whereClause(organisation, environment, from, to, alias = '', endpointId
 
 // Everything the console's KPI row needs for one date range, computed in
 // Postgres over exact counts rather than in the browser over a sampled buffer.
-async function getSummary(organisation, { environment, from, to, endpointIds } = {}) {
+// Cache wrapper — see server/obsCache.js for why this is a flat short TTL
+// rather than the write-invalidated pattern server/cache.js uses for
+// workspace reads. endpointIds is an array, so it's joined into the key
+// rather than passed as-is (a fresh array reference on every call would
+// otherwise never hit the same String(parts) key twice).
+async function getSummary(organisation, opts = {}) {
+  const { environment, from, to, endpointIds } = opts;
+  const key = [organisation, environment, from, to, endpointIds && endpointIds.join(',')];
+  const cached = await obsCache.get('summary', key);
+  if (cached !== undefined) return cached;
+  const result = await getSummaryUncached(organisation, opts);
+  await obsCache.set('summary', key, result);
+  return result;
+}
+
+async function getSummaryUncached(organisation, { environment, from, to, endpointIds } = {}) {
   const w = whereClause(organisation, environment, from, to, '', endpointIds);
   const { rows } = await pool.query(
     `SELECT
@@ -497,11 +513,19 @@ async function getSummary(organisation, { environment, from, to, endpointIds } =
   const total = Number(r.total || 0);
   const errCount = Number(r.s4 || 0) + Number(r.s5 || 0);
   const latencyCount = Number(r.latency_count || 0);
+  // QA regression (2026-09-26): the client's own copy (see
+  // renderObsOverviewTab/status-breakdown hint in 26-obs-console.js)
+  // explicitly tells the reader unclassified requests are "deliberately
+  // NOT part of the error rate" - but this was dividing errCount by `total`
+  // (every request, unclassified included), understating the rate among
+  // requests whose outcome is actually known. The denominator now matches
+  // what the UI already claims: classified requests only.
+  const classifiedTotal = total - Number(r.sunknown || 0);
 
   return {
     total,
     errCount,
-    errorRate: total ? errCount / total : 0,
+    errorRate: classifiedTotal > 0 ? errCount / classifiedTotal : 0,
     statusBreakdown: {
       '2xx': Number(r.s2 || 0),
       '3xx': Number(r.s3 || 0),
@@ -530,7 +554,17 @@ async function getSummary(organisation, { environment, from, to, endpointIds } =
 // Time series for the charts, bucketed server-side to whatever resolution the
 // range warrants (date_trunc/ floor to `intervalSeconds`) so a 30-day view
 // returns a few hundred points instead of 43,200.
-async function getSeries(organisation, { environment, from, to, intervalSeconds = 300, endpointIds } = {}) {
+async function getSeries(organisation, opts = {}) {
+  const { environment, from, to, intervalSeconds = 300, endpointIds } = opts;
+  const key = [organisation, environment, from, to, intervalSeconds, endpointIds && endpointIds.join(',')];
+  const cached = await obsCache.get('series', key);
+  if (cached !== undefined) return cached;
+  const result = await getSeriesUncached(organisation, opts);
+  await obsCache.set('series', key, result);
+  return result;
+}
+
+async function getSeriesUncached(organisation, { environment, from, to, intervalSeconds = 300, endpointIds } = {}) {
   const w = whereClause(organisation, environment, from, to, '', endpointIds);
   const seconds = Math.max(60, Math.min(86400, toInt(intervalSeconds, 300)));
   const params = w.params.concat([seconds]);
@@ -574,7 +608,23 @@ async function getSeries(organisation, { environment, from, to, intervalSeconds 
 
 // Per-endpoint totals for the range - drives the endpoints table and the
 // service-health ranking, sorted and paginated in SQL rather than in the page.
-async function getEndpointBreakdown(organisation, { environment, from, to, limit = 500, endpointIds } = {}) {
+// Same cache wrapper as getSummary/getSeries above, and for the same reason:
+// obsLoadAll() (see 24-obs-api.js) fetches /summary, /series, AND /endpoints
+// together on every load, INCLUDING every SSE live push while the
+// Observability page is open - so this pays the same full-range aggregation
+// cost, at the same frequency, as the two it already sits next to in that
+// Promise.all. Cached here for the same reason it's cached there.
+async function getEndpointBreakdown(organisation, opts = {}) {
+  const { environment, from, to, limit = 500, endpointIds } = opts;
+  const key = [organisation, environment, from, to, limit, endpointIds && endpointIds.join(',')];
+  const cached = await obsCache.get('endpoints', key);
+  if (cached !== undefined) return cached;
+  const result = await getEndpointBreakdownUncached(organisation, opts);
+  await obsCache.set('endpoints', key, result);
+  return result;
+}
+
+async function getEndpointBreakdownUncached(organisation, { environment, from, to, limit = 500, endpointIds } = {}) {
   const w = whereClause(organisation, environment, from, to, '', endpointIds);
   const params = w.params.concat([Math.max(1, Math.min(2000, toInt(limit, 500)))]);
 
@@ -622,11 +672,14 @@ async function getEndpointBreakdown(organisation, { environment, from, to, limit
     const total = Number(r.total || 0);
     const errCount = Number(r.s4 || 0) + Number(r.s5 || 0);
     const latencyCount = Number(r.latency_count || 0);
+    // Same fix as getSummaryUncached above, for the same reason - see that
+    // comment for the full explanation.
+    const classifiedTotal = total - Number(r.sunknown || 0);
     return {
       endpointId: r.endpoint_id,
       total,
       errCount,
-      errorRate: total ? errCount / total : 0,
+      errorRate: classifiedTotal > 0 ? errCount / classifiedTotal : 0,
       statusBreakdown: {
         '2xx': Number(r.s2 || 0),
         '3xx': Number(r.s3 || 0),
@@ -650,7 +703,16 @@ async function getEndpointBreakdown(organisation, { environment, from, to, limit
 
 // Paginated raw records for the Log Explorer. Every filter here is an indexed
 // column; the encrypted payload is decrypted only for the page actually being
-// returned, never across the whole range.
+// returned, never across the whole range - so unlike getSummary/getSeries/
+// getEndpointBreakdown above, this was never the expensive one (bounded by
+// `limit`, max 500 rows, not a full-range aggregation over the rollup table).
+// Deliberately NOT wrapped in obsCache despite sitting right next to three
+// functions that are: the Log Explorer's whole point is showing the newest
+// rows, and this is specifically what a live SSE push re-fetches (see
+// obsLoadRecordsPage() in 26-obs-console.js) to prove that push actually
+// happened. A 15s-stale cache here would silently undo that - trading a
+// real, already-verified live-update feature for a cache hit on a query
+// that wasn't the bottleneck to begin with.
 async function getRecords(organisation, {
   environment, from, to, endpointId, endpointIds, statusFamily, correlationId, clientIp,
   minLatencyMs, limit = 100, offset = 0,
@@ -673,6 +735,16 @@ async function getRecords(organisation, {
   if (isFiniteNum(Number(minLatencyMs)) && Number(minLatencyMs) > 0) add('latency_ms >= $?', toInt(minLatencyMs));
   if (statusFamily === 'unknown') {
     parts.push('status_code IS NULL');
+  } else if (statusFamily === 'known') {
+    // The inverse of 'unknown' - hides rows with no status code at all,
+    // regardless of which family the real ones fall into. Exists for the Log
+    // explorer's "hide requests with no status" toggle: a row with no status
+    // carries none of the columns that make this table useful (status,
+    // latency, source), whether it's a genuinely partial observation or a
+    // cross-writer duplicate collapse_duplicate_hops()/the correlation fold
+    // above didn't catch (e.g. no correlation id was ever logged for it, so
+    // there was nothing to fold against).
+    parts.push('status_code IS NOT NULL');
   } else if (/^[1-5]xx$/.test(statusFamily || '')) {
     const base = Number(statusFamily[0]) * 100;
     add('status_code >= $?', base);
@@ -683,16 +755,55 @@ async function getRecords(organisation, {
   const safeOffset = Math.max(0, toInt(offset, 0));
   const where = parts.join(' AND ');
 
+  // A single real request can produce more than one row here even from one
+  // well-behaved agent (see collapse_duplicate_hops() in mule_doc_agent.py),
+  // and that agent-side dedup is per-writer state - it cannot see what a
+  // SECOND agent (a different Mule node, e.g. a shared/mirrored log path
+  // across a cluster) independently pushed for the SAME request. Two writers
+  // is the normal case here (see agent health's writerCount), so this can't
+  // be treated as a rare edge case. Folding by correlation_id at read time,
+  // not at insert time, keeps the insert path a simple append (safe under
+  // retry) and lets every drill-down view share one fold instead of each
+  // needing its own de-dup pass.
+  //
+  // Rows with NO correlation id are never folded into each other - Postgres
+  // treats every NULL as equal for PARTITION BY, which would otherwise
+  // collapse every uncorrelated row in the whole result down to one.
+  //
+  // Preference mirrors the agent's own _best_hop_record(): the row that
+  // actually completed (has a status code) beats one that doesn't, then the
+  // one with a latency value, then the most recently written. Path length -
+  // the agent's last tiebreaker - isn't available here without decrypting
+  // fields_enc for every candidate row just to sort by it, so it's dropped;
+  // it only matters when status AND latency already tied, which the id
+  // tiebreaker resolves just as well for display purposes.
+  const rankedCte = `
+    WITH ranked AS (
+      SELECT id, ts, endpoint_id, status_code, latency_ms, client_ip,
+             correlation_id, flow_name, fields_enc,
+             ROW_NUMBER() OVER (
+               PARTITION BY correlation_id
+               ORDER BY (status_code IS NOT NULL) DESC, (latency_ms IS NOT NULL) DESC, id DESC
+             ) AS rn
+      FROM endpoint_log_records WHERE ${where}
+    )
+  `;
+
   const [{ rows }, { rows: countRows }] = await Promise.all([
     pool.query(
-      `SELECT id, ts, endpoint_id, status_code, latency_ms, client_ip,
+      `${rankedCte}
+       SELECT id, ts, endpoint_id, status_code, latency_ms, client_ip,
               correlation_id, flow_name, fields_enc
-       FROM endpoint_log_records WHERE ${where}
+       FROM ranked WHERE correlation_id IS NULL OR rn = 1
        ORDER BY ts DESC, id DESC
        LIMIT $${i} OFFSET $${i + 1}`,
       params.concat([safeLimit, safeOffset])
     ),
-    pool.query(`SELECT COUNT(*)::bigint AS n FROM endpoint_log_records WHERE ${where}`, params),
+    pool.query(
+      `${rankedCte}
+       SELECT COUNT(*)::bigint AS n FROM ranked WHERE correlation_id IS NULL OR rn = 1`,
+      params
+    ),
   ]);
 
   const records = rows.map((r) => {
