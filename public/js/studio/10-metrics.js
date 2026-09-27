@@ -250,6 +250,12 @@ function requestFlowSvg(stages, direction){
   const iconCy = topPad + iconR;
   const boxY = iconCy + iconR + 12;
   const baseBoxH = 62, lineH = 15, maxShown = 3;
+  // SVG <text> never wraps or shrinks to fit its container — a system/stage
+  // name longer than the box is wide just draws past its edges. maxChars is
+  // a character-count approximation of how much fits in boxW at this font
+  // size (~6px/char average, minus left/right box padding); full text always
+  // stays available via the box's <title> (below).
+  const maxChars = Math.max(8, Math.floor((boxW - 24) / 6));
   const normalized = stages.map(s=>{
     const systems = (Array.isArray(s.systems) && s.systems.length) ? s.systems : ['—'];
     const shown = systems.slice(0, maxShown);
@@ -271,7 +277,7 @@ function requestFlowSvg(stages, direction){
     const mid = !!s.mid;
     const icon = RF_ICONS[s.icon] || RF_ICONS.custom;
     const valueLines = s.shown.map((sys,li)=>
-      `<text x="${cx}" y="${boxY+42+li*lineH}" text-anchor="middle" class="rf-box-v">${escapeHtml(sys)}</text>`
+      `<text x="${cx}" y="${boxY+42+li*lineH}" text-anchor="middle" class="rf-box-v">${escapeHtml(rfTruncateLabel(sys, maxChars))}</text>`
     ).join('') + (s.extraCount>0
       ? `<text x="${cx}" y="${boxY+42+s.shown.length*lineH}" text-anchor="middle" class="rf-box-v rf-box-more">+${s.extraCount} more</text>`
       : '');
@@ -284,7 +290,7 @@ function requestFlowSvg(stages, direction){
       <g transform="translate(${cx},${iconCy})" class="rf-icon${mid?' mid-icon':''}">${icon}</g>
       <text x="${cx}" y="${boxY+22}" text-anchor="middle" class="rf-box-k${mid?' mid-k':''}">${escapeHtml(String(s.k).toUpperCase())}</text>
       ${valueLines}
-      ${(s.systems.length > 1) ? `<title>${escapeHtml(fullList)}</title>` : ''}
+      <title>${escapeHtml(fullList)}</title>
       ${tokenBranch}
     </g>`;
   }).join('');
@@ -441,6 +447,7 @@ function pdfRequestFlowSvg(stages, direction){
   const boxY = iconCy + iconR + 12;
   const baseBoxH = 62, lineH = 15, maxShown = 3;
   const accent = '#5c7cfa';
+  const maxChars = Math.max(8, Math.floor((boxW - 24) / 6));
   const normalized = stages.map(s=>{
     const systems = (Array.isArray(s.systems) && s.systems.length) ? s.systems : ['—'];
     const shown = systems.slice(0, maxShown);
@@ -459,10 +466,11 @@ function pdfRequestFlowSvg(stages, direction){
     const mid = !!s.mid;
     const icon = RF_ICONS[s.icon] || RF_ICONS.custom;
     const valueLines = s.shown.map((sys,li)=>
-      `<text x="${cx}" y="${boxY+42+li*lineH}" text-anchor="middle" font-size="12px" font-weight="700" fill="#0f1420">${escapeHtml(sys)}</text>`
+      `<text x="${cx}" y="${boxY+42+li*lineH}" text-anchor="middle" font-size="12px" font-weight="700" fill="#0f1420">${escapeHtml(rfTruncateLabel(sys, maxChars))}</text>`
     ).join('') + (s.extraCount>0
       ? `<text x="${cx}" y="${boxY+42+s.shown.length*lineH}" text-anchor="middle" font-size="10.5px" font-weight="600" fill="#8890a3">+${s.extraCount} more</text>`
       : '');
+    const fullList = s.systems.join(', ');
     const tokenBranch = s.token ? rfTokenBranchSvg(cx, s.token, tokenTopPad, boxY, true) : '';
     return `<g>
       <circle cx="${cx}" cy="${iconCy}" r="${iconR+7}" fill="${mid?'rgba(92,124,250,.14)':'#eef1f6'}"></circle>
@@ -471,6 +479,7 @@ function pdfRequestFlowSvg(stages, direction){
       <g transform="translate(${cx},${iconCy})" stroke="${mid?accent:'#4b5468'}" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round">${icon}</g>
       <text x="${cx}" y="${boxY+22}" text-anchor="middle" font-size="8.5px" letter-spacing=".6px" font-weight="700" fill="${mid?accent:'#8890a3'}">${escapeHtml(String(s.k).toUpperCase())}</text>
       ${valueLines}
+      <title>${escapeHtml(fullList)}</title>
       ${tokenBranch}
     </g>`;
   }).join('');
