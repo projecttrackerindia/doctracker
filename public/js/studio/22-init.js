@@ -38,10 +38,13 @@
   // /promotion-requests org-wide route) — same visibility gate as Security.
   document.getElementById('btnReleasePipeline').style.display = (isAdmin() || ownsAnyProject()) ? '' : 'none';
   // Observability shows traffic auto-discovered from server logs (hit
-  // counts, error rates, client IPs) - same visibility gate as Security/
-  // Release Pipeline, since it's an ops-facing view, not part of the docs a
-  // regular Editor/Viewer reads day to day.
-  document.getElementById('btnObservability').style.display = (isAdmin() || ownsAnyProject()) ? '' : 'none';
+  // counts, error rates, client IPs) - an ops-facing view, not part of the
+  // docs a regular Editor/Viewer reads day to day. Admin-only (2026-09-27,
+  // requested explicitly): this used to also allow any non-admin project
+  // owner in, matching Security/Release Pipeline's looser rule - narrowed
+  // here specifically, see the matching guard in renderMain() and the
+  // server-side requireAdmin on every read route in routes/observability.js.
+  document.getElementById('btnObservability').style.display = isAdmin() ? '' : 'none';
 
   // Access-schedule banner/lock state — rendered immediately from the
   // server-injected AUTH_USER (so it's correct on first paint, before any

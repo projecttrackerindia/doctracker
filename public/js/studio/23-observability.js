@@ -202,16 +202,29 @@ function renderAgentLiveBadge(){
 
 // Names the environment these figures came from, and says plainly when the
 // header's environment has no agent reporting it.
+// Server-side bucket for writer segments from before environment scoping
+// existed (composeOneEnvironment's UNSCOPED_ENVIRONMENT, routes/workspace.js)
+// - real, but not a real environment: it's not in the header's own
+// dropdown, so "switch environment in the header to see them" is a false
+// promise for it specifically. Named consistently between the two spots
+// below that filter it out of what they tell the visitor is reachable that
+// way.
+const OBS_UNSCOPED_ENVIRONMENT_NAME = 'Unscoped';
+
 function renderObsEnvironmentBar(){
   const names = obsEnvironmentNames();
   const active = obsActiveEnvironment();
-  const header = escapeHtml(String(state.env || '—'));
+  // QA regression (2026-09-26): this used state.env directly - the
+  // environment's internal id (e.g. "PREPROD") - instead of its display
+  // label ("Staging"), so the "no agent reporting" banner named an id the
+  // header/dropdown never shows the visitor anywhere else on the page.
+  const header = escapeHtml(state.env ? (envMeta(state.env).label || state.env) : '—');
   if(!names.length){
     return `<div class="obs-env-bar obs-env-bar-single">These figures predate per-environment
       recording, so the environment they came from isn't known. The next agent push will label them.</div>`;
   }
   if(active){
-    const others = names.filter(n => n !== active);
+    const others = names.filter(n => n !== active && n !== OBS_UNSCOPED_ENVIRONMENT_NAME);
     return `<div class="obs-env-bar obs-env-bar-single">${renderAgentLiveBadge()}
       Showing <strong>${escapeHtml(active)}</strong>,
       from the environment selected in the header.${others.length
@@ -219,9 +232,10 @@ function renderObsEnvironmentBar(){
         : ''}
       <span class="obs-env-note">Figures are never summed across environments.</span></div>`;
   }
+  const reportingNames = names.filter(n => n !== OBS_UNSCOPED_ENVIRONMENT_NAME);
   return `<div class="obs-env-bar obs-env-bar-warn">No agent is reporting for <strong>${header}</strong>,
-    so there is nothing to show. Reporting environments: ${names.map(n => `<strong>${escapeHtml(n)}</strong>`).join(', ')}
-    — switch environment in the header to see them.</div>`;
+    so there is nothing to show.${reportingNames.length ? ` Reporting environments: ${reportingNames.map(n => `<strong>${escapeHtml(n)}</strong>`).join(', ')}
+    — switch environment in the header to see them.` : ''}</div>`;
 }
 
 const OBS_OVERFLOW_KEY = '* OVERFLOW - too many distinct endpoints';
@@ -332,6 +346,16 @@ function renderAgentHealth(health){
   if(health.catchingUp) warnings.push(`Currently catching up on a backlog larger than one poll cycle (${health.maxLinesPerCycle} lines) - this is expected under a burst of traffic and resolves on its own; it does not mean anything was dropped.`);
   if(health.overflowObservations) warnings.push(`${health.overflowObservations} observation(s) folded into a shared overflow bucket because more than ${health.maxTrackedEndpoints} distinct endpoints were seen - see the "OVERFLOW" row below. Raise MAX_TRACKED_ENDPOINTS if this keeps growing, or check for path segments (ids) that should be templated out.`);
   if(health.lastPushOk === false) warnings.push(`Last push to DocTracker failed: ${escapeHtml(health.lastError || 'unknown error')}. The agent will retry automatically next cycle - nothing needs to be done on this page.`);
+  // Same fingerprint, different writerId = two agent PROCESSES reading the
+  // exact same log files on the exact same host - not two load-balanced
+  // nodes (those have different hostnames or different files), a mistake
+  // that silently doubles every counter on this page. See
+  // duplicateWriterGroups in composeOneEnvironment() (routes/workspace.js).
+  if(Array.isArray(health.duplicateWriterGroups)){
+    health.duplicateWriterGroups.forEach(group=>{
+      warnings.push(`${group.length} agents appear to be reading the EXACT SAME log files on the same host (${group.map(id=>`<code>${escapeHtml(id)}</code>`).join(', ')}) - this doubles every counter above. Check whether ${group.length} agent processes are genuinely running where only one should be.`);
+    });
+  }
 
   const rpm = health.requestsPerMinute;
   const rpmDisplay = (rpm === null || rpm === undefined) ? '—' : (rpm >= 1000 ? `${(rpm/1000).toFixed(1)}k` : rpm);
@@ -352,6 +376,18 @@ function renderAgentHealth(health){
       // Uptime is per PROCESS, so a small figure beside a large lifetime
       // count means "restarted recently", not "lost its history".
       [health.cyclesRun ? `${health.cyclesRun.toLocaleString()} poll cycle(s) this run` : '',
+       // QA regression (2026-09-26): cyclesRun's real growth rate can run far
+       // faster than the configured poll interval shown in the card's own
+       // header text - a backlog larger than one cycle's line budget makes
+       // the NEXT cycle start immediately with no sleep at all (see run()'s
+       // main loop in mule_doc_agent.py), and that catch-up behaviour was
+       // invisible here: the header only ever showed the two CONFIGURED
+       // intervals, never what actually happened. uptimeSeconds/cyclesRun is
+       // the one number that's true regardless of how much of it was
+       // catch-up vs. idle/active sleeping.
+       health.cyclesRun > 0 && health.uptimeSeconds
+         ? `≈1 every ${(health.uptimeSeconds / health.cyclesRun).toFixed(1)}s measured`
+         : '',
        health.restartCount ? `${health.restartCount} restart(s) since install` : '']
         .filter(Boolean).join(' · ')),
     // Shown because "we serve twice the traffic we thought" and "we log every
@@ -364,10 +400,22 @@ function renderAgentHealth(health){
     healthKpi('Last push', health.lastPushAt ? formatDateTime(health.lastPushAt) : '—', health.lastPushOk === false ? 'Failed - retrying' : (health.lastPushOk ? 'Succeeded' : ''), health.lastPushOk === false ? '--delete' : (health.lastPushOk ? '--post' : undefined)),
   ];
 
+  // QA regression (2026-09-26): this only ever showed health.pollIntervalSeconds
+  // (the IDLE default, 60s by default) even though the agent adaptively polls
+  // much faster than that whenever it isn't yet "idle enough" (see
+  // POLL_INTERVAL_ACTIVE_SECONDS / POLL_IDLE_CYCLES_BEFORE_BACKOFF in
+  // mule_doc_agent.py) - build_agent_health() has always sent BOTH cadences
+  // (pollIntervalActiveSeconds too), nothing client-side ever read the second
+  // one. A busy environment's real cyclesRun growth rate could be 20-30x
+  // faster than the single number shown here claimed, with no indication
+  // anything adaptive was even happening.
+  const pollCadenceText = (health.pollIntervalActiveSeconds && health.pollIntervalActiveSeconds !== health.pollIntervalSeconds)
+    ? `polling every ${health.pollIntervalActiveSeconds}s while busy, backing off to every ${health.pollIntervalSeconds ?? '?'}s once idle`
+    : `polling every ${health.pollIntervalSeconds ?? '?'}s`;
   return `<div class="obs-panel">
     <div class="section-title">Agent health</div>
     <div class="hint" style="margin-top:-4px;">
-      Self-monitoring for the discovery agent itself (${escapeHtml(health.sourceLog || '')}, Python ${escapeHtml(health.pythonVersion || '?')}, polling every ${health.pollIntervalSeconds ?? '?'}s). The agent never sits in the request path - it only tails an already-written log file - so it cannot slow down or hang the real API server regardless of traffic volume; what it CAN do under enough volume is fall behind reading its own input or grow its own memory/storage, which is what this card tracks. Generated ${health.generatedAt ? formatDateTime(health.generatedAt) : '—'}.
+      Self-monitoring for the discovery agent itself (${escapeHtml(health.sourceLog || '')}, Python ${escapeHtml(health.pythonVersion || '?')}, ${pollCadenceText}). The agent never sits in the request path - it only tails an already-written log file - so it cannot slow down or hang the real API server regardless of traffic volume; what it CAN do under enough volume is fall behind reading its own input or grow its own memory/storage, which is what this card tracks. Generated ${health.generatedAt ? formatDateTime(health.generatedAt) : '—'}.
     </div>
     ${warnings.length ? `<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;">${warnings.map(w=>`<div style="font-size:11.5px;color:var(--put);background:var(--put-bg);border:1px solid color-mix(in srgb, var(--put) 35%, transparent);border-radius:8px;padding:8px 12px;">${w}</div>`).join('')}</div>` : ''}
     <div class="kpi-grid">${kpis.join('')}</div>
@@ -448,12 +496,30 @@ function renderLogVolumeAndLevelsSection(agentHealth){
       <div class="obs-status-legend">${present.map(([lvl,cssVar])=>`<span class="k"><i style="background:var(${cssVar});"></i>${lvl} ${(counts[lvl]||0).toLocaleString()}</span>`).join('')}</div>`;
   }
 
+  // QA regression (2026-09-26): "8,409 raw log lines" beside "73,615 lines
+  // with a level tag" reads as impossible (a subset bigger than its whole)
+  // unless the reader already knows these are two different SCOPES - the
+  // chart above is only ever the last <=MAX_LOG_VOLUME_SAMPLES pushes
+  // (~a push interval each), while the level tally is a lifetime count that
+  // has never been windowed and survives every restart. Making that explicit
+  // here is the fix; computing a windowed level count to match would need
+  // the same per-push snapshotting the volume chart has and the agent
+  // doesn't do that for levels today. Also explains the volume figure
+  // "freezing" between two checks minutes apart: one sample is taken per
+  // push (pushIntervalSeconds, 15 min by default), not continuously.
+  const pushEvery = agentHealth && agentHealth.pushIntervalSeconds
+    ? formatDuration(agentHealth.pushIntervalSeconds) : null;
   return `<div class="obs-panel">
     <div class="section-title">Log volume</div>
-    <div class="hint" style="margin-top:-4px;">${bucketed && bucketed.totalLines>0 ? Math.round(bucketed.totalLines).toLocaleString()+' raw log line(s) over the sampled range' : 'Raw lines read by the agent, sampled once per push'}</div>
+    <div class="hint" style="margin-top:-4px;">${bucketed && bucketed.totalLines>0
+      ? Math.round(bucketed.totalLines).toLocaleString()+' raw log line(s) over the last '+samples.length+' push(es)'
+        +(pushEvery ? ` — one sample per push (every ${pushEvery}), so this only moves that often, not continuously` : '')
+      : 'Raw lines read by the agent, sampled once per push'}</div>
     ${volumeHtml}
     <div class="section-title" style="margin-top:18px;">Log level distribution</div>
-    <div class="hint" style="margin-top:-4px;">${matchedTotal>=LOG_LEVEL_MIN_MATCHES ? matchedTotal.toLocaleString()+' log line(s) with a detected level tag' : 'Best-effort — only shown once reliably detected in this log format'}</div>
+    <div class="hint" style="margin-top:-4px;">${matchedTotal>=LOG_LEVEL_MIN_MATCHES
+      ? matchedTotal.toLocaleString()+' log line(s) with a detected level tag — a lifetime total since this agent was installed, not windowed like the chart above, so it can be (and usually is) larger'
+      : 'Best-effort — only shown once reliably detected in this log format'}</div>
     ${levelsHtml}
   </div>`;
 }
@@ -1883,6 +1949,15 @@ function renderObservability(main){
       // load makes is for the window being returned to rather than for the
       // default one, followed by a second request correcting it.
       if(typeof obsRestoreView === 'function') obsRestoreView();
+      // obsRestoreView() can land state.obsTab on 'logs' before any request
+      // has ever been fetched - a hard refresh restoring straight onto the
+      // Log explorer tab, with no click event to trigger anything. Every
+      // OTHER path that switches onto this tab (a tab click, an environment
+      // change, a scope change) already kicks off its own records fetch;
+      // this is the one path that changes the tab without a click, so
+      // without this it's stuck on "Loading requests..." forever - nothing
+      // else was ever going to ask.
+      if(state.obsTab === 'logs' && typeof obsLoadRecordsPage === 'function') obsLoadRecordsPage();
     }
     if(state.obsStatus === 'idle' || stale){
       state.obsLastCheckedAt = Date.now();
@@ -2032,8 +2107,7 @@ function renderObservability(main){
     // The stream replaces the 60s poll entirely; stop it so a page that is
     // already live-updating is not also refetching the whole workspace.
     stopObsAutoRefresh();
-    obsStartLive(()=>{
-      obsLoad({ quiet: true });
+    obsStartLive(async ()=>{
       // obsLoad() refreshes the KPIs, the charts and the endpoints table, but
       // not the per-request rows - so the Log explorer, the one tab that reads
       // like a live tail, was the only one a push did not reach. It sat frozen
@@ -2042,10 +2116,16 @@ function renderObservability(main){
       // Only on page 1: someone reading page 3 has scrolled back through
       // history deliberately, and shuffling rows under them every few seconds
       // is worse than leaving the page where they put it.
-      if(state.obsTab === 'logs' && (state.obsRecordsPage || 1) === 1
-         && typeof obsLoadRecordsPage === 'function'){
-        obsLoadRecordsPage();
-      }
+      const onLogsPage1 = state.obsTab === 'logs' && (state.obsRecordsPage || 1) === 1
+        && typeof obsLoadRecordsPage === 'function';
+      // Both fetches skip their own render and this awaits both before doing
+      // exactly ONE narrow console re-render - previously each fired its own
+      // independent full-page rebuild, so a single push on the Log explorer
+      // tab meant two of them back to back.
+      const tasks = [obsLoad({ quiet: true, skipRender: true })];
+      if(onLogsPage1) tasks.push(obsLoadRecordsPage({ skipRender: true }));
+      await Promise.all(tasks);
+      if(typeof obsRerenderLiveConsole === 'function') obsRerenderLiveConsole();
     });
   }else{
     renderConsole(body, metrics, agentHealth, logRecords);

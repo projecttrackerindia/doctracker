@@ -9,6 +9,7 @@ const {
   getDocAccessMap, applyDocLock, userHasFullDocAccess,
 } = require('./workspace');
 const { validateOutboundUrlAsync } = require('../urlSafety');
+const { grantCoversEnvironment } = require('../projectAccess');
 
 const router = express.Router();
 router.use(authenticate);
@@ -267,11 +268,8 @@ router.post('/send', liveCallLimiter, async (req, res) => {
       );
       if (grantRows.length) grant = grantRows[0];
     }
-    if (grant) {
-      const envs = Array.isArray(grant.environments) ? grant.environments : [];
-      if (!envs.includes('*') && !envs.includes(environmentId)) {
-        return res.status(403).json({ error: 'You do not have access to this environment for this project.' });
-      }
+    if (grant && !grantCoversEnvironment(grant.environments, environmentId)) {
+      return res.status(403).json({ error: 'You do not have access to this environment for this project.' });
     }
     let ep = (project.endpoints || []).find((e) => e.id === endpointId);
     if (!ep) return res.status(404).json({ error: 'Endpoint not found.' });

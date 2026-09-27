@@ -42,6 +42,56 @@ function syncUrlToSelection(){
 
 function renderMain(){
   syncUrlToSelection();
+  // Observability opens a live SSE stream (obsStartLive(), called every time
+  // renderObservability() runs - see 23-observability.js). Nothing ever
+  // closed it on navigating away: obsStopLive() existed but had no call
+  // site anywhere in the app, so leaving the page left the stream open,
+  // still calling renderMain() (force-re-rendering whatever page is
+  // currently on screen) and firing background refetches, for the rest of
+  // the session - only a full page reload actually stopped it. This is the
+  // one place every navigation path funnels through regardless of which of
+  // the ~30 call sites set state.selected, so it's the one place that can
+  // reliably catch "we just left Observability" without hooking each of
+  // them individually.
+  const nowType = state.selected && state.selected.type;
+  if(state._obsStreamOpen && nowType !== 'observability' && typeof obsStopLive === 'function'){
+    obsStopLive();
+  }
+  state._obsStreamOpen = nowType === 'observability';
+  // QA regression (2026-09-26): the floating "New project"/"New endpoint" FAB
+  // is position:fixed at the bottom-right of the VIEWPORT on every page, and
+  // Observability's "Currently firing" alert rows put their own right-aligned
+  // "Acknowledged by ..." text in that exact corner - the two visibly
+  // overlapped. "New project" is also the least useful action on this page
+  // specifically (there's no project in view to disambiguate against), so
+  // it's hidden here rather than nudged aside.
+  document.body.classList.toggle('view-observability', nowType === 'observability');
+  // The code-samples rail is an off-canvas drawer opened explicitly from an
+  // endpoint page (see openCodeSamplesRail()) and never had anything closing
+  // it on navigation - so browsing an endpoint, opening it, then switching to
+  // Observability (or any other page) left it open showing a stale-looking
+  // "Select an endpoint ..." (renderRail() already re-renders that correctly
+  // for the new page - it just isn't the endpoint someone thinks they picked
+  // on THIS page, e.g. Observability's own unrelated endpoint-scope filter).
+  // Simplest honest fix: it only ever applies to an endpoint page, so it only
+  // stays open on one.
+  if(nowType !== 'endpoint'){
+    const rail = document.getElementById('rail');
+    const railScrim = document.getElementById('railScrim');
+    if(rail) rail.classList.remove('show');
+    if(railScrim) railScrim.classList.remove('show');
+  }
+  // Home's "new changes — refresh" banner (see wsEventsStartLive() in
+  // 03-notifications.js): the underlying flag is data-truth and persists
+  // across navigation, but the banner itself should only be visible while
+  // Home is actually on screen — show it immediately on arriving at Home if
+  // the update happened while looking at something else, hide it (without
+  // clearing the flag) the moment the visitor navigates away.
+  if(nowType === 'home'){
+    if(state._homeUpdatePending && typeof showHomeUpdateBanner === 'function') showHomeUpdateBanner();
+  } else if(typeof hideHomeUpdateBanner === 'function'){
+    hideHomeUpdateBanner();
+  }
   const main = document.getElementById('main');
   const authorBtn = document.getElementById('btnAuthor');
   if(authorBtn) authorBtn.classList.toggle('active', !!state.selected && state.selected.type === 'profile');
@@ -50,7 +100,7 @@ function renderMain(){
     main.innerHTML = `<div class="welcome">
       <div class="mark-lg">{ }</div>
       <h1>No endpoint selected</h1>
-      <p>Import a MuleSoft OpenAPI/Swagger export (JSON or YAML), or add an endpoint by hand if you don't have a full spec yet. Everything is saved locally in this browser — no server, no account.</p>
+      <p>Import a MuleSoft OpenAPI/Swagger export (JSON or YAML), or add an endpoint by hand if you don't have a full spec yet. If you switched environments, this can also just mean nothing has been promoted here yet.</p>
       <div class="actions">
         <button class="primary" id="btnImport2">Import spec file</button>
         <button id="btnAddManual2">Add endpoint manually</button>
@@ -95,7 +145,11 @@ function renderMain(){
   }
 
   if(state.selected.type === 'observability'){
-    if(!isAdmin() && !ownsAnyProject()){ state.selected = { type:'home' }; renderControlCenter(main); return; }
+    // Admin-only (2026-09-27, requested explicitly) - narrower than
+    // Security/Release Pipeline just above, which still let a non-admin
+    // project owner in. See the matching btnObservability gate in
+    // 22-init.js and the server-side requireAdmin in routes/observability.js.
+    if(!isAdmin()){ state.selected = { type:'home' }; renderControlCenter(main); return; }
     renderObservability(main);
     return;
   }

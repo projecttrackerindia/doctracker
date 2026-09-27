@@ -2,6 +2,7 @@ const express = require('express');
 const { authenticate } = require('../middleware/authGuard');
 const notifications = require('../notifications');
 const liveBus = require('../notificationsBus');
+const { attachSseStream } = require('../sseHelper');
 
 const router = express.Router();
 router.use(authenticate);
@@ -66,33 +67,10 @@ router.post('/read-all', async (req, res) => {
 // for (see notificationsBus.js's header comment for why that's a separate
 // bus from observabilityBus.js rather than a reuse of it).
 router.get('/stream', async (req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  });
-  res.write(': connected\n\n');
-  if (typeof res.flushHeaders === 'function') res.flushHeaders();
-
   const { organisation, sub: userId } = req.authUser;
-  const send = (payload) => {
-    try {
-      res.write(`event: notification\ndata: ${JSON.stringify(payload)}\n\n`);
-    } catch (err) { /* the socket is gone; the close handler below cleans up */ }
-  };
-  const unsubscribe = liveBus.subscribe(organisation, userId, send);
-
-  // Same 25s keep-alive as the observability stream — proxies/load balancers
-  // drop a connection that goes quiet.
-  const heartbeat = setInterval(() => {
-    try { res.write(': ping\n\n'); } catch (err) { /* same as above */ }
-  }, 25000);
-
-  req.on('close', () => {
-    clearInterval(heartbeat);
-    unsubscribe();
-    try { res.end(); } catch (err) { /* already closed */ }
+  attachSseStream(req, res, {
+    eventName: 'notification',
+    subscribe: (send) => liveBus.subscribe(organisation, userId, send),
   });
 });
 

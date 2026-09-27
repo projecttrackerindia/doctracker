@@ -26,6 +26,15 @@ const OBS_TABS = [
 
 async function obsLoad(opts){
   const quiet = opts && opts.quiet;   // a live-stream refresh must not flash a spinner
+  const skipRender = opts && opts.skipRender;  // caller will render once, after its own other fetches
+  // NOT the same thing as `quiet`. renderObservability() has its own quiet
+  // recheck ("has this org's agent started pushing rollups yet") that must
+  // still go through the full renderMain() - it can flip useTimeSeries from
+  // false to true, or decide the live stream needs to START for the first
+  // time, neither of which the narrow console-only patch below can do. Only
+  // the SSE onUpdate callback - which can only ever fire after the stream is
+  // already open and rendering the time-series console - sets this.
+  const liveUpdate = opts && opts.liveUpdate;
   if(!quiet){ state.obsStatus = 'loading'; renderMain(); }
   try{
     const [data, envs] = await Promise.all([
@@ -47,13 +56,28 @@ async function obsLoad(opts){
     state.obsStatus = state.obsData ? 'ready' : 'error';
     state.obsError = err && err.message ? err.message : 'Could not load observability data.';
   }
-  renderMain();
+  if(skipRender) return;
+  // A live-stream-driven refresh patches just the console's own content
+  // instead of going through renderMain() -> renderObservability(), which
+  // tears down and rebuilds the page header/environment-bar/#obsBody wrapper
+  // on every call with no in-place-update path. One SSE push while parked on
+  // the console used to mean a full page-shell rebuild for what's
+  // conceptually "the numbers changed" - see obsRerenderLiveConsole(). Every
+  // other quiet caller (renderObservability()'s own availability recheck)
+  // still needs the full path, so this checks liveUpdate, not quiet.
+  if(liveUpdate && typeof obsRerenderLiveConsole === 'function'){
+    obsRerenderLiveConsole();
+  }else{
+    renderMain();
+  }
 }
 
-async function obsLoadRecordsPage(){
+async function obsLoadRecordsPage(opts){
   // Nothing writes records before the upgraded agent, so this would be a round
   // trip that can only come back empty. The Log explorer tab says why instead.
   if(obsIsBridged()) return;
+  const liveUpdate = opts && opts.liveUpdate;  // see the note on obsLoad()'s own liveUpdate flag
+  const skipRender = opts && opts.skipRender;
   const filters = state.obsFilters || {};
   const limit = 50;
   try{
@@ -69,7 +93,30 @@ async function obsLoadRecordsPage(){
   }catch(err){
     state.obsRecords = { records: [], total: 0, limit, offset: 0, error: err.message };
   }
-  renderMain();
+  if(skipRender) return;
+  if(liveUpdate && typeof obsRerenderLiveConsole === 'function'){
+    obsRerenderLiveConsole();
+  }else{
+    renderMain();
+  }
+}
+
+// The narrow live-update path both functions above use instead of
+// renderMain(): re-renders ONLY the console's own content into the #obsBody
+// wrapper that's already in the DOM, not the header/live-badge/environment-
+// bar around it. Safe to assume the time-series console (not the legacy
+// blob-backed one) is what's showing, because a live SSE push can only ever
+// arrive after obsStartLive() already ran once from inside that branch (see
+// 23-observability.js) - the legacy console never opens the stream at all.
+// If #obsBody isn't in the DOM, the viewer has navigated away since the
+// fetch started; renderMain() itself now closes the stream on navigation
+// (11-render-main.js), so this is a narrow in-flight-request window, not a
+// leak - there's simply nothing to patch.
+function obsRerenderLiveConsole(){
+  const body = document.getElementById('obsBody');
+  if(!body) return;
+  const { agentHealth } = observabilityData();
+  renderObsConsoleV2(body, agentHealth);
 }
 
 /* --- Drill-down --------------------------------------------------------- */
@@ -279,11 +326,22 @@ function renderObsToolbar(){
    data, which is worse than an inflated number that says it is inflated. */
 const OBS_DUP_FIX_ISO = '2026-09-25T08:00:00.000Z';
 
+// QA regression (2026-09-26): this only checked the SELECTED range's start
+// against the fixed cutoff, not whether this org+environment has any actual
+// data before it. A "7 days"/"30 days"/"90 days" pill always resolves to a
+// `from` before OBS_DUP_FIX_ISO once that date is a few days in the past,
+// so the note fired even for an environment whose recording only started
+// AFTER the fix - contradicting the toolbar's own "Recording starts ..."
+// note next to it, which (correctly) says nothing exists before that. Both
+// now agree: the note only appears when real rows this org+environment
+// wrote actually predate the fix.
 function obsRangeReachesDuplicates(){
   if(typeof obsResolvedRange !== 'function') return false;
   const r = obsResolvedRange();
   const from = Date.parse(r.from);
-  return isFinite(from) && from < Date.parse(OBS_DUP_FIX_ISO);
+  const coverageStart = Date.parse(obsCoverageStart());
+  return isFinite(from) && from < Date.parse(OBS_DUP_FIX_ISO)
+    && isFinite(coverageStart) && coverageStart < Date.parse(OBS_DUP_FIX_ISO);
 }
 
 function renderObsDuplicateWarning(){
@@ -360,7 +418,8 @@ function renderObsActiveFilters(){
   };
   return `<div class="obs-active-filters">
     ${entries.map(([k, v]) => {
-      const shown = k === 'endpointId' ? obsEndpointLabel(v) : (k === 'minLatencyMs' ? `${v}ms` : v);
+      const shown = k === 'endpointId' ? obsEndpointLabel(v) : (k === 'minLatencyMs' ? `${v}ms`
+        : (k === 'statusFamily' && v === 'known' ? 'has a status' : v));
       return `<button type="button" class="obs-filter-chip" data-obs-clear-filter="${k}"
         title="Remove this filter">${labelFor[k] || k}: ${escapeHtml(String(shown))} <span class="x">×</span></button>`;
     }).join('')}
@@ -388,6 +447,14 @@ function renderObsKpis(){
 
   const errPct = (cur.errorRate * 100);
   const errColor = errPct >= 25 ? '--delete' : errPct >= 5 ? '--put' : '--post';
+  // QA regression (2026-09-26): errorRate is 0 both when every classified
+  // request succeeded AND when there were no classified requests to rate at
+  // all (every request unclassified, or zero traffic) - those read very
+  // differently ("healthy" vs "nothing to measure"), but both showed the
+  // same "0.0%". Latency p95 already distinguishes "no data" with a dash;
+  // this now does too.
+  const classifiedTotal = cur.total - (cur.statusBreakdown.unknown || 0);
+  const hasErrorRateData = classifiedTotal > 0;
 
   /* deltaBadge() returns an empty string when there is nothing to compare
      against - most visibly when the previous window held zero requests,
@@ -401,10 +468,13 @@ function renderObsKpis(){
       sub(`${cur.endpointCount} endpoint(s)`,
           prev ? deltaBadge(cur.total, prev.total, 'pct', 'neutral') : '')
       + renderKpiSparkline(sparkTotals, '--accent'))}
-    ${healthKpi('Error rate', errPct.toFixed(1) + '%',
+    ${hasErrorRateData ? healthKpi('Error rate', errPct.toFixed(1) + '%',
       sub(`${obsFormatCount(cur.errCount)} error(s)`,
           prev ? deltaBadge(cur.errorRate, prev.errorRate, 'pp', 'down') : '')
-      + renderKpiSparkline(sparkErrs, errColor), errColor)}
+      + renderKpiSparkline(sparkErrs, errColor), errColor)
+      : healthKpi('Error rate', '—', cur.total
+          ? 'Every request is unclassified — no status code to rate'
+          : 'No requests in this range')}
     ${lat ? healthKpi('Latency p95', lat.p95 + 'ms',
       sub(`p50 ${lat.p50}ms`, `p99 ${lat.p99}ms`,
           prev && prev.latency ? deltaBadge(lat.p95, prev.latency.p95, 'pct', 'down') : ''))
@@ -414,7 +484,10 @@ function renderObsKpis(){
     ${healthKpi('Unclassified', obsFormatCount(cur.statusBreakdown.unknown || 0),
       (cur.statusBreakdown.unknown || 0) > 0
         ? 'Requests with no status code logged'
-        : 'Every request has a status code',
+        // QA regression (2026-09-26): with zero requests total, this said
+        // "Every request has a status code" - vacuously true, but reads as
+        // a claim about traffic that never happened.
+        : cur.total ? 'Every request has a status code' : 'No requests in this range',
       (cur.statusBreakdown.unknown || 0) > cur.total * 0.2 ? '--put' : '--post')}
   </div>`;
 }
@@ -769,7 +842,13 @@ function renderObsLogsTab(){
           <div class="section-title">Requests</div>
           <div class="hint" style="margin-top:-4px;">${r.total.toLocaleString()} matching request(s) in this range</div>
         </div>
-        <span class="obs-drill-hint">Newest first</span>
+        <div style="display:flex;align-items:center;gap:12px;">
+          ${filters.statusFamily === 'known'
+            ? `<button type="button" class="obs-ip-more" data-obs-clear-filter="statusFamily">Show all requests</button>`
+            : `<button type="button" class="obs-ip-more" data-obs-filter-family="known"
+                 title="Hide rows with no status, latency or source — these carry no diagnostic value on their own, whether they're a duplicate or a genuinely partial observation">Hide requests with no status</button>`}
+          <span class="obs-drill-hint">Newest first</span>
+        </div>
       </div>
       ${samplingNote}
       ${r.records.length ? `<div class="obs-table-scroll"><table class="data-table obs-data-table">
@@ -943,7 +1022,7 @@ function renderObsActiveAlerts(d){
       title="Open ${escapeHtml(destTab ? destTab.label : 'Observability')}${a.environment ? ' for ' + escapeHtml(a.environment) : ''}">
       <span class="obs-alert-pip"></span>
       <div class="obs-alert-main">
-        <div class="obs-alert-name">${escapeHtml(a.name)}</div>
+        <div class="obs-alert-name" title="${escapeHtml(a.name)}">${escapeHtml(a.name)}</div>
         <div class="obs-alert-where mono">${escapeHtml(where)}</div>
       </div>
       <div class="obs-alert-value">
