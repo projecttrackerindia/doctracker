@@ -27,7 +27,7 @@ const CHANNEL = 'doctracker:notif';
 const localSubscribers = new Map();
 
 let publisher = null;
-let subscriber = null;
+let subscriber;
 
 if (process.env.REDIS_URL) {
   try {
@@ -52,7 +52,6 @@ if (process.env.REDIS_URL) {
   } catch (err) {
     console.warn('REDIS_URL is set but ioredis failed to load — live notification updates will be per-instance only.', err.message);
     publisher = null;
-    subscriber = null;
   }
 }
 
