@@ -507,6 +507,16 @@ router.get('/', async (req, res) => {
       const data = decryptProjectData(row);
       const grant = row.grant_permission ? { environments: row.grant_environments, permission: row.grant_permission } : null;
       const viewed = projectForViewer(row, userId, data, grant);
+      // Admin-only (2026-09-27, requested explicitly): raw auto-discovered
+      // projects (mule_doc_agent.py's build_app_projects(), tagged
+      // discoveryEnvironment) reach every org member here whenever they're
+      // public/has_public_endpoint, same as any other project - hiding the
+      // sidebar section alone (09-render-sidebar.js) left the data itself
+      // still reachable in a non-admin's own state.projects. Excluded here
+      // unless it's this user's own (viewed._owned) or explicitly shared
+      // with them (grant) - an admin, or the agent account itself reading
+      // its own projects, is unaffected.
+      if (data.discoveryEnvironment && req.authUser.role !== 'admin' && !viewed._owned && !grant) return;
       projects[row.id] = piiMasking.maskProjectData(viewed, orgRules);
       if (!viewed._owned && !grant) publicViewProjectIds.push(row.id);
     });
