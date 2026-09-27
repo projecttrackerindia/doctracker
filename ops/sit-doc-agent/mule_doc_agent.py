@@ -67,6 +67,7 @@ import glob
 import gzip
 import json
 import time
+import signal
 import platform
 import calendar
 import hashlib
@@ -456,6 +457,10 @@ def _parse_timestamp_ms(raw):
     if s.isdigit():
         n = int(s)
         return n if n > 10**12 else n * 1000
+    # log4j2's default layout separates millis with a comma, not a period
+    # (e.g. "2024-11-18 10:23:06,860") - strptime has no directive for that,
+    # so normalize it before trying the period-based formats below.
+    s = re.sub(r'(\d{2}:\d{2}:\d{2}),(\d{3})', r'\1.\2', s)
     for fmt in (
         "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%fZ",
         "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
@@ -949,16 +954,20 @@ def load_state():
 
 
 # The BULKY state keys - the aggregates, the captured records, the pending
-# rollup buckets. Everything NOT listed here (file offsets and inodes, the
-# seen-event ids, push bookkeeping) is small, changes every cycle, and must
-# survive a crash or the agent would re-read and re-count log lines.
+# rollup buckets. Everything NOT listed here (file offsets and inodes, push
+# bookkeeping) is small, changes every cycle, and must survive a crash or the
+# agent would re-read and re-count log lines.
 BULKY_STATE_KEYS = ("endpoints", "logRecords", "logRecordKeyCounts", "rollups", "health",
-                    # Thousands of correlation ids. It belongs with the other
-                    # bulky values in the file written on a full save, not in
-                    # the cursor file that is rewritten every couple of
-                    # seconds purely to keep read offsets current. Losing it
-                    # to a crash costs a handful of double-counted requests.
-                    "countedRequestPaths")
+                    # Thousands of correlation ids/event ids apiece. Both
+                    # belong with the other bulky values in the file written
+                    # on a full save, not in the cursor file that is
+                    # rewritten every couple of seconds purely to keep read
+                    # offsets current - losing either to a crash (or a
+                    # SIGTERM between push cycles; see run()'s handler, which
+                    # deliberately only flushes the cheap cursor half) costs
+                    # at most a handful of double-counted requests until the
+                    # next push, not a correctness problem.
+                    "countedRequestPaths", "seenEvents")
 
 # The small, write-every-cycle half lives in its own file so the bulky half
 # does not have to be re-serialised to update it.
@@ -980,13 +989,15 @@ def save_state(state, full=True):
     real field values. A multi-megabyte rewrite every minute, forever, most of
     it re-writing bytes that had not changed.
 
-    Now the cheap half (cursors: file offsets, inodes, seen-event ids) goes to
-    its own small file every cycle, and the expensive half (aggregates,
-    records, pending rollups) is written only on push cycles - by which point
-    it has just been durably sent to DocTracker anyway. Losing the bulky half
-    to an unclean shutdown costs at most one push interval of aggregates; the
-    log POSITION, which is the thing that must never be wrong, is always
-    current.
+    Now the cheap half (cursors: file offsets, inodes, push bookkeeping) goes
+    to its own small file every cycle, and the expensive half (aggregates,
+    records, pending rollups, the seen-event/counted-path dedup lists) is
+    written only on push cycles - by which point it has just been durably
+    sent to DocTracker anyway. Losing the bulky half to an unclean shutdown
+    costs at most one push interval of aggregates (and a handful of
+    double-counted requests straddling the restart, from the dedup lists
+    resetting slightly stale - not silence, not a crash); the log POSITION,
+    which is the thing that must never be wrong, is always current.
     """
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     cursor = {k: v for k, v in state.items() if k not in BULKY_STATE_KEYS}
@@ -995,7 +1006,7 @@ def save_state(state, full=True):
         _atomic_write_json(STATE_FILE, {k: state[k] for k in BULKY_STATE_KEYS if k in state})
 
 
-def tail_new_lines(path, state, max_lines=None):
+def tail_new_lines(path, state, max_lines=None, stat_cache=None):
     """Reads any lines appended since the last recorded offset. Detects log
     rotation (inode change or file shrank) and restarts from the top of the
     new file rather than crashing or silently missing the rotated-out tail.
@@ -1006,6 +1017,18 @@ def tail_new_lines(path, state, max_lines=None):
     one poll cycle into one huge blocking read-and-process pass - see
     MAX_LINES_PER_CYCLE and run()'s catch-up loop, which calls this
     repeatedly in bounded chunks instead of once unbounded.
+
+    `stat_cache`, when given, is a plain dict shared across every file this
+    poll cycle touches (see run()'s main loop): a brand-new file's discovery
+    stat is reused for its first read here instead of stat'ing it twice, and
+    build_agent_health()'s backlog calculation reuses this cycle's stats
+    instead of taking its own independent os.stat() pass over every tailed
+    file afterwards. It is deliberately NOT reused for a SECOND call to this
+    function against a path whose state["offset"] this cycle already
+    advanced (see tail_all_logs()'s hungry-files pass) - `st.st_size` there
+    has to reflect the file's real size at the moment of THIS read, not an
+    earlier snapshot, or a file that simply grew in between can look like it
+    shrank and trigger a spurious, offset-resetting "truncated" reset.
 
     CONFIRMED bug found against the real, actively-growing jwt-token-api.log:
     the original version used `for line in f: ...` then `f.tell()` at the
@@ -1019,7 +1042,12 @@ def tail_new_lines(path, state, max_lines=None):
     committing the offset past a line that actually ends in "\\n" - an
     incomplete trailing line is left unread and picked up whole next cycle."""
     try:
-        st = os.stat(path)
+        if stat_cache is not None and path in stat_cache:
+            st = stat_cache[path]
+        else:
+            st = os.stat(path)
+            if stat_cache is not None:
+                stat_cache[path] = st
     except (FileNotFoundError, PermissionError) as e:
         # A glob can match a file that disappears between expansion and read
         # (rotation), or one this unprivileged user can't open. Neither is
@@ -1141,7 +1169,7 @@ def resolve_log_paths(spec):
     return unique
 
 
-def tail_all_logs(paths, state, total_budget):
+def tail_all_logs(paths, state, total_budget, stat_cache=None):
     """Read new lines from EVERY tailed file, sharing one line budget.
 
     Returns {path: [lines]} so the caller can keep each file's multi-line
@@ -1153,7 +1181,17 @@ def tail_all_logs(paths, state, total_budget):
     so one very busy log can't starve the other 69. Any budget the quiet
     files don't use is handed to the remaining ones in a second pass, so a
     single busy file still gets the full budget when it's the only one with
-    a backlog."""
+    a backlog.
+
+    `stat_cache` is forwarded to tail_new_lines() - see its docstring - but
+    ONLY for the fair-share pass below, not the hungry-files redistribution
+    pass (see that pass's own comment for why reusing a stat across a
+    mutated offset is unsafe there specifically). The saving here is
+    real but narrower: a brand-new file's discovery stat (above) is reused
+    by its first read instead of stat'ing it twice, and this whole cycle's
+    stats are available to build_agent_health()'s backlog estimate
+    afterwards instead of it taking its own independent pass over every
+    file."""
     files_state = state.setdefault("files", {})
     if not paths:
         return {}
@@ -1173,17 +1211,67 @@ def tail_all_logs(paths, state, total_budget):
     #   * a freshly rolled LIVE file has a recent mtime -> start at 0 and
     #     read it whole, so nothing written between rollover and discovery
     #     is missed.
+    #
+    # CONFIRMED real gap in the mtime heuristic alone: a %i rollover RENAMES
+    # app.log -> app-1.log, and a rename preserves the ORIGINAL mtime - the
+    # instant of its last write, which is "just now" for a file that was live
+    # seconds ago. If the periodic re-glob discovers app-1.log within the
+    # same NEW_FILE_MAX_AGE_SECONDS window (the common case - one hour is far
+    # longer than LOG_GLOB_RESCAN_SECONDS), the mtime check alone reads it as
+    # a fresh live file and starts it at 0, RE-INGESTING bytes already
+    # counted under the old path. A rename never changes the inode, though -
+    # so before trusting mtime, check whether this "new" path's inode is one
+    # this agent already has an offset for under a DIFFERENT (now vanished)
+    # path. If so, this isn't a new file at all: it's the same file, carry
+    # its already-recorded offset forward and retire the old path entry
+    # rather than re-reading anything.
+    by_inode = {}
+    for known_path, known in files_state.items():
+        if known.get("inode") is not None:
+            by_inode.setdefault(known["inode"], []).append(known_path)
+
     for path in paths:
         if path in files_state:
             continue
         try:
             st = os.stat(path)
+            if stat_cache is not None:
+                stat_cache[path] = st  # pass 1 below will otherwise re-stat this same brand-new file
         except OSError:
+            continue
+        inode = getattr(st, "st_ino", None)
+        renamed_from = None
+        if inode is not None and inode in by_inode:
+            for candidate in by_inode[inode]:
+                # The candidate path string can still be in `paths` (glob
+                # results are paths, not identities) even though rotation has
+                # already put a BRAND NEW file there - e.g. app.log itself,
+                # freshly recreated after being renamed to app-1.log. What
+                # matters is whether the candidate's CURRENT on-disk inode
+                # still matches what was recorded for it, not whether the
+                # path string still resolves to something.
+                try:
+                    still_same = os.stat(candidate).st_ino == inode
+                except OSError:
+                    still_same = False
+                if not still_same:
+                    renamed_from = candidate
+                    break
+        if renamed_from is not None:
+            files_state[path] = {
+                "offset": files_state[renamed_from]["offset"],
+                "inode": inode,
+            }
+            del files_state[renamed_from]
+            print(f"[info] {os.path.basename(path)}: same inode as vanished "
+                  f"{os.path.basename(renamed_from)} - this is that file renamed by "
+                  f"rotation, not a new one. Carrying its offset forward instead of "
+                  f"re-reading it.")
             continue
         stale = (time.time() - st.st_mtime) > NEW_FILE_MAX_AGE_SECONDS
         files_state[path] = {
             "offset": st.st_size if stale else 0,
-            "inode": getattr(st, "st_ino", None),
+            "inode": inode,
         }
         if stale:
             # Says "not recently written" rather than "rotated archive": a
@@ -1202,7 +1290,7 @@ def tail_all_logs(paths, state, total_budget):
     # Pass 1: fair share.
     for path in paths:
         fstate = files_state.setdefault(path, {"offset": 0, "inode": None})
-        lines = tail_new_lines(path, fstate, max_lines=per_file)
+        lines = tail_new_lines(path, fstate, max_lines=per_file, stat_cache=stat_cache)
         if lines:
             out[path] = lines
             used += len(lines)
@@ -1218,6 +1306,21 @@ def tail_all_logs(paths, state, total_budget):
                 if leftover <= 0:
                     break
                 fstate = files_state[path]
+                # Deliberately NOT stat_cache here, unlike pass 1 above.
+                # This re-reads a path pass 1 already advanced state["offset"]
+                # for moments ago - reusing pass 1's now-stale st.st_size
+                # against that NEWLY-advanced offset could make a file that's
+                # simply still growing look like it shrank (a real writer can
+                # append between pass 1's stat and this read, especially
+                # under the exact sustained-load conditions that make a file
+                # "hungry" enough to reach pass 2 at all), spuriously
+                # triggering tail_new_lines()'s truncation check and
+                # resetting the offset to 0 - re-reading and double-counting
+                # everything already read this cycle. A stale stat is only
+                # safe to reuse where nothing downstream mutates the offset
+                # it's being compared against (pass 1's first read of a path,
+                # or build_agent_health()'s read-only backlog estimate) - not
+                # here.
                 more = tail_new_lines(path, fstate, max_lines=min(extra, leftover))
                 if more:
                     out.setdefault(path, []).extend(more)
@@ -1281,6 +1384,62 @@ MULE_EVENT_PATTERN = re.compile(r'event:\s*([0-9a-fA-F][0-9a-fA-F-]{7,})')
 # Startup inventory line.
 STARTING_FLOW_PATTERN = re.compile(r'Starting flow:\s*(\S+)')
 
+# A custom Logger component logging a human-readable ENTRY/EXIT breadcrumb
+# pair around a (sub)flow - CONFIRMED 2026-09-26 against s-portal-cmsapi-api's
+# real logs, e.g.:
+#   ... LoggerMessageProcessor: ENTRY  >>  Flow Name: send-otp-sub-flow, ...
+#   ... LoggerMessageProcessor: EXIT  >>  Flow Name: send-otp-sub-flow, ...
+# Neither line ever carries a status code - this app's Logger components
+# simply never log one, which is a real Mule-flow-instrumentation gap outside
+# this agent's control, not something any amount of regex tuning can recover.
+# But both lines share the SAME `event:` id MULE_EVENT_PATTERN above already
+# extracts, and each carries its own wall-clock timestamp at the front of the
+# line, so the backend processing latency (exit minus entry) genuinely IS
+# recoverable even though status isn't. See _logger_entry_exit_latency_ms().
+LOGGER_ENTRY_PATTERN = re.compile(r'LoggerMessageProcessor:\s*ENTRY\b', re.IGNORECASE)
+LOGGER_EXIT_PATTERN = re.compile(r'LoggerMessageProcessor:\s*EXIT\b', re.IGNORECASE)
+LEADING_TIMESTAMP_PATTERN = re.compile(r'(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}[,.]\d{3})')
+LEADING_TIMESTAMP_SEARCH_PREFIX_CHARS = 60
+
+# Pending ENTRY timestamps, keyed by correlation id, each a STACK (not a
+# scalar) so nested subflow calls sharing one top-level correlation id pair
+# up LIFO - the same way nested function calls actually nest - instead of an
+# outer flow's EXIT silently grabbing an inner subflow's ENTRY timestamp.
+# Bounded the same way _CORRID_METHOD is: an ENTRY with no matching EXIT
+# (e.g. the request crashed, or straddles a log rotation) must not grow this
+# without limit on a long-running agent.
+MAX_PENDING_LOGGER_ENTRIES = int(os.environ.get("MAX_PENDING_LOGGER_ENTRIES", "5000"))
+_PENDING_LOGGER_ENTRY = collections.OrderedDict()
+
+
+def _logger_entry_exit_latency_ms(stripped, corr_id):
+    """Returns the latency (ms) once this line is an EXIT whose correlation
+    id had a prior pending ENTRY, else None. An ENTRY line always returns
+    None itself - its timestamp is only remembered for a later EXIT."""
+    if not corr_id:
+        return None
+    is_entry = LOGGER_ENTRY_PATTERN.search(stripped)
+    is_exit = not is_entry and LOGGER_EXIT_PATTERN.search(stripped)
+    if not is_entry and not is_exit:
+        return None
+    ts_m = LEADING_TIMESTAMP_PATTERN.search(stripped[:LEADING_TIMESTAMP_SEARCH_PREFIX_CHARS])
+    ts_ms = _parse_timestamp_ms(ts_m.group(1)) if ts_m else None
+    if is_entry:
+        if ts_ms is not None:
+            _PENDING_LOGGER_ENTRY.setdefault(corr_id, []).append(ts_ms)
+            while len(_PENDING_LOGGER_ENTRY) > MAX_PENDING_LOGGER_ENTRIES:
+                _PENDING_LOGGER_ENTRY.popitem(last=False)
+        return None
+    stack = _PENDING_LOGGER_ENTRY.get(corr_id)
+    if not stack:
+        return None
+    entry_ts = stack.pop()
+    if not stack:
+        del _PENDING_LOGGER_ENTRY[corr_id]
+    if ts_ms is not None and ts_ms >= entry_ts:
+        return round(ts_ms - entry_ts)
+    return None
+
 
 def apikit_path_to_uri(raw):
     """`\\customers\\(customerId)\\orders` -> `/customers/{customerId}/orders`."""
@@ -1309,15 +1468,17 @@ def parse_apikit_line(stripped):
     is_inventory = bool(STARTING_FLOW_PATTERN.search(stripped))
     event_m = MULE_EVENT_PATTERN.search(stripped)
     status_m = STATUS_CODE_PATTERN.search(stripped)
+    corr_id = event_m.group(1) if event_m else None
     if event_m and not is_inventory:
         # So a structured JSON block logged later under this same correlation
         # id can recover the method without guessing it (see _finish_block).
-        remember_corrid_method(event_m.group(1), method, path)
+        remember_corrid_method(corr_id, method, path)
     return {
         "method": method,
         "path": path,
         "statusCode": int(status_m.group(1)) if status_m else None,
-        "correlationId": event_m.group(1) if event_m else None,
+        "correlationId": corr_id,
+        "latencyMs": _logger_entry_exit_latency_ms(stripped, corr_id) if not is_inventory else None,
         "body": None,
         "isInventory": is_inventory,
         "style": "apikit",
@@ -2122,9 +2283,27 @@ class DocTrackerClient:
         Rollup buckets are SUMMED server-side on conflict, which is what makes
         it safe to flush a partially-filled minute now and the rest of it on
         the next cycle: the stored total is exact either way.
+
+        QA regression (2026-09-26): this used to skip the request entirely
+        when there was nothing new to send (`if not rollups and not records:
+        return`) - which meant a genuinely quiet environment (SIT in
+        practice: a handful of requests a day) never called this at all
+        between real traffic. The SERVER's ingest route calls
+        touchHeartbeat() unconditionally alongside its writes SPECIFICALLY
+        so a heartbeat-only push still counts as "the agent is alive" for
+        agent_silent (see alertEngine.js and touchHeartbeat()'s own comment
+        in observabilityStore.js) - but that design only works if the agent
+        actually MAKES the call. Skipping it here defeated that, and
+        produced exactly the false "Collector stopped reporting" alert that
+        design was meant to prevent: the endpoint-metrics push (a separate
+        route) kept succeeding on schedule, proving the agent was alive,
+        while this route's own heartbeat signal silently went stale. This
+        function is only ever reached from run()'s own due_for_data/
+        due_for_heartbeat gate (already throttled to PUSH_MIN_INTERVAL_
+        SECONDS/PUSH_INTERVAL_SECONDS) - so always making the call here adds
+        one lightweight request per already-scheduled push cycle, not a new
+        unthrottled one.
         """
-        if not rollups and not records:
-            return {"rollupsWritten": 0, "recordsWritten": 0}
         body = {"environment": environment, "rollups": rollups, "records": records}
         status, data, _ = self._request("PUT", "/api/workspace/observability/ingest", body)
         if status != 200 or not data.get("ok"):
@@ -2294,12 +2473,23 @@ def sample_host_metrics(health, now):
     return [round(now)] + values, static
 
 
-def build_agent_health(state):
+def build_agent_health(state, stat_cache=None):
     """Self-monitoring for the agent itself - throughput, backlog, and how
     close it is to the scale safeguards' caps. This is what answers "is this
     keeping up, or quietly falling behind / dropping things" - shown as its
     own card on the Observability page rather than only being visible in
-    stdout logs on a server the reviewer isn't logged into."""
+    stdout logs on a server the reviewer isn't logged into.
+
+    `stat_cache`, when given, is the SAME dict tail_all_logs() populated
+    earlier this cycle (see run()'s main loop) - the backlog estimate below
+    just needs each tailed file's size, which this cycle's tailing pass
+    already has fresh, so reusing it here avoids a THIRD independent
+    os.stat() pass over every tailed file on top of tail_all_logs()'s own.
+    Safe even when slightly stale (unlike tail_new_lines()'s use of a cached
+    stat): this only ever reads st.st_size to estimate a backlog for
+    display, never to decide whether to reset an offset, so the worst case
+    of a stale size is an backlog number that's very slightly low for one
+    report - not a correctness bug."""
     health = state.get("health", {})
     now = time.time()
     started_at = health.get("startedAtEpoch") or now
@@ -2317,7 +2507,8 @@ def build_agent_health(state):
     backlog_bytes = 0
     for path, fstate in tailed.items():
         try:
-            backlog_bytes += max(0, os.stat(path).st_size - fstate.get("offset", 0))
+            st = stat_cache[path] if stat_cache is not None and path in stat_cache else os.stat(path)
+            backlog_bytes += max(0, st.st_size - fstate.get("offset", 0))
         except OSError:
             continue
 
@@ -3246,8 +3437,41 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
         state["seededFromHistory"] = True
         save_state(state)
 
+    # The deployment's own restart path is `kill <pid>` (SIGTERM) followed by
+    # a fresh start - there was previously no handler at all, so a restart
+    # simply killed the process mid-cycle with whatever tailing progress
+    # hadn't yet been written to the cursor file (up to one poll interval's
+    # worth - 60s idle, as little as 2s under load) silently re-read and
+    # re-counted on the next start. A cursor-only save is deliberately cheap
+    # (just file offsets, inodes, push bookkeeping - not the bulky
+    # aggregates/captured records/dedup lists) so a clean shutdown stays fast
+    # even mid-cycle. This means a SIGTERM restart can lose up to one push
+    # interval's worth of seenEvents/countedRequestPaths (see
+    # BULKY_STATE_KEYS) - the same handful-of-double-counted-requests cost as
+    # an unclean crash would have anyway, not a new risk this handler
+    # introduces. Registered here, not at the top of run(), so the one-shot
+    # modes above (--sample-lines, --dry-run, seeding) keep Python's normal
+    # SIGTERM behavior - there is no long-lived state in those paths worth
+    # flushing.
+    def _handle_sigterm(signum, frame):
+        print("[info] SIGTERM received - saving tailing progress before exit.", file=sys.stderr)
+        try:
+            save_state(state, full=False)
+        except Exception as e:
+            print(f"[warn] could not save state on shutdown: {e}", file=sys.stderr)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
     while True:
         cycle_start = time.time()
+        # Fresh every cycle, thrown away at the end of it - shared between
+        # tail_all_logs() (which populates it) and build_agent_health()
+        # (which reuses it) below, so this cycle's file sizes get stat'd
+        # once instead of the two-then-three independent passes this used
+        # to be. See both functions' docstrings for exactly which reads are
+        # safe to share and which aren't.
+        stat_cache = {}
         # Bounded read: at most MAX_LINES_PER_CYCLE lines per call, so one
         # poll cycle can never block for an unbounded amount of time no
         # matter how large the backlog is (a burst of traffic, or the agent
@@ -3268,7 +3492,7 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
                 log_paths = new_paths
             last_glob_scan = time.time()
 
-        by_file = tail_all_logs(log_paths, state, MAX_LINES_PER_CYCLE)
+        by_file = tail_all_logs(log_paths, state, MAX_LINES_PER_CYCLE, stat_cache=stat_cache)
         lines = [l for file_lines in by_file.values() for l in file_lines]
         caught_up = len(lines) < MAX_LINES_PER_CYCLE
         observations = []
@@ -3411,7 +3635,7 @@ def run(dry_run=False, sample_lines=None, local_html=None, serve_port=None, seed
             metrics_payload = {
                 "environment": ENVIRONMENT or None,
                 "endpoints": build_endpoint_metrics(state),
-                "agentHealth": build_agent_health(state),
+                "agentHealth": build_agent_health(state, stat_cache=stat_cache),
                 "logRecords": new_log_records,
                 "logRecordsDelta": CAPTURE_MODE == "full",
             }

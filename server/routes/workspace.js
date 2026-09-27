@@ -6,7 +6,7 @@ const { recordAuditEvent } = require('../auditService');
 const dataCrypto = require('../crypto');
 const storage = require('../storage');
 const cache = require('../cache');
-const { resolveAccessById, environmentAllowed } = require('../projectAccess');
+const { resolveAccessById, environmentAllowed, grantCoversEnvironment } = require('../projectAccess');
 const { notifyUser, notifyUsers, adminUserIds } = require('../notifications');
 const { detectBreakingChanges } = require('../breakingChangeDetector');
 const piiMasking = require('../piiMasking');
@@ -102,16 +102,72 @@ function attachmentSizeError(projectData) {
 // also used by imports, promotions, and the quick "Add endpoint" modal).
 // Returns an error string, or null if every method+path in this project is
 // unique.
+// QA regression (2026-09-26, bug #1, High): matched exact method+path only,
+// so a trailing slash (or a case difference) slipped past this check as a
+// "different" endpoint. That matters beyond cosmetics: the editor's own
+// endpointSlugFor()/slugify() (19-audit-log-page.js) lowercases the path and
+// collapses a trailing slash into nothing when building that endpoint's URL
+// - so /qa/test-endpoint and /qa/test-endpoint/ (or a differently-cased
+// path) already resolve to the SAME page address on the client, even though
+// the server just accepted them as two distinct endpoints. Whichever one
+// happened to render there "won"; the other became permanently unreachable
+// by its own link. Normalizing the same way the slug generator effectively
+// does (case-insensitive, trailing slash ignored) before comparing closes
+// this at the source: two paths that would collide on a URL are now
+// rejected as the duplicate they actually are, so the collision can never
+// be saved in the first place.
+function normalizedEndpointPathKey(path) {
+  let p = String(path).trim().toLowerCase();
+  if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+  return p;
+}
+
 function duplicateEndpointError(projectData) {
   const endpoints = Array.isArray(projectData && projectData.endpoints) ? projectData.endpoints : [];
   const seen = new Set();
   for (const ep of endpoints) {
     if (!ep || !ep.method || !ep.path) continue;
-    const key = `${String(ep.method).toUpperCase()} ${String(ep.path).trim()}`;
+    const method = String(ep.method).toUpperCase();
+    const key = `${method} ${normalizedEndpointPathKey(ep.path)}`;
     if (seen.has(key)) {
-      return `This project already has two endpoints for ${key} — give one a different path, or delete the duplicate before saving.`;
+      return `This project already has two endpoints for ${method} ${String(ep.path).trim()} (a trailing slash or letter case doesn't make it a different endpoint) — give one a different path, or delete the duplicate before saving.`;
     }
     seen.add(key);
+  }
+  return null;
+}
+
+const MAX_ENDPOINT_NAME_LENGTH = 150;
+
+// QA regression (2026-09-26, bugs #3/#4/#5/#13): the editor's own client-side
+// checks (server/views/editor.html's performSave()) only ever confirmed the
+// path field wasn't EMPTY — nothing there enforced a leading slash, rejected
+// whitespace inside the path, capped the endpoint name's length, or
+// constrained a response's status code to a real HTTP status range. All four
+// saved successfully because nothing server-side checked them either. Client
+// -side validation is UX, not a gate — it can always be bypassed by calling
+// the API directly — so this is the one place that actually has to enforce
+// it.
+function endpointFieldsError(projectData) {
+  const endpoints = Array.isArray(projectData && projectData.endpoints) ? projectData.endpoints : [];
+  for (const ep of endpoints) {
+    if (!ep) continue;
+    if (typeof ep.path === 'string' && ep.path.trim()) {
+      const path = ep.path.trim();
+      if (!path.startsWith('/')) return `Path "${path}" must start with /.`;
+      if (/\s/.test(path)) return `Path "${path}" can't contain spaces or other whitespace.`;
+    }
+    if (typeof ep.name === 'string' && ep.name.length > MAX_ENDPOINT_NAME_LENGTH) {
+      return `Endpoint name is too long (${ep.name.length} characters, max ${MAX_ENDPOINT_NAME_LENGTH}).`;
+    }
+    const responses = Array.isArray(ep.responses) ? ep.responses : [];
+    for (const r of responses) {
+      if (!r || r.code === undefined || r.code === null || r.code === '') continue;
+      const n = Number(r.code);
+      if (!Number.isInteger(n) || n < 100 || n > 599) {
+        return `Response status code "${r.code}" on ${String(ep.method || '').toUpperCase()} ${ep.path || ''} must be a whole number from 100 to 599.`;
+      }
+    }
   }
   return null;
 }
@@ -451,6 +507,16 @@ router.get('/', async (req, res) => {
       const data = decryptProjectData(row);
       const grant = row.grant_permission ? { environments: row.grant_environments, permission: row.grant_permission } : null;
       const viewed = projectForViewer(row, userId, data, grant);
+      // Admin-only (2026-09-27, requested explicitly): raw auto-discovered
+      // projects (mule_doc_agent.py's build_app_projects(), tagged
+      // discoveryEnvironment) reach every org member here whenever they're
+      // public/has_public_endpoint, same as any other project - hiding the
+      // sidebar section alone (09-render-sidebar.js) left the data itself
+      // still reachable in a non-admin's own state.projects. Excluded here
+      // unless it's this user's own (viewed._owned) or explicitly shared
+      // with them (grant) - an admin, or the agent account itself reading
+      // its own projects, is unaffected.
+      if (data.discoveryEnvironment && req.authUser.role !== 'admin' && !viewed._owned && !grant) return;
       projects[row.id] = piiMasking.maskProjectData(viewed, orgRules);
       if (!viewed._owned && !grant) publicViewProjectIds.push(row.id);
     });
@@ -592,6 +658,11 @@ router.put('/projects', async (req, res) => {
       if (dupError) {
         await client.query('ROLLBACK');
         return res.status(400).json({ error: dupError, projectId: id });
+      }
+      const fieldsError = endpointFieldsError(dataToStore);
+      if (fieldsError) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: fieldsError, projectId: id });
       }
       await offloadAttachments(dataToStore, id);
 
@@ -1177,11 +1248,32 @@ function composeOneEnvironment(entries) {
   logRecords.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
   logRecords = logRecords.slice(0, 5000);
 
+  // Two agents on different hosts (or the same host tailing genuinely
+  // different apps) are a normal, supported deployment - their counters
+  // above are meant to sum. Two agents that ended up with the SAME
+  // sourceFingerprint (hostname + exact set of tailed files - see
+  // source_fingerprint() in mule_doc_agent.py) are reading the identical
+  // files, which means every merge above just doubled real numbers instead
+  // of correctly summing two independent nodes' traffic. The fingerprint
+  // has been computed and sent since the agent-side fix shipped, but
+  // nothing ever consumed it - this is that consumer, so the duplicate
+  // shows up as a visible warning (see 23-observability.js) instead of a
+  // silently-inflated request count nobody can explain.
+  const byFingerprint = new Map();
+  for (const a of agents) {
+    if (!a.sourceFingerprint) continue;
+    if (!byFingerprint.has(a.sourceFingerprint)) byFingerprint.set(a.sourceFingerprint, []);
+    byFingerprint.get(a.sourceFingerprint).push(a.writerId);
+  }
+  const duplicateWriterGroups = [...byFingerprint.values()].filter((ids) => ids.length > 1);
+
   // The page renders one agentHealth card; give it the most recently
   // generated one, and attach every writer's own health beside it so a
   // multi-server deployment can still see each agent individually.
   agents.sort((a, b) => String(b.generatedAt || '').localeCompare(String(a.generatedAt || '')));
-  const agentHealth = agents.length ? { ...agents[0], writers: agents } : null;
+  const agentHealth = agents.length
+    ? { ...agents[0], writers: agents, ...(duplicateWriterGroups.length ? { duplicateWriterGroups } : {}) }
+    : null;
 
   return { endpoints, agentHealth, logRecords };
 }
@@ -3038,11 +3130,8 @@ router.get('/projects/:id/snapshot', async (req, res) => {
     // A project_access grant also names which environments this person may
     // browse for this project (see projectForViewer's _grantedEnvironments) —
     // enforce that here too, not just for Try It/Live Mode.
-    if (grant) {
-      const envs = Array.isArray(grant.environments) ? grant.environments : [];
-      if (!envs.includes('*') && !envs.includes(envKey)) {
-        return res.status(403).json({ error: 'You do not have access to this environment for this project.' });
-      }
+    if (grant && !grantCoversEnvironment(grant.environments, envKey)) {
+      return res.status(403).json({ error: 'You do not have access to this environment for this project.' });
     }
 
     const isDraft = idx === 0;
@@ -3144,11 +3233,8 @@ router.get('/projects/:id/diff', async (req, res) => {
     if (!stageById.has(fromKey) || !stageById.has(toKey)) {
       return res.status(400).json({ error: 'Unknown environment.' });
     }
-    if (grant) {
-      const envs = Array.isArray(grant.environments) ? grant.environments : [];
-      if (!envs.includes('*') && (!envs.includes(fromKey) || !envs.includes(toKey))) {
-        return res.status(403).json({ error: 'You do not have access to these environments for this project.' });
-      }
+    if (grant && (!grantCoversEnvironment(grant.environments, fromKey) || !grantCoversEnvironment(grant.environments, toKey))) {
+      return res.status(403).json({ error: 'You do not have access to these environments for this project.' });
     }
 
     const [fromData, toData] = await Promise.all([
@@ -3534,3 +3620,7 @@ module.exports.loadStageData = loadStageData;
 module.exports.projectForViewer = projectForViewer;
 module.exports.applyDocLock = applyDocLock;
 module.exports.userHasFullDocAccess = userHasFullDocAccess;
+module.exports.composeWriterSegments = composeWriterSegments;
+module.exports.composeOneEnvironment = composeOneEnvironment;
+module.exports.duplicateEndpointError = duplicateEndpointError;
+module.exports.endpointFieldsError = endpointFieldsError;

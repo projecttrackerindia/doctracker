@@ -255,3 +255,38 @@ test('values are formatted with their unit, and a missing one reads as a dash', 
   assert.equal(engine.formatValue('request_rate', 4.26), '4.3/min');
   assert.equal(engine.formatValue('error_rate', null), '—');
 });
+
+// QA regression (2026-09-26): the Observability console's own copy tells
+// the reader unclassified requests (no status code logged) are
+// "deliberately NOT part of the error rate" - error_rate/server_error_rate/
+// client_error_rate used to divide by the raw total (unclassified
+// included), understating the rate among requests whose outcome is
+// actually known. A real case from SIT: 3 2xx, 1 4xx, 2 unclassified -
+// the page showed 16.7% (1 of 6, wrong) instead of 25% (1 of 4 classified,
+// matches the page's own stated policy).
+test('error_rate excludes unclassified requests from its denominator', () => {
+  const b = { total: 6, s4: 1, s5: 0, unknown: 2 };
+  assert.equal(engine.METRICS.error_rate.compute(b), 25, 'should be 1 of 4 classified, not 1 of 6 total');
+});
+
+test('server_error_rate and client_error_rate also exclude unclassified', () => {
+  const b = { total: 10, s4: 1, s5: 1, unknown: 4 };
+  // 6 classified (10 - 4 unknown): 1/6 5xx, 1/6 4xx.
+  assert.ok(Math.abs(engine.METRICS.server_error_rate.compute(b) - (100 / 6)) < 0.001);
+  assert.ok(Math.abs(engine.METRICS.client_error_rate.compute(b) - (100 / 6)) < 0.001);
+});
+
+test('unclassified_rate itself is UNCHANGED - it measures unclassified as a share of ALL requests', () => {
+  const b = { total: 10, s4: 0, s5: 0, unknown: 4 };
+  assert.equal(engine.METRICS.unclassified_rate.compute(b), 40);
+});
+
+test('a request set with EVERY request unclassified has a null error rate, not a divide-by-zero', () => {
+  const b = { total: 5, s4: 0, s5: 0, unknown: 5 };
+  assert.equal(engine.METRICS.error_rate.compute(b), null);
+});
+
+test('a normal, fully-classified request set is unaffected by the fix', () => {
+  const b = { total: 100, s4: 5, s5: 5, unknown: 0 };
+  assert.equal(engine.METRICS.error_rate.compute(b), 10);
+});

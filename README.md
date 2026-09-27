@@ -255,3 +255,14 @@ under `ops/sit-doc-agent/tests/` (pytest).
 - **Frontend has no build step.** `public/js/studio/*.js` are loaded as 26
   separate, order-dependent `<script>` tags with implicit shared global
   scope — no bundling, minification, or per-file isolation for testing.
+- **SSO covers OIDC only — no SAML, no SCIM.** `server/routes/sso.js` and the
+  Security Center's Single Sign-On tab support any standard OIDC provider
+  (Okta, Azure AD, Google Workspace, or a generic IdP). SAML is a separate,
+  materially different protocol (XML signing/assertions) with no code path
+  in common with OIDC — worth its own follow-up if a specific customer needs
+  it, not something to bolt onto this. SCIM (automated user
+  provisioning/deprovisioning pushed from an IdP) is a large spec surface
+  that's genuinely untestable without a real enterprise IdP contract to
+  register against; today, provisioning is either manual (`POST
+  /api/users/invite`/`invite-bulk`) or automatic-on-first-SSO-login (as a
+  Viewer, promoted by an Admin afterward).
