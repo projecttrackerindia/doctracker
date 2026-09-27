@@ -174,7 +174,11 @@ function renderSidebar(){
   // uses and viewEndpoints() already enforces per-project. Without this, switching
   // the header environment left the same pooled list of every environment's
   // discovery projects on screen here.
-  const autoProjects = projects.filter(p=>!!p.discoveryEnvironment && discoveryMatchesCurrentEnv(p));
+  // Admin-only (2026-09-27, requested explicitly): raw auto-discovered
+  // traffic, same ops-facing bar as Observability — a non-admin (even one
+  // who owns a curated project) never sees this section at all, regardless
+  // of whether any of it happens to overlap something they own.
+  const autoProjects = isAdmin() ? projects.filter(p=>!!p.discoveryEnvironment && discoveryMatchesCurrentEnv(p)) : [];
   const manualHtml = manualProjects.map(proj=>renderProjectNode(proj, filter)).join('');
 
   // Reconcile discovery against the documentation before rendering it, so an

@@ -547,13 +547,34 @@ function renderObsLiveBadge(){
     }
   }
 
+  // The stream and the agent are genuinely different things (see the note
+  // above obsAgentFreshness), but a bold "LIVE" sitting over "agent 788m
+  // ago" reads as a contradiction, not two independent facts — a stream
+  // that's merely connected to a collector that stopped hours ago isn't
+  // showing anything live. Only overrides the top label when the stream
+  // itself has nothing to report (no outage already being shown above) —
+  // an actual stream outage still takes priority, since that explains the
+  // stale reading rather than being a second, separate problem.
+  let agentDown = false;
+  if(!outage && obsLiveState === 'live' && feed && (feed.level === 'bad' || feed.level === 'none')){
+    agentDown = true;
+    colorVar = '--delete';
+    label = feed.level === 'none' ? 'NO AGENT' : 'AGENT DOWN';
+    // feed.title already says the full "no agent has reported" sentence for
+    // the 'none' case (see obsAgentFreshness) and gets appended below —
+    // this just needs to say the stream itself is fine, not repeat it.
+    title = feed.level === 'none'
+      ? 'The live stream is connected'
+      : 'The live stream is connected, but the collector on the Mule host has stopped pushing data';
+  }
+
   const stateClass = outage
     ? (outage.offline ? 'nonetwork' : (outage.downMs < OBS_RECONNECT_GRACE_MS ? 'retrying' : 'down'))
-    : obsLiveState;
+    : (agentDown ? 'down' : obsLiveState);
   const full = feed && feed.title ? `${title}. ${feed.title}.` : `${title}.`;
   return `<span class="obs-live-badge obs-live-${stateClass}${feed ? ' obs-live-feed-' + feed.level : ''}"
       id="obsLiveBadge" style="--obs-live: var(${colorVar});" title="${escapeHtml(full)}">
-    <span class="obs-live-dot${obsLiveState === 'live' ? ' pulsing' : ''}"></span>
+    <span class="obs-live-dot${(obsLiveState === 'live' && !agentDown) ? ' pulsing' : ''}"></span>
     <span class="obs-live-stack">
       <span class="obs-live-label">${label}</span>
       ${feed ? `<span class="obs-live-sub">${escapeHtml(feed.label)}</span>` : ''}

@@ -236,6 +236,60 @@ function initNotifications(){
   refreshSecurityBadge();
   refreshReleasePipelineBadge();
   notifStartLive();
+  wsEventsStartLive();
+}
+
+// ---------- Live workspace updates (Dashboard/Home banner) ----------
+// Same lifecycle pattern as notifStartLive() above and obsStartLive() in
+// 24-obs-api.js: plain SSE, cookie auth, EventSource's native auto-reconnect.
+// Unlike those two, a workspace change is NOT auto-applied here — Home's
+// Control Center view has its own local search/sort/filter UI state that a
+// forced reload would blow away mid-interaction, and it's actively useful
+// for a change made in another tab/by another user to be visible as "this
+// changed since you loaded" rather than silently shift the data under
+// someone's cursor. So this only ever raises a flag (`state._homeUpdatePending`)
+// and, if Home is the page currently on screen, shows a small "refresh"
+// banner (see 11-render-main.js for where that flag is also checked on
+// navigating TO Home, in case the event arrived while looking at something
+// else) — the actual refetch only happens if the visitor clicks it.
+let _wsEventSource = null;
+function wsEventsStartLive(){
+  if(_wsEventSource) return;
+  if(typeof EventSource === 'undefined') return; // no live affordance without SSE support — a manual reload still picks up changes
+  try{
+    _wsEventSource = new EventSource('/api/audit/stream', { withCredentials: true });
+  }catch(e){ return; }
+  _wsEventSource.addEventListener('workspace', ()=>{
+    state._homeUpdatePending = true;
+    if(state.selected && state.selected.type === 'home') showHomeUpdateBanner();
+  });
+  _wsEventSource.addEventListener('error', ()=>{
+    // EventSource retries on its own; nothing to do here beyond letting it.
+  });
+}
+
+function ensureHomeUpdateBannerEl(){
+  let el = document.getElementById('homeUpdateBanner');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'homeUpdateBanner';
+    el.className = 'live-refresh-banner';
+    el.innerHTML = `<span>New changes are available.</span><button type="button" id="homeUpdateBannerBtn">Refresh</button>`;
+    document.body.appendChild(el);
+    el.querySelector('#homeUpdateBannerBtn').addEventListener('click', ()=>{
+      state._homeUpdatePending = false;
+      hideHomeUpdateBanner();
+      loadState().then(()=>{ renderAll(); toast('Dashboard refreshed.'); });
+    });
+  }
+  return el;
+}
+function showHomeUpdateBanner(){
+  ensureHomeUpdateBannerEl().classList.add('show');
+}
+function hideHomeUpdateBanner(){
+  const el = document.getElementById('homeUpdateBanner');
+  if(el) el.classList.remove('show');
 }
 
 // One-time: if this browser still has the old localStorage workspace, ship it

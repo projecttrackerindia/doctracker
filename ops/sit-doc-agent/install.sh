@@ -94,6 +94,21 @@ chmod 700 "$DIR/start-agent.sh"
 
 # Log rotation, because this appends forever otherwise. Keeps one previous
 # file; 20 MB is several days of normal output.
+#
+# copy-then-truncate, NOT rename: the agent has no signal handling and holds
+# agent.log open via the shell's `>> agent.log` redirect for as long as it
+# runs (days/weeks by design). A rename leaves that fd pointed at the old,
+# now-unlinked inode - the running process keeps appending to it forever,
+# every later rotation attempt finds no file at $LOG and silently no-ops, and
+# the "one previous file, 20 MB cap" promise above only ever held once. This
+# is the standard `copytruncate` logrotate strategy for exactly this case: a
+# long-running process that can't be told to reopen its log. `: > "$LOG"`
+# truncates the SAME inode the process is already writing to, so it keeps
+# appending correctly with no restart and no signal needed. The accepted
+# trade-off (same one real logrotate --copytruncate documents) is that a
+# handful of lines written in the instant between the copy and the truncate
+# can be lost - acceptable for a diagnostic log, not for request data (this
+# never touches state.json or the log files being tailed).
 cat > "$DIR/rotate-log.sh" <<'INNER'
 #!/bin/bash
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -101,7 +116,7 @@ LOG="$DIR/agent.log"
 [ -f "$LOG" ] || exit 0
 SIZE=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
 [ "$SIZE" -lt 20971520 ] && exit 0
-mv -f "$LOG" "$LOG.1"
+cp -f "$LOG" "$LOG.1" && : > "$LOG"
 INNER
 chmod 700 "$DIR/rotate-log.sh"
 

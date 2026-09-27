@@ -18,6 +18,20 @@
   ]);
   const SPECIAL_RE = /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]/;
   const EMAIL_RE = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
+  // QA regression (2026-09-26, bugs #6/#7): this comment already claimed to
+  // mirror server/validators.js's validateUsername(), but only a bare
+  // `username.length < 3` check ever existed in the submit handler below -
+  // no max-length, no starts-with-a-letter/valid-characters check. A
+  // username starting with a digit, or over 30 characters, passed this
+  // weak check and fell through to whatever the NEXT field's error was
+  // (usually read as "the username check passed"). This is the actual
+  // mirror of the server rule.
+  const USERNAME_RE = /^[a-zA-Z][a-zA-Z0-9._-]*$/;
+  function validateUsername(username) {
+    if (username.length < 3 || username.length > 30) return { valid: false, reason: 'Username must be 3–30 characters.' };
+    if (!USERNAME_RE.test(username)) return { valid: false, reason: 'Username must start with a letter and use only letters, numbers, ., _ or -.' };
+    return { valid: true };
+  }
 
   function classifyEmail(email) {
     if (!EMAIL_RE.test(email)) return { valid: false, kind: null, domain: null };
@@ -215,7 +229,8 @@
     const emailInfo = classifyEmail(email);
     const pwEval = evaluatePassword(password, username, email);
 
-    if (username.length < 3) return showAlert('Enter a username of at least 3 characters.');
+    const usernameCheck = validateUsername(username);
+    if (!usernameCheck.valid) return showAlert(usernameCheck.reason);
     if (!emailInfo.valid) return showAlert('Enter a valid Gmail or work email address.');
     if (!organisation) return showAlert('Enter your organisation name.');
     if (!selectedRole) return showAlert('Select a role.');

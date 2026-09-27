@@ -2,10 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Architecture Studio · DocTracker</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/css/components.css?v=__ASSET_VERSION__">
 <script src="/js/idle-session.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/shared/toast.js?v=__ASSET_VERSION__"></script>
+<script nonce="__CSP_NONCE__" src="/js/shared/focus-trap.js?v=__ASSET_VERSION__"></script>
 <script nonce="__CSP_NONCE__">
 (function(){
   var t = localStorage.getItem('apiStudio_theme');
@@ -515,13 +518,7 @@ svg{ display:block; }
 .banner button:hover{ background:var(--surface-hover); }
 .banner button.primary{ background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:#04141a; }
 
-#toast{
-  position:absolute; bottom:20px; left:50%; transform:translateX(-50%) translateY(10px); z-index:60;
-  background:var(--surface-solid); border:1px solid var(--border-strong); color:var(--text);
-  padding:9px 16px; border-radius:10px; font-size:12.5px; font-weight:600; opacity:0; pointer-events:none;
-  transition:opacity .2s, transform .2s; box-shadow:var(--shadow-panel);
-}
-#toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+/* .toast/.toast.show now in components.css, shared with the other pages. */
 
 .ctx-menu{
   position:fixed; z-index:70; min-width:170px; padding:5px; border-radius:11px;
@@ -753,12 +750,11 @@ svg{ display:block; }
 
 </div>
 
-<div id="toast"></div>
 <div class="ctx-menu hidden" id="ctxMenu"></div>
 
-<div class="modal-overlay" id="publishModal">
+<div class="modal-overlay" id="publishModal" role="dialog" aria-modal="true" aria-labelledby="publishModalTitle">
   <div class="modal">
-    <h2>Publish diagram</h2>
+    <h2 id="publishModalTitle">Publish diagram</h2>
     <p id="publishModalText">This replaces the architecture diagram shown on <b id="publishProjName">this project's</b> overview page for everyone who can view it. You can keep editing and publish again anytime.</p>
     <div class="modal-actions">
       <button id="publishCancel">Cancel</button>
@@ -767,9 +763,9 @@ svg{ display:block; }
   </div>
 </div>
 
-<div class="modal-overlay" id="customIconModal">
+<div class="modal-overlay" id="customIconModal" role="dialog" aria-modal="true" aria-labelledby="customIconModalTitle">
   <div class="modal">
-    <h2>Add a custom icon</h2>
+    <h2 id="customIconModalTitle">Add a custom icon</h2>
     <p>Drop in a logo (yours to use — PNG, JPEG, WebP or SVG, under 300KB) and give it a name. It's saved for your whole organisation, so it'll show up in every project's diagram from now on.</p>
     <div class="insp-field" id="ciDropZone" style="border:1.5px dashed var(--border-strong); border-radius:12px; padding:16px; text-align:center; cursor:pointer; margin-bottom:14px;">
       <div id="ciPreviewWrap" style="display:none; margin-bottom:8px;">
@@ -806,13 +802,6 @@ function slugify(str){
   return String(str||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'x';
 }
 function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
-function toast(msg){
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(t._timer);
-  t._timer = setTimeout(()=>t.classList.remove('show'), 2800);
-}
 async function apiGet(path){
   const res = await fetch('/api/workspace' + path, { credentials:'same-origin' });
   if(!res.ok) throw new Error('Request failed: ' + res.status);

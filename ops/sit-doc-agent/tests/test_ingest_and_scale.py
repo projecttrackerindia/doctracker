@@ -12,6 +12,7 @@ that drops new entries still renders a confident-looking "Top source IPs"
 panel. Neither raises anything.
 """
 import io
+import json
 import os
 import re
 import shutil
@@ -638,18 +639,34 @@ try:
     st_save = {"offset": 1234, "inode": 99, "last_push": 7,
                "endpoints": {"GET /x": {"totalRequests": 5}},
                "rollups": {"a|b": {"requestCount": 1}},
-               "health": {"linesProcessedTotal": 10}}
+               "health": {"linesProcessedTotal": 10},
+               "seenEvents": ["evt-1", "evt-2"],
+               "countedRequestPaths": {"GET evt-1": "/x"}}
     agent.save_state(st_save, full=True)
     check("a full save writes both files",
           os.path.exists(agent.STATE_FILE) and os.path.exists(agent.CURSOR_FILE))
     round_trip = agent.load_state()
     check("a full save round-trips every key",
           round_trip["offset"] == 1234 and round_trip["endpoints"]["GET /x"]["totalRequests"] == 5
-          and round_trip["rollups"]["a|b"]["requestCount"] == 1)
+          and round_trip["rollups"]["a|b"]["requestCount"] == 1
+          and round_trip["seenEvents"] == ["evt-1", "evt-2"])
+
+    # seenEvents/countedRequestPaths hold up to MAX_SEEN_EVENTS (20,000)
+    # strings apiece - large enough that rewriting them every cycle (rather
+    # than only on push cycles, like the other bulky keys) would mean real,
+    # avoidable disk I/O under sustained traffic. Confirmed directly against
+    # the cursor file's own raw content, not just round-trip behavior, so a
+    # future change that re-adds either key to the cheap half is caught here
+    # even if it happens to still round-trip correctly in this same test.
+    with open(agent.CURSOR_FILE, "r", encoding="utf-8") as fh:
+        cursor_on_disk = json.load(fh)
+    check("seenEvents is never written to the cursor file", "seenEvents" not in cursor_on_disk)
+    check("countedRequestPaths is never written to the cursor file", "countedRequestPaths" not in cursor_on_disk)
 
     bulky_before = os.path.getsize(agent.STATE_FILE)
     st_save["offset"] = 5678
     st_save["endpoints"]["GET /x"]["totalRequests"] = 999
+    st_save["seenEvents"].append("evt-3")
     agent.save_state(st_save, full=False)
     check("a cursor-only save does NOT rewrite the bulky file",
           os.path.getsize(agent.STATE_FILE) == bulky_before)
@@ -658,6 +675,9 @@ try:
     check("a cursor-only save leaves the last-written aggregates intact",
           reloaded["endpoints"]["GET /x"]["totalRequests"] == 5,
           "in-memory value was 999; on disk it stays at the last full save")
+    check("a cursor-only save leaves the last-written seenEvents intact too",
+          reloaded["seenEvents"] == ["evt-1", "evt-2"],
+          "in-memory value had evt-3 appended; on disk it stays at the last full save")
     check("the cursor file is much smaller than the bulky file it replaces per cycle",
           os.path.getsize(agent.CURSOR_FILE) < bulky_before)
 
@@ -813,6 +833,33 @@ health5 = agent.build_agent_health({"health": {}, "endpoints": {}, "files": {}})
 check("agent health reports both cadences so the page can size its badge",
       health5.get("pushMinIntervalSeconds") == agent.PUSH_MIN_INTERVAL_SECONDS
       and health5.get("pollIntervalActiveSeconds") == agent.POLL_INTERVAL_ACTIVE_SECONDS)
+
+print("A heartbeat-only push must still reach the observability ingest route")
+# QA regression (2026-09-26): push_observability() used to return early
+# ("if not rollups and not records: return") without ever calling
+# _request() when there was nothing new to send. The SERVER's ingest route
+# calls touchHeartbeat() unconditionally specifically so a push with zero
+# new data still counts as "the agent is alive" for the agent_silent alert
+# (see touchHeartbeat()'s comment in observabilityStore.js) - but that only
+# works if the agent actually makes the call. A quiet environment (a
+# handful of requests a day is a real production case here) never called
+# this at all, so its heartbeat went stale and "Collector stopped
+# reporting" fired on a demonstrably live agent.
+client = agent.DocTrackerClient("https://example.invalid", "u", "p")
+calls = []
+client._request = lambda method, path, body=None, auth=True: (
+    calls.append((method, path, body)) or (200, {"ok": True, "rollupsWritten": 0, "recordsWritten": 0}, {})
+)
+client.push_observability("DEV", [], [])
+check("push_observability makes the HTTP request even with empty rollups AND records",
+      len(calls) == 1, calls)
+check("...and still sends the environment even though there's nothing else in the body",
+      calls[0][2]["environment"] == "DEV" if calls else False)
+
+calls.clear()
+client.push_observability("DEV", [{"key": "a"}], [])
+check("push_observability still makes the request when there IS real data (unchanged behavior)",
+      len(calls) == 1, calls)
 
 print("Adaptive polling must not silently shorten history or thrash the disk")
 # Both of these were regressions introduced BY adaptive polling: work that was

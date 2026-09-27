@@ -243,6 +243,14 @@ async function initDb() {
   // encrypted the way live_mode_grants' sibling request_history is.
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS doc_browse_grants JSONB NOT NULL DEFAULT '{}';`);
 
+  // Per-org SSO/OIDC configuration (issuer, client id, encrypted client
+  // secret, allowed email domain, enabled flag) — same shape as
+  // alert_settings' webhook config immediately above it in server/sso.js:
+  // one JSONB blob per org rather than a dedicated table, since this is
+  // exactly the same kind of thing (a handful of settings plus one secret)
+  // every other per-org config in this table already is.
+  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS sso_config JSONB NOT NULL DEFAULT '{}';`);
+
   // ---- Admin-managed sensitive-field masking rules (Admin ▸ Security ▸ PII & Data Masking) ----
   // Every request/response parameter table consults this list (merged with the
   // client's built-in field/pattern detectors) before ever rendering an example

@@ -118,6 +118,139 @@ router.post('/invite', async (req, res) => {
   }
 });
 
+// ---- POST /api/users/invite-bulk — provision several accounts at once ----
+// Same per-user validation, temp-password generation, and safe-role handling
+// as POST /invite, just looped over a small array instead of one call per
+// person. All-or-nothing: if any row fails validation or collides with an
+// existing account (or with ANOTHER row in the same batch), nothing is
+// created and the response lists every problem found, by index, so the
+// admin can fix the CSV/list and resubmit rather than guess which of 20
+// people actually got an account.
+const MAX_BULK_INVITE = 50;
+
+router.post('/invite-bulk', async (req, res) => {
+  try {
+    const { users: incoming } = req.body || {};
+    if (!Array.isArray(incoming) || incoming.length === 0) {
+      return res.status(400).json({ error: 'Expected { users: [ { username, email, role, ... }, ... ] }.' });
+    }
+    if (incoming.length > MAX_BULK_INVITE) {
+      return res.status(400).json({ error: `Too many accounts in one batch (max ${MAX_BULK_INVITE}).` });
+    }
+
+    const errors = [];
+    const checked = [];
+    const seenUsernames = new Map(); // lowercase username -> first index that used it
+    const seenEmails = new Map();
+
+    for (let i = 0; i < incoming.length; i += 1) {
+      const row = incoming[i] || {};
+      const { username, email, role, customPermissions, accessSchedule } = row;
+
+      const usernameCheck = validateUsername(username);
+      if (!usernameCheck.valid) { errors.push({ index: i, field: 'username', error: usernameCheck.reason }); continue; }
+
+      const emailCheck = validateEmail(email);
+      if (!emailCheck.valid) { errors.push({ index: i, field: 'email', error: emailCheck.reason }); continue; }
+
+      const roleCheck = validateRole(role);
+      if (!roleCheck.valid) { errors.push({ index: i, field: 'role', error: roleCheck.reason }); continue; }
+
+      let permsToStore = null;
+      if (roleCheck.value === 'custom') {
+        const permsCheck = validateCustomPermissions(customPermissions);
+        if (!permsCheck.valid) { errors.push({ index: i, field: 'customPermissions', error: permsCheck.reason }); continue; }
+        permsToStore = permsCheck.value;
+      }
+
+      const scheduleCheck = validateAccessSchedule(accessSchedule);
+      if (!scheduleCheck.valid) { errors.push({ index: i, field: 'accessSchedule', error: scheduleCheck.reason }); continue; }
+
+      const uKey = usernameCheck.value.toLowerCase();
+      const eKey = email.trim().toLowerCase();
+      if (seenUsernames.has(uKey)) {
+        errors.push({ index: i, field: 'username', error: `Duplicate of row ${seenUsernames.get(uKey)} in this same batch.` });
+        continue;
+      }
+      if (seenEmails.has(eKey)) {
+        errors.push({ index: i, field: 'email', error: `Duplicate of row ${seenEmails.get(eKey)} in this same batch.` });
+        continue;
+      }
+      seenUsernames.set(uKey, i);
+      seenEmails.set(eKey, i);
+
+      checked.push({
+        index: i,
+        username: usernameCheck.value,
+        email: eKey,
+        role: roleCheck.value,
+        customPermissions: permsToStore,
+        accessSchedule: scheduleCheck.value,
+      });
+    }
+
+    if (errors.length) {
+      return res.status(400).json({ error: 'One or more accounts could not be validated.', errors });
+    }
+
+    const existing = await pool.query(
+      `SELECT username, email FROM users WHERE LOWER(username) = ANY($1::text[]) OR LOWER(email) = ANY($2::text[])`,
+      [checked.map((c) => c.username.toLowerCase()), checked.map((c) => c.email)]
+    );
+    if (existing.rows.length) {
+      const existingUsernames = new Set(existing.rows.map((r) => r.username.toLowerCase()));
+      const existingEmails = new Set(existing.rows.map((r) => r.email.toLowerCase()));
+      const collisions = checked
+        .filter((c) => existingUsernames.has(c.username.toLowerCase()) || existingEmails.has(c.email))
+        .map((c) => ({ index: c.index, error: 'An account with that username or email already exists.' }));
+      return res.status(409).json({ error: 'One or more accounts already exist.', errors: collisions });
+    }
+
+    const client = await pool.connect();
+    let created;
+    try {
+      await client.query('BEGIN');
+      created = [];
+      for (const c of checked) {
+        const temporaryPassword = generateTemporaryPassword();
+        const passwordHash = await bcrypt.hash(temporaryPassword, 12);
+        const result = await client.query(
+          `INSERT INTO users (username, email, password_hash, organisation, role, custom_permissions, access_schedule)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING ${SAFE_COLUMNS}`,
+          [
+            c.username, c.email, passwordHash, req.authUser.organisation, c.role,
+            c.customPermissions ? JSON.stringify(c.customPermissions) : null,
+            c.accessSchedule ? JSON.stringify(c.accessSchedule) : null,
+          ]
+        );
+        created.push({ user: result.rows[0], temporaryPassword });
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Best-effort, same as the single-invite welcome notification — never
+    // lets a notification failure undo or fail the accounts already created.
+    await Promise.all(created.map((c) => notifyUser(c.user.id, {
+      organisation: req.authUser.organisation,
+      type: 'ACCOUNT_CREATED',
+      title: `Welcome — your account was set up by ${req.authUser.username}`,
+      body: `Role: ${c.user.role}`,
+      link: null,
+    }).catch((err) => console.error('Welcome notification failed:', err))));
+
+    res.status(201).json({ created });
+  } catch (err) {
+    console.error('Bulk invite users error:', err);
+    res.status(500).json({ error: 'Something went wrong creating those accounts. Please try again.' });
+  }
+});
+
 // Shared lookup: only ever act on a user in the admin's own organisation.
 async function findManagedUser(req, res) {
   const id = parseInt(req.params.id, 10);

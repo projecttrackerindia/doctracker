@@ -81,4 +81,17 @@ function environmentAllowed(access, environmentId) {
   return access.allowedEnvironments === 'all' || access.allowedEnvironments.includes(environmentId);
 }
 
-module.exports = { resolveAccess, resolveAccessById, environmentAllowed, NO_ACCESS };
+// The same "is this environment covered by this grant" predicate as
+// environmentAllowed() above, but for call sites that already have a raw
+// project_access.environments array in hand (from their own query) rather
+// than a resolveAccess() result — this was independently re-implemented as
+// `envs.includes('*') || envs.includes(environmentId)` in liveMode.js,
+// pii.js, and workspace.js (twice), so a future change to the matching rule
+// (e.g. a new wildcard alias) would have had to be made in 4 places to
+// actually take effect everywhere.
+function grantCoversEnvironment(environments, environmentId) {
+  const envs = Array.isArray(environments) ? environments : [];
+  return envs.includes('*') || envs.includes(environmentId);
+}
+
+module.exports = { resolveAccess, resolveAccessById, environmentAllowed, grantCoversEnvironment, NO_ACCESS };
