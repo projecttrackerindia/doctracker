@@ -145,7 +145,11 @@ function renderMain(){
   }
 
   if(state.selected.type === 'observability'){
-    if(!isAdmin() && !ownsAnyProject()){ state.selected = { type:'home' }; renderControlCenter(main); return; }
+    // Admin-only (2026-09-27, requested explicitly) - narrower than
+    // Security/Release Pipeline just above, which still let a non-admin
+    // project owner in. See the matching btnObservability gate in
+    // 22-init.js and the server-side requireAdmin in routes/observability.js.
+    if(!isAdmin()){ state.selected = { type:'home' }; renderControlCenter(main); return; }
     renderObservability(main);
     return;
   }

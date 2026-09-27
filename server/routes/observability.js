@@ -14,7 +14,7 @@
 // needs, and never touch the workspace cache at all.
 // ============================================================================
 const express = require('express');
-const { authenticate, blockIfScheduleLocked } = require('../middleware/authGuard');
+const { authenticate, requireAdmin, blockIfScheduleLocked } = require('../middleware/authGuard');
 const store = require('../observabilityStore');
 const liveBus = require('../observabilityBus');
 const alertEngine = require('../alertEngine');
@@ -197,6 +197,16 @@ function resolvePreviousWindow(range, coverageOldest) {
   const prevFromCovered = !coverageOldest || Date.parse(coverageOldest) <= Date.parse(prevFrom);
   return prevFromCovered ? { from: prevFrom, to: range.from } : null;
 }
+
+// Admin-only (2026-09-27, requested explicitly): the read side of this page
+// is an ops-facing view, not part of the docs a regular Editor/Viewer reads
+// day to day - the client already hides the nav button and redirects a
+// non-admin away (22-init.js / renderMain() in 11-render-main.js), but that
+// alone is only a UI convenience; without this, anyone authenticated could
+// still call these routes directly. Deliberately placed AFTER /ingest
+// above: the SIT/Dev discovery agent pushes there under its own account
+// and must keep working regardless of that account's role.
+router.use(requireAdmin);
 
 router.get('/summary', async (req, res) => {
   const range = parseRange(req.query);
