@@ -83,7 +83,7 @@ svg{ display:block; }
    APP SHELL
    ============================================================ */
 .app{
-  display:grid;
+  display:grid; position:relative;
   grid-template-columns:var(--sb-w, 300px) 1fr;
   grid-template-rows:3px 56px 1fr;
   height:100vh;
@@ -322,16 +322,33 @@ kbd{
 
 /* ---------- Sidebar drag-to-resize ----------
    No single fixed width fits every endpoint name, so the width itself is
-   adjustable: a thin invisible strip on the sidebar's own right edge,
-   widening and tinting on hover so it reads as draggable, that drags
-   --sb-w directly. Persisted per-browser (see SB_WIDTH_KEY) so it's a
-   one-time adjustment, not something to redo every visit. */
+   adjustable: an invisible strip at the sidebar/content boundary, widening
+   and tinting on hover so it reads as draggable, that drags --sb-w
+   directly. Persisted per-browser (see SB_WIDTH_KEY) so it's a one-time
+   adjustment, not something to redo every visit.
+
+   QA regression (2026-09-27), two bugs found live, both fixed together:
+   1) The hit area was a literal 6px strip centered ON the boundary —
+      under real-mouse precision that's easy to miss by a pixel or two
+      either side. Widened to 14px.
+   2) It used to be the LAST CHILD of .sidebar, positioned via
+      right:-7px past that box's own edge. .sidebar has overflow-y:auto
+      for its endpoint list, and CSS computes an unspecified/opposite-axis
+      'visible' as 'auto' once the OTHER axis is non-visible (true even
+      when overflow-x:visible is set explicitly - the two axes can't be
+      split that way) — so anything hanging past .sidebar's own right
+      edge was silently clipped, including this handle. Confirmed live:
+      document.elementFromPoint at the handle's own center returned
+      #sidebar, not the handle, no matter how wide the hit area was made.
+      Moved OUT of .sidebar's DOM subtree (now a sibling, positioned off
+      .app instead, which has no such scroll/clip container) so it can no
+      longer be clipped by whatever the sidebar's own overflow does. */
 .sidebar-resize-handle{
-  position:absolute; top:0; right:-3px; width:6px; height:100%; z-index:31;
-  cursor:col-resize; background:transparent;
+  position:absolute; top:59px; left:calc(var(--sb-w, 300px) - 7px); width:14px;
+  height:calc(100% - 59px); z-index:31; cursor:col-resize; background:transparent;
 }
 .sidebar-resize-handle::after{
-  content:''; position:absolute; top:0; left:2px; width:2px; height:100%;
+  content:''; position:absolute; top:0; left:6px; width:2px; height:100%;
   background:var(--accent); opacity:0; transition:opacity .12s ease;
 }
 .sidebar-resize-handle:hover::after,
@@ -3999,8 +4016,8 @@ pre.json-raw{ max-height:360px; margin:0; }
       <div class="pinned-row" data-nav="home" title="API Control Center"><span class="pinned-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect></svg></span><span class="pinned-label">API Control Center</span></div>
     </div>
     <div id="projectList"></div>
-    <div class="sidebar-resize-handle" id="sidebarResizeHandle" title="Drag to resize"></div>
   </div>
+  <div class="sidebar-resize-handle" id="sidebarResizeHandle" title="Drag to resize"></div>
 
   <div class="main-wrap">
     <div id="scheduleBanner" style="display:none;"></div>
