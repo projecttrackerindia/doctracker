@@ -165,7 +165,7 @@ document.getElementById('notifList').addEventListener('click', async (e)=>{
   item.classList.remove('unread');
   notifApiPost(`/${id}/read`).then(refreshNotifBadge).catch(()=>{});
   const linkRaw = item.getAttribute('data-notif-link');
-  let link = null;
+  let link;
   try{ link = linkRaw ? JSON.parse(linkRaw) : null; }catch(e){ link = null; }
   toggleNotifPanel(false);
   if(link) navigateToNotifLink(link);
