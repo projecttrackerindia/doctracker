@@ -23,6 +23,17 @@ const localSubscribers = new Map();
 let publisher = null;
 let subscriber;
 
+// Tags every message this process publishes to Redis, so this SAME process's
+// own subscription to CHANNEL can recognize its own echo and skip it. Without
+// this, every push landed on screen twice per connected browser: once
+// instantly from the synchronous deliverLocal() call inside publish() below,
+// and a second time a moment later when that same publish round-tripped
+// through Redis and arrived back on this process's own `subscriber.on
+// ('message', ...)` handler, indistinguishable from a sibling instance's
+// push. Reproduced live against production (two identical 'metrics' events,
+// same payload, same instant) before this fix.
+const INSTANCE_ID = `${process.pid}-${Math.random().toString(36).slice(2)}`;
+
 if (process.env.REDIS_URL) {
   try {
     const Redis = require('ioredis');
@@ -37,7 +48,8 @@ if (process.env.REDIS_URL) {
     subscriber.on('message', (channel, raw) => {
       if (channel !== CHANNEL) return;
       try {
-        const { organisation, payload } = JSON.parse(raw);
+        const { organisation, payload, sourceInstanceId } = JSON.parse(raw);
+        if (sourceInstanceId === INSTANCE_ID) return; // our own publish, already delivered locally
         deliverLocal(organisation, payload);
       } catch (err) {
         console.error('Observability bus: malformed message from Redis:', err.message);
@@ -81,7 +93,7 @@ function publish(organisation, payload) {
   deliverLocal(organisation, payload);
   if (publisher) {
     publisher
-      .publish(CHANNEL, JSON.stringify({ organisation, payload }))
+      .publish(CHANNEL, JSON.stringify({ organisation, payload, sourceInstanceId: INSTANCE_ID }))
       .catch((err) => console.error('Observability bus: Redis publish failed:', err.message));
   }
 }

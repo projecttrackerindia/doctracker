@@ -2126,6 +2126,14 @@ function renderObservability(main){
       if(onLogsPage1) tasks.push(obsLoadRecordsPage({ skipRender: true }));
       await Promise.all(tasks);
       if(typeof obsRerenderLiveConsole === 'function') obsRerenderLiveConsole();
+      // obsLoad() just refreshed state.obsData (including agentHealth), but the
+      // "LIVE / agent Xm ago" badge lives outside #obsBody, which is all
+      // obsRerenderLiveConsole() above touches - so a push updated the charts
+      // instantly but left the badge's freshness reading stale until the next
+      // 30s clock tick (obsStartBadgeClock) or the next SSE open/error event.
+      // Repaint it here too so a real push is reflected immediately, not up to
+      // 30 seconds later.
+      obsRefreshLiveBadge();
     });
   }else{
     renderConsole(body, metrics, agentHealth, logRecords);

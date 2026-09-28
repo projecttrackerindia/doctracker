@@ -42,7 +42,20 @@ function attachSseStream(req, res, { eventName, subscribe }) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
+    // Deliberately NOT setting Connection: keep-alive here (removed — see
+    // below). It used to be set explicitly, on the assumption it was needed
+    // to keep the underlying TCP connection open for a long-lived stream —
+    // but Connection is a hop-by-hop header, and RFC 7540 §8.1.2.2 forbids
+    // it entirely over HTTP/2: "An intermediary transforming an HTTP/1.x
+    // message to HTTP/2 MUST remove connection-specific header fields... or
+    // their messages will be treated as malformed". Reproduced live: the
+    // browser reported net::ERR_HTTP2_PROTOCOL_ERROR specifically on this
+    // app's SSE endpoints (Railway terminates HTTP/2 to the browser while
+    // this backend still speaks HTTP/1.1), tearing the connection down and
+    // forcing EventSource's automatic reconnect — the exact "LIVE badge
+    // flickers to CONNECTING/OFFLINE on its own" behavior reported live.
+    // Node keeps the underlying HTTP/1.1 connection to Railway's edge alive
+    // on its own; this header was never required for that.
     // Tells nginx-style proxies not to buffer this response. Without it, a
     // proxy can hold events until its buffer fills, which defeats the point.
     'X-Accel-Buffering': 'no',
