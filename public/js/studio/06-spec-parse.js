@@ -181,6 +181,23 @@ function applySidebarCollapsed(){
   const edgeBtn = document.getElementById('btnSidebarEdgeToggle');
   const collapsed = !!state.sidebarCollapsed;
   app.classList.toggle('sb-collapsed', collapsed);
+  // BUG: a manually drag-resized width (21-events.js's sidebar-resize-handle)
+  // is stored as an INLINE --sb-w style on #app, reapplied on every page
+  // load. Inline styles always beat a class-based rule for the same custom
+  // property regardless of specificity, so `.app.sb-collapsed{--sb-w:64px}`
+  // below was silently losing to that leftover inline value - the rail's
+  // CONTENT correctly hid (those rules target plain classes, unaffected),
+  // but its WIDTH stayed stuck at whatever it had last been dragged to,
+  // producing a wide, empty-looking sidebar instead of the narrow icon rail.
+  // Clearing the inline override on collapse, and restoring the saved width
+  // on expand, keeps both the collapse AND the user's remembered custom
+  // width working together instead of one silently overriding the other.
+  if(collapsed){
+    app.style.removeProperty('--sb-w');
+  }else{
+    const savedWidth = parseInt(localStorage.getItem('sbWidth'), 10);
+    if(savedWidth && savedWidth >= 220 && savedWidth <= 520) app.style.setProperty('--sb-w', savedWidth + 'px');
+  }
   btn.setAttribute('aria-expanded', String(!collapsed));
   btn.title = collapsed ? 'Show sidebar (Ctrl/Cmd+B)' : 'Hide sidebar (Ctrl/Cmd+B)';
   if(edgeBtn){
