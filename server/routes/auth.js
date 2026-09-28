@@ -7,6 +7,7 @@ const dataCrypto = require('../crypto');
 const totp = require('../totp');
 const { verifySession, IdleTimeoutError, authenticate } = require('../middleware/authGuard');
 const { notifyUsers, adminUserIds } = require('../notifications');
+const { recordAuthEvent } = require('../auditService');
 const { log } = require('../logger');
 const {
   validateEmail,
@@ -223,7 +224,7 @@ const LOGIN_COLUMNS = `id, username, email, password_hash, organisation, role, c
 // last_login/last_activity update, the signed cookie, its options) is
 // identical either way; omitting redirectTo (every existing caller) keeps
 // the original JSON response exactly as it was.
-async function finalizeLogin(user, res, { redirectTo } = {}) {
+async function finalizeLogin(user, req, res, { redirectTo } = {}) {
   // Reset last_activity_at here too, not just last_login_at — verifySession()
   // (authGuard.js) checks last_activity_at on every subsequent request to
   // decide idle-timeout, and it doesn't know or care that a fresh login just
@@ -238,6 +239,13 @@ async function finalizeLogin(user, res, { redirectTo } = {}) {
   };
   const token = signSession(user);
   res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
+  // SECURITY (VAPT-08): a successful sign-in is a security-relevant event —
+  // record it the same way every other audited action is, not silently.
+  // Never awaited: an audit-write hiccup must not block the user's login.
+  recordAuthEvent(user.organisation, { userId: user.id, username: user.username, role: user.role }, req, {
+    action: 'login_success',
+    resourceType: 'auth',
+  }).catch((err) => log.error('Audit write failed for login_success', { err }));
   if (redirectTo) return res.redirect(redirectTo);
   res.json({ user: safeUser, orgToken: dataCrypto.encryptOrgToken(user.organisation) });
 }
@@ -283,6 +291,9 @@ router.post('/login', authLimiter, async (req, res) => {
     const now = Date.now();
     const lockout = checkAccountLockout(user.locked_until, now);
     if (lockout.locked) {
+      recordAuthEvent(user.organisation, { userId: user.id, username: user.username, role: user.role }, req, {
+        action: 'login_blocked_locked', resourceType: 'auth', result: 'failure', severity: 'warning',
+      }).catch((err) => log.error('Audit write failed for login_blocked_locked', { err }));
       return res.status(423).json({
         error: 'account_locked',
         message: `Too many failed sign-in attempts. This account is temporarily locked — try again in about ${lockout.minutesLeft} minute${lockout.minutesLeft === 1 ? '' : 's'}.`,
@@ -299,6 +310,15 @@ router.post('/login', authLimiter, async (req, res) => {
       } else {
         await pool.query('UPDATE users SET failed_login_count = $1 WHERE id = $2', [failedCount, user.id]);
       }
+      // SECURITY (VAPT-08): a wrong-password attempt against a REAL account is
+      // exactly the signal brute-force/credential-stuffing detection needs —
+      // logged against that account's own organisation, distinct from
+      // login_blocked_locked above (which fires once the lock itself kicks
+      // in, not on every attempt against an already-known account).
+      recordAuthEvent(user.organisation, { userId: user.id, username: user.username, role: user.role }, req, {
+        action: shouldLock ? 'login_failed_lockout_triggered' : 'login_failed',
+        resourceType: 'auth', result: 'failure', severity: shouldLock ? 'warning' : 'info',
+      }).catch((err) => log.error('Audit write failed for login_failed', { err }));
       return res.status(401).json(genericError);
     }
 
@@ -318,7 +338,7 @@ router.post('/login', authLimiter, async (req, res) => {
       return res.json({ mfaRequired: true, challengeToken });
     }
 
-    await finalizeLogin(user, res);
+    await finalizeLogin(user, req, res);
   } catch (err) {
     log.error('Login error', { requestId: req.id, err });
     res.status(500).json({ error: 'Something went wrong signing you in. Please try again.' });
@@ -346,10 +366,13 @@ router.post('/mfa/challenge', authLimiter, async (req, res) => {
 
     const secret = dataCrypto.decryptField(user.mfa_secret_enc, `user:${user.id}:mfa`);
     if (!totp.verifyToken(secret, code)) {
+      recordAuthEvent(user.organisation, { userId: user.id, username: user.username, role: user.role }, req, {
+        action: 'mfa_failed', resourceType: 'auth', result: 'failure', severity: 'warning',
+      }).catch((err) => log.error('Audit write failed for mfa_failed', { err }));
       return res.status(401).json({ error: 'Incorrect code. Please try again.' });
     }
 
-    await finalizeLogin(user, res);
+    await finalizeLogin(user, req, res);
   } catch (err) {
     log.error('MFA challenge error', { requestId: req.id, err });
     res.status(500).json({ error: 'Something went wrong verifying your code. Please try again.' });
@@ -507,7 +530,17 @@ router.post('/logout', async (req, res) => {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET, { ignoreExpiration: true });
       if (decoded?.sub) {
-        await pool.query('UPDATE users SET token_version = token_version + 1 WHERE id = $1', [decoded.sub]);
+        const { rows } = await pool.query('UPDATE users SET token_version = token_version + 1 WHERE id = $1 RETURNING organisation, username, role', [decoded.sub]);
+        // SECURITY (VAPT-08): logout is a security-relevant event same as
+        // login — recorded from the token's own claims (organisation/
+        // username/role), the JWT was already verified above so those
+        // claims are trustworthy even though req.authUser was never set on
+        // this unauthenticated route.
+        if (rows.length) {
+          recordAuthEvent(rows[0].organisation, { userId: decoded.sub, username: rows[0].username, role: rows[0].role }, req, {
+            action: 'logout', resourceType: 'auth',
+          }).catch((err) => log.error('Audit write failed for logout', { err }));
+        }
       }
     } catch {
       // Malformed/already-invalid token — nothing to revoke, just clear the cookie below.

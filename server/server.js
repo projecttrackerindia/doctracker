@@ -107,6 +107,19 @@ app.use(
     hsts: { maxAge: 15552000, includeSubDomains: true, preload: true },
   })
 );
+// SECURITY (VAPT-05): helmet does not set Permissions-Policy itself (unlike
+// most of the other security headers it configures) — it's left to the
+// application since the right feature list is app-specific. This app has no
+// use for any of these browser features, so deny them all; if content
+// injection were ever achieved despite the CSP above, this is one more layer
+// stopping it from turning into a camera/mic/geolocation prompt.
+app.use((req, res, next) => {
+  res.setHeader(
+    'Permissions-Policy',
+    'camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), interest-cohort=()'
+  );
+  next();
+});
 // CORS: previously `origin: true` reflected whatever Origin header a request
 // sent, and combined with `credentials: true` that meant ANY website could
 // make a credentialed (cookie-bearing) request to this API from a visitor's
@@ -206,20 +219,35 @@ app.use('/api/workspace/sso', ssoRoutes.adminRouter);
 // degrade gracefully to "no cache" / "in-memory limiter" on their own if
 // Redis is unreachable, so a failed Redis ping shouldn't flip this endpoint
 // unhealthy the way a failed DB ping should.
+// SECURITY (VAPT-07): dependency detail (db/redis status) used to be in this
+// unauthenticated response unconditionally — reachable by anyone, disclosing
+// which backing services this app depends on for free reconnaissance. The
+// deploy platform's own health check only ever reads the status code, so it
+// loses nothing by getting the minimal {ok, time} shape; an authenticated
+// caller (an admin checking this by hand, or a future internal dashboard)
+// still gets the full db/redis detail by sending the session cookie.
 app.get('/api/health', async (req, res) => {
-  const health = {
-    ok: true,
-    time: new Date().toISOString(),
-    db: 'ok',
-    redis: workspaceCache.isEnabled() ? 'configured' : 'not configured',
-  };
+  const health = { ok: true, time: new Date().toISOString() };
+  let dbOk = true;
   try {
     await pool.query('SELECT 1');
   } catch (err) {
+    dbOk = false;
     health.ok = false;
-    health.db = 'unreachable';
     log.error('Health check: DB ping failed', { requestId: req.id, err });
   }
+
+  let authUser = null;
+  try {
+    authUser = await verifySession(req.cookies?.[COOKIE_NAME]);
+  } catch {
+    authUser = null; // an idle/invalid session here just means "treat as unauthenticated", not an error
+  }
+  if (authUser) {
+    health.db = dbOk ? 'ok' : 'unreachable';
+    health.redis = workspaceCache.isEnabled() ? 'configured' : 'not configured';
+  }
+
   res.status(health.ok ? 200 : 503).json(health);
 });
 
