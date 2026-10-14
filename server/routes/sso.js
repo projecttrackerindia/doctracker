@@ -150,7 +150,7 @@ publicRouter.get('/:organisation/callback', ssoLimiter, async (req, res) => {
       user = inserted.rows[0];
     }
 
-    await auth.finalizeLogin(user, res, { redirectTo: `/${dataCrypto.encryptOrgToken(user.organisation)}/dashboard.html` });
+    await auth.finalizeLogin(user, req, res, { redirectTo: `/${dataCrypto.encryptOrgToken(user.organisation)}/dashboard.html` });
   } catch (err) {
     log.error('GET /api/auth/sso/:organisation/callback failed', { requestId: req.id, err });
     res.status(500).send('Could not complete SSO sign-in. Try again, or use your password.');

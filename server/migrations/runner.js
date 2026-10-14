@@ -81,7 +81,7 @@ async function runMigrations(pool) {
       console.log(`Migration applied: ${filename}`);
     } catch (err) {
       await client.query('ROLLBACK');
-      throw new Error(`Migration ${filename} failed and was rolled back: ${err.message}`);
+      throw new Error(`Migration ${filename} failed and was rolled back: ${err.message}`, { cause: err });
     } finally {
       client.release();
     }
@@ -113,7 +113,7 @@ async function rollbackLast(pool) {
     return filename;
   } catch (err) {
     await client.query('ROLLBACK');
-    throw new Error(`Rollback of ${filename} failed and was rolled back: ${err.message}`);
+    throw new Error(`Rollback of ${filename} failed and was rolled back: ${err.message}`, { cause: err });
   } finally {
     client.release();
   }

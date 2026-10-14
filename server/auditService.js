@@ -47,6 +47,31 @@ async function recordSystemAuditEvent(organisation, fields = {}) {
   );
 }
 
+// SECURITY (VAPT-08): login/logout/lockout/MFA events previously had nowhere
+// to go — recordAuditEvent requires an already-VERIFIED req.authUser, which
+// doesn't exist yet during the login flow itself (that's the entire point of
+// a login attempt), and recordSystemAuditEvent deliberately anonymises its
+// actor to 'system', which is wrong here: a failed login attempt IS an
+// identified (or attempted) user acting, not a background process. This is
+// the auth-flow equivalent of recordAuditEvent — same shape, but the identity
+// comes from a DB user ROW the caller already looked up (or, for an unknown
+// username, from whatever the caller could resolve) rather than from
+// req.authUser, since no verified session exists at this point in the flow.
+async function recordAuthEvent(organisation, identity, req, fields = {}) {
+  return insertAuditRow(
+    {
+      organisation,
+      userId: identity.userId ?? null,
+      username: identity.username || 'unknown',
+      role: identity.role || 'unknown',
+      ip: req && req.ip ? String(req.ip).slice(0, 64) : null,
+      userAgent: req && req.get ? (req.get('user-agent') || '').slice(0, 300) : null,
+      requestId: null,
+    },
+    fields
+  );
+}
+
 async function insertAuditRow(identity, fields = {}) {
   const eventId = crypto.randomUUID();
   const {
@@ -140,4 +165,4 @@ function toClientShape(row) {
   };
 }
 
-module.exports = { recordAuditEvent, recordSystemAuditEvent, toClientShape };
+module.exports = { recordAuditEvent, recordSystemAuditEvent, recordAuthEvent, toClientShape };
