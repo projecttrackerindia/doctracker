@@ -11,7 +11,7 @@ router.use(authenticate);
 router.use(blockIfScheduleLocked);
 
 // Tight — a real workflow reveals a handful of times per session, not
-// dozens; matches the caution already applied to Live Mode/AI generation.
+// dozens; matches the caution already applied to AI generation.
 const revealLimiter = createRateLimiter({
   windowMs: 60 * 1000,
   max: 20,

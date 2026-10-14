@@ -1913,8 +1913,8 @@ body.tryit-standalone #tryItClose{ display:none; }
 /* Postman-style Headers table: checkbox / Key / Value / Description columns
    with a real column header row, replacing the old plain key–value list.
    The checkbox is functional, not decorative — unchecking a header removes
-   it from the "Request sent" preview built in sendTryIt()/sendTryItLive(),
-   same as unchecking a header in Postman drops it from the outgoing
+   it from the "Request sent" preview built in sendTryIt(), same as
+   unchecking a header in Postman drops it from the outgoing
    request. */
 .tryit-headers-table{ border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--surface-2); }
 .tryit-headers-thead{
@@ -1968,10 +1968,6 @@ body.tryit-standalone #tryItClose{ display:none; }
   font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--text-faint);
   margin:14px 0 6px; }
 .tryit-table-section-label:first-child{ margin-top:0; }
-.tryit-live-banner{
-  margin-top:8px; padding:8px 10px; border-radius:8px; font-size:11.5px; line-height:1.5;
-  color:var(--delete); background:var(--put-bg); border:1px dashed var(--put);
-}
 /* Small count badge on Params/Headers tab buttons, e.g. "Headers 3" — same
    idea as Postman's grey pill next to a tab with active content. */
 .trytab-count{
@@ -3669,17 +3665,13 @@ pre.json-raw{ max-height:360px; margin:0; }
     <div class="tryit-tabpanel" id="tryItSettingsPanel">
       <div class="tryit-stub-panel">
         <div class="tryit-stub-title">Request settings</div>
-        <div class="tryit-stub-body">Not built yet. SSL verification, redirect-following, and encoding options for Live mode will live here.</div>
+        <div class="tryit-stub-body">Not built yet. SSL verification, redirect-following, and encoding options will live here.</div>
       </div>
     </div>
 
     <div style="display:flex; align-items:center; justify-content:space-between; margin:16px 0 8px; flex-wrap:wrap; gap:8px;">
       <span class="hint" id="tryItHint" style="margin:0;">Only shows a response for a request that's actually documented for this endpoint — nothing leaves your browser, and nothing is ever guessed.</span>
       <div style="display:flex; align-items:center; gap:10px;">
-        <label id="tryItLiveWrap" style="display:none; align-items:center; gap:6px; font-size:11.5px; font-weight:600; color:var(--delete); cursor:pointer;">
-          <input type="checkbox" id="tryItLiveToggle" style="accent-color:var(--delete);">
-          Live — send a real request
-        </label>
         <button type="button" id="tryItRunAll" class="tryit-run-all-btn" style="display:none;" title="Send every documented scenario for this endpoint, one after another">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-14 9V3z"></path></svg>
           Run all scenarios

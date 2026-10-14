@@ -51,8 +51,10 @@ function navigateToNotifLink(link){
     state.selected = { type:'project', id: link.projectId };
     renderMain();
   } else if(link.view === 'tryit'){
-    // Live Mode access changed — nothing more specific to jump to than the
-    // home view; the person can open Try It on whichever endpoint they need.
+    // Historical notifications may still carry this link (previously sent
+    // when Live Mode access changed) — nothing more specific to jump to
+    // than the home view; the person can open Try It on whichever endpoint
+    // they need.
     state.selected = { type:'home' };
     renderMain();
   }
@@ -997,20 +999,20 @@ function ownsAnyProject(){
   return Object.values(state.projects || {}).some(p => p && p._owned);
 }
 // Which environments a given role may even see/switch to in the top-right
-// switcher. Admins always see everything. Below Admin, this used to just be
-// "every env that isn't hard-flagged restricted" — meaning Production/DR
-// were locked but Dev/SIT/UAT/Staging were open to any Viewer regardless of
-// what an Admin had actually granted them. That was closed by driving the
-// switcher off the Live Mode grant matrix — but that then over-corrected:
-// it meant "let this Viewer browse SIT's docs" and "let this Viewer fire a
-// REAL request at SIT" were the same admin checkbox, with no way to grant
-// one without the other. So browsing is now its own SEPARATE grant
-// (state.docBrowseEnvs, loaded once at boot from
-// /api/live-mode/my-browse-access) — either it OR a Live Mode grant
-// (state.liveModeEnvs) is enough to browse an environment's docs, since a
-// live-fire grant obviously implies "trusted to at least look at it first".
-// A `restricted` env (Production/DR) still can't be granted this way; that
-// flag is a hard ceiling neither grant can lift.
+// switcher. Admins always see everything.
+//
+// INTERMEDIATE STATE (Cluster A of the removal project — Live Mode proxy
+// removed, environment collapse not yet done): this used to also allow a
+// non-admin role to see an environment via either the Live Mode grant
+// matrix or the separate doc-browse grant matrix. Both grant matrices and the endpoints that
+// populated them are gone as of this cluster, and `state` no longer even
+// sets those two fields, so that branch is removed outright here (rather
+// than left reading `undefined`) and non-custom, non-seesAll roles fail
+// closed to "no environments" below. The real fix — a single implicit
+// environment every role can always see — lands in the environment-collapse
+// cluster; until then this is deliberately conservative, not a regression
+// a real user would hit today (Live Mode's removal means there's no
+// grant left to honor anyway).
 function roleAllowedEnvs(roleId){
   if(roleId === 'custom'){
     if(AUTH_USER && AUTH_USER.role === 'custom' && AUTH_USER.customPermissions){
@@ -1021,9 +1023,7 @@ function roleAllowedEnvs(roleId){
   }
   const role = roleMeta(roleId);
   if(role.seesAll) return environments();
-  const live = Array.isArray(state.liveModeEnvs) ? state.liveModeEnvs : [];
-  const browse = Array.isArray(state.docBrowseEnvs) ? state.docBrowseEnvs : [];
-  return environments().filter(e=>!e.restricted && (live.includes(e.id) || browse.includes(e.id)));
+  return [];
 }
 function roleAllowsEnv(envId){ return roleAllowedEnvs(state.authorRole).some(e=>e.id===envId); }
 

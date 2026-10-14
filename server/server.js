@@ -19,7 +19,6 @@ const workspaceRoutes = require('./routes/workspace');
 const auditRoutes = require('./routes/audit');
 const piiRoutes = require('./routes/pii');
 const securityRoutes = require('./routes/security');
-const liveModeRoutes = require('./routes/liveMode');
 const docAccessRoutes = require('./routes/docAccess');
 const aiRoutes = require('./routes/ai');
 const notificationRoutes = require('./routes/notifications');
@@ -167,13 +166,12 @@ app.use('/api/workspace', workspaceRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/pii', piiRoutes);
 app.use('/api/security', securityRoutes);
-app.use('/api/live-mode', liveModeRoutes);
 // Mounted under /api/workspace (not its own top-level prefix) purely so the
 // client's existing apiGet/apiSend helpers — hard-coded to the
 // '/api/workspace' base — can call it with no new fetch wrapper, and so it
 // automatically gets the same 25mb JSON body limit set above rather than
 // falling back to the tighter 20kb default. It's still its own router/file
-// (server/routes/docAccess.js), same separation as liveModeRoutes.
+// (server/routes/docAccess.js), same separation as the other route files.
 app.use('/api/workspace/doc-access', docAccessRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/notifications', notificationRoutes);

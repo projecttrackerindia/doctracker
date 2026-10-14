@@ -6,8 +6,8 @@
 // Scoped per RECIPIENT (`organisation:userId`), not per organisation — an
 // org-wide channel would mean every open tab in the org receives every
 // user's notification and has to filter its own out client-side, which is a
-// data-exposure smell (e.g. "so-and-so's Live Mode grants changed" leaking
-// to every browser in the org) for no real benefit, since the actual
+// data-exposure smell (e.g. "so-and-so's doc-access request was approved"
+// leaking to every browser in the org) for no real benefit, since the actual
 // subscriber set is always one user.
 //
 // Shape: an in-process Map of subscribers, relayed through Redis pub/sub

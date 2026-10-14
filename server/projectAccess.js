@@ -85,9 +85,9 @@ function environmentAllowed(access, environmentId) {
 // environmentAllowed() above, but for call sites that already have a raw
 // project_access.environments array in hand (from their own query) rather
 // than a resolveAccess() result — this was independently re-implemented as
-// `envs.includes('*') || envs.includes(environmentId)` in liveMode.js,
-// pii.js, and workspace.js (twice), so a future change to the matching rule
-// (e.g. a new wildcard alias) would have had to be made in 4 places to
+// `envs.includes('*') || envs.includes(environmentId)` in pii.js and
+// workspace.js (twice), so a future change to the matching rule (e.g. a
+// new wildcard alias) would have had to be made in multiple places to
 // actually take effect everywhere.
 function grantCoversEnvironment(environments, environmentId) {
   const envs = Array.isArray(environments) ? environments : [];

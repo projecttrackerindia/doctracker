@@ -42,22 +42,6 @@
   renderScheduleState();
   setInterval(renderScheduleState, 30000);
 
-  // Which environments (if any) this signed-in user may fire a REAL request
-  // against from Try It — see /api/live-mode and openTryItModal(). Failure
-  // here just means Live mode stays hidden (fails closed), never blocks boot.
-  try{
-    const res = await fetch('/api/live-mode/my-access', { credentials:'same-origin' });
-    state.liveModeEnvs = res.ok ? (await res.json()).environments || [] : [];
-  }catch(e){ state.liveModeEnvs = []; }
-  // Separate from the above — "may browse this environment's docs" is its
-  // own grant, independent of "may fire a real request against it" (see
-  // server/routes/liveMode.js's loadBrowseGrants). roleAllowedEnvs()
-  // (03-notifications.js) unions both, so either grant is enough to browse.
-  try{
-    const res = await fetch('/api/live-mode/my-browse-access', { credentials:'same-origin' });
-    state.docBrowseEnvs = res.ok ? (await res.json()).environments || [] : [];
-  }catch(e){ state.docBrowseEnvs = []; }
-
   // Landed here via a "Try it" new-tab link (see openTryItTab/buildTryItUrl) —
   // jump straight to that endpoint's docs with Try It already open, in
   // whichever environment the link carried, without touching this browser's

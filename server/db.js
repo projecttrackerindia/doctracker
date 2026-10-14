@@ -224,25 +224,6 @@ async function initDb() {
     }'::jsonb;
   `);
 
-  // ---- Live Mode (Try It → real outbound calls) ----
-  // Per-user allow-list of environment ids that user may fire a REAL request
-  // against from Try It, managed entirely by an Admin (Security ▸ Live Mode
-  // Access) — deliberately independent of role, so an Admin can grant a
-  // Viewer access to DEV without touching their role, or withhold PROD from
-  // an Editor. Shape: { "<userId>": ["DEV","SIT"], ... }. Org-wide (like
-  // pii_settings above) rather than per-project, since the grant is about how
-  // much real-world blast radius a *person* is trusted with, not which
-  // project they happen to be looking at. See server/routes/liveMode.js.
-  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS live_mode_grants JSONB NOT NULL DEFAULT '{}';`);
-  // A SEPARATE grant from live_mode_grants above: "may browse this
-  // environment's docs" vs "may fire a real request against it". Previously
-  // the switcher reused live_mode_grants for both, which meant an Admin
-  // could not let a Viewer browse SIT without also handing them live-fire
-  // capability there. No secrets live in this list (just environment ids),
-  // so — like custom_flow_directions/custom_icons — it's plain JSONB, not
-  // encrypted the way live_mode_grants' sibling request_history is.
-  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS doc_browse_grants JSONB NOT NULL DEFAULT '{}';`);
-
   // Per-org SSO/OIDC configuration (issuer, client id, encrypted client
   // secret, allowed email domain, enabled flag) — see server/sso.js: one
   // JSONB blob per org rather than a dedicated table, since this is exactly
@@ -360,8 +341,7 @@ async function initDb() {
 
   // ---- Per-project, per-environment sharing grants ----
   // Fills the gap between `projects.visibility` ('private' = owner only,
-  // 'public' = entire organisation) and the org-wide `live_mode_grants`
-  // above: this is how an owner (or Admin) shares ONE private project with a
+  // 'public' = entire organisation): this is how an owner (or Admin) shares ONE private project with a
   // NAMED person, optionally restricted to specific environments, without
   // touching that person's global role or exposing the project to the whole
   // organisation. One row per (project, user) — not per (project, user,
@@ -369,9 +349,9 @@ async function initDb() {
   // of how many environments a project has; `environments` holds the scoped
   // list (or the literal ["*"] wildcard for "every environment this project
   // has"), same JSONB-list pattern already used by `custom_permissions.envs`
-  // and `pii_field_rules.environments`. Deliberately independent of role,
-  // same reasoning as live_mode_grants: an Admin can hand a Viewer edit
-  // access to one specific project without promoting them org-wide.
+  // and `pii_field_rules.environments`. Deliberately independent of role:
+  // an Admin can hand a Viewer edit access to one specific project without
+  // promoting them org-wide.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS project_access (
       id BIGSERIAL PRIMARY KEY,

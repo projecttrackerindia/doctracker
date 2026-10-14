@@ -75,7 +75,7 @@ function renderEnvSwitcher(){
           const hoverHint = locked
             ? (e.restricted
                 ? `${e.label} is restricted to Admins`
-                : `An Admin hasn't granted you access to ${e.label} yet (Security ▸ Live Mode Access)`)
+                : `An Admin hasn't granted you access to ${e.label} yet`)
             : (url ? `Endpoint: ${maskEndpointUrl(url)}` : '');
           return `
           <div class="env-dd-opt${e.id===state.env?' sel':''}${locked?' locked':''}" role="option" aria-selected="${e.id===state.env}" aria-disabled="${locked}" data-env="${e.id}"

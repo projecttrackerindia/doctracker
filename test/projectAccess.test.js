@@ -1,6 +1,6 @@
 // grantCoversEnvironment() — the environment-matching predicate previously
 // re-implemented independently as `envs.includes('*') || envs.includes(x)`
-// in liveMode.js, pii.js, and workspace.js (twice). Pure function, zero-DB,
+// in pii.js and workspace.js (twice). Pure function, zero-DB,
 // same node:test style as the rest of this directory.
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgres://unused@127.0.0.1:1/none';
 process.env.MASTER_KEY = process.env.MASTER_KEY || Buffer.alloc(32, 9).toString('base64');

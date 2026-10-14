@@ -4,7 +4,7 @@ const liveBus = require('./notificationsBus');
 // Single place that ever writes to `notifications` — same pattern as
 // auditService.recordAuditEvent, and deliberately called from the exact
 // spots that already call recordAuditEvent for these actions (doc-access
-// request/approve/deny/revoke, live-mode grant changes, project-access
+// request/approve/deny/revoke, project-access
 // shares, new accounts), so this is fan-out to a recipient's inbox, not a
 // new, separately-maintained instrumentation surface.
 //

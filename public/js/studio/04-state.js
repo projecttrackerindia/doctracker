@@ -22,6 +22,4 @@ let state = {
   envTableStatus: 'ready',           // 'ready' | 'loading' | 'error' — see loadState()
   envMetrics: null,                  // GET /environment-metrics response cache — see loadEnvironmentMetrics()
   envMetricsStatus: 'idle',          // 'idle' | 'loading' | 'error' | 'ready'
-  liveModeEnvs: [],                  // envIds this user may fire a REAL request against — see 22-init.js / server/routes/liveMode.js
-  docBrowseEnvs: [],                 // envIds this user may browse docs for — separate grant from liveModeEnvs, see roleAllowedEnvs()
 };

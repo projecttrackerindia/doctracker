@@ -50,9 +50,8 @@ async function getOrgPiiRules(org) {
 // base URL) previously had no validation at all anywhere in this file.
 // Rejects a URL only if it's clearly dangerous (bad scheme, localhost, a
 // literal private/loopback/link-local/metadata IP) — this is the cheap,
-// synchronous, save-time gate; the DNS-resolving check happens again,
-// immediately before firing, in server/routes/liveMode.js. Returns an error
-// string, or null if every entry is fine.
+// synchronous, save-time gate. Returns an error string, or null if every
+// entry is fine.
 function environmentUrlError(projectData) {
   const envs = projectData && projectData.environments;
   if (!envs || typeof envs !== 'object') return null;
@@ -321,8 +320,8 @@ async function reencryptOrganisation(organisation) {
 // "share the whole project with this person," same as an owner would see it,
 // gated only by `_readonly` (view-only grants can't be saved back) and
 // `_grantedEnvironments` (which of the project's environments this person may
-// actually use in Try It/Live Mode/promotion views — enforced at THOSE call
-// sites, not here, since endpoints themselves aren't per-environment).
+// actually use in Try It — enforced at THOSE call sites, not here, since
+// endpoints themselves aren't per-environment).
 // Everyone else in the same organisation gets the old stripped-down view:
 // only `public` endpoints survive, and attachments/diagram (project-level,
 // not per-endpoint) only survive if the whole project is public. Different
@@ -810,7 +809,7 @@ router.post('/projects/:id/access', async (req, res) => {
     }
 
     // Silently drop anything invalid rather than failing the whole save over
-    // one stale entry — same tolerance liveMode.js applies to its grants.
+    // one stale entry.
     const wildcard = environments.includes('*');
     let cleanEnvs = ['*'];
     if (!wildcard) {
@@ -1677,7 +1676,7 @@ router.get('/projects/:id/snapshot', async (req, res) => {
 
     // A project_access grant also names which environments this person may
     // browse for this project (see projectForViewer's _grantedEnvironments) —
-    // enforce that here too, not just for Try It/Live Mode.
+    // enforce that here too, not just for Try It.
     if (grant && !grantCoversEnvironment(grant.environments, envKey)) {
       return res.status(403).json({ error: 'You do not have access to this environment for this project.' });
     }
