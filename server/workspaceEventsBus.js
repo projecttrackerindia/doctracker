@@ -1,17 +1,14 @@
 // ============================================================================
 // Fan-out for "something in this organisation's workspace changed" pushes —
-// the generic third bus described in the Phase 2 real-time plan, alongside
-// notificationsBus.js (per-recipient) and observabilityBus.js (per-org
-// metrics traffic). Scoped per organisation, same as observabilityBus.js,
+// alongside notificationsBus.js (per-recipient). Scoped per organisation,
 // since a workspace change (an endpoint saved, a project promoted, a
 // rollback) is relevant to everyone currently looking at that org's
 // workspace, not just the user who made it.
 //
-// Exact same shape as the other two buses on purpose: in-process Map
-// fan-out, relayed through Redis pub/sub when REDIS_URL is set so a push
-// landing on one instance still reaches a subscriber connected to a
-// sibling, pure in-process fan-out (correct for a single-instance deploy)
-// when it isn't.
+// Same shape as notificationsBus.js on purpose: in-process Map fan-out,
+// relayed through Redis pub/sub when REDIS_URL is set so a push landing on
+// one instance still reaches a subscriber connected to a sibling, pure
+// in-process fan-out (correct for a single-instance deploy) when it isn't.
 //
 // The only publisher today is auditService.js's insertAuditRow() — audit_logs
 // is already, by its own header comment, "the single place that ever writes

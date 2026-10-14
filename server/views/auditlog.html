@@ -481,7 +481,7 @@ tbody tr.al-hidden{ display:none; }
   // Live updates: this page used to only ever refresh on a manual reload —
   // one more entry could land the moment after load() ran and this tab would
   // never know. GET /api/audit/stream (SSE, same cookie auth, same native
-  // auto-reconnect as the bell/Observability streams — see server/sseHelper.js)
+  // auto-reconnect as the bell's notification stream — see server/sseHelper.js)
   // pushes a 'workspace' event any time ANY audit row is written for this
   // organisation, by anyone. The event carries no data of its own — it's a
   // hint to refetch, not the row — so on receiving one this re-fetches just

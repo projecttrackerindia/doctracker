@@ -1,15 +1,12 @@
-// Admin-facing view of DocTracker's OWN usage — distinct from the
-// Observability console, which is entirely about monitored Mule endpoints
-// fed by the external agent. Nothing tracked this app's own activity
-// trends before this: audit_logs already records every audit-worthy action
-// (endpoint edits, PII reveals, logins, role changes, ...) with a
-// success/failure result per event, so this aggregates that rather than
-// adding a second, separate tracking mechanism.
+// Admin-facing view of DocTracker's OWN usage. Nothing tracked this app's
+// own activity trends before this: audit_logs already records every
+// audit-worthy action (endpoint edits, PII reveals, logins, role changes,
+// ...) with a success/failure result per event, so this aggregates that
+// rather than adding a second, separate tracking mechanism.
 //
 // Deliberately NOT "HTTP request volume/error rate" — audit_logs records
 // audit-worthy actions, not every request, and this endpoint doesn't
-// overstate what it's measuring. See ALERTING.md/README.md's "Known gaps"
-// conventions: name what's actually tracked, not what would be nice to.
+// overstate what it's measuring.
 const express = require('express');
 const { pool } = require('../db');
 const { authenticate, requireAdmin } = require('../middleware/authGuard');
@@ -20,7 +17,7 @@ router.use(authenticate);
 router.use(requireAdmin); // everything under /api/admin/analytics is Admin-only
 
 const DEFAULT_DAYS = 30;
-const MAX_DAYS = 90; // matches the longest range the Observability console itself offers
+const MAX_DAYS = 90;
 
 // ---- GET /api/admin/analytics/overview?days=30 ----
 router.get('/overview', async (req, res) => {

@@ -22,8 +22,7 @@ async function notifyUser(userId, { organisation, type, title, body = null, link
   );
   const row = rows[0];
   // Fire-and-forget: a live-push failure must never turn an already-committed
-  // notification write into a reported error for the caller. Same discipline
-  // as observabilityBus.publish (see its own header comment).
+  // notification write into a reported error for the caller.
   try {
     liveBus.publish(organisation, userId, row);
   } catch (err) {

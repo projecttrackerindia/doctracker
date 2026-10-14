@@ -1,17 +1,15 @@
 // A narrow Redis subset — get/set with EX, incr — backed by a capped
-// in-process Map. This is the single-instance fallback for cache.js and
-// obsCache.js when REDIS_URL isn't set, so a deployment that hasn't
-// configured Redis gets SOME caching instead of none (previously every
-// getter in both modules was a hard no-op without it — see their own header
-// comments). Same trade rateLimitStore.js already makes for rate limiting:
-// in-process is correct for one instance, Redis is what makes it correct
-// across many.
+// in-process Map. This is the single-instance fallback for cache.js when
+// REDIS_URL isn't set, so a deployment that hasn't configured Redis gets
+// SOME caching instead of none (previously its getters were a hard no-op
+// without it — see its own header comment). Same trade rateLimitStore.js
+// already makes for rate limiting: in-process is correct for one instance,
+// Redis is what makes it correct across many.
 //
 // Deliberately not a general-purpose cache client — only the two call
-// patterns cache.js/obsCache.js actually use against a real ioredis client
-// are implemented, with the same signatures, so both modules can hold one
-// `store` reference (real Redis or this) without branching at every call
-// site:
+// patterns cache.js actually uses against a real ioredis client are
+// implemented, with the same signatures, so it can hold one `store`
+// reference (real Redis or this) without branching at every call site:
 //   - get(key)                       -> string | null
 //   - set(key, value, 'EX', seconds) -> sets with expiry
 //   - incr(key)                      -> increments (from 0 if absent)

@@ -22,7 +22,6 @@ async function loadState(){
     state.tryitPersonal = (ws.tryitPersonal && typeof ws.tryitPersonal === 'object')
       ? { variables: Array.isArray(ws.tryitPersonal.variables) ? ws.tryitPersonal.variables : [], saved: Array.isArray(ws.tryitPersonal.saved) ? ws.tryitPersonal.saved : [] }
       : { variables: [], saved: [] };
-    state.endpointMetrics = (ws.endpointMetrics && typeof ws.endpointMetrics === 'object') ? ws.endpointMetrics : {};
     state.environments = (Array.isArray(ws.environments) && ws.environments.length) ? ws.environments.map(migrateEnvironment) : [];
     state.customFlowDirections = Array.isArray(ws.customFlowDirections) ? ws.customFlowDirections : [];
     state.branding = ws.branding && typeof ws.branding === 'object' ? ws.branding : {};
@@ -33,7 +32,6 @@ async function loadState(){
     state.requestHistory = {};
     state.tryitCollections = { variables: [], saved: [] };
     state.tryitPersonal = { variables: [], saved: [] };
-    state.endpointMetrics = {};
     state.environments = [];
     state.customFlowDirections = [];
     state.branding = {};
@@ -67,11 +65,6 @@ async function loadState(){
   const role = localStorage.getItem(ROLE_KEY);
   state.authorRole = ROLES.some(r=>r.id===role) ? role : 'Developer';
   state.sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === '1';
-  state.autoSectionOpen = localStorage.getItem(AUTO_SECTION_KEY) === '1';
-  // Defaults ON — the point of the auto-discovered section is what you have
-  // NOT documented yet; showing the already-documented half of it back to you
-  // is the duplicate this setting exists to remove.
-  state.discoveryNewOnly = localStorage.getItem(DISCOVERY_NEW_ONLY_KEY) !== '0';
 
   if(AUTH_USER){
     // Signed in via the real auth service — identity comes from the session, not localStorage.

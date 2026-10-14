@@ -6,8 +6,8 @@
 // package.json fails `npm ci` at build time. This does the same job in a few
 // lines with a module Node already ships.
 //
-// JSON compresses roughly 10x, and the observability payloads are the largest
-// JSON this app serves. The CPU spent gzipping is far less than the time saved
+// JSON compresses roughly 10x, and the larger API responses this app serves
+// benefit the most. The CPU spent gzipping is far less than the time saved
 // on the wire.
 //
 // NOT compressed:

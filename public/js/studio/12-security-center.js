@@ -15,7 +15,6 @@ const STORAGE_KEY_KNOWLEDGE = {
   apiStudio_authorRole: { purpose:'Legacy pre-login display role (ignored once signed in — the real role always comes from the server session)', classification:'INTERNAL', risk:'Low' },
   apiStudio_profileColor: { purpose:'Avatar color preference — not app data', classification:'PUBLIC', risk:'Low' },
   apiStudio_sidebarCollapsed: { purpose:'Sidebar collapsed/expanded UI state', classification:'PUBLIC', risk:'Low' },
-  apiStudio_autoSectionOpen: { purpose:'Sidebar "Auto-discovered APIs" section collapsed/expanded UI state', classification:'PUBLIC', risk:'Low' },
   apiStudio_migratedToServer_v1: { purpose:'One-time flag: has this browser\'s old local data been migrated to Postgres yet', classification:'INTERNAL', risk:'Low' },
   apiStudio_workspace_v1: { purpose:'Pre-Postgres workspace cache — should be empty post-migration; if present, migration may not have completed for this browser', classification:'CONFIDENTIAL', risk:'Medium' },
   apiStudio_auditLog: { purpose:'Pre-Postgres audit log cache — should be empty post-migration (audit is now server-authoritative)', classification:'CONFIDENTIAL', risk:'Medium' },
@@ -1369,9 +1368,8 @@ async function adminAnalyticsApi(path){
   return data;
 }
 
-// Admin-only view of DocTracker's OWN usage — distinct from the
-// Observability console (which is entirely about monitored Mule
-// endpoints). Sourced from audit_logs via GET /api/admin/analytics/overview,
+// Admin-only view of DocTracker's OWN usage. Sourced from audit_logs via
+// GET /api/admin/analytics/overview,
 // which only counts audit-worthy actions (endpoint edits, PII reveals,
 // logins, ...), not every HTTP request — the labels here say "activity",
 // not "requests", so the tab doesn't claim to measure more than it does.

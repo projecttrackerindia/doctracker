@@ -128,16 +128,3 @@ for (const file of files) {
     });
   });
 }
-
-// The specific rule the bug above destroyed. Worth naming: it is the one that
-// puts the live-stream badge in the header's top-right corner, and when it
-// vanished the badge dropped to the left margin with nothing to explain it.
-test('studio.html: .obs-header is a real, standalone flex rule', () => {
-  const css = styleBlocks('studio.html')
-    .map((b) => b.css).join('\n')
-    .replace(/\/\*[\s\S]*?\*\//g, '');
-  const m = css.match(/([^{};]*)\.obs-header\s*\{([^}]*)\}/);
-  assert.ok(m, '.obs-header has no rule at all');
-  assert.equal(`${m[1]}.obs-header`.trim(), '.obs-header', 'the selector picked up preceding text');
-  assert.match(m[2], /display\s*:\s*flex/, 'the header is not a flex row');
-});

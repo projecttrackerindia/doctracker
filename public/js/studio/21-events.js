@@ -16,14 +16,6 @@ document.getElementById('btnReleasePipeline').addEventListener('click', ()=>{
   state.selected = { type:'releasepipeline' };
   renderMain();
 });
-// Toggle, not a one-way jump: clicking it again while already on
-// Observability returns to the API Control Center - a complete way in
-// AND out on its own (the sidebar no longer has a separate exit row).
-document.getElementById('btnObservability').addEventListener('click', ()=>{
-  const onObservability = !!state.selected && state.selected.type === 'observability';
-  state.selected = onObservability ? { type:'home' } : { type:'observability' };
-  renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
-});
 // The FAB used to always call openEditorTab(currentProjectForEnvContext(), null) —
 // meaning if you'd last viewed (or were viewing) some project, EVERY field shared
 // across that project (name, owner, team, auth type, auth params, everything under
@@ -201,15 +193,6 @@ document.getElementById('importModal').addEventListener('click', (e)=>{ if(e.tar
 document.querySelectorAll('.pinned-row').forEach(row=>{
   row.addEventListener('click', ()=>{
     const nav = row.getAttribute('data-nav');
-    // While on Observability, this same row doubles as "All traffic" (its
-    // label/active-state are swapped in renderSidebar()) instead of
-    // navigating away to the API Control Center dashboard — see
-    // 09-render-sidebar.js.
-    if(nav === 'home' && state.selected && state.selected.type === 'observability'){
-      obsSetScope({ type:'all' });
-      closeMobileSidebar();
-      return;
-    }
     state.selected = { type: nav };
     renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
     closeMobileSidebar();

@@ -59,13 +59,10 @@ router.post('/read-all', async (req, res) => {
 });
 
 // --- Live stream (SSE) ------------------------------------------------------
-// Same pattern as GET /api/workspace/observability/stream (see that route's
-// header comment for the full rationale): plain HTTP, EventSource's native
-// auto-reconnect, cookie auth. The one difference is the subscription key —
-// this is per-RECIPIENT (organisation + this user), not per-organisation,
-// since a notification is only ever meant for the one user it was written
-// for (see notificationsBus.js's header comment for why that's a separate
-// bus from observabilityBus.js rather than a reuse of it).
+// Plain HTTP, EventSource's native auto-reconnect, cookie auth. The
+// subscription key is per-RECIPIENT (organisation + this user), not
+// per-organisation, since a notification is only ever meant for the one
+// user it was written for (see notificationsBus.js's header comment).
 router.get('/stream', async (req, res) => {
   const { organisation, sub: userId } = req.authUser;
   attachSseStream(req, res, {

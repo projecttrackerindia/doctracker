@@ -44,19 +44,6 @@ function navigateToNotifLink(link){
     // Security — see renderProfilePage() in 12-security-center.js.
     state.selected = { type:'profile' };
     renderMain();
-  } else if(link.view === 'observability'){
-    // An alert notification lands on the evidence, not on a home page: the
-    // console opens already scoped to the endpoint that fired, so the click
-    // answers "what is wrong" rather than starting the search over.
-    state.selected = { type:'observability' };
-    state.obsTab = link.tab || 'alerts';
-    if(link.endpointId){
-      state.obsFilters = { ...(state.obsFilters || {}), endpointId: link.endpointId };
-      state.obsRecords = null;
-      state.obsRecordsPage = 1;
-    }
-    renderSidebar();
-    renderMain();
   } else if(link.view === 'endpoint' && link.endpointId){
     state.selected = { type:'endpoint', id: link.endpointId };
     renderMain();
@@ -191,11 +178,10 @@ function refreshAllNotifBadges(){
   if(_notifPanelOpen) loadNotifPanel();
 }
 
-// Live push, same pattern as obsStartLive() in 24-obs-api.js: plain SSE,
-// cookie auth, EventSource's native auto-reconnect (no retry loop of our
-// own). One difference from Observability's page-scoped stream — this opens
-// once at boot and stays open for the session, since the bell/badges are
-// visible everywhere in the SPA chrome, not just on one page. Any single
+// Live push: plain SSE, cookie auth, EventSource's native auto-reconnect
+// (no retry loop of our own). This opens once at boot and stays open for
+// the session, since the bell/badges are visible everywhere in the SPA
+// chrome, not just on one page. Any single
 // event could in principle mean any of the three badges changed (a doc-access
 // approval affects the bell AND the Security badge, a promotion affects the
 // bell AND the Release Pipeline badge), so the simplest correct handling is
@@ -240,9 +226,9 @@ function initNotifications(){
 }
 
 // ---------- Live workspace updates (Dashboard/Home banner) ----------
-// Same lifecycle pattern as notifStartLive() above and obsStartLive() in
-// 24-obs-api.js: plain SSE, cookie auth, EventSource's native auto-reconnect.
-// Unlike those two, a workspace change is NOT auto-applied here — Home's
+// Same lifecycle pattern as notifStartLive() above: plain SSE, cookie auth,
+// EventSource's native auto-reconnect. Unlike that one, a workspace change
+// is NOT auto-applied here — Home's
 // Control Center view has its own local search/sort/filter UI state that a
 // forced reload would blow away mid-interaction, and it's actively useful
 // for a change made in another tab/by another user to be visible as "this

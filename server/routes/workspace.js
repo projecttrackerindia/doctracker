@@ -289,8 +289,8 @@ async function reencryptOrganisation(organisation) {
 
   const { rows: wsRows } = await pool.query(
     `SELECT environments, environments_enc, request_history, request_history_enc,
-            tryit_collections_enc, endpoint_metrics_enc, environments_key_version,
-            request_history_key_version, tryit_collections_key_version, endpoint_metrics_key_version
+            tryit_collections_enc, environments_key_version,
+            request_history_key_version, tryit_collections_key_version
      FROM org_workspace WHERE organisation = $1`,
     [organisation]
   );
@@ -299,24 +299,20 @@ async function reencryptOrganisation(organisation) {
     const envPlain = decryptOrgBlob(ws.environments_enc, ws.environments, organisation, 'environments', []);
     const histPlain = decryptOrgBlob(ws.request_history_enc, ws.request_history, organisation, 'request_history', {});
     const tryitPlain = decryptOrgBlob(ws.tryit_collections_enc, null, organisation, 'tryit_collections', { variables: [], saved: [] });
-    const metricsPlain = decryptOrgBlob(ws.endpoint_metrics_enc, null, organisation, 'endpoint_metrics', {});
     const envEnc = encryptOrgBlob(envPlain, organisation, 'environments');
     const histEnc = encryptOrgBlob(histPlain, organisation, 'request_history');
     const tryitEnc = encryptOrgBlob(tryitPlain, organisation, 'tryit_collections');
-    const metricsEnc = encryptOrgBlob(metricsPlain, organisation, 'endpoint_metrics');
     await pool.query(
       `UPDATE org_workspace SET
          environments = '[]'::jsonb, environments_enc = $1, environments_key_version = $2,
          request_history = '{}'::jsonb, request_history_enc = $3, request_history_key_version = $4,
-         tryit_collections_enc = $5, tryit_collections_key_version = $6,
-         endpoint_metrics_enc = $7, endpoint_metrics_key_version = $8
-       WHERE organisation = $9
-         AND environments_key_version IS NOT DISTINCT FROM $10
-         AND request_history_key_version IS NOT DISTINCT FROM $11
-         AND tryit_collections_key_version IS NOT DISTINCT FROM $12
-         AND endpoint_metrics_key_version IS NOT DISTINCT FROM $13`,
-      [envEnc.enc, envEnc.version, histEnc.enc, histEnc.version, tryitEnc.enc, tryitEnc.version, metricsEnc.enc, metricsEnc.version,
-        organisation, ws.environments_key_version, ws.request_history_key_version, ws.tryit_collections_key_version, ws.endpoint_metrics_key_version]
+         tryit_collections_enc = $5, tryit_collections_key_version = $6
+       WHERE organisation = $7
+         AND environments_key_version IS NOT DISTINCT FROM $8
+         AND request_history_key_version IS NOT DISTINCT FROM $9
+         AND tryit_collections_key_version IS NOT DISTINCT FROM $10`,
+      [envEnc.enc, envEnc.version, histEnc.enc, histEnc.version, tryitEnc.enc, tryitEnc.version,
+        organisation, ws.environments_key_version, ws.request_history_key_version, ws.tryit_collections_key_version]
     );
   }
   return { projects: projectsTouched, orgWorkspace: true };
@@ -541,7 +537,7 @@ router.get('/', async (req, res) => {
 
     const [wsResult, userRow] = await Promise.all([
       pool.query(
-        `SELECT environments, environments_enc, request_history, request_history_enc, tryit_collections_enc, endpoint_metrics_enc, custom_flow_directions, custom_icons, branding
+        `SELECT environments, environments_enc, request_history, request_history_enc, tryit_collections_enc, custom_flow_directions, custom_icons, branding
          FROM org_workspace WHERE organisation = $1`,
         [org]
       ),
@@ -553,21 +549,11 @@ router.get('/', async (req, res) => {
     // Audit log is no longer part of this payload — it's fetched separately
     // from GET /api/audit/events, which returns server-authoritative entries
     // from the audit_logs table instead of a client-writable JSONB blob.
-    // Composed from per-writer segments when the blob has them, returned
-    // as-is otherwise (a single-agent deployment, or data written before
-    // multi-writer support). Either way the client sees one flat shape.
-    const storedMetrics = decryptOrgBlob(ws.endpoint_metrics_enc, null, org, 'endpoint_metrics', {});
-    const endpointMetrics = composeWriterSegments(storedMetrics);
     const payload = {
       projects,
       environments: decryptOrgBlob(ws.environments_enc, ws.environments, org, 'environments', []),
       requestHistory: decryptOrgBlob(ws.request_history_enc, ws.request_history, org, 'request_history', {}),
       tryitCollections: decryptOrgBlob(ws.tryit_collections_enc, null, org, 'tryit_collections', { variables: [], saved: [] }),
-      endpointMetrics,
-      // Revision of the STORED blob, not the composed view above - a
-      // whole-blob writer is overwriting what's stored, so that's what it
-      // has to prove it read. See PUT /endpoint-metrics.
-      endpointMetricsRev: metricsRev(storedMetrics),
       // PER-USER, not org-shared — see the users.tryit_personal_enc comment
       // in server/db.js. Safe to fold into this same cached payload because
       // the cache itself is already keyed per (org, userId) — see cache.js.
@@ -1068,11 +1054,10 @@ async function upsertOrgWorkspace(org, column, value) {
 // (it was born encrypted-only), so it always writes '{}' into that slot.
 async function upsertEncryptedOrgWorkspace(org, purpose, value) {
   const column = purpose === 'environments' ? 'environments'
-    : purpose === 'tryit_collections' ? 'tryit_collections'
-    : purpose === 'endpoint_metrics' ? 'endpoint_metrics' : 'request_history';
+    : purpose === 'tryit_collections' ? 'tryit_collections' : 'request_history';
   const legacyPlaceholder = column === 'environments' ? '[]' : '{}';
-  if (column === 'tryit_collections' || column === 'endpoint_metrics') {
-    // No legacy plaintext column for either - both were born encrypted-only.
+  if (column === 'tryit_collections') {
+    // No legacy plaintext column - it was born encrypted-only.
     const { enc, version } = encryptOrgBlob(value, org, purpose);
     await pool.query(
       `INSERT INTO org_workspace (organisation, ${column}_enc, ${column}_key_version, updated_at)
@@ -1119,314 +1104,6 @@ router.put('/request-history', async (req, res) => {
   }
 });
 
-// Traffic metrics pushed by the SIT log auto-discovery agent (ops/sit-doc-agent) -
-// keyed by "METHOD /path", org-shared, encrypted like request_history (client IPs
-// are PII). Whole-blob overwrite by design: the agent recomputes and replaces its
-// own metrics wholesale from its own state each push, same as the doc-discovery
-// project push - no merge-by-key needed since there's exactly one writer
-// (the service account), not multiple humans editing concurrently.
-// Optimistic-locking guard for the endpoint-metrics blob.
-//
-// This blob is written as a WHOLE-BLOB OVERWRITE by the SIT log agent, and
-// "only one writer" used to be enforced by nothing but convention. Two agents
-// running at once (a stale systemd unit, a manual debug run alongside the
-// service, a second server) meant one silently erased the other's entire
-// history - every counter, every record - with no error and no trace.
-//
-// Unlike projects, this can't key off org_workspace.updated_at: that column is
-// shared with environments / request_history / tryit_collections, so an
-// unrelated write to any of those would bump it and cause a false conflict
-// here. A content hash of the blob itself is the honest revision - it changes
-// when and only when THIS blob changes.
-function metricsRev(value) {
-  return nodeCrypto.createHash('sha256')
-    .update(JSON.stringify(value === undefined ? {} : value))
-    .digest('hex')
-    .slice(0, 16);
-}
-
-// --- Multi-writer support ---------------------------------------------------
-// Whole-blob overwrite only works with exactly one agent. A deployment with
-// several Mule servers needs one agent per server, and they must not clobber
-// each other - the ifMatchRev guard above would make them 409 in a loop
-// instead, which is safe but useless.
-//
-// So a writer may instead claim only its OWN segment: the stored blob becomes
-// { writers: { [writerId]: {endpoints, agentHealth, logRecords, updatedAt} } }
-// and a merge-mode write replaces exactly one segment, leaving the others
-// untouched. No lost updates, no conflict, no coordination between agents.
-//
-// GET composes the segments back into the flat { endpoints, agentHealth,
-// logRecords } shape the client already reads, so nothing on the page has to
-// know this happened.
-const MAX_METRICS_WRITERS = 50;
-
-// Mirrors the agent's own MAX_LOG_RECORDS_PER_ENDPOINT / MAX_LOG_RECORDS_TOTAL
-// defaults (mule_doc_agent.py). Only used when a writer sends
-// `logRecordsDelta: true` (CAPTURE_MODE=full) - it appends the new records
-// it sent onto whatever this writer's segment already has, instead of that
-// payload REPLACING the segment's whole logRecords list, then re-applies
-// these same caps so the stored size stays bounded exactly as it would if
-// the agent had sent (and this route had stored) the full list every time.
-// A writer that omits the flag keeps the old, simpler full-replace
-// behaviour untouched - this is purely additive.
-const MAX_LOG_RECORDS_PER_ENDPOINT = 200;
-const MAX_LOG_RECORDS_TOTAL = 3000;
-
-function capLogRecords(records) {
-  const countByKey = new Map();
-  for (const r of records) countByKey.set(r?.key, (countByKey.get(r?.key) || 0) + 1);
-  const droppedSoFar = new Map();
-  const kept = [];
-  for (const r of records) {
-    const total = countByKey.get(r?.key) || 0;
-    if (total > MAX_LOG_RECORDS_PER_ENDPOINT) {
-      const seen = (droppedSoFar.get(r?.key) || 0) + 1;
-      droppedSoFar.set(r?.key, seen);
-      if (seen <= total - MAX_LOG_RECORDS_PER_ENDPOINT) continue; // oldest-first for this key
-    }
-    kept.push(r);
-  }
-  return kept.length > MAX_LOG_RECORDS_TOTAL ? kept.slice(kept.length - MAX_LOG_RECORDS_TOTAL) : kept;
-}
-
-// Endpoint counters are summed across writers reporting the SAME endpoint,
-// which is right for two load-balanced nodes of one environment and wrong
-// across environments: the same API is deployed to SIT, UAT and PROD, so a
-// pooled `totalRequests` is not a rougher truth but a meaningless number, and
-// a pooled `topSourceIps` leaks PROD client addresses into a SIT view.
-//
-// So composition happens strictly WITHIN an environment. Each writer segment
-// carries the environment its node serves (the agent refuses to guess it);
-// segments from before this existed have none, and are grouped under
-// UNSCOPED_ENVIRONMENT so they stay visible rather than vanishing.
-const UNSCOPED_ENVIRONMENT = 'Unscoped';
-
-function segmentEnvironment(seg) {
-  const raw = typeof seg.environment === 'string' ? seg.environment.trim() : '';
-  return raw ? raw.slice(0, 32) : UNSCOPED_ENVIRONMENT;
-}
-
-function composeOneEnvironment(entries) {
-  const endpoints = {};
-  let logRecords = [];
-  const agents = [];
-
-  for (const [writerId, seg] of entries) {
-    for (const [key, ep] of Object.entries(seg.endpoints || {})) {
-      const prev = endpoints[key];
-      if (!prev) { endpoints[key] = { ...ep }; continue; }
-      // Same method+path seen on two servers: these are aggregate counters,
-      // so the union is the sum. Anything else would under-report a
-      // load-balanced endpoint.
-      const merged = { ...prev };
-      merged.totalRequests = (prev.totalRequests || 0) + (ep.totalRequests || 0);
-      merged.statusBreakdown = { ...(prev.statusBreakdown || {}) };
-      for (const [fam, n] of Object.entries(ep.statusBreakdown || {})) {
-        merged.statusBreakdown[fam] = (merged.statusBreakdown[fam] || 0) + n;
-      }
-      const errs = (merged.statusBreakdown['4xx'] || 0) + (merged.statusBreakdown['5xx'] || 0);
-      const withStatus = Object.values(merged.statusBreakdown).reduce((a, b) => a + b, 0);
-      merged.errorRate = withStatus ? Math.round((errs / withStatus) * 10000) / 10000 : 0;
-      // Source IPs: sum per IP, then keep the heaviest few.
-      const ipTotals = new Map();
-      for (const list of [prev.topSourceIps || [], ep.topSourceIps || []]) {
-        for (const row of list) ipTotals.set(row.ip, (ipTotals.get(row.ip) || 0) + (row.count || 0));
-      }
-      merged.topSourceIps = [...ipTotals.entries()]
-        .sort((a, b) => b[1] - a[1]).slice(0, 10)
-        .map(([ip, count]) => ({ ip, count }));
-      merged.lastSeenAt = [prev.lastSeenAt, ep.lastSeenAt].filter(Boolean).sort().pop() || null;
-      endpoints[key] = merged;
-    }
-    if (Array.isArray(seg.logRecords)) logRecords = logRecords.concat(seg.logRecords);
-    if (isPlainObject(seg.agentHealth)) agents.push({ writerId, ...seg.agentHealth });
-  }
-
-  // Newest-first, then capped - with several agents this is the union of
-  // their ring buffers and could otherwise grow without bound.
-  logRecords.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
-  logRecords = logRecords.slice(0, 5000);
-
-  // Two agents on different hosts (or the same host tailing genuinely
-  // different apps) are a normal, supported deployment - their counters
-  // above are meant to sum. Two agents that ended up with the SAME
-  // sourceFingerprint (hostname + exact set of tailed files - see
-  // source_fingerprint() in mule_doc_agent.py) are reading the identical
-  // files, which means every merge above just doubled real numbers instead
-  // of correctly summing two independent nodes' traffic. The fingerprint
-  // has been computed and sent since the agent-side fix shipped, but
-  // nothing ever consumed it - this is that consumer, so the duplicate
-  // shows up as a visible warning (see 23-observability.js) instead of a
-  // silently-inflated request count nobody can explain.
-  const byFingerprint = new Map();
-  for (const a of agents) {
-    if (!a.sourceFingerprint) continue;
-    if (!byFingerprint.has(a.sourceFingerprint)) byFingerprint.set(a.sourceFingerprint, []);
-    byFingerprint.get(a.sourceFingerprint).push(a.writerId);
-  }
-  const duplicateWriterGroups = [...byFingerprint.values()].filter((ids) => ids.length > 1);
-
-  // The page renders one agentHealth card; give it the most recently
-  // generated one, and attach every writer's own health beside it so a
-  // multi-server deployment can still see each agent individually.
-  agents.sort((a, b) => String(b.generatedAt || '').localeCompare(String(a.generatedAt || '')));
-  const agentHealth = agents.length
-    ? { ...agents[0], writers: agents, ...(duplicateWriterGroups.length ? { duplicateWriterGroups } : {}) }
-    : null;
-
-  return { endpoints, agentHealth, logRecords };
-}
-
-function composeWriterSegments(stored) {
-  if (!isPlainObject(stored) || !isPlainObject(stored.writers)) return stored || {};
-
-  const byEnv = new Map();
-  for (const [writerId, seg] of Object.entries(stored.writers)) {
-    if (!isPlainObject(seg)) continue;
-    const env = segmentEnvironment(seg);
-    if (!byEnv.has(env)) byEnv.set(env, []);
-    byEnv.get(env).push([writerId, seg]);
-  }
-
-  const environments = {};
-  for (const [env, entries] of byEnv) environments[env] = composeOneEnvironment(entries);
-
-  // The page picks ONE environment to display. A single-environment install
-  // (the common case) still gets the flat shape at the top level so nothing
-  // downstream has to special-case it; with several, the flat fields describe
-  // the default environment only, and `environmentNames` drives the selector.
-  // They are deliberately NOT a cross-environment sum - see the note above.
-  const names = [...byEnv.keys()].sort();
-  const primary = names.includes(UNSCOPED_ENVIRONMENT) && names.length > 1
-    ? names.find((n) => n !== UNSCOPED_ENVIRONMENT)
-    : names[0];
-  const head = (primary && environments[primary]) || { endpoints: {}, agentHealth: null, logRecords: [] };
-
-  return { ...head, environments, environmentNames: names, defaultEnvironment: primary || null };
-}
-
-router.put('/endpoint-metrics', async (req, res) => {
-  if (!isPlainObject(req.body?.endpointMetrics)) return res.status(400).json({ error: 'Expected { endpointMetrics: {} }.' });
-  const org = req.authUser.organisation;
-  try {
-    // Merge mode: this writer owns one named segment and never touches the
-    // others, so several agents (one per Mule server) can write concurrently
-    // with no conflict and no lost updates. No ifMatchRev is needed or
-    // honoured here - there is nothing to race against.
-    const writerId = typeof req.body.writerId === 'string' ? req.body.writerId.trim().slice(0, 64) : '';
-    if (writerId) {
-      // The merge itself is a read-modify-write of one encrypted blob, which
-      // cannot be done with jsonb_set - the value is ciphertext. So it runs
-      // inside a transaction holding FOR UPDATE on the row: without that,
-      // two agents pushing at the same moment would both read the same
-      // `writers` map and the second write would drop the first agent's
-      // segment. That is exactly the lost-update class of bug this whole
-      // endpoint is being hardened against, so it would be absurd to
-      // reintroduce it here.
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        const { rows } = await client.query(
-          `SELECT endpoint_metrics_enc FROM org_workspace WHERE organisation = $1 FOR UPDATE`,
-          [org]
-        );
-        const stored = rows.length
-          ? decryptOrgBlob(rows[0].endpoint_metrics_enc, null, org, 'endpoint_metrics', {})
-          : {};
-        // A blob written by a pre-merge single agent has no `writers` key.
-        // Its data is adopted under a reserved id rather than discarded, so
-        // switching an existing deployment to merge mode doesn't reset
-        // history.
-        const writers = isPlainObject(stored.writers) ? { ...stored.writers } : (
-          (stored.endpoints || stored.agentHealth) ? { 'legacy-single-writer': stored } : {}
-        );
-        if (!writers[writerId] && Object.keys(writers).length >= MAX_METRICS_WRITERS) {
-          await client.query('ROLLBACK');
-          return res.status(409).json({
-            error: `Too many distinct metrics writers (${MAX_METRICS_WRITERS}). Each agent must send a STABLE writerId; a value that changes per restart will exhaust this.`,
-          });
-        }
-        // The environment label is rendered on a page and used as a grouping
-        // key, so it is constrained here rather than taken as sent - an agent
-        // is not a trusted source of display strings.
-        const seg = { ...req.body.endpointMetrics, updatedAt: new Date().toISOString() };
-        if (seg.logRecordsDelta === true) {
-          const prevRecords = Array.isArray(writers[writerId]?.logRecords) ? writers[writerId].logRecords : [];
-          const newRecords = Array.isArray(seg.logRecords) ? seg.logRecords : [];
-          seg.logRecords = capLogRecords(prevRecords.concat(newRecords));
-        }
-        delete seg.logRecordsDelta; // transport-only flag, not part of the stored segment
-        const envRaw = typeof seg.environment === 'string' ? seg.environment.trim() : '';
-        seg.environment = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,31}$/.test(envRaw) ? envRaw : null;
-        if (envRaw && !seg.environment) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            error: 'environment must be a short label (letters, digits, spaces, - or _, max 32 chars).',
-          });
-        }
-        writers[writerId] = seg;
-        const { enc, version } = encryptOrgBlob({ writers }, org, 'endpoint_metrics');
-        await client.query(
-          `INSERT INTO org_workspace (organisation, endpoint_metrics_enc, endpoint_metrics_key_version, updated_at)
-           VALUES ($1, $2, $3, now())
-           ON CONFLICT (organisation) DO UPDATE SET
-             endpoint_metrics_enc = EXCLUDED.endpoint_metrics_enc,
-             endpoint_metrics_key_version = EXCLUDED.endpoint_metrics_key_version, updated_at = now()`,
-          [org, enc, version]
-        );
-        await client.query('COMMIT');
-        await cache.invalidateOrg(org);
-        return res.json({ ok: true, writerId, writerCount: Object.keys(writers).length });
-      } catch (err) {
-        await client.query('ROLLBACK').catch(() => {});
-        throw err;
-      } finally {
-        client.release();
-      }
-    }
-
-    // A client that sends `ifMatchRev` is held to it; one that omits it (an
-    // older agent build) is never blocked - same forgiving contract the
-    // projects route uses for `_rev`, so upgrading the server can't break a
-    // deployed agent.
-    const wantsDelta = req.body.endpointMetrics.logRecordsDelta === true;
-    let current = null;
-    if (typeof req.body.ifMatchRev === 'string' || wantsDelta) {
-      const { rows } = await pool.query(
-        `SELECT endpoint_metrics_enc FROM org_workspace WHERE organisation = $1`,
-        [org]
-      );
-      current = rows.length
-        ? decryptOrgBlob(rows[0].endpoint_metrics_enc, null, org, 'endpoint_metrics', {})
-        : {};
-      if (typeof req.body.ifMatchRev === 'string') {
-        const actualRev = metricsRev(current);
-        if (actualRev !== req.body.ifMatchRev) {
-          // 409, NOT a silent win-by-last-write. The caller is expected to
-          // re-read and retry rather than force its stale copy through.
-          return res.status(409).json({
-            error: 'Endpoint metrics changed since you read them — another writer (a second agent?) is active. Re-read and retry.',
-            currentRev: actualRev,
-          });
-        }
-      }
-    }
-    const toStore = { ...req.body.endpointMetrics };
-    if (wantsDelta) {
-      const prevRecords = Array.isArray(current?.logRecords) ? current.logRecords : [];
-      const newRecords = Array.isArray(toStore.logRecords) ? toStore.logRecords : [];
-      toStore.logRecords = capLogRecords(prevRecords.concat(newRecords));
-    }
-    delete toStore.logRecordsDelta;
-    await upsertEncryptedOrgWorkspace(org, 'endpoint_metrics', toStore);
-    await cache.invalidateOrg(org);
-    res.json({ ok: true, rev: metricsRev(toStore) });
-  } catch (err) {
-    console.error('PUT endpoint-metrics failed:', err);
-    res.status(500).json({ error: 'Could not save endpoint metrics.' });
-  }
-});
 
 // Try It collection variables + saved requests (Postman-style). Same
 // org-shared, encrypted-at-rest treatment as /request-history — a variable
@@ -3620,7 +3297,5 @@ module.exports.loadStageData = loadStageData;
 module.exports.projectForViewer = projectForViewer;
 module.exports.applyDocLock = applyDocLock;
 module.exports.userHasFullDocAccess = userHasFullDocAccess;
-module.exports.composeWriterSegments = composeWriterSegments;
-module.exports.composeOneEnvironment = composeOneEnvironment;
 module.exports.duplicateEndpointError = duplicateEndpointError;
 module.exports.endpointFieldsError = endpointFieldsError;

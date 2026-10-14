@@ -2,7 +2,7 @@
 // Keeps the address bar matching whatever's on screen — so copying the URL
 // from a normal browsing session (not just a link someone constructs by
 // hand) reaches the same project/endpoint/view. Mirrors the :projectSlug/
-// :endpointSlug and observability dashboard.html routes in server.js and
+// :endpointSlug dashboard.html routes in server.js and
 // INITIAL_PROJECT_SLUG/INITIAL_ENDPOINT_SLUG/INITIAL_VIEW's handling in
 // boot() (22-init.js) — same slugify/endpointSlugFor functions, so a URL
 // built here resolves the same way a hand-typed one does. replaceState (not
@@ -13,7 +13,6 @@
 // literal segments ahead of its generic :projectSlug route, so they're
 // reserved words in the URL space.
 const SPECIAL_VIEW_SLUGS = {
-  observability: 'observability',
   security: 'security',
   releasepipeline: 'release-pipeline',
   errors: 'errors',
@@ -42,30 +41,7 @@ function syncUrlToSelection(){
 
 function renderMain(){
   syncUrlToSelection();
-  // Observability opens a live SSE stream (obsStartLive(), called every time
-  // renderObservability() runs - see 23-observability.js). Nothing ever
-  // closed it on navigating away: obsStopLive() existed but had no call
-  // site anywhere in the app, so leaving the page left the stream open,
-  // still calling renderMain() (force-re-rendering whatever page is
-  // currently on screen) and firing background refetches, for the rest of
-  // the session - only a full page reload actually stopped it. This is the
-  // one place every navigation path funnels through regardless of which of
-  // the ~30 call sites set state.selected, so it's the one place that can
-  // reliably catch "we just left Observability" without hooking each of
-  // them individually.
   const nowType = state.selected && state.selected.type;
-  if(state._obsStreamOpen && nowType !== 'observability' && typeof obsStopLive === 'function'){
-    obsStopLive();
-  }
-  state._obsStreamOpen = nowType === 'observability';
-  // QA regression (2026-09-26): the floating "New project"/"New endpoint" FAB
-  // is position:fixed at the bottom-right of the VIEWPORT on every page, and
-  // Observability's "Currently firing" alert rows put their own right-aligned
-  // "Acknowledged by ..." text in that exact corner - the two visibly
-  // overlapped. "New project" is also the least useful action on this page
-  // specifically (there's no project in view to disambiguate against), so
-  // it's hidden here rather than nudged aside.
-  document.body.classList.toggle('view-observability', nowType === 'observability');
   // The code-samples rail is an off-canvas drawer opened explicitly from an
   // endpoint page (see openCodeSamplesRail()) and never had anything closing
   // it on navigation - so browsing an endpoint, opening it, then switching to
@@ -141,16 +117,6 @@ function renderMain(){
   if(state.selected.type === 'releasepipeline'){
     if(!isAdmin() && !ownsAnyProject()){ state.selected = { type:'home' }; renderControlCenter(main); return; }
     renderReleasePipelineOverview(main);
-    return;
-  }
-
-  if(state.selected.type === 'observability'){
-    // Admin-only (2026-09-27, requested explicitly) - narrower than
-    // Security/Release Pipeline just above, which still let a non-admin
-    // project owner in. See the matching btnObservability gate in
-    // 22-init.js and the server-side requireAdmin in routes/observability.js.
-    if(!isAdmin()){ state.selected = { type:'home' }; renderControlCenter(main); return; }
-    renderObservability(main);
     return;
   }
 
@@ -552,52 +518,6 @@ function renderControlCenter(main){
       </div>
     </div>` : '';
 
-  // Discovery coverage — the one number this page could not answer before:
-  // of everything the log agent watched running, how much is actually written
-  // up here. Both sides are in state.projects; reconcileDiscovery() matches
-  // them (see 05-util.js). Hidden entirely when no agent is reporting.
-  const ccRecon = reconcileDiscovery();
-  // Scoped to the currently selected environment, same as reconcileDiscovery()
-  // itself (see discoveryMatchesCurrentEnv() in 05-util.js) — otherwise this
-  // count pooled every environment's discovery projects even though ccRecon's
-  // OWN numbers were already correctly scoped, e.g. "75 app(s) discovered"
-  // staying identical and wrong after ccGaps below had already been filtered
-  // down to just the current environment's gaps.
-  const ccAutoProjects = allProjectsSorted.filter(p => !!p.discoveryEnvironment && discoveryMatchesCurrentEnv(p));
-  const ccGaps = ccAutoProjects
-    .map(p => ccRecon.byAutoId[p.id])
-    .filter(c => c && c.novel > 0)
-    .sort((a, b) => b.novel - a.novel);
-  const ccDiscoveredEndpoints = ccRecon.duplicateEndpoints + ccRecon.novelEndpoints;
-  const ccCoveredPct = ccDiscoveredEndpoints
-    ? Math.round((ccRecon.duplicateEndpoints / ccDiscoveredEndpoints) * 100) : 0;
-  const ccDiscoveryHtml = ccAutoProjects.length ? `
-    <div class="section">
-      <div class="section-title">Discovery coverage <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— what is running versus what is documented</span></div>
-      <div class="hint" style="margin-top:-4px;">The log agent reports every Mule app it sees serving traffic, with no
-        knowledge of what anyone has documented. These are the two lists compared: an app already in the Control
-        Center is not a second API, and the sidebar no longer lists it as one.</div>
-      <div class="sec-card" style="--sc-accent:var(${ccGaps.length ? '--put' : '--post'});margin-top:10px;">
-        <div class="v" style="font-size:14px;"><span class="dot"></span>${ccRecon.duplicateEndpoints} of
-          ${ccDiscoveredEndpoints} discovered endpoint${ccDiscoveredEndpoints === 1 ? '' : 's'} (${ccCoveredPct}%) are documented</div>
-        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;">
-          <span class="sec-status-dot"><span class="dot" style="background:var(--get);"></span>${ccAutoProjects.length} app(s) discovered</span>
-          <span class="sec-status-dot"><span class="dot" style="background:var(--post);"></span>${ccRecon.duplicateProjects} already in the Control Center</span>
-          <span class="sec-status-dot"><span class="dot" style="background:${ccRecon.novelEndpoints ? 'var(--put)' : 'var(--post)'};"></span>${ccRecon.novelEndpoints} endpoint(s) running but undocumented</span>
-        </div>
-        ${ccGaps.length ? `<div class="cc-digest" style="margin-top:12px;">
-          ${ccGaps.slice(0, 5).map(c => `
-            <div class="cc-digest-row" data-cc-discovery-proj="${escapeHtml(c.autoProj.id)}">
-              <span class="cc-digest-path mono">${escapeHtml(c.autoProj.name)}</span>
-              <span class="cc-digest-proj">${c.documented ? 'documented as ' + escapeHtml(c.documented.name) : 'no matching API'}</span>
-              <span class="mono cc-digest-pct cc-digest-new" style="color:var(--put);">${c.novel} new</span>
-            </div>`).join('')}
-        </div>
-        ${ccGaps.length > 5 ? `<div class="s" style="margin-top:8px;">…and ${ccGaps.length - 5} more app(s) with undocumented endpoints.</div>` : ''}`
-        : `<div class="s" style="margin-top:8px;">Everything the agent has seen running is documented.</div>`}
-      </div>
-    </div>` : '';
-
   main.innerHTML = `
     <div class="crumb">API Control Center</div>
     <div class="ctrl-hero" style="--ctrl-glow-bg:var(${ctrlBgVar});">
@@ -636,8 +556,6 @@ function renderControlCenter(main){
           : 'Every documented endpoint has SecOps, VAPT, and Log Mgmt all signed off. Whether they\'re actually live in Production is a separate question — check each project\'s Release Pipeline.'}</div>
       </div>
     </div>
-
-    ${ccDiscoveryHtml}
 
     ${ccDigestHtml}
 
@@ -751,21 +669,4 @@ function renderControlCenter(main){
     });
   });
 
-  // A discovery gap opens that app's Overview, where the reconciliation panel
-  // lives (renderDiscoveryReconcilePanel in 14-users.js) — the place the gap
-  // is actually resolved, rather than a read-only number on this page.
-  main.querySelectorAll('[data-cc-discovery-proj]').forEach(row=>{
-    row.addEventListener('click', ()=>{
-      const id = row.getAttribute('data-cc-discovery-proj');
-      const proj = state.projects[id];
-      if(!proj) return;
-      // The panel only renders in the environment the traffic was observed in.
-      if(proj.discoveryEnvironment && envIds().includes(proj.discoveryEnvironment) && state.env !== proj.discoveryEnvironment){
-        state.env = proj.discoveryEnvironment;
-        saveEnv();
-      }
-      state.selected = { type:'overview', projectId: id };
-      renderAll();
-    });
-  });
 }

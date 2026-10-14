@@ -122,16 +122,6 @@ function selectEnvironment(envId){
   applyEnvAccent();
   applyRoleGatedUI();
   renderEnvSwitcher();
-  // Alerts are fetched once, lazily, on first visit to the tab and then
-  // cached for the rest of the session (see wireObsAlerts) — correct within
-  // one environment, but without this reset a switch would keep showing the
-  // PREVIOUS environment's alert rules and active alerts under the new
-  // environment's badge indefinitely, not just until the next fetch resolves.
-  state.obsAlerts = null;
-  state.obsAlertsStatus = 'idle';
-  state.obsAlertHistory = null;
-  state.obsAlertHistoryStatus = 'idle';
-  state.obsAlertHistoryOldestId = null;
   // renderSidebar() was missing here, so the endpoint tree kept showing
   // whichever environment was rendered last (e.g. SIT's promoted endpoints)
   // until something else happened to trigger a full renderAll() — like a
@@ -144,22 +134,6 @@ function selectEnvironment(envId){
   renderSidebar();
   renderMain();
   renderRail();
-  // Observability is now scoped by this switcher alone — it used to carry a
-  // second environment dropdown of its own, which could disagree with the
-  // header. Its panels are server queries, so switching here has to re-ask for
-  // the new environment's data rather than just repaint the old answer.
-  if(state.selected && state.selected.type === 'observability' && typeof obsLoad === 'function'){
-    state.obsRecords = null;
-    state.obsRecordsPage = 1;
-    // NOT { quiet: true } — quiet exists so the live-stream auto-refresh
-    // doesn't flicker while re-asking about the SAME environment. This is an
-    // environment CHANGE: obsLoad's own (non-quiet) loading-state render
-    // happens synchronously, in the same tick as the renderMain() above, so
-    // it's what the browser actually paints — the previous environment's
-    // numbers are never shown under the new badge, not even briefly.
-    obsLoad();
-    if(state.obsTab === 'logs' && typeof obsLoadRecordsPage === 'function') obsLoadRecordsPage();
-  }
 }
 
 function renderAll(){

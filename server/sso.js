@@ -3,11 +3,10 @@
 // default) behaves exactly as it always has; enabling it just adds a second
 // door in, gated on a verified email from a real IdP.
 //
-// Storage mirrors alertEngine.js's webhook settings exactly: one JSONB
-// column (org_workspace.sso_config) rather than a dedicated table, since
-// this is the same shape as every other per-org config in that table — a
-// handful of settings plus one secret, encrypted the same way MFA secrets
-// and the alert webhook secret already are (dataCrypto.encryptField, never
+// Storage: one JSONB column (org_workspace.sso_config) rather than a
+// dedicated table, since this is the same shape as every other per-org
+// config in that table — a handful of settings plus one secret, encrypted
+// the same way MFA secrets already are (dataCrypto.encryptField, never
 // re-exposed once saved).
 const { pool } = require('./db');
 const dataCrypto = require('./crypto');
@@ -34,8 +33,7 @@ async function getSsoConfig(organisation) {
   return { ...DEFAULT_CONFIG, ...raw };
 }
 
-// Never the encrypted secret — only whether one is set, same convention
-// alertEngine.js's toClientSettings() uses for the webhook secret.
+// Never the encrypted secret — only whether one is set.
 function toClientSsoConfig(config) {
   const { clientSecretEnc, clientSecretKeyVersion, ...rest } = config;
   return { ...rest, hasClientSecret: !!clientSecretEnc };
@@ -43,9 +41,9 @@ function toClientSsoConfig(config) {
 
 // `patch.clientSecret`: a non-empty string replaces the stored secret
 // (encrypted here, never persisted plaintext); an empty string clears it;
-// omitted keeps whatever secret is already stored — same convention as
-// alertEngine.js's buildWebhookPatch, so re-saving the issuer/client id or
-// toggling `enabled` doesn't force re-entering the secret every time.
+// omitted keeps whatever secret is already stored, so re-saving the
+// issuer/client id or toggling `enabled` doesn't force re-entering the
+// secret every time.
 async function saveSsoConfig(organisation, patch) {
   const current = await getSsoConfig(organisation);
   const issuer = typeof patch.issuer === 'string' ? patch.issuer.trim().slice(0, 2048) : current.issuer;
