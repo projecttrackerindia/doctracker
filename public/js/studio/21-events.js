@@ -12,18 +12,6 @@ document.getElementById('btnSecurityCenter').addEventListener('click', ()=>{
   state.securityTab = state.securityTab || (isAdmin() ? 'summary' : 'docaccess');
   renderMain();
 });
-document.getElementById('btnReleasePipeline').addEventListener('click', ()=>{
-  state.selected = { type:'releasepipeline' };
-  renderMain();
-});
-// Toggle, not a one-way jump: clicking it again while already on
-// Observability returns to the API Control Center - a complete way in
-// AND out on its own (the sidebar no longer has a separate exit row).
-document.getElementById('btnObservability').addEventListener('click', ()=>{
-  const onObservability = !!state.selected && state.selected.type === 'observability';
-  state.selected = onObservability ? { type:'home' } : { type:'observability' };
-  renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
-});
 // The FAB used to always call openEditorTab(currentProjectForEnvContext(), null) —
 // meaning if you'd last viewed (or were viewing) some project, EVERY field shared
 // across that project (name, owner, team, auth type, auth params, everything under
@@ -146,10 +134,6 @@ document.getElementById('pgCancel').addEventListener('click', closeProjectModal)
 document.getElementById('btnOpenArchStudioSettings').addEventListener('click', ()=>{
   if(editingProjectId && state.projects[editingProjectId]) openArchitectureStudioTab(state.projects[editingProjectId]);
 });
-document.getElementById('btnOpenReleasePipelineSettings').addEventListener('click', ()=>{
-  if(editingProjectId && state.projects[editingProjectId]) openReleasePipelineTab(state.projects[editingProjectId]);
-});
-
 /* Request flows (one or more diagrams per project) are edited by the shared
    FlowEditor (public/js/flow-editor.js) mounted on #mFlowsRoot in the endpoint
    modal's "Project details" section — populated by hydrateEndpointProjectFields
@@ -201,17 +185,8 @@ document.getElementById('importModal').addEventListener('click', (e)=>{ if(e.tar
 document.querySelectorAll('.pinned-row').forEach(row=>{
   row.addEventListener('click', ()=>{
     const nav = row.getAttribute('data-nav');
-    // While on Observability, this same row doubles as "All traffic" (its
-    // label/active-state are swapped in renderSidebar()) instead of
-    // navigating away to the API Control Center dashboard — see
-    // 09-render-sidebar.js.
-    if(nav === 'home' && state.selected && state.selected.type === 'observability'){
-      obsSetScope({ type:'all' });
-      closeMobileSidebar();
-      return;
-    }
     state.selected = { type: nav };
-    renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
+    renderSidebar(); renderMain(); renderRail();
     closeMobileSidebar();
   });
 });
@@ -226,7 +201,7 @@ document.getElementById('btnTheme').addEventListener('click', ()=>{
 
 document.getElementById('btnAuthor').addEventListener('click', ()=>{
   state.selected = { type: 'profile' };
-  renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
+  renderSidebar(); renderMain(); renderRail();
   closeMobileSidebar();
 });
 
@@ -340,49 +315,11 @@ document.querySelector('[data-nav="home"]').addEventListener('click', ()=>{
   if(state.sidebarCollapsed) expandSidebarThen(false);
 });
 
-/* ---------- Environment dropdown (delegated — #envSwitcher itself persists across re-renders) ---------- */
-document.getElementById('envSwitcher').addEventListener('click', (e)=>{
-  if(e.target.closest('#envDDBtn')){
-    const dd = document.getElementById('envDD');
-    dd.classList.contains('open') ? closeEnvDropdown() : openEnvDropdown();
-    return;
-  }
-  const opt = e.target.closest('.env-dd-opt');
-  if(opt){
-    selectEnvironment(opt.getAttribute('data-env'));
-    closeEnvDropdown();
-    document.getElementById('envDDBtn').focus();
-  }
-});
-document.getElementById('envSwitcher').addEventListener('keydown', (e)=>{
-  const dd = document.getElementById('envDD');
-  if(!dd) return;
-  const isOpen = dd.classList.contains('open');
-  const opts = Array.from(dd.querySelectorAll('.env-dd-opt'));
-  const focusedIdx = opts.findIndex(o=>o.classList.contains('kbd-focus'));
-  if(e.key === 'Enter' || e.key === ' '){
-    e.preventDefault();
-    if(!isOpen){ openEnvDropdown(); return; }
-    const target = opts[focusedIdx] || opts.find(o=>o.classList.contains('sel'));
-    if(target){ selectEnvironment(target.getAttribute('data-env')); closeEnvDropdown(); document.getElementById('envDDBtn').focus(); }
-    return;
-  }
-  if(e.key === 'Escape' && isOpen){
-    e.preventDefault(); closeEnvDropdown(); document.getElementById('envDDBtn').focus(); return;
-  }
-  if(e.key === 'ArrowDown' || e.key === 'ArrowUp'){
-    e.preventDefault();
-    if(!isOpen){ openEnvDropdown(); return; }
-    let next;
-    if(e.key === 'ArrowDown') next = focusedIdx < 0 ? 0 : Math.min(opts.length-1, focusedIdx+1);
-    else next = focusedIdx < 0 ? opts.length-1 : Math.max(0, focusedIdx-1);
-    opts.forEach(o=>o.classList.remove('kbd-focus'));
-    if(opts[next]) opts[next].classList.add('kbd-focus');
-  }
-});
+// The environment dropdown's delegated click/keydown handlers used to live
+// here (#envSwitcher). Removed along with the switcher itself as part of the
+// environment-collapse cluster — there's only one implicit environment now,
+// so there's nothing to switch between.
 document.addEventListener('click', (e)=>{
-  const dd = document.getElementById('envDD');
-  if(dd && dd.classList.contains('open') && !dd.contains(e.target)) closeEnvDropdown();
   const epDD = document.getElementById('epActionsDD');
   if(epDD && epDD.classList.contains('open') && !epDD.contains(e.target)) epDD.classList.remove('open');
   const projDD = document.getElementById('projActionsDD');
@@ -399,12 +336,6 @@ document.addEventListener('click', (e)=>{
   if(usersState.rowMenu.id !== null){
     const openUserDD = document.querySelector(`.row-actions-dd[data-urow-dd="${usersState.rowMenu.id}"]`);
     if(openUserDD && !openUserDD.contains(e.target)){ usersState.rowMenu = { id:null }; renderUsersTableSection(); }
-  }
-  const envAddForm = document.getElementById('envAddForm');
-  const envAddBtnEl = document.getElementById('envTableAddBtn');
-  const envAddBtnEmptyEl = document.getElementById('envTableAddBtnEmpty');
-  if(envAddFormOpen && envAddForm && !envAddForm.contains(e.target) && e.target!==envAddBtnEl && e.target!==envAddBtnEmptyEl){
-    envAddFormOpen = false; renderEnvTableSection();
   }
   const toggleProjVisBtn = e.target.closest('[data-toggle-proj-visibility]');
   if(toggleProjVisBtn){ toggleProjectVisibility(toggleProjVisBtn.getAttribute('data-toggle-proj-visibility')); }

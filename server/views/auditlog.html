@@ -19,8 +19,8 @@
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 /* Dark/light palette now lives in /css/design-tokens.css (linked in <head>),
-   shared with the Studio and release-pipeline tabs — this used to be its own
-   copy-pasted :root block, byte-for-byte identical to theirs. */
+   shared with the Studio tab — this used to be its own copy-pasted :root
+   block, byte-for-byte identical to theirs. */
 :root{
   --sans:'Inter', system-ui, sans-serif; --mono:'JetBrains Mono', ui-monospace, monospace;
 }
@@ -481,7 +481,7 @@ tbody tr.al-hidden{ display:none; }
   // Live updates: this page used to only ever refresh on a manual reload —
   // one more entry could land the moment after load() ran and this tab would
   // never know. GET /api/audit/stream (SSE, same cookie auth, same native
-  // auto-reconnect as the bell/Observability streams — see server/sseHelper.js)
+  // auto-reconnect as the bell's notification stream — see server/sseHelper.js)
   // pushes a 'workspace' event any time ANY audit row is written for this
   // organisation, by anyone. The event carries no data of its own — it's a
   // hint to refetch, not the row — so on receiving one this re-fetches just

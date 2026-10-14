@@ -1,14 +1,12 @@
 const express = require('express');
-const nodeCrypto = require('crypto');
 const { pool } = require('../db');
 const { authenticate, requireAdmin, blockIfScheduleLocked } = require('../middleware/authGuard');
 const { recordAuditEvent } = require('../auditService');
 const dataCrypto = require('../crypto');
 const storage = require('../storage');
 const cache = require('../cache');
-const { resolveAccessById, environmentAllowed, grantCoversEnvironment } = require('../projectAccess');
-const { notifyUser, notifyUsers, adminUserIds } = require('../notifications');
-const { detectBreakingChanges } = require('../breakingChangeDetector');
+const { resolveAccessById, environmentAllowed } = require('../projectAccess');
+const { notifyUser } = require('../notifications');
 const piiMasking = require('../piiMasking');
 const { validateOutboundUrlSync } = require('../urlSafety');
 
@@ -52,9 +50,8 @@ async function getOrgPiiRules(org) {
 // base URL) previously had no validation at all anywhere in this file.
 // Rejects a URL only if it's clearly dangerous (bad scheme, localhost, a
 // literal private/loopback/link-local/metadata IP) — this is the cheap,
-// synchronous, save-time gate; the DNS-resolving check happens again,
-// immediately before firing, in server/routes/liveMode.js. Returns an error
-// string, or null if every entry is fine.
+// synchronous, save-time gate. Returns an error string, or null if every
+// entry is fine.
 function environmentUrlError(projectData) {
   const envs = projectData && projectData.environments;
   if (!envs || typeof envs !== 'object') return null;
@@ -289,8 +286,8 @@ async function reencryptOrganisation(organisation) {
 
   const { rows: wsRows } = await pool.query(
     `SELECT environments, environments_enc, request_history, request_history_enc,
-            tryit_collections_enc, endpoint_metrics_enc, environments_key_version,
-            request_history_key_version, tryit_collections_key_version, endpoint_metrics_key_version
+            tryit_collections_enc, environments_key_version,
+            request_history_key_version, tryit_collections_key_version
      FROM org_workspace WHERE organisation = $1`,
     [organisation]
   );
@@ -299,24 +296,20 @@ async function reencryptOrganisation(organisation) {
     const envPlain = decryptOrgBlob(ws.environments_enc, ws.environments, organisation, 'environments', []);
     const histPlain = decryptOrgBlob(ws.request_history_enc, ws.request_history, organisation, 'request_history', {});
     const tryitPlain = decryptOrgBlob(ws.tryit_collections_enc, null, organisation, 'tryit_collections', { variables: [], saved: [] });
-    const metricsPlain = decryptOrgBlob(ws.endpoint_metrics_enc, null, organisation, 'endpoint_metrics', {});
     const envEnc = encryptOrgBlob(envPlain, organisation, 'environments');
     const histEnc = encryptOrgBlob(histPlain, organisation, 'request_history');
     const tryitEnc = encryptOrgBlob(tryitPlain, organisation, 'tryit_collections');
-    const metricsEnc = encryptOrgBlob(metricsPlain, organisation, 'endpoint_metrics');
     await pool.query(
       `UPDATE org_workspace SET
          environments = '[]'::jsonb, environments_enc = $1, environments_key_version = $2,
          request_history = '{}'::jsonb, request_history_enc = $3, request_history_key_version = $4,
-         tryit_collections_enc = $5, tryit_collections_key_version = $6,
-         endpoint_metrics_enc = $7, endpoint_metrics_key_version = $8
-       WHERE organisation = $9
-         AND environments_key_version IS NOT DISTINCT FROM $10
-         AND request_history_key_version IS NOT DISTINCT FROM $11
-         AND tryit_collections_key_version IS NOT DISTINCT FROM $12
-         AND endpoint_metrics_key_version IS NOT DISTINCT FROM $13`,
-      [envEnc.enc, envEnc.version, histEnc.enc, histEnc.version, tryitEnc.enc, tryitEnc.version, metricsEnc.enc, metricsEnc.version,
-        organisation, ws.environments_key_version, ws.request_history_key_version, ws.tryit_collections_key_version, ws.endpoint_metrics_key_version]
+         tryit_collections_enc = $5, tryit_collections_key_version = $6
+       WHERE organisation = $7
+         AND environments_key_version IS NOT DISTINCT FROM $8
+         AND request_history_key_version IS NOT DISTINCT FROM $9
+         AND tryit_collections_key_version IS NOT DISTINCT FROM $10`,
+      [envEnc.enc, envEnc.version, histEnc.enc, histEnc.version, tryitEnc.enc, tryitEnc.version,
+        organisation, ws.environments_key_version, ws.request_history_key_version, ws.tryit_collections_key_version]
     );
   }
   return { projects: projectsTouched, orgWorkspace: true };
@@ -327,8 +320,8 @@ async function reencryptOrganisation(organisation) {
 // "share the whole project with this person," same as an owner would see it,
 // gated only by `_readonly` (view-only grants can't be saved back) and
 // `_grantedEnvironments` (which of the project's environments this person may
-// actually use in Try It/Live Mode/promotion views — enforced at THOSE call
-// sites, not here, since endpoints themselves aren't per-environment).
+// actually use in Try It — enforced at THOSE call sites, not here, since
+// endpoints themselves aren't per-environment).
 // Everyone else in the same organisation gets the old stripped-down view:
 // only `public` endpoints survive, and attachments/diagram (project-level,
 // not per-endpoint) only survive if the whole project is public. Different
@@ -346,14 +339,17 @@ function projectForViewer(row, viewerId, data, grant) {
     return { ...data, id: row.id, visibility: row.visibility, _owned: true, _rev: rev };
   }
   if (grant) {
-    const envs = Array.isArray(grant.environments) ? grant.environments : [];
+    // Grants are project-wide only now (environment collapse cluster) — a
+    // project_access row used to carry its own `environments` scope, but
+    // with exactly one environment left in the app, any grant at all
+    // already covers "every environment there is."
     return {
       ...data,
       id: row.id,
       visibility: row.visibility,
       _owned: false,
       _readonly: grant.permission !== 'edit',
-      _grantedEnvironments: envs.includes('*') ? 'all' : envs,
+      _grantedEnvironments: 'all',
       _rev: rev,
     };
   }
@@ -482,11 +478,13 @@ router.get('/', async (req, res) => {
     // project that isn't the caller's own, instead of fetching and decrypting
     // all of them just to discard most in projectForViewer() afterwards.
     // The LEFT JOIN both pulls in this user's own grants (pa.user_id = $1 in
-    // the WHERE) AND carries the grant's environments/permission along for
+    // the WHERE) AND carries the grant's permission along for
     // projectForViewer to apply — one query instead of an N+1 per project.
+    // (Used to also carry pa.environments — grants are project-wide only
+    // now, see projectForViewer's grant branch, environment collapse cluster.)
     const { rows } = await pool.query(
       `SELECT p.id, p.owner_id, p.organisation, p.visibility, p.name, p.data, p.data_enc, p.updated_at,
-              pa.environments AS grant_environments, pa.permission AS grant_permission
+              pa.permission AS grant_permission
        FROM projects p
        LEFT JOIN project_access pa ON pa.project_id = p.id AND pa.user_id = $1
        WHERE p.owner_id = $1
@@ -505,7 +503,7 @@ router.get('/', async (req, res) => {
     const publicViewProjectIds = []; // ids seen only via the org-wide public catalog — the one branch doc-locking applies to
     rows.forEach((row) => {
       const data = decryptProjectData(row);
-      const grant = row.grant_permission ? { environments: row.grant_environments, permission: row.grant_permission } : null;
+      const grant = row.grant_permission ? { permission: row.grant_permission } : null;
       const viewed = projectForViewer(row, userId, data, grant);
       // Admin-only (2026-09-27, requested explicitly): raw auto-discovered
       // projects (mule_doc_agent.py's build_app_projects(), tagged
@@ -541,7 +539,7 @@ router.get('/', async (req, res) => {
 
     const [wsResult, userRow] = await Promise.all([
       pool.query(
-        `SELECT environments, environments_enc, request_history, request_history_enc, tryit_collections_enc, endpoint_metrics_enc, custom_flow_directions, custom_icons, branding
+        `SELECT environments, environments_enc, request_history, request_history_enc, tryit_collections_enc, custom_flow_directions, custom_icons, branding
          FROM org_workspace WHERE organisation = $1`,
         [org]
       ),
@@ -553,21 +551,11 @@ router.get('/', async (req, res) => {
     // Audit log is no longer part of this payload — it's fetched separately
     // from GET /api/audit/events, which returns server-authoritative entries
     // from the audit_logs table instead of a client-writable JSONB blob.
-    // Composed from per-writer segments when the blob has them, returned
-    // as-is otherwise (a single-agent deployment, or data written before
-    // multi-writer support). Either way the client sees one flat shape.
-    const storedMetrics = decryptOrgBlob(ws.endpoint_metrics_enc, null, org, 'endpoint_metrics', {});
-    const endpointMetrics = composeWriterSegments(storedMetrics);
     const payload = {
       projects,
       environments: decryptOrgBlob(ws.environments_enc, ws.environments, org, 'environments', []),
       requestHistory: decryptOrgBlob(ws.request_history_enc, ws.request_history, org, 'request_history', {}),
       tryitCollections: decryptOrgBlob(ws.tryit_collections_enc, null, org, 'tryit_collections', { variables: [], saved: [] }),
-      endpointMetrics,
-      // Revision of the STORED blob, not the composed view above - a
-      // whole-blob writer is overwriting what's stored, so that's what it
-      // has to prove it read. See PUT /endpoint-metrics.
-      endpointMetricsRev: metricsRev(storedMetrics),
       // PER-USER, not org-shared — see the users.tryit_personal_enc comment
       // in server/db.js. Safe to fold into this same cached payload because
       // the cache itself is already keyed per (org, userId) — see cache.js.
@@ -765,16 +753,18 @@ async function requireOwnerOrAdmin(req, res, projectId) {
   return project;
 }
 
-// GET /api/workspace/projects/:id/access — current grants + org roster/env
-// catalog, everything the "Share" UI needs in one call.
+// GET /api/workspace/projects/:id/access — current grants + org roster,
+// everything the "Share" UI needs in one call. Used to also return the org's
+// environment catalog so a grant could be scoped to a subset — grants are
+// project-wide only now (environment collapse cluster), so that's gone.
 router.get('/projects/:id/access', async (req, res) => {
   try {
     const project = await requireOwnerOrAdmin(req, res, req.params.id);
     if (!project) return;
 
-    const [grantsResult, usersResult, environments] = await Promise.all([
+    const [grantsResult, usersResult] = await Promise.all([
       pool.query(
-        `SELECT pa.user_id, u.username, u.role, pa.environments, pa.permission, pa.granted_at,
+        `SELECT pa.user_id, u.username, u.role, pa.permission, pa.granted_at,
                 gb.username AS granted_by_username
          FROM project_access pa
          JOIN users u ON u.id = pa.user_id
@@ -787,7 +777,6 @@ router.get('/projects/:id/access', async (req, res) => {
         `SELECT id, username, role FROM users WHERE organisation = $1 AND id != $2 ORDER BY username ASC`,
         [req.authUser.organisation, project.owner_id]
       ),
-      getOrgEnvironments(req.authUser.organisation),
     ]);
 
     res.json({
@@ -795,7 +784,6 @@ router.get('/projects/:id/access', async (req, res) => {
       projectName: project.name,
       grants: grantsResult.rows,
       shareableUsers: usersResult.rows,
-      environments,
     });
   } catch (err) {
     console.error('GET project access failed:', err);
@@ -803,14 +791,20 @@ router.get('/projects/:id/access', async (req, res) => {
   }
 });
 
-// POST /api/workspace/projects/:id/access — create or update one user's grant.
-// Body: { userId, environments: ["DEV","SIT"] | ["*"], permission: 'view'|'edit' }
+// POST /api/workspace/projects/:id/access — create or update one user's
+// grant. Body: { userId, permission: 'view'|'edit' }. Used to also take an
+// `environments` scope (["DEV","SIT"] or ["*"]) — grants are project-wide
+// only now (environment collapse cluster: there's only one environment
+// left, so "which environments" was never a real choice any more), stored
+// in the DB as the fixed `["*"]` for compatibility with the existing
+// project_access.environments column/projectAccess.js rather than dropping
+// the column outright.
 router.post('/projects/:id/access', async (req, res) => {
   try {
     const project = await requireOwnerOrAdmin(req, res, req.params.id);
     if (!project) return;
 
-    const { userId, environments, permission } = req.body || {};
+    const { userId, permission } = req.body || {};
     const targetUserId = Number(userId);
     if (!Number.isInteger(targetUserId)) {
       return res.status(400).json({ error: 'userId is required.' });
@@ -820,19 +814,6 @@ router.post('/projects/:id/access', async (req, res) => {
     }
     if (permission !== 'view' && permission !== 'edit') {
       return res.status(400).json({ error: "permission must be 'view' or 'edit'." });
-    }
-    if (!Array.isArray(environments) || environments.length === 0) {
-      return res.status(400).json({ error: 'Pick at least one environment, or ["*"] for all.' });
-    }
-
-    // Silently drop anything invalid rather than failing the whole save over
-    // one stale entry — same tolerance liveMode.js applies to its grants.
-    const wildcard = environments.includes('*');
-    let cleanEnvs = ['*'];
-    if (!wildcard) {
-      const validEnvIds = new Set((await getOrgEnvironments(req.authUser.organisation)).map((e) => e.id));
-      cleanEnvs = [...new Set(environments.filter((e) => typeof e === 'string' && validEnvIds.has(e)))];
-      if (!cleanEnvs.length) return res.status(400).json({ error: 'None of the given environments exist for this organisation.' });
     }
 
     // Confirm the target user is actually in the same organisation before
@@ -845,12 +826,12 @@ router.post('/projects/:id/access', async (req, res) => {
 
     const { rows } = await pool.query(
       `INSERT INTO project_access (project_id, user_id, environments, permission, granted_by)
-       VALUES ($1, $2, $3::jsonb, $4, $5)
+       VALUES ($1, $2, '["*"]'::jsonb, $3, $4)
        ON CONFLICT (project_id, user_id)
-       DO UPDATE SET environments = EXCLUDED.environments, permission = EXCLUDED.permission,
+       DO UPDATE SET permission = EXCLUDED.permission,
                       granted_by = EXCLUDED.granted_by, granted_at = now()
-       RETURNING user_id, environments, permission, granted_at`,
-      [req.params.id, targetUserId, JSON.stringify(cleanEnvs), permission, req.authUser.sub]
+       RETURNING user_id, permission, granted_at`,
+      [req.params.id, targetUserId, permission, req.authUser.sub]
     );
 
     await cache.invalidateOrg(req.authUser.organisation);
@@ -859,9 +840,9 @@ router.post('/projects/:id/access', async (req, res) => {
       resourceType: 'project',
       resourceId: req.params.id,
       projectName: project.name,
-      details: `Granted ${targetRows[0].username} ${permission} access (${cleanEnvs.join(', ')})`,
+      details: `Granted ${targetRows[0].username} ${permission} access`,
       severity: 'warning',
-      metadata: { targetUserId, environments: cleanEnvs, permission },
+      metadata: { targetUserId, permission },
     });
     // Same blind spot as doc-access requests: the person who was just given
     // (or had regranted) access to someone else's project had no way to
@@ -870,7 +851,7 @@ router.post('/projects/:id/access', async (req, res) => {
       organisation: req.authUser.organisation,
       type: 'PROJECT_ACCESS_GRANTED',
       title: `You were given ${permission} access to ${project.name}`,
-      body: cleanEnvs.includes('*') ? 'All environments' : cleanEnvs.join(', '),
+      body: project.name,
       link: { view: 'project', projectId: req.params.id },
     });
 
@@ -1007,12 +988,10 @@ router.get('/projects/:id/attachments/:docId', async (req, res) => {
       return res.status(403).json({ error: 'This project is private.' });
     }
 
-    // Attachments are frozen into each stage's snapshot the same as
-    // endpoints are (see finalizePromotion) — without this, downloading a
-    // document while viewing SIT/UAT/Staging/Production always served
-    // whatever's on the current DEV draft instead of what was actually
-    // promoted, so a document replaced after a promotion looked identical
-    // in every environment even though the live stages hadn't changed.
+    // Attachments are frozen into each stage's snapshot — without this,
+    // downloading a document while viewing a non-draft stage always served
+    // whatever's on the current draft instead of what was actually in that
+    // stage's frozen snapshot.
     const envKey = req.query.environmentId;
     let data;
     if (envKey) {
@@ -1068,11 +1047,10 @@ async function upsertOrgWorkspace(org, column, value) {
 // (it was born encrypted-only), so it always writes '{}' into that slot.
 async function upsertEncryptedOrgWorkspace(org, purpose, value) {
   const column = purpose === 'environments' ? 'environments'
-    : purpose === 'tryit_collections' ? 'tryit_collections'
-    : purpose === 'endpoint_metrics' ? 'endpoint_metrics' : 'request_history';
+    : purpose === 'tryit_collections' ? 'tryit_collections' : 'request_history';
   const legacyPlaceholder = column === 'environments' ? '[]' : '{}';
-  if (column === 'tryit_collections' || column === 'endpoint_metrics') {
-    // No legacy plaintext column for either - both were born encrypted-only.
+  if (column === 'tryit_collections') {
+    // No legacy plaintext column - it was born encrypted-only.
     const { enc, version } = encryptOrgBlob(value, org, purpose);
     await pool.query(
       `INSERT INTO org_workspace (organisation, ${column}_enc, ${column}_key_version, updated_at)
@@ -1095,10 +1073,21 @@ async function upsertEncryptedOrgWorkspace(org, purpose, value) {
   );
 }
 
+// PUT /api/workspace/environments — repurposed by the environment-collapse
+// cluster: this used to be CRUD over an org's whole environment list
+// (add/reorder/delete), now it just edits the one environment's own
+// settings (label, base URL, color, access level, host IPs). The client
+// still sends `{ environments: [...] }` (see saveEnvironments() in
+// 03-notifications.js) so this keeps accepting that shape rather than
+// force a client-side contract change, but always collapses whatever
+// comes in down to the single entry (collapseEnvironmentsList) before it's
+// stored — so even a stale/multi-entry client payload can't resurrect a
+// second environment.
 router.put('/environments', async (req, res) => {
   if (!Array.isArray(req.body?.environments)) return res.status(400).json({ error: 'Expected { environments: [] }.' });
   try {
-    await upsertEncryptedOrgWorkspace(req.authUser.organisation, 'environments', req.body.environments);
+    const collapsed = collapseEnvironmentsList(req.body.environments);
+    await upsertEncryptedOrgWorkspace(req.authUser.organisation, 'environments', collapsed);
     await cache.invalidateOrg(req.authUser.organisation);
     res.json({ ok: true });
   } catch (err) {
@@ -1119,314 +1108,6 @@ router.put('/request-history', async (req, res) => {
   }
 });
 
-// Traffic metrics pushed by the SIT log auto-discovery agent (ops/sit-doc-agent) -
-// keyed by "METHOD /path", org-shared, encrypted like request_history (client IPs
-// are PII). Whole-blob overwrite by design: the agent recomputes and replaces its
-// own metrics wholesale from its own state each push, same as the doc-discovery
-// project push - no merge-by-key needed since there's exactly one writer
-// (the service account), not multiple humans editing concurrently.
-// Optimistic-locking guard for the endpoint-metrics blob.
-//
-// This blob is written as a WHOLE-BLOB OVERWRITE by the SIT log agent, and
-// "only one writer" used to be enforced by nothing but convention. Two agents
-// running at once (a stale systemd unit, a manual debug run alongside the
-// service, a second server) meant one silently erased the other's entire
-// history - every counter, every record - with no error and no trace.
-//
-// Unlike projects, this can't key off org_workspace.updated_at: that column is
-// shared with environments / request_history / tryit_collections, so an
-// unrelated write to any of those would bump it and cause a false conflict
-// here. A content hash of the blob itself is the honest revision - it changes
-// when and only when THIS blob changes.
-function metricsRev(value) {
-  return nodeCrypto.createHash('sha256')
-    .update(JSON.stringify(value === undefined ? {} : value))
-    .digest('hex')
-    .slice(0, 16);
-}
-
-// --- Multi-writer support ---------------------------------------------------
-// Whole-blob overwrite only works with exactly one agent. A deployment with
-// several Mule servers needs one agent per server, and they must not clobber
-// each other - the ifMatchRev guard above would make them 409 in a loop
-// instead, which is safe but useless.
-//
-// So a writer may instead claim only its OWN segment: the stored blob becomes
-// { writers: { [writerId]: {endpoints, agentHealth, logRecords, updatedAt} } }
-// and a merge-mode write replaces exactly one segment, leaving the others
-// untouched. No lost updates, no conflict, no coordination between agents.
-//
-// GET composes the segments back into the flat { endpoints, agentHealth,
-// logRecords } shape the client already reads, so nothing on the page has to
-// know this happened.
-const MAX_METRICS_WRITERS = 50;
-
-// Mirrors the agent's own MAX_LOG_RECORDS_PER_ENDPOINT / MAX_LOG_RECORDS_TOTAL
-// defaults (mule_doc_agent.py). Only used when a writer sends
-// `logRecordsDelta: true` (CAPTURE_MODE=full) - it appends the new records
-// it sent onto whatever this writer's segment already has, instead of that
-// payload REPLACING the segment's whole logRecords list, then re-applies
-// these same caps so the stored size stays bounded exactly as it would if
-// the agent had sent (and this route had stored) the full list every time.
-// A writer that omits the flag keeps the old, simpler full-replace
-// behaviour untouched - this is purely additive.
-const MAX_LOG_RECORDS_PER_ENDPOINT = 200;
-const MAX_LOG_RECORDS_TOTAL = 3000;
-
-function capLogRecords(records) {
-  const countByKey = new Map();
-  for (const r of records) countByKey.set(r?.key, (countByKey.get(r?.key) || 0) + 1);
-  const droppedSoFar = new Map();
-  const kept = [];
-  for (const r of records) {
-    const total = countByKey.get(r?.key) || 0;
-    if (total > MAX_LOG_RECORDS_PER_ENDPOINT) {
-      const seen = (droppedSoFar.get(r?.key) || 0) + 1;
-      droppedSoFar.set(r?.key, seen);
-      if (seen <= total - MAX_LOG_RECORDS_PER_ENDPOINT) continue; // oldest-first for this key
-    }
-    kept.push(r);
-  }
-  return kept.length > MAX_LOG_RECORDS_TOTAL ? kept.slice(kept.length - MAX_LOG_RECORDS_TOTAL) : kept;
-}
-
-// Endpoint counters are summed across writers reporting the SAME endpoint,
-// which is right for two load-balanced nodes of one environment and wrong
-// across environments: the same API is deployed to SIT, UAT and PROD, so a
-// pooled `totalRequests` is not a rougher truth but a meaningless number, and
-// a pooled `topSourceIps` leaks PROD client addresses into a SIT view.
-//
-// So composition happens strictly WITHIN an environment. Each writer segment
-// carries the environment its node serves (the agent refuses to guess it);
-// segments from before this existed have none, and are grouped under
-// UNSCOPED_ENVIRONMENT so they stay visible rather than vanishing.
-const UNSCOPED_ENVIRONMENT = 'Unscoped';
-
-function segmentEnvironment(seg) {
-  const raw = typeof seg.environment === 'string' ? seg.environment.trim() : '';
-  return raw ? raw.slice(0, 32) : UNSCOPED_ENVIRONMENT;
-}
-
-function composeOneEnvironment(entries) {
-  const endpoints = {};
-  let logRecords = [];
-  const agents = [];
-
-  for (const [writerId, seg] of entries) {
-    for (const [key, ep] of Object.entries(seg.endpoints || {})) {
-      const prev = endpoints[key];
-      if (!prev) { endpoints[key] = { ...ep }; continue; }
-      // Same method+path seen on two servers: these are aggregate counters,
-      // so the union is the sum. Anything else would under-report a
-      // load-balanced endpoint.
-      const merged = { ...prev };
-      merged.totalRequests = (prev.totalRequests || 0) + (ep.totalRequests || 0);
-      merged.statusBreakdown = { ...(prev.statusBreakdown || {}) };
-      for (const [fam, n] of Object.entries(ep.statusBreakdown || {})) {
-        merged.statusBreakdown[fam] = (merged.statusBreakdown[fam] || 0) + n;
-      }
-      const errs = (merged.statusBreakdown['4xx'] || 0) + (merged.statusBreakdown['5xx'] || 0);
-      const withStatus = Object.values(merged.statusBreakdown).reduce((a, b) => a + b, 0);
-      merged.errorRate = withStatus ? Math.round((errs / withStatus) * 10000) / 10000 : 0;
-      // Source IPs: sum per IP, then keep the heaviest few.
-      const ipTotals = new Map();
-      for (const list of [prev.topSourceIps || [], ep.topSourceIps || []]) {
-        for (const row of list) ipTotals.set(row.ip, (ipTotals.get(row.ip) || 0) + (row.count || 0));
-      }
-      merged.topSourceIps = [...ipTotals.entries()]
-        .sort((a, b) => b[1] - a[1]).slice(0, 10)
-        .map(([ip, count]) => ({ ip, count }));
-      merged.lastSeenAt = [prev.lastSeenAt, ep.lastSeenAt].filter(Boolean).sort().pop() || null;
-      endpoints[key] = merged;
-    }
-    if (Array.isArray(seg.logRecords)) logRecords = logRecords.concat(seg.logRecords);
-    if (isPlainObject(seg.agentHealth)) agents.push({ writerId, ...seg.agentHealth });
-  }
-
-  // Newest-first, then capped - with several agents this is the union of
-  // their ring buffers and could otherwise grow without bound.
-  logRecords.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
-  logRecords = logRecords.slice(0, 5000);
-
-  // Two agents on different hosts (or the same host tailing genuinely
-  // different apps) are a normal, supported deployment - their counters
-  // above are meant to sum. Two agents that ended up with the SAME
-  // sourceFingerprint (hostname + exact set of tailed files - see
-  // source_fingerprint() in mule_doc_agent.py) are reading the identical
-  // files, which means every merge above just doubled real numbers instead
-  // of correctly summing two independent nodes' traffic. The fingerprint
-  // has been computed and sent since the agent-side fix shipped, but
-  // nothing ever consumed it - this is that consumer, so the duplicate
-  // shows up as a visible warning (see 23-observability.js) instead of a
-  // silently-inflated request count nobody can explain.
-  const byFingerprint = new Map();
-  for (const a of agents) {
-    if (!a.sourceFingerprint) continue;
-    if (!byFingerprint.has(a.sourceFingerprint)) byFingerprint.set(a.sourceFingerprint, []);
-    byFingerprint.get(a.sourceFingerprint).push(a.writerId);
-  }
-  const duplicateWriterGroups = [...byFingerprint.values()].filter((ids) => ids.length > 1);
-
-  // The page renders one agentHealth card; give it the most recently
-  // generated one, and attach every writer's own health beside it so a
-  // multi-server deployment can still see each agent individually.
-  agents.sort((a, b) => String(b.generatedAt || '').localeCompare(String(a.generatedAt || '')));
-  const agentHealth = agents.length
-    ? { ...agents[0], writers: agents, ...(duplicateWriterGroups.length ? { duplicateWriterGroups } : {}) }
-    : null;
-
-  return { endpoints, agentHealth, logRecords };
-}
-
-function composeWriterSegments(stored) {
-  if (!isPlainObject(stored) || !isPlainObject(stored.writers)) return stored || {};
-
-  const byEnv = new Map();
-  for (const [writerId, seg] of Object.entries(stored.writers)) {
-    if (!isPlainObject(seg)) continue;
-    const env = segmentEnvironment(seg);
-    if (!byEnv.has(env)) byEnv.set(env, []);
-    byEnv.get(env).push([writerId, seg]);
-  }
-
-  const environments = {};
-  for (const [env, entries] of byEnv) environments[env] = composeOneEnvironment(entries);
-
-  // The page picks ONE environment to display. A single-environment install
-  // (the common case) still gets the flat shape at the top level so nothing
-  // downstream has to special-case it; with several, the flat fields describe
-  // the default environment only, and `environmentNames` drives the selector.
-  // They are deliberately NOT a cross-environment sum - see the note above.
-  const names = [...byEnv.keys()].sort();
-  const primary = names.includes(UNSCOPED_ENVIRONMENT) && names.length > 1
-    ? names.find((n) => n !== UNSCOPED_ENVIRONMENT)
-    : names[0];
-  const head = (primary && environments[primary]) || { endpoints: {}, agentHealth: null, logRecords: [] };
-
-  return { ...head, environments, environmentNames: names, defaultEnvironment: primary || null };
-}
-
-router.put('/endpoint-metrics', async (req, res) => {
-  if (!isPlainObject(req.body?.endpointMetrics)) return res.status(400).json({ error: 'Expected { endpointMetrics: {} }.' });
-  const org = req.authUser.organisation;
-  try {
-    // Merge mode: this writer owns one named segment and never touches the
-    // others, so several agents (one per Mule server) can write concurrently
-    // with no conflict and no lost updates. No ifMatchRev is needed or
-    // honoured here - there is nothing to race against.
-    const writerId = typeof req.body.writerId === 'string' ? req.body.writerId.trim().slice(0, 64) : '';
-    if (writerId) {
-      // The merge itself is a read-modify-write of one encrypted blob, which
-      // cannot be done with jsonb_set - the value is ciphertext. So it runs
-      // inside a transaction holding FOR UPDATE on the row: without that,
-      // two agents pushing at the same moment would both read the same
-      // `writers` map and the second write would drop the first agent's
-      // segment. That is exactly the lost-update class of bug this whole
-      // endpoint is being hardened against, so it would be absurd to
-      // reintroduce it here.
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        const { rows } = await client.query(
-          `SELECT endpoint_metrics_enc FROM org_workspace WHERE organisation = $1 FOR UPDATE`,
-          [org]
-        );
-        const stored = rows.length
-          ? decryptOrgBlob(rows[0].endpoint_metrics_enc, null, org, 'endpoint_metrics', {})
-          : {};
-        // A blob written by a pre-merge single agent has no `writers` key.
-        // Its data is adopted under a reserved id rather than discarded, so
-        // switching an existing deployment to merge mode doesn't reset
-        // history.
-        const writers = isPlainObject(stored.writers) ? { ...stored.writers } : (
-          (stored.endpoints || stored.agentHealth) ? { 'legacy-single-writer': stored } : {}
-        );
-        if (!writers[writerId] && Object.keys(writers).length >= MAX_METRICS_WRITERS) {
-          await client.query('ROLLBACK');
-          return res.status(409).json({
-            error: `Too many distinct metrics writers (${MAX_METRICS_WRITERS}). Each agent must send a STABLE writerId; a value that changes per restart will exhaust this.`,
-          });
-        }
-        // The environment label is rendered on a page and used as a grouping
-        // key, so it is constrained here rather than taken as sent - an agent
-        // is not a trusted source of display strings.
-        const seg = { ...req.body.endpointMetrics, updatedAt: new Date().toISOString() };
-        if (seg.logRecordsDelta === true) {
-          const prevRecords = Array.isArray(writers[writerId]?.logRecords) ? writers[writerId].logRecords : [];
-          const newRecords = Array.isArray(seg.logRecords) ? seg.logRecords : [];
-          seg.logRecords = capLogRecords(prevRecords.concat(newRecords));
-        }
-        delete seg.logRecordsDelta; // transport-only flag, not part of the stored segment
-        const envRaw = typeof seg.environment === 'string' ? seg.environment.trim() : '';
-        seg.environment = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,31}$/.test(envRaw) ? envRaw : null;
-        if (envRaw && !seg.environment) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            error: 'environment must be a short label (letters, digits, spaces, - or _, max 32 chars).',
-          });
-        }
-        writers[writerId] = seg;
-        const { enc, version } = encryptOrgBlob({ writers }, org, 'endpoint_metrics');
-        await client.query(
-          `INSERT INTO org_workspace (organisation, endpoint_metrics_enc, endpoint_metrics_key_version, updated_at)
-           VALUES ($1, $2, $3, now())
-           ON CONFLICT (organisation) DO UPDATE SET
-             endpoint_metrics_enc = EXCLUDED.endpoint_metrics_enc,
-             endpoint_metrics_key_version = EXCLUDED.endpoint_metrics_key_version, updated_at = now()`,
-          [org, enc, version]
-        );
-        await client.query('COMMIT');
-        await cache.invalidateOrg(org);
-        return res.json({ ok: true, writerId, writerCount: Object.keys(writers).length });
-      } catch (err) {
-        await client.query('ROLLBACK').catch(() => {});
-        throw err;
-      } finally {
-        client.release();
-      }
-    }
-
-    // A client that sends `ifMatchRev` is held to it; one that omits it (an
-    // older agent build) is never blocked - same forgiving contract the
-    // projects route uses for `_rev`, so upgrading the server can't break a
-    // deployed agent.
-    const wantsDelta = req.body.endpointMetrics.logRecordsDelta === true;
-    let current = null;
-    if (typeof req.body.ifMatchRev === 'string' || wantsDelta) {
-      const { rows } = await pool.query(
-        `SELECT endpoint_metrics_enc FROM org_workspace WHERE organisation = $1`,
-        [org]
-      );
-      current = rows.length
-        ? decryptOrgBlob(rows[0].endpoint_metrics_enc, null, org, 'endpoint_metrics', {})
-        : {};
-      if (typeof req.body.ifMatchRev === 'string') {
-        const actualRev = metricsRev(current);
-        if (actualRev !== req.body.ifMatchRev) {
-          // 409, NOT a silent win-by-last-write. The caller is expected to
-          // re-read and retry rather than force its stale copy through.
-          return res.status(409).json({
-            error: 'Endpoint metrics changed since you read them — another writer (a second agent?) is active. Re-read and retry.',
-            currentRev: actualRev,
-          });
-        }
-      }
-    }
-    const toStore = { ...req.body.endpointMetrics };
-    if (wantsDelta) {
-      const prevRecords = Array.isArray(current?.logRecords) ? current.logRecords : [];
-      const newRecords = Array.isArray(toStore.logRecords) ? toStore.logRecords : [];
-      toStore.logRecords = capLogRecords(prevRecords.concat(newRecords));
-    }
-    delete toStore.logRecordsDelta;
-    await upsertEncryptedOrgWorkspace(org, 'endpoint_metrics', toStore);
-    await cache.invalidateOrg(org);
-    res.json({ ok: true, rev: metricsRev(toStore) });
-  } catch (err) {
-    console.error('PUT endpoint-metrics failed:', err);
-    res.status(500).json({ error: 'Could not save endpoint metrics.' });
-  }
-});
 
 // Try It collection variables + saved requests (Postman-style). Same
 // org-shared, encrypted-at-rest treatment as /request-history — a variable
@@ -1645,7 +1326,11 @@ router.post('/migrate', async (req, res) => {
       return arr;
     };
 
-    const mergedEnvironments = mergeById(current.environments, body.environments);
+    // Collapsed to the single environment (environment collapse cluster) —
+    // an old browser's localStorage could still hand this route a
+    // multi-entry list (pre-Postgres, pre-collapse data); merging it in
+    // unchanged would resurrect a second environment in org_workspace.
+    const mergedEnvironments = collapseEnvironmentsList(mergeById(current.environments, body.environments));
     const mergedFlowDirections = mergeById(current.custom_flow_directions, body.customFlowDirections);
     const mergedHistory = { ...(current.request_history || {}) };
     if (isPlainObject(body.requestHistory)) {
@@ -1708,23 +1393,44 @@ router.post('/migrate', async (req, res) => {
 });
 
 // ============================================================================
-// Environment release pipeline: Dev (live draft) -> SIT -> UAT -> Staging ->
-// Production, each non-Dev stage holding a frozen, versioned snapshot until
-// explicitly promoted forward. Promotion is Admin-only.
-//
-// The pipeline order comes from the org's OWN environments list (org_workspace
-// .environments — user-configurable, see the environment settings UI), not a
-// hardcoded list, since orgs can rename/reorder/add environments freely. One
-// convention: an environment labeled "DR" (case-insensitive) is never a
-// manual pipeline stage — it always auto-mirrors whatever's currently in the
-// pipeline's last stage (Production, by default) the moment that stage is
-// promoted to, with no separate "Promote" click.
+// Environment collapse (see migrations/sql/0009_collapse_environments.sql):
+// there is now exactly one environment, read from org_workspace.environments
+// (self-healing on read, see collapseEnvironmentsList/getOrgEnvironments
+// below). Before this cluster there was a user-configurable list of
+// environments, each a "pipeline stage" potentially holding its own frozen
+// promoted snapshot (project_env_versions — dropped entirely in an earlier
+// cluster, see migrations/sql/0007_drop_release_pipeline.sql) read by
+// GET /environment-metrics and GET /projects/:id/snapshot below; both now
+// report on the one live draft only.
 // ============================================================================
 
-function isAdminUser(req) {
-  return req.authUser.role === 'admin';
+// Picks the one environment to keep from a (possibly still multi-entry,
+// pre-collapse) environments list, using the exact same decision rule the
+// data migration used (see server/migrations/sql/0009_collapse_environments.sql):
+// an entry explicitly flagged default/primary/prod if the shape ever had
+// one (as of this schema it doesn't — see that migration's header comment
+// for what was actually inferred), otherwise the list's own first entry
+// (its existing order already represented the org's priority). Always
+// returns exactly one entry with a fixed synthetic id/label, so
+// project_access's `["*"]` and pii_field_rules' `["default"]` (and the
+// client's envIds()) have one stable id to agree on across every org.
+function collapseEnvironmentsList(list) {
+  const arr = Array.isArray(list) ? list : [];
+  const kept = arr.find((e) => e && (e.isDefault || e.isProd || e.primary)) || arr[0] || {};
+  return [{ ...kept, id: 'default', label: 'Default' }];
 }
 
+// Reads the org's environment catalog, self-healing it to the single
+// collapsed entry on the way out. The SQL migration already collapsed the
+// plaintext legacy `environments` column, but `environments_enc` is
+// encrypted with this org's DEK (see server/crypto.js) — a plain SQL
+// UPDATE can't transform ciphertext it can't decrypt, so any org whose
+// catalog was already encrypted before the collapse migration ran would
+// otherwise keep decrypting to its old multi-environment shape forever.
+// Collapsing here, the first time anything reads it post-migration, and
+// writing the result straight back finishes that migration in application
+// code instead (same split the removal plan anticipated for endpoint-level
+// per-environment data — see migrateProject/migrateEndpoint client-side).
 async function getOrgEnvironments(org) {
   const { rows } = await pool.query(
     `SELECT environments, environments_enc FROM org_workspace WHERE organisation = $1`,
@@ -1732,15 +1438,25 @@ async function getOrgEnvironments(org) {
   );
   const ws = rows[0] || {};
   const list = decryptOrgBlob(ws.environments_enc, ws.environments, org, 'environments', []);
-  return Array.isArray(list) ? list : [];
+  const raw = Array.isArray(list) ? list : [];
+  if (raw.length === 1 && raw[0] && raw[0].id === 'default') return raw;
+  const collapsed = collapseEnvironmentsList(raw);
+  try {
+    await upsertEncryptedOrgWorkspace(org, 'environments', collapsed);
+  } catch (err) {
+    console.error(`Failed to persist self-healed environment collapse for org ${org}:`, err);
+  }
+  return collapsed;
 }
 
-// The pipeline is every configured environment EXCEPT ones labeled "DR" —
-// those mirror the last pipeline stage automatically instead of being
-// manually promoted to. Stage 0 is always the live draft (projects.data),
-// never a project_env_versions row.
+// Used to filter out "DR" (auto-mirrored) stages from the Release Pipeline's
+// list of manually-promotable environments. The pipeline itself is gone
+// (see migrations/sql/0007_drop_release_pipeline.sql) and there is only one
+// environment left to report on, so this is now the identity function —
+// kept only so docAccess.js's existing `pipelineStages(await
+// getOrgEnvironments(org))` call keeps working unchanged.
 function pipelineStages(allEnvironments) {
-  return allEnvironments.filter((e) => String(e.label || '').trim().toUpperCase() !== 'DR');
+  return allEnvironments;
 }
 
 // GET /api/workspace/environment-metrics — workspace-wide rollup of how many
@@ -1780,6 +1496,14 @@ function mergeByStatus(target, addition) {
   return target;
 }
 
+// With the environment collapse (and, before it, Release Pipeline's removal
+// — see migrations/sql/0007_drop_release_pipeline.sql) there is exactly one
+// environment and no separate "promoted snapshot" table any more; everything
+// below counts the live draft only. The response shape (stages/mirrors/
+// perProject/...) is kept unchanged so the API Control Center dashboard
+// cards (public/js/studio/11-render-main.js) keep rendering without their
+// own rewrite — `mirrors` is now always empty and every per-project entry
+// has exactly one stage (always the draft).
 router.get('/environment-metrics', async (req, res) => {
   try {
     const userId = req.authUser.sub;
@@ -1793,21 +1517,14 @@ router.get('/environment-metrics', async (req, res) => {
       [userId, org]
     );
 
-    const allEnvs = await getOrgEnvironments(org);
-    const stages = pipelineStages(allEnvs);
+    const stages = pipelineStages(await getOrgEnvironments(org)); // always exactly one entry — the collapsed default environment
     if (!stages.length) return res.json({ stages: [], mirrors: [], totalProjects: rows.length, baselineTotal: 0 });
 
-    // Stage 0 (the live draft) — counts (and now per-status tallies) come
-    // straight from each project's current data, filtered down to what this
-    // viewer is allowed to see.
     const draftCounts = new Map(); // projectId -> count
     const draftByStatus = new Map(); // projectId -> {statusId: count}
-    // How many of this project's draft endpoints actually pass the
-    // Production gate right now (see partitionForFinalStagePromotion) —
-    // needed below so "fully promoted" means "every endpoint that CAN be in
-    // Production IS," not "literally every endpoint the project has ever
-    // documented," which a project using partial Production promotion could
-    // never satisfy even once its ready endpoints are genuinely all live.
+    // How many of this project's endpoints are actually release-ready right
+    // now (see endpointReadinessProblem) — used below for the "fully
+    // promoted" repurposing.
     const draftReadyCounts = new Map(); // projectId -> count
     rows.forEach((row) => {
       const viewerData = projectForViewer(row, userId, decryptProjectData(row));
@@ -1817,103 +1534,57 @@ router.get('/environment-metrics', async (req, res) => {
       draftReadyCounts.set(row.id, endpoints.filter((ep) => !endpointReadinessProblem(ep)).length);
     });
 
-    // Promoted stages — one query for every frozen snapshot across these
-    // projects, decrypted and counted (and tallied by status) the same
-    // viewer-scoped way.
-    const promotedCounts = new Map(); // `${projectId}:${environmentId}` -> count
-    const promotedByStatus = new Map(); // `${projectId}:${environmentId}` -> {statusId: count}
-    const projectIds = rows.map((r) => r.id);
-    if (projectIds.length) {
-      const { rows: verRows } = await pool.query(
-        `SELECT project_id, environment_id, data_enc FROM project_env_versions WHERE project_id = ANY($1::text[])`,
-        [projectIds]
-      );
-      const rowById = new Map(rows.map((r) => [r.id, r]));
-      verRows.forEach((v) => {
-        const projRow = rowById.get(v.project_id);
-        if (!projRow) return;
-        let count = 0;
-        let byStatus = {};
-        try {
-          const stageData = JSON.parse(dataCrypto.decryptField(v.data_enc, `project-env:${v.project_id}:${v.environment_id}`));
-          const endpoints = Array.isArray(stageData.endpoints) ? stageData.endpoints : [];
-          const isOwner = projRow.owner_id === userId;
-          const visible = isOwner ? endpoints : endpoints.filter((ep) => ep && ep.visibility === 'public');
-          count = visible.length;
-          byStatus = tallyByStatus(visible);
-        } catch (err) {
-          console.error('Failed to decrypt env snapshot for environment-metrics:', err);
-        }
-        promotedCounts.set(`${v.project_id}:${v.environment_id}`, count);
-        promotedByStatus.set(`${v.project_id}:${v.environment_id}`, byStatus);
-      });
-    }
-
     const baselineTotal = Array.from(draftCounts.values()).reduce((s, n) => s + n, 0);
 
-    const buildStageMetric = (env, idx) => {
+    const buildStageMetric = (env) => {
       let totalEndpoints = 0, projectsWithEndpoints = 0;
       const byStatus = {};
       rows.forEach((row) => {
-        const count = idx === 0 ? (draftCounts.get(row.id) || 0) : (promotedCounts.get(`${row.id}:${env.id}`) || 0);
-        const statusTally = idx === 0 ? (draftByStatus.get(row.id) || {}) : (promotedByStatus.get(`${row.id}:${env.id}`) || {});
+        const count = draftCounts.get(row.id) || 0;
         totalEndpoints += count;
         if (count > 0) projectsWithEndpoints++;
-        mergeByStatus(byStatus, statusTally);
+        mergeByStatus(byStatus, draftByStatus.get(row.id) || {});
       });
       return {
         environmentId: env.id,
         label: env.label,
         color: env.color,
-        isDraftStage: idx === 0,
+        isDraftStage: true,
         totalEndpoints,
         projectsWithEndpoints,
         totalProjects: rows.length,
-        percentOfBaseline: baselineTotal ? Math.round((totalEndpoints / baselineTotal) * 100) : (idx === 0 ? 0 : 0),
+        percentOfBaseline: baselineTotal ? Math.round((totalEndpoints / baselineTotal) * 100) : 0,
         byStatus,
       };
     };
 
-    const stageMetrics = stages.map((env, idx) => buildStageMetric(env, idx));
+    const stageMetrics = stages.map(buildStageMetric);
 
-    // "DR" environments auto-mirror the pipeline's last stage rather than
-    // being a manual pipeline stage — see pipelineStages() above — but they
-    // still hold their own project_env_versions rows, so they're reported
-    // the same way, just kept in a separate list.
-    const drEnvs = allEnvs.filter((e) => String(e.label || '').trim().toUpperCase() === 'DR');
-    const mirrorMetrics = drEnvs.map((env) => buildStageMetric(env, -1)); // idx -1 => never the draft stage
-
-    // Per-project breakdown — same counts, just grouped by project instead
-    // of summed across the workspace. Lets the "APIs" table show each
-    // project's own promotion progress instead of the old "has a base URL"
-    // checkbox count.
+    // Per-project breakdown. There's nowhere left to promote to, so
+    // "fullyPromoted" is repurposed as the closest honest equivalent: every
+    // endpoint in the project is actually release-ready (see
+    // endpointReadinessProblem) rather than "reached the last pipeline
+    // stage." stagesReached is always 0 — there are no stages past the
+    // draft any more.
     const perProject = rows.map((row) => {
-      const byEnvironment = {};
-      stages.forEach((env, idx) => {
-        byEnvironment[env.id] = idx === 0 ? (draftCounts.get(row.id) || 0) : (promotedCounts.get(`${row.id}:${env.id}`) || 0);
-      });
       const draftTotal = draftCounts.get(row.id) || 0;
       const readyTotal = draftReadyCounts.get(row.id) || 0;
-      const stagesReached = stages.filter((env, idx) => idx > 0 && (byEnvironment[env.id] || 0) > 0).length;
-      const lastStage = stages[stages.length - 1];
-      // "Fully promoted" means every endpoint that's actually release-ready
-      // has reached the last stage — NOT every endpoint the project has ever
-      // documented. A project intentionally leaving not-yet-ready endpoints
-      // out of Production (see partitionForFinalStagePromotion) should still
-      // be able to show as fully promoted once its ready subset is all live,
-      // rather than being permanently stuck below 100% for endpoints that
-      // were never eligible in the first place.
-      const fullyPromoted = readyTotal > 0 && lastStage && byEnvironment[lastStage.id] === readyTotal;
-      // Draft-stage status mix — this is the "current/API-level" breakdown
-      // (what's live in the editable doc right now), as opposed to the
-      // per-environment byStatus above which is scoped to a promoted snapshot.
-      const byStatus = draftByStatus.get(row.id) || {};
-      return { projectId: row.id, byEnvironment, draftTotal, readyTotal, stagesReached, fullyPromoted, byStatus };
+      const byEnvironment = {};
+      stages.forEach((env) => { byEnvironment[env.id] = draftTotal; });
+      return {
+        projectId: row.id,
+        byEnvironment,
+        draftTotal,
+        readyTotal,
+        stagesReached: 0,
+        fullyPromoted: draftTotal > 0 && readyTotal === draftTotal,
+        byStatus: draftByStatus.get(row.id) || {},
+      };
     });
 
     res.json({
       stages: stageMetrics,
-      mirrors: mirrorMetrics,
+      mirrors: [],
       totalProjects: rows.length,
       baselineTotal,
       pipelineStageCount: stages.length,
@@ -1925,984 +1596,11 @@ router.get('/environment-metrics', async (req, res) => {
   }
 });
 
-// GET /api/workspace/projects/:id/versions — read-only status of every stage
-// for this project. Any org member who can see the project may view it;
-// promoting is Admin-only (enforced in the POST route below).
-// GET /api/workspace/projects/:id/versions — release-pipeline status
-// (version numbers, who promoted, when) for one project.
-//
-// Previously this only checked `project.organisation === req.authUser.organisation`
-// — ANY signed-in member of the organisation could pull the promotion status
-// of ANY project, including a fully private one with no public endpoint and
-// no explicit share, just by knowing its id. Same visibility rule as
-// GET /projects/:id/snapshot and /diff now applies: owner, an explicit
-// project_access grant, or the project (or at least one endpoint) being
-// public.
-router.get('/projects/:id/versions', async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT id, owner_id, organisation, visibility, has_public_endpoint, release_version FROM projects WHERE id = $1`,
-      [req.params.id]
-    );
-    if (!rows.length) return res.status(404).json({ error: 'Project not found.' });
-    const project = rows[0];
-    if (project.organisation !== req.authUser.organisation) return res.status(404).json({ error: 'Project not found.' });
 
-    const access = await resolveAccessById(req.authUser.sub, req.params.id, req.authUser.organisation);
-    if (!access.canView) return res.status(404).json({ error: 'Project not found.' });
-
-    const allEnvs = await getOrgEnvironments(project.organisation);
-    const stages = pipelineStages(allEnvs);
-    const drEnvs = allEnvs.filter((e) => String(e.label || '').trim().toUpperCase() === 'DR');
-
-    const { rows: versionRows } = await pool.query(
-      `SELECT environment_id, version, source_environment_id, promoted_by_username, auto_mirrored, promoted_at
-       FROM project_env_versions WHERE project_id = $1`,
-      [req.params.id]
-    );
-    const byEnv = new Map(versionRows.map((r) => [r.environment_id, r]));
-
-    res.json({
-      releaseVersion: project.release_version,
-      draftLabel: `1.0.${project.release_version} (draft)`,
-      stages: stages.map((env, idx) => {
-        const v = byEnv.get(env.id);
-        return {
-          environmentId: env.id,
-          label: env.label,
-          color: env.color,
-          isDraftStage: idx === 0,
-          // GitHub-style branch protection: an environment flagged this way
-          // can't be promoted into directly (POST /promote refuses it) — a
-          // second Admin has to approve a promotion request instead. See
-          // POST /projects/:id/promotion-requests below.
-          requiresApproval: !!env.requiresApproval,
-          version: v ? v.version : null,
-          versionLabel: v ? `1.0.${v.version}` : null,
-          promotedBy: v ? v.promoted_by_username : null,
-          promotedAt: v ? v.promoted_at : null,
-          sourceEnvironmentId: v ? v.source_environment_id : null,
-        };
-      }),
-      mirrors: drEnvs.map((env) => {
-        const v = byEnv.get(env.id);
-        return {
-          environmentId: env.id,
-          label: env.label,
-          version: v ? v.version : null,
-          versionLabel: v ? `1.0.${v.version}` : null,
-          mirrorsEnvironmentId: v ? v.source_environment_id : null,
-          promotedAt: v ? v.promoted_at : null,
-        };
-      }),
-    });
-  } catch (err) {
-    console.error('GET project versions failed:', err);
-    res.status(500).json({ error: 'Could not load release pipeline status.' });
-  }
-});
-
-// GET /api/workspace/projects/:id/release-history — Release Pipeline v2's
-// GitHub-style unified merge history: every promotion/rollback across EVERY
-// environment for this project, newest first, in one feed instead of having
-// to open each stage's own history panel separately. Same access rule as
-// GET /versions above (owner, an explicit grant, or a public project) since
-// it's the same class of metadata, just the full timeline instead of only
-// "what's live right now."
-router.get('/projects/:id/release-history', async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT id, owner_id, organisation, visibility, has_public_endpoint FROM projects WHERE id = $1`,
-      [req.params.id]
-    );
-    if (!rows.length) return res.status(404).json({ error: 'Project not found.' });
-    const project = rows[0];
-    if (project.organisation !== req.authUser.organisation) return res.status(404).json({ error: 'Project not found.' });
-
-    const access = await resolveAccessById(req.authUser.sub, req.params.id, req.authUser.organisation);
-    if (!access.canView) return res.status(404).json({ error: 'Project not found.' });
-
-    const allEnvs = await getOrgEnvironments(project.organisation);
-    const labelById = new Map(allEnvs.map((e) => [e.id, e.label]));
-
-    // ---- Pagination + filters (GitHub commit-log parity) ----
-    // `before` is a history row id cursor, not an offset — offset pagination
-    // over a feed that keeps getting new rows at the top would skip or
-    // repeat entries as promotions land between page loads; "give me
-    // everything with id < this" is stable regardless of what's added
-    // concurrently. One extra row is fetched past `limit` purely to know
-    // whether there's more to page to, then trimmed back off before
-    // responding.
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 30, 1), 100);
-    const before = req.query.before ? parseInt(req.query.before, 10) : null;
-    const environmentId = req.query.environmentId ? String(req.query.environmentId) : null;
-    const author = req.query.author ? String(req.query.author).trim() : null;
-    const breakingOnly = req.query.breakingOnly === 'true' || req.query.breakingOnly === '1';
-
-    const params = [req.params.id];
-    let where = 'WHERE project_id = $1';
-    if (environmentId) { params.push(environmentId); where += ` AND environment_id = $${params.length}`; }
-    if (author) { params.push(`%${author}%`); where += ` AND promoted_by_username ILIKE $${params.length}`; }
-    if (breakingOnly) { where += ` AND jsonb_array_length(breaking_changes) > 0`; }
-    if (before && Number.isFinite(before)) { params.push(before); where += ` AND id < $${params.length}`; }
-    params.push(limit + 1);
-
-    const { rows: historyRows } = await pool.query(
-      `SELECT id, environment_id, version, source_environment_id, action, rolled_back_from_id,
-              promoted_by_username, auto_mirrored, promoted_at, release_note, breaking_changes
-       FROM project_env_version_history ${where} ORDER BY promoted_at DESC, id DESC LIMIT $${params.length}`,
-      params
-    );
-    const hasMore = historyRows.length > limit;
-    const pageRows = hasMore ? historyRows.slice(0, limit) : historyRows;
-
-    res.json({
-      entries: pageRows.map((h) => ({
-        id: h.id,
-        environmentId: h.environment_id,
-        environmentLabel: labelById.get(h.environment_id) || h.environment_id,
-        version: h.version,
-        versionLabel: `1.0.${h.version}`,
-        sourceEnvironmentId: h.source_environment_id,
-        sourceEnvironmentLabel: h.source_environment_id ? (labelById.get(h.source_environment_id) || h.source_environment_id) : null,
-        action: h.action,
-        rolledBackFromId: h.rolled_back_from_id,
-        promotedByUsername: h.promoted_by_username,
-        autoMirrored: h.auto_mirrored,
-        promotedAt: h.promoted_at,
-        releaseNote: h.release_note,
-        breakingChanges: Array.isArray(h.breaking_changes) ? h.breaking_changes : [],
-      })),
-      hasMore,
-      nextBefore: hasMore ? pageRows[pageRows.length - 1].id : null,
-    });
-  } catch (err) {
-    console.error('GET release history failed:', err);
-    res.status(500).json({ error: 'Could not load release history.' });
-  }
-});
-
-// GET /api/workspace/projects/:id/release-health — breaking-changes-per-
-// release trend for the Overview page's sparkline (Release Pipeline v2 item
-// #5: "a signal, not just something you see mid-promotion"). One point per
-// promotion INTO the pipeline's last stage (the stage that actually reaches
-// consumers), not every intermediate SIT/UAT hop, so the sparkline reads as
-// "releases that shipped" rather than every internal promotion.
-router.get('/projects/:id/release-health', async (req, res) => {
-  try {
-    const { rows: projRows } = await pool.query(`SELECT id, organisation FROM projects WHERE id = $1`, [req.params.id]);
-    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
-      return res.status(404).json({ error: 'Project not found.' });
-    }
-    const access = await resolveAccessById(req.authUser.sub, req.params.id, req.authUser.organisation);
-    if (!access.canView) return res.status(404).json({ error: 'Project not found.' });
-
-    const allEnvs = await getOrgEnvironments(projRows[0].organisation);
-    const stages = pipelineStages(allEnvs);
-    if (stages.length < 2) return res.json({ points: [] });
-    const lastStage = stages[stages.length - 1];
-
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 50);
-    const { rows } = await pool.query(
-      `SELECT version, breaking_changes, promoted_at FROM project_env_version_history
-       WHERE project_id = $1 AND environment_id = $2 AND action = 'promote'
-       ORDER BY promoted_at DESC, id DESC LIMIT $3`,
-      [req.params.id, lastStage.id, limit]
-    );
-    const points = rows.reverse().map((r) => ({
-      versionLabel: `1.0.${r.version}`,
-      breakingChangesCount: Array.isArray(r.breaking_changes) ? r.breaking_changes.length : 0,
-      promotedAt: r.promoted_at,
-    }));
-    res.json({ lastStageLabel: lastStage.label, points });
-  } catch (err) {
-    console.error('GET release-health failed:', err);
-    res.status(500).json({ error: 'Could not load release health.' });
-  }
-});
-
-// ---- Shared promotion core (item: GitHub-style branch protection) ----
-// Everything from "encrypt the target snapshot" through the mirror insert,
-// commit, audit trail, and Admin notification is IDENTICAL whether a
-// promotion happens immediately (POST /promote, target doesn't require
-// approval) or after a second Admin approves a promotion request (target
-// DOES require approval — see project_promotion_requests below). This is
-// that shared tail end, so the two call sites can't drift out of sync on
-// what "a promotion" actually does.
-// Writes the promotion itself (target stage + optional DR mirror) inside
-// the caller's already-open transaction. Deliberately does NOT commit —
-// see the two call sites: direct-promote has nothing left to do and
-// commits right after calling this, but the approve-a-request path still
-// has one more write of its own (marking the request row 'approved') that
-// must land in the SAME transaction as everything here. This function used
-// to commit+release internally, which meant the approve route's later
-// UPDATE ran against an already-closed transaction — any hiccup there
-// (which is exactly what happened in practice) left the promotion silently
-// applied while the request stayed stuck "pending" forever, with no way to
-// tell from the outside that anything had actually gone through.
-async function finalizePromotion(client, req, {
-  project, allEnvs, stages, fromIdx, targetStage, sourceData, newReleaseVersion,
-  fromEnvironmentId, releaseNote, breakingChanges, actingUser,
-}) {
-  const targetEnc = dataCrypto.encryptField(JSON.stringify(sourceData), `project-env:${project.id}:${targetStage.id}`);
-  const targetKeyVersion = dataCrypto.currentKeyVersion();
-  await client.query(
-    `INSERT INTO project_env_versions
-       (project_id, environment_id, version, data_enc, data_key_version, source_environment_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, now())
-     ON CONFLICT (project_id, environment_id) DO UPDATE SET
-       version = EXCLUDED.version, data_enc = EXCLUDED.data_enc, data_key_version = EXCLUDED.data_key_version,
-       source_environment_id = EXCLUDED.source_environment_id, promoted_by = EXCLUDED.promoted_by,
-       promoted_by_username = EXCLUDED.promoted_by_username, auto_mirrored = false, promoted_at = now()`,
-    [project.id, targetStage.id, newReleaseVersion, targetEnc, targetKeyVersion, fromEnvironmentId, actingUser.sub, actingUser.username]
-  );
-  await recordEnvVersionHistory(client, {
-    projectId: project.id, environmentId: targetStage.id, version: newReleaseVersion,
-    dataEnc: targetEnc, dataKeyVersion: targetKeyVersion, sourceEnvironmentId: fromEnvironmentId,
-    action: 'promote', promotedBy: actingUser.sub, promotedByUsername: actingUser.username, autoMirrored: false,
-    releaseNote, breakingChanges,
-  });
-
-  let mirrored = null;
-  const isLastStage = fromIdx + 1 === stages.length - 1;
-  if (isLastStage) {
-    const drEnv = allEnvs.find((e) => String(e.label || '').trim().toUpperCase() === 'DR');
-    if (drEnv) {
-      const mirrorEnc = dataCrypto.encryptField(JSON.stringify(sourceData), `project-env:${project.id}:${drEnv.id}`);
-      const mirrorKeyVersion = dataCrypto.currentKeyVersion();
-      await client.query(
-        `INSERT INTO project_env_versions
-           (project_id, environment_id, version, data_enc, data_key_version, source_environment_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, now())
-         ON CONFLICT (project_id, environment_id) DO UPDATE SET
-           version = EXCLUDED.version, data_enc = EXCLUDED.data_enc, data_key_version = EXCLUDED.data_key_version,
-           source_environment_id = EXCLUDED.source_environment_id, promoted_by = EXCLUDED.promoted_by,
-           promoted_by_username = EXCLUDED.promoted_by_username, auto_mirrored = true, promoted_at = now()`,
-        [project.id, drEnv.id, newReleaseVersion, mirrorEnc, mirrorKeyVersion, targetStage.id, actingUser.sub, actingUser.username]
-      );
-      await recordEnvVersionHistory(client, {
-        projectId: project.id, environmentId: drEnv.id, version: newReleaseVersion,
-        dataEnc: mirrorEnc, dataKeyVersion: mirrorKeyVersion, sourceEnvironmentId: targetStage.id,
-        action: 'promote', promotedBy: actingUser.sub, promotedByUsername: actingUser.username, autoMirrored: true,
-        releaseNote: `Auto-mirrored from ${targetStage.label}: ${releaseNote}`,
-      });
-      mirrored = { environmentId: drEnv.id, label: drEnv.label };
-    }
-  }
-
-  return { toEnvironmentId: targetStage.id, toEnvironmentLabel: targetStage.label, versionLabel: `1.0.${newReleaseVersion}`, mirrored };
-}
-
-// Side effects that only make sense once the promotion has ACTUALLY
-// committed — cache invalidation, audit log, notifications. Called by both
-// finalizePromotion() callers right after their own successful COMMIT,
-// never before. Failures here (e.g. a notification hiccup) intentionally
-// don't roll back the promotion — the write already happened — they just
-// won't crash the request; each call site still returns ok:true either way
-// since the promotion itself is what the caller actually asked for.
-async function afterPromotionCommitted(req, {
-  project, stages, fromIdx, targetStage, newReleaseVersion, fromEnvironmentId, releaseNote, breakingChanges, actingUser, mirrored,
-}) {
-  await cache.invalidateOrg(project.organisation);
-
-  await recordAuditEvent(actingUser, req, {
-    action: 'PROJECT_PROMOTED',
-    resourceType: 'project',
-    resourceId: project.id,
-    entityName: stages[fromIdx].label + ' → ' + targetStage.label,
-    details: `Promoted "${project.id}" from ${stages[fromIdx].label} to ${targetStage.label} — v1.0.${newReleaseVersion}.`
-      + (breakingChanges.length ? ` Included ${breakingChanges.length} acknowledged breaking change${breakingChanges.length === 1 ? '' : 's'}.` : ''),
-    severity: breakingChanges.length ? 'warning' : 'info',
-    metadata: { fromEnvironmentId, toEnvironmentId: targetStage.id, version: newReleaseVersion, breakingChangesCount: breakingChanges.length },
-  });
-  if (mirrored) {
-    await recordAuditEvent(actingUser, req, {
-      action: 'PROJECT_ENV_MIRRORED',
-      resourceType: 'project',
-      resourceId: project.id,
-      entityName: mirrored.label,
-      details: `${mirrored.label} auto-mirrored ${targetStage.label} — v1.0.${newReleaseVersion}.`,
-      severity: 'info',
-      metadata: { mirroredFrom: targetStage.id, version: newReleaseVersion },
-    });
-  }
-
-  const recipientIds = (await adminUserIds(project.organisation)).filter((id) => id !== actingUser.sub);
-  if (recipientIds.length) {
-    const hasBreaking = breakingChanges.length > 0;
-    await notifyUsers(recipientIds, {
-      organisation: project.organisation,
-      type: hasBreaking ? 'PROJECT_PROMOTED_BREAKING' : 'PROJECT_PROMOTED',
-      title: `${actingUser.username} promoted ${stages[fromIdx].label} → ${targetStage.label}${hasBreaking ? ' (breaking changes)' : ''}`,
-      body: releaseNote,
-      link: { view: 'release-pipeline', projectId: project.id },
-    });
-  }
-}
-
-// POST /api/workspace/projects/:id/promote — { fromEnvironmentId }. Promotes
-// that stage's current content into the NEXT stage in the pipeline (server-
-// derived from the org's environment list — the client can't specify an
-// arbitrary target, so stages can't be skipped). Admin-only.
-router.post('/projects/:id/promote', async (req, res) => {
-  if (!isAdminUser(req)) return res.status(403).json({ error: 'Only Admins can promote a project between environments.' });
-  const fromEnvironmentId = req.body?.fromEnvironmentId;
-  if (!fromEnvironmentId) return res.status(400).json({ error: 'fromEnvironmentId is required.' });
-  // Release Pipeline v2: a release note is required on every promotion — the
-  // diff already shows *what* changed, this is the one place "why" gets
-  // captured, and it's what makes the merge-history timeline (GET
-  // /release-history) read like an actual changelog instead of a bare list
-  // of version bumps.
-  const releaseNote = String(req.body?.releaseNote || '').trim().slice(0, 500);
-  if (!releaseNote) return res.status(400).json({ error: 'A release note is required before promoting.' });
-  if (releaseNote.length < 10) return res.status(400).json({ error: 'That release note is too short to be useful — say a bit more about what changed and why (at least 10 characters).' });
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const { rows: projRows } = await client.query(
-      `SELECT id, organisation, data, data_enc, release_version FROM projects WHERE id = $1 FOR UPDATE`,
-      [req.params.id]
-    );
-    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Project not found.' });
-    }
-    const project = projRows[0];
-
-    const allEnvs = await getOrgEnvironments(project.organisation);
-    const stages = pipelineStages(allEnvs);
-    const fromIdx = stages.findIndex((e) => e.id === fromEnvironmentId);
-    if (fromIdx < 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Unknown source environment.' });
-    }
-    const targetStage = stages[fromIdx + 1];
-    if (!targetStage) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: `${stages[fromIdx].label} is already the last stage in the pipeline.` });
-    }
-
-    // ---- Branch-protection gate ----
-    // An environment flagged requiresApproval can never be promoted into
-    // directly, even by the Admin who started the promotion — that's the
-    // whole point of a second-approver requirement. Refuse here, before any
-    // writes, and point the caller at the request flow instead.
-    if (targetStage.requiresApproval) {
-      await client.query('ROLLBACK');
-      return res.status(403).json({
-        error: `${targetStage.label} requires a second Admin's approval — open a promotion request instead of promoting directly.`,
-        requiresApproval: true,
-      });
-    }
-
-    let sourceData, newReleaseVersion;
-    if (fromIdx === 0) {
-      // Promoting out of the draft stage: cut a brand-new release.
-      sourceData = decryptProjectData(project);
-      newReleaseVersion = project.release_version + 1;
-      await client.query(`UPDATE projects SET release_version = $1 WHERE id = $2`, [newReleaseVersion, project.id]);
-    } else {
-      // Promoting an already-cut release further down the pipeline: carry
-      // the same version forward unchanged, just copy the snapshot along.
-      const { rows: srcRows } = await client.query(
-        `SELECT version, data_enc FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
-        [project.id, fromEnvironmentId]
-      );
-      if (!srcRows.length) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ error: `Nothing has been promoted to ${stages[fromIdx].label} yet.` });
-      }
-      sourceData = JSON.parse(dataCrypto.decryptField(srcRows[0].data_enc, `project-env:${project.id}:${fromEnvironmentId}`));
-      newReleaseVersion = srcRows[0].version;
-    }
-
-    // Note: the per-endpoint readiness gate (partitionForFinalStagePromotion)
-    // only ever applies to the LAST stage, and the last stage is always
-    // flagged requiresApproval, which is refused above before sourceData is
-    // even loaded — so this route never actually reaches the last stage.
-
-    // ---- Diff-viewed gate (see checkDiffToken above) ----
-    // Recompute the exact same diff a caller would see for this from/to
-    // pair right now, and require a token proving they actually pulled up
-    // that diff (and that nothing changed since). This runs AFTER loading
-    // sourceData so the recomputed diff reflects the same content that's
-    // about to be promoted, not a stale read from before this transaction.
-    const toStageIdx = fromIdx + 1;
-    const toStageData = await loadStageData(project, targetStage.id, toStageIdx);
-    const liveDiff = diffEndpointLists(sourceData.endpoints || [], toStageData.endpoints || []);
-    // detectBreakingChanges(fromEndpoints, toEndpoints) expects from=live-today,
-    // to=about-to-become-live — i.e. (current target content, promoted source
-    // content), the reverse of diffEndpointLists' (source, target) order above.
-    const liveBreakingChanges = detectBreakingChanges(toStageData.endpoints || [], sourceData.endpoints || []);
-    const tokenError = checkDiffToken(req.body?.diffToken, {
-      projectId: project.id, from: fromEnvironmentId, to: targetStage.id,
-      diff: liveDiff, breakingChanges: liveBreakingChanges, ackBreakingChanges: req.body?.ackBreakingChanges === true,
-    });
-    if (tokenError) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ error: tokenError, breakingChanges: liveBreakingChanges });
-    }
-
-    const result = await finalizePromotion(client, req, {
-      project, allEnvs, stages, fromIdx, targetStage, sourceData, newReleaseVersion,
-      fromEnvironmentId, releaseNote, breakingChanges: liveBreakingChanges, actingUser: req.authUser,
-    });
-    await client.query('COMMIT');
-
-    // The promotion has now genuinely committed — anything past this point
-    // (cache, audit log, notifications) must not be able to turn a
-    // successful promotion into a reported failure, so it's isolated in its
-    // own try/catch rather than sharing the one above.
-    try {
-      await afterPromotionCommitted(req, {
-        project, stages, fromIdx, targetStage, newReleaseVersion, fromEnvironmentId,
-        releaseNote, breakingChanges: liveBreakingChanges, actingUser: req.authUser, mirrored: result.mirrored,
-      });
-    } catch (sideEffectErr) {
-      console.error('POST promote: side effects after commit failed (promotion itself still succeeded):', sideEffectErr);
-    }
-
-    res.json({ ok: true, ...result, breakingChangesCount: liveBreakingChanges.length });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('POST promote failed:', err);
-    res.status(500).json({ error: 'Could not promote project.' });
-  } finally {
-    client.release();
-  }
-});
-
-// ============================================================================
-// Promotion requests — the "protected branch / required review" half of the
-// GitHub model. An environment flagged requiresApproval refuses direct
-// POST /promote (see the gate above); instead, an Admin opens a request
-// here, and a DIFFERENT Admin has to approve it before the promotion
-// actually happens. This mirrors "you can't approve your own pull request."
-// ============================================================================
-
-// POST /api/workspace/projects/:id/promotion-requests — { fromEnvironmentId,
-// releaseNote, ackBreakingChanges }. Validates exactly what POST /promote
-// would (release note length, adjacency, diff-viewed-recently via the
-// client's diffToken), but instead of writing the promotion, freezes the
-// diff + breaking changes it just computed onto a pending request row for
-// another Admin to review.
-router.post('/projects/:id/promotion-requests', async (req, res) => {
-  if (!isAdminUser(req)) return res.status(403).json({ error: 'Only Admins can request a promotion.' });
-  const fromEnvironmentId = req.body?.fromEnvironmentId;
-  if (!fromEnvironmentId) return res.status(400).json({ error: 'fromEnvironmentId is required.' });
-  const releaseNote = String(req.body?.releaseNote || '').trim().slice(0, 500);
-  if (!releaseNote) return res.status(400).json({ error: 'A release note is required before requesting a promotion.' });
-  if (releaseNote.length < 10) return res.status(400).json({ error: 'That release note is too short to be useful — say a bit more about what changed and why (at least 10 characters).' });
-
-  try {
-    const { rows: projRows } = await pool.query(
-      `SELECT id, organisation, data, data_enc, release_version FROM projects WHERE id = $1`,
-      [req.params.id]
-    );
-    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
-      return res.status(404).json({ error: 'Project not found.' });
-    }
-    const project = projRows[0];
-
-    const allEnvs = await getOrgEnvironments(project.organisation);
-    const stages = pipelineStages(allEnvs);
-    const fromIdx = stages.findIndex((e) => e.id === fromEnvironmentId);
-    if (fromIdx < 0) return res.status(400).json({ error: 'Unknown source environment.' });
-    const targetStage = stages[fromIdx + 1];
-    if (!targetStage) return res.status(400).json({ error: `${stages[fromIdx].label} is already the last stage in the pipeline.` });
-    if (!targetStage.requiresApproval) {
-      return res.status(400).json({ error: `${targetStage.label} doesn't require approval — promote directly instead.` });
-    }
-
-    const fromData = fromIdx === 0 ? decryptProjectData(project) : await loadStageData(project, fromEnvironmentId, fromIdx);
-    const toStageData = await loadStageData(project, targetStage.id, fromIdx + 1);
-
-    // Per-endpoint Production gate: only ready endpoints (plus whatever's
-    // already frozen in Production for the ones that aren't) go into this
-    // request — see partitionForFinalStagePromotion. targetStage is always
-    // the last stage here since only it is ever flagged requiresApproval.
-    const isFinalStage = targetStage.id === stages[stages.length - 1].id;
-    const gate = isFinalStage
-      ? partitionForFinalStagePromotion(fromData.endpoints || [], toStageData.endpoints || [])
-      : { endpoints: fromData.endpoints || [], excluded: [] };
-    const gatedFromEndpoints = gate.endpoints;
-
-    const liveDiff = diffEndpointLists(gatedFromEndpoints, toStageData.endpoints || []);
-    const liveBreakingChanges = detectBreakingChanges(toStageData.endpoints || [], gatedFromEndpoints);
-    const ackBreakingChanges = req.body?.ackBreakingChanges === true;
-    if (liveBreakingChanges.length && !ackBreakingChanges) {
-      const n = liveBreakingChanges.length;
-      return res.status(409).json({
-        error: `This promotion includes ${n} breaking change${n === 1 ? '' : 's'} — check "I've reviewed the breaking changes" before requesting.`,
-        breakingChanges: liveBreakingChanges,
-      });
-    }
-    const total = liveDiff.added.length + liveDiff.removed.length + liveDiff.modified.length;
-    if (!total) {
-      return res.status(400).json({
-        error: gate.excluded.length
-          ? `Nothing release-ready to promote — ${gate.excluded.length} endpoint${gate.excluded.length === 1 ? '' : 's'} in ${stages[fromIdx].label} still ${gate.excluded.length === 1 ? "isn't" : "aren't"} Active with SecOps/VAPT/Log Mgmt approved.`
-          : `${stages[fromIdx].label} and ${targetStage.label} are already in sync — nothing to promote.`,
-        excludedNotReady: gate.excluded,
-      });
-    }
-
-    const diffHash = hashDiff(liveDiff, liveBreakingChanges);
-    let created;
-    try {
-      const { rows } = await pool.query(
-        `INSERT INTO project_promotion_requests
-           (project_id, from_environment_id, to_environment_id, diff_hash, diff_snapshot, breaking_changes,
-            ack_breaking_changes, release_note, requested_by, requested_by_username)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-         RETURNING id, created_at`,
-        [project.id, fromEnvironmentId, targetStage.id, diffHash, JSON.stringify(liveDiff), JSON.stringify(liveBreakingChanges),
-          ackBreakingChanges, releaseNote, req.authUser.sub, req.authUser.username]
-      );
-      created = rows[0];
-    } catch (err) {
-      if (err.code === '23505') { // unique_violation — a pending request already targets this stage
-        return res.status(409).json({ error: `There's already a pending promotion request into ${targetStage.label}. Cancel it before opening another.` });
-      }
-      throw err;
-    }
-
-    await recordAuditEvent(req.authUser, req, {
-      action: 'PROJECT_PROMOTION_REQUESTED',
-      resourceType: 'project',
-      resourceId: project.id,
-      entityName: stages[fromIdx].label + ' → ' + targetStage.label,
-      details: `Requested promotion of "${project.id}" from ${stages[fromIdx].label} to ${targetStage.label} — awaiting a second Admin's approval.`
-        + (gate.excluded.length ? ` ${gate.excluded.length} endpoint${gate.excluded.length === 1 ? '' : 's'} left out as not release-ready.` : ''),
-      severity: liveBreakingChanges.length ? 'warning' : 'info',
-      metadata: { fromEnvironmentId, toEnvironmentId: targetStage.id, requestId: created.id, excludedNotReadyCount: gate.excluded.length },
-    });
-
-    const recipientIds = (await adminUserIds(project.organisation)).filter((id) => id !== req.authUser.sub);
-    if (recipientIds.length) {
-      await notifyUsers(recipientIds, {
-        organisation: project.organisation,
-        type: 'PROJECT_PROMOTION_REQUESTED',
-        title: `${req.authUser.username} requested promotion into ${targetStage.label} — needs your approval`,
-        body: releaseNote,
-        link: { view: 'release-pipeline', projectId: project.id },
-      });
-    }
-
-    res.json({ ok: true, id: created.id, toEnvironmentLabel: targetStage.label, createdAt: created.created_at, excludedNotReady: gate.excluded });
-  } catch (err) {
-    console.error('POST promotion-requests failed:', err);
-    res.status(500).json({ error: 'Could not open a promotion request.' });
-  }
-});
-
-// GET /api/workspace/projects/:id/promotion-requests?status=pending — list
-// requests for this project. Same visibility as GET /versions.
-router.get('/projects/:id/promotion-requests', async (req, res) => {
-  try {
-    const { rows: projRows } = await pool.query(`SELECT id, organisation FROM projects WHERE id = $1`, [req.params.id]);
-    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
-      return res.status(404).json({ error: 'Project not found.' });
-    }
-    const access = await resolveAccessById(req.authUser.sub, req.params.id, req.authUser.organisation);
-    if (!access.canView) return res.status(404).json({ error: 'Project not found.' });
-
-    const status = ['pending', 'approved', 'rejected', 'cancelled'].includes(req.query.status) ? req.query.status : 'pending';
-    const allEnvs = await getOrgEnvironments(projRows[0].organisation);
-    const labelById = new Map(allEnvs.map((e) => [e.id, e.label]));
-
-    const { rows } = await pool.query(
-      `SELECT id, from_environment_id, to_environment_id, breaking_changes, ack_breaking_changes, release_note,
-              status, requested_by, requested_by_username, decided_by_username, decision_note, decided_at, created_at
-       FROM project_promotion_requests WHERE project_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT 50`,
-      [req.params.id, status]
-    );
-    res.json({
-      requests: rows.map((r) => ({
-        id: r.id,
-        fromEnvironmentId: r.from_environment_id,
-        fromEnvironmentLabel: labelById.get(r.from_environment_id) || r.from_environment_id,
-        toEnvironmentId: r.to_environment_id,
-        toEnvironmentLabel: labelById.get(r.to_environment_id) || r.to_environment_id,
-        breakingChanges: Array.isArray(r.breaking_changes) ? r.breaking_changes : [],
-        ackBreakingChanges: r.ack_breaking_changes,
-        releaseNote: r.release_note,
-        status: r.status,
-        requestedBy: r.requested_by,
-        requestedByUsername: r.requested_by_username,
-        decidedByUsername: r.decided_by_username,
-        decisionNote: r.decision_note,
-        decidedAt: r.decided_at,
-        createdAt: r.created_at,
-        // The requester can't approve their own request — the client uses
-        // this to grey out the Approve button rather than let someone click
-        // it and be refused server-side.
-        canApprove: isAdminUser(req) && r.requested_by !== req.authUser.sub,
-        canCancel: r.requested_by === req.authUser.sub,
-      })),
-    });
-  } catch (err) {
-    console.error('GET promotion-requests failed:', err);
-    res.status(500).json({ error: 'Could not load promotion requests.' });
-  }
-});
-
-// GET /api/workspace/promotion-requests?status=pending — org-wide list, for
-// the top-level Release Pipeline nav page. Admin-only (a non-admin only ever
-// sees requests through a project they can already reach, via the per-project
-// route above); joins back to projects for a name/id to link into
-// openReleasePipelineTab from a single cross-project view.
-router.get('/promotion-requests', async (req, res) => {
-  try {
-    if (!isAdminUser(req)) return res.status(403).json({ error: 'Admin access required.' });
-
-    const status = ['pending', 'approved', 'rejected', 'cancelled'].includes(req.query.status) ? req.query.status : 'pending';
-    const allEnvs = await getOrgEnvironments(req.authUser.organisation);
-    const labelById = new Map(allEnvs.map((e) => [e.id, e.label]));
-
-    const { rows } = await pool.query(
-      `SELECT r.id, r.project_id, p.name AS project_name, r.from_environment_id, r.to_environment_id,
-              r.breaking_changes, r.ack_breaking_changes, r.release_note,
-              r.status, r.requested_by, r.requested_by_username, r.decided_by_username, r.decision_note,
-              r.decided_at, r.created_at
-       FROM project_promotion_requests r
-       JOIN projects p ON p.id = r.project_id
-       WHERE p.organisation = $1 AND r.status = $2
-       ORDER BY r.created_at DESC LIMIT 100`,
-      [req.authUser.organisation, status]
-    );
-    res.json({
-      requests: rows.map((r) => ({
-        id: r.id,
-        projectId: r.project_id,
-        projectName: r.project_name,
-        fromEnvironmentId: r.from_environment_id,
-        fromEnvironmentLabel: labelById.get(r.from_environment_id) || r.from_environment_id,
-        toEnvironmentId: r.to_environment_id,
-        toEnvironmentLabel: labelById.get(r.to_environment_id) || r.to_environment_id,
-        breakingChanges: Array.isArray(r.breaking_changes) ? r.breaking_changes : [],
-        ackBreakingChanges: r.ack_breaking_changes,
-        releaseNote: r.release_note,
-        status: r.status,
-        requestedBy: r.requested_by,
-        requestedByUsername: r.requested_by_username,
-        decidedByUsername: r.decided_by_username,
-        decisionNote: r.decision_note,
-        decidedAt: r.decided_at,
-        createdAt: r.created_at,
-        canApprove: r.requested_by !== req.authUser.sub,
-      })),
-    });
-  } catch (err) {
-    console.error('GET org-wide promotion-requests failed:', err);
-    res.status(500).json({ error: 'Could not load promotion requests.' });
-  }
-});
-
-// POST /api/workspace/projects/:id/promotion-requests/:reqId/approve —
-// Admin-only, and NOT the Admin who opened the request (GitHub's "you can't
-// approve your own PR"). Recomputes the live diff for the same from/to pair
-// and compares its hash against what was frozen at request time; if
-// anything's moved since (someone else promoted in the meantime, or the
-// draft changed), the approval is refused with the same "view it again"
-// framing as the direct-promote path, rather than silently approving
-// content nobody actually reviewed.
-router.post('/projects/:id/promotion-requests/:reqId/approve', async (req, res) => {
-  if (!isAdminUser(req)) return res.status(403).json({ error: 'Only Admins can approve a promotion request.' });
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const { rows: reqRows } = await client.query(
-      `SELECT * FROM project_promotion_requests WHERE id = $1 AND project_id = $2 FOR UPDATE`,
-      [req.params.reqId, req.params.id]
-    );
-    if (!reqRows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Promotion request not found.' }); }
-    const request = reqRows[0];
-    if (request.status !== 'pending') { await client.query('ROLLBACK'); return res.status(400).json({ error: `This request was already ${request.status}.` }); }
-    if (request.requested_by === req.authUser.sub) {
-      await client.query('ROLLBACK');
-      return res.status(403).json({ error: "You can't approve your own promotion request — ask another Admin to review it." });
-    }
-
-    const { rows: projRows } = await client.query(
-      `SELECT id, organisation, data, data_enc, release_version FROM projects WHERE id = $1 FOR UPDATE`,
-      [req.params.id]
-    );
-    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Project not found.' });
-    }
-    const project = projRows[0];
-    const allEnvs = await getOrgEnvironments(project.organisation);
-    const stages = pipelineStages(allEnvs);
-    const fromIdx = stages.findIndex((e) => e.id === request.from_environment_id);
-    const targetStage = stages.find((e) => e.id === request.to_environment_id);
-    if (fromIdx < 0 || !targetStage || stages[fromIdx + 1]?.id !== targetStage.id) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ error: 'The pipeline has changed since this request was opened — cancel it and open a fresh one.' });
-    }
-
-    let sourceData, newReleaseVersion;
-    if (fromIdx === 0) {
-      sourceData = decryptProjectData(project);
-    } else {
-      const { rows: srcRows } = await client.query(
-        `SELECT version, data_enc FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
-        [project.id, request.from_environment_id]
-      );
-      if (!srcRows.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: `Nothing has been promoted to ${stages[fromIdx].label} yet.` }); }
-      sourceData = JSON.parse(dataCrypto.decryptField(srcRows[0].data_enc, `project-env:${project.id}:${request.from_environment_id}`));
-    }
-    const toStageData = await loadStageData(project, targetStage.id, fromIdx + 1);
-
-    // Same per-endpoint Production gate as when the request was opened — has
-    // to be recomputed identically here so the hash check below still
-    // matches (it's a pure function of sourceData + Production's current
-    // content, and Production hasn't moved since unless someone else
-    // promoted into it in the meantime, which the hash check below still
-    // correctly catches).
-    const isFinalStage = targetStage.id === stages[stages.length - 1].id;
-    const gate = isFinalStage
-      ? partitionForFinalStagePromotion(sourceData.endpoints || [], toStageData.endpoints || [])
-      : { endpoints: sourceData.endpoints || [], excluded: [] };
-    const gatedSourceData = { ...sourceData, endpoints: gate.endpoints };
-
-    const liveDiff = diffEndpointLists(gatedSourceData.endpoints, toStageData.endpoints || []);
-    const liveBreakingChanges = detectBreakingChanges(toStageData.endpoints || [], gatedSourceData.endpoints);
-    if (hashDiff(liveDiff, liveBreakingChanges) !== request.diff_hash) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ error: "What's changed since this request was opened — ask the requester to cancel it and open a fresh one." });
-    }
-
-    if (fromIdx === 0) {
-      newReleaseVersion = project.release_version + 1;
-      await client.query(`UPDATE projects SET release_version = $1 WHERE id = $2`, [newReleaseVersion, project.id]);
-    } else {
-      const { rows: srcRows } = await client.query(
-        `SELECT version FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
-        [project.id, request.from_environment_id]
-      );
-      newReleaseVersion = srcRows[0].version;
-    }
-
-    const result = await finalizePromotion(client, req, {
-      project, allEnvs, stages, fromIdx, targetStage, sourceData: gatedSourceData, newReleaseVersion,
-      fromEnvironmentId: request.from_environment_id, releaseNote: request.release_note,
-      breakingChanges: liveBreakingChanges, actingUser: { sub: request.requested_by, username: request.requested_by_username },
-    });
-
-    // This UPDATE has to land in the SAME transaction as finalizePromotion's
-    // writes above (see finalizePromotion's own comment) — this is exactly
-    // that commit point, covering both at once.
-    await client.query(
-      `UPDATE project_promotion_requests SET status = 'approved', decided_by = $1, decided_by_username = $2, decided_at = now() WHERE id = $3`,
-      [req.authUser.sub, req.authUser.username, request.id]
-    );
-    await client.query('COMMIT');
-
-    // Everything below is now purely post-commit side effects — the
-    // promotion AND the request's approved status are both already durable.
-    // Isolated in its own try/catch so a notification hiccup can never be
-    // reported back as "approval failed" when it actually succeeded.
-    try {
-      const requestedByActingUser = { sub: request.requested_by, username: request.requested_by_username };
-      await afterPromotionCommitted(req, {
-        project, stages, fromIdx, targetStage, newReleaseVersion,
-        fromEnvironmentId: request.from_environment_id, releaseNote: request.release_note,
-        breakingChanges: liveBreakingChanges, actingUser: requestedByActingUser, mirrored: result.mirrored,
-      });
-      await recordAuditEvent(req.authUser, req, {
-        action: 'PROJECT_PROMOTION_APPROVED',
-        resourceType: 'project',
-        resourceId: project.id,
-        entityName: stages[fromIdx].label + ' → ' + targetStage.label,
-        details: `Approved ${request.requested_by_username || 'a teammate'}'s promotion request from ${stages[fromIdx].label} to ${targetStage.label} — v1.0.${newReleaseVersion}.`,
-        severity: 'info',
-        metadata: { requestId: request.id, version: newReleaseVersion },
-      });
-      if (request.requested_by) {
-        await notifyUsers([request.requested_by], {
-          organisation: project.organisation,
-          type: 'PROJECT_PROMOTION_APPROVED',
-          title: `${req.authUser.username} approved your promotion into ${targetStage.label}`,
-          body: `${result.versionLabel} is now live in ${targetStage.label}.`,
-          link: { view: 'release-pipeline', projectId: project.id },
-        });
-      }
-    } catch (sideEffectErr) {
-      console.error('POST promotion-requests/approve: side effects after commit failed (approval itself still succeeded):', sideEffectErr);
-    }
-
-    res.json({ ok: true, ...result, excludedNotReady: gate.excluded });
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    console.error('POST promotion-requests/approve failed:', err);
-    res.status(500).json({ error: 'Could not approve this promotion request.' });
-  } finally {
-    client.release();
-  }
-});
-
-// POST /api/workspace/projects/:id/promotion-requests/:reqId/reject — any
-// Admin other than the requester can reject, with an optional note (shown
-// to the requester, same as GitHub's "changes requested" review comment).
-router.post('/projects/:id/promotion-requests/:reqId/reject', async (req, res) => {
-  if (!isAdminUser(req)) return res.status(403).json({ error: 'Only Admins can reject a promotion request.' });
-  try {
-    const { rows } = await pool.query(
-      `SELECT pr.*, p.organisation FROM project_promotion_requests pr JOIN projects p ON p.id = pr.project_id
-       WHERE pr.id = $1 AND pr.project_id = $2`,
-      [req.params.reqId, req.params.id]
-    );
-    if (!rows.length || rows[0].organisation !== req.authUser.organisation) return res.status(404).json({ error: 'Promotion request not found.' });
-    const request = rows[0];
-    if (request.status !== 'pending') return res.status(400).json({ error: `This request was already ${request.status}.` });
-    if (request.requested_by === req.authUser.sub) return res.status(403).json({ error: "You can't reject your own promotion request — cancel it instead." });
-
-    const decisionNote = String(req.body?.note || '').trim().slice(0, 500) || null;
-    await pool.query(
-      `UPDATE project_promotion_requests SET status = 'rejected', decided_by = $1, decided_by_username = $2, decision_note = $3, decided_at = now() WHERE id = $4`,
-      [req.authUser.sub, req.authUser.username, decisionNote, request.id]
-    );
-    await recordAuditEvent(req.authUser, req, {
-      action: 'PROJECT_PROMOTION_REJECTED',
-      resourceType: 'project',
-      resourceId: request.project_id,
-      entityName: request.to_environment_id,
-      details: `Rejected ${request.requested_by_username || 'a teammate'}'s promotion request into ${request.to_environment_id}.` + (decisionNote ? ` Note: ${decisionNote}` : ''),
-      severity: 'warning',
-      metadata: { requestId: request.id },
-    });
-    if (request.requested_by) {
-      await notifyUsers([request.requested_by], {
-        organisation: request.organisation,
-        type: 'PROJECT_PROMOTION_REJECTED',
-        title: `${req.authUser.username} rejected your promotion request`,
-        body: decisionNote || 'No reason given.',
-        link: { view: 'release-pipeline', projectId: request.project_id },
-      });
-    }
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('POST promotion-requests/reject failed:', err);
-    res.status(500).json({ error: 'Could not reject this promotion request.' });
-  }
-});
-
-// POST /api/workspace/projects/:id/promotion-requests/:reqId/cancel — the
-// original requester withdraws their own still-pending request.
-router.post('/projects/:id/promotion-requests/:reqId/cancel', async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT pr.*, p.organisation FROM project_promotion_requests pr JOIN projects p ON p.id = pr.project_id
-       WHERE pr.id = $1 AND pr.project_id = $2`,
-      [req.params.reqId, req.params.id]
-    );
-    if (!rows.length || rows[0].organisation !== req.authUser.organisation) return res.status(404).json({ error: 'Promotion request not found.' });
-    const request = rows[0];
-    if (request.status !== 'pending') return res.status(400).json({ error: `This request was already ${request.status}.` });
-    if (request.requested_by !== req.authUser.sub) return res.status(403).json({ error: 'Only the person who opened this request can cancel it.' });
-    await pool.query(`UPDATE project_promotion_requests SET status = 'cancelled', decided_at = now() WHERE id = $1`, [request.id]);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('POST promotion-requests/cancel failed:', err);
-    res.status(500).json({ error: 'Could not cancel this promotion request.' });
-  }
-});
-
-// ----------------------------------------------------------------------------
-// Release pipeline diff — generic structural (git-diff-style) comparison of
-// the `endpoints` array between any two pipeline stages. Read-only: unlike
-// /promote, `from`/`to` don't have to be adjacent stages (comparing Dev
-// directly against Production is a legitimate thing to want to see); the
-// client is told via `canMerge` whether the pair also lines up with what
-// POST /promote will actually accept, and gates the "Merge" button on that.
-// ----------------------------------------------------------------------------
-
-// Fields that are pure bookkeeping (who/when an endpoint was last touched) —
-// diffing them would bury the actual content changes under noise every time
-// a stage is re-promoted.
-const DIFF_IGNORE_KEYS = new Set(['id', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy', '_open']);
-
-function isPlainObj(v) { return v && typeof v === 'object' && !Array.isArray(v); }
-
-// Arrays of parameters/headers/responses aren't identified by array index —
-// re-ordering shouldn't read as add+remove — so match items by their natural
-// key (name+in, response code, or name) when every item in both arrays has one.
-function arrayItemKey(item) {
-  if (isPlainObj(item)) {
-    if (item.name != null && item.in != null) return `ni:${item.in}:${item.name}`;
-    if (item.code != null) return `code:${item.code}`;
-    if (item.name != null) return `n:${item.name}`;
-  }
-  return null;
-}
-
-function diffArrays(a, b, path, out) {
-  a = a || []; b = b || [];
-  const keyable = (a.length || b.length) && a.every((x) => arrayItemKey(x) != null) && b.every((x) => arrayItemKey(x) != null);
-  if (keyable) {
-    const am = new Map(a.map((x) => [arrayItemKey(x), x]));
-    const bm = new Map(b.map((x) => [arrayItemKey(x), x]));
-    for (const k of new Set([...am.keys(), ...bm.keys()])) {
-      const av = am.get(k), bv = bm.get(k);
-      if (av === undefined) out.push({ path, kind: 'added', before: null, after: bv });
-      else if (bv === undefined) out.push({ path, kind: 'removed', before: av, after: null });
-      else diffValue(av, bv, path, out);
-    }
-  } else if (JSON.stringify(a) !== JSON.stringify(b)) {
-    out.push({ path, kind: 'changed', before: a, after: b });
-  }
-}
-
-function diffValue(a, b, path, out) {
-  if (a === b) return;
-  if (isPlainObj(a) && isPlainObj(b)) {
-    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
-      if (DIFF_IGNORE_KEYS.has(k)) continue;
-      diffValue(a[k], b[k], path ? `${path}.${k}` : k, out);
-    }
-    return;
-  }
-  if (Array.isArray(a) && Array.isArray(b)) { diffArrays(a, b, path, out); return; }
-  const av = a === undefined ? null : a;
-  const bv = b === undefined ? null : b;
-  if (JSON.stringify(av) !== JSON.stringify(bv)) {
-    out.push({ path, kind: a === undefined ? 'added' : b === undefined ? 'removed' : 'changed', before: av, after: bv });
-  }
-}
-
-function epSummary(ep) {
-  return { id: ep.id, method: ep.method || '', path: ep.path || '', summary: ep.summary || '' };
-}
-
-// `from` is the stage being promoted (its content is what the target stage
-// is ABOUT TO BECOME); `to` is the target stage's CURRENT content, which
-// gets overwritten by `from`'s content the moment promotion happens. So
-// "added" has to mean "present in `from`, missing from `to`" — that's what
-// the target stage gains once promoted — and "removed" is the reverse: only
-// in `to` today, and about to disappear because `from` doesn't have it.
-// (Swapping these reads as a plain chronological from-old/to-new diff, which
-// is backwards here — promoting overwrites `to` with `from`, it doesn't
-// turn `from` into `to`.)
-// ---- Release readiness gate (item #7) ----
-// A promotion into the pipeline's LAST stage (Production, by convention —
-// DR isn't a manual stage, it inherits Production's readiness for free)
-// used to be all-or-nothing: a single endpoint that wasn't status:active
-// with SecOps/VAPT/Log Mgmt all approved blocked the ENTIRE project from
-// reaching Production, even when most of it was long since ready. That
-// pushed teams into forking a project into a second "-prod" copy just to
-// get its finished endpoints live, fragmenting the documentation for no
-// real reason. Instead, a Production promotion now carries forward only
-// the endpoints that are actually release-ready — see
-// partitionForFinalStagePromotion below — while everything not ready
-// simply sits out of this particular promotion; the next promotion picks
-// it up automatically once it passes. An endpoint already live in
-// Production is never silently pulled or overwritten by an unapproved
-// edit just because its review status later regressed — it's kept frozen
-// at its last-promoted content until it's ready again.
+// ---- Endpoint release readiness (used by GET /environment-metrics) ----
+// An endpoint is only counted as "ready" in environment-metrics' per-project
+// readyTotal when it is status:active and its SecOps/VAPT/Log Mgmt reviews are
+// all approved — see endpointReadinessProblem below.
 const RELEASE_REVIEW_KINDS = ['secOps', 'vapt', 'logMgmt'];
 
 function endpointReadinessProblem(ep) {
@@ -2920,177 +1618,31 @@ function endpointReadinessProblem(ep) {
   return null;
 }
 
-// Splits `fromEndpoints` (what's about to be promoted) into what actually
-// gets carried into Production this time. Ready endpoints pass through
-// as-is. Not-ready endpoints that are already live in Production are kept
-// at their CURRENT Production content (not silently dropped, not silently
-// updated). Not-ready endpoints that have never reached Production are
-// left out entirely. Returns the effective endpoint list to promote plus
-// a summary of what was excluded, for transparency in the diff/response.
-function partitionForFinalStagePromotion(fromEndpoints, currentTargetEndpoints) {
-  const currentById = new Map((currentTargetEndpoints || []).filter((e) => e && e.id).map((e) => [e.id, e]));
-  const endpoints = [];
-  const excluded = [];
-  for (const ep of fromEndpoints || []) {
-    if (!ep || !ep.id) continue;
-    const problem = endpointReadinessProblem(ep);
-    if (!problem) {
-      endpoints.push(ep);
-      continue;
-    }
-    const already = currentById.get(ep.id);
-    if (already) {
-      endpoints.push(already);
-      excluded.push({ ...epSummary(ep), reason: problem, keptAsIs: true });
-    } else {
-      excluded.push({ ...epSummary(ep), reason: problem, keptAsIs: false });
-    }
-  }
-  return { endpoints, excluded };
-}
-
-function diffEndpointLists(fromEps, toEps) {
-  const fm = new Map((fromEps || []).map((e) => [e.id, e]));
-  const tm = new Map((toEps || []).map((e) => [e.id, e]));
-  const added = [], removed = [], modified = [];
-  for (const id of new Set([...fm.keys(), ...tm.keys()])) {
-    const fe = fm.get(id), te = tm.get(id);
-    if (!fe) { removed.push(epSummary(te)); continue; }
-    if (!te) { added.push(epSummary(fe)); continue; }
-    const changes = [];
-    diffValue(fe, te, '', changes);
-    if (changes.length) modified.push({ ...epSummary(te), changes });
-  }
-  return { added, removed, modified };
-}
-
-// ---- "You must have actually seen the diff" promotion gate (item #6) ----
-// Previously POST /promote had no relationship at all to GET /diff — nothing
-// stopped a caller from promoting straight to the next stage without ever
-// having pulled up what would change, even though the UI's own Merge button
-// only ever appears inside the rendered diff panel. This closes that gap
-// server-side rather than relying on the UI's own sequencing: GET /diff
-// mints a short-lived signed token binding (project, from, to, a content
-// hash of the diff) together; POST /promote requires that token and
-// recomputes the SAME hash at promote time, so a token only works for the
-// exact diff it was issued for — if the source content changed in between
-// (someone else edited the draft), the hash won't match and promote is
-// rejected with a clear "diff has changed, view it again" error instead of
-// silently promoting something nobody actually reviewed.
-const DIFF_TOKEN_TYPE = 'diff-ack';
-const DIFF_TOKEN_TTL_MS = 15 * 60 * 1000;
-
-function hashDiff(diff, breakingChanges) {
-  // Field order from diffEndpointLists/epSummary (and detectBreakingChanges,
-  // which walks the same endpoint maps the same way) is already
-  // deterministic, so a plain JSON.stringify is a stable, reproducible
-  // fingerprint of "exactly this diff + these breaking-change findings" —
-  // not cryptographic integrity (the token's own AEAD already provides
-  // that), just a fingerprint for the equality check below. Breaking
-  // changes are folded into the SAME hash as the structural diff (rather
-  // than a separate token field) so there's exactly one "has this changed
-  // since you looked at it" check to get right, not two that could
-  // disagree.
-  return nodeCrypto.createHash('sha256').update(JSON.stringify({ diff, breakingChanges })).digest('hex');
-}
-
-function mintDiffToken({ projectId, from, to, diff, breakingChanges }) {
-  return dataCrypto.encryptShareToken({
-    t: DIFF_TOKEN_TYPE,
-    pid: projectId,
-    from,
-    to,
-    hash: hashDiff(diff, breakingChanges),
-    bc: (breakingChanges || []).length,
-    exp: Date.now() + DIFF_TOKEN_TTL_MS,
-  });
-}
-
-// Returns null (valid) or an error message string. `ackBreakingChanges` is
-// whatever the client sent in POST /promote's body — required to be
-// explicitly truthy whenever the acknowledged diff included at least one
-// breaking-change finding, same "you must have actually seen it" principle
-// as the diff-viewed check itself, just for the specific subset of changes
-// most likely to take a live consumer down.
-function checkDiffToken(token, { projectId, from, to, diff, breakingChanges, ackBreakingChanges }) {
-  if (!token || typeof token !== 'string') {
-    return 'View the diff before promoting — open the From/To comparison first.';
-  }
-  const payload = dataCrypto.decryptShareToken(token);
-  if (!payload || payload.t !== DIFF_TOKEN_TYPE) {
-    return 'Your diff confirmation is invalid — view the diff again and retry.';
-  }
-  if (payload.pid !== projectId || payload.from !== from || payload.to !== to) {
-    return 'That diff confirmation was for a different comparison — view the current diff and retry.';
-  }
-  if (!payload.exp || Date.now() > payload.exp) {
-    return 'Your diff confirmation has expired — view the diff again and retry.';
-  }
-  if (payload.hash !== hashDiff(diff, breakingChanges)) {
-    return "What's changed since you last viewed the diff — view it again before promoting.";
-  }
-  if ((breakingChanges || []).length && !ackBreakingChanges) {
-    const n = breakingChanges.length;
-    return `This promotion includes ${n} breaking change${n === 1 ? '' : 's'} — check "I've reviewed the breaking changes" before merging.`;
-  }
-  return null;
-}
-
-// ---- Append-only promotion history (item #6 — rollback) ----
-// project_env_versions (below) stays a single overwritten "what's live right
-// now" row per (project, environment); this table is its append-only
-// companion so a bad promotion can be rolled back to a specific earlier
-// version instead of only ever moving forward. Called from inside the same
-// transaction as the project_env_versions upsert, with the exact same
-// already-encrypted payload — no re-encryption needed, since the AAD
-// (`project-env:<id>:<env>`) binds to project+environment only, not to
-// "current" vs "historical".
-async function recordEnvVersionHistory(client, {
-  projectId, environmentId, version, dataEnc, dataKeyVersion, sourceEnvironmentId,
-  action = 'promote', rolledBackFromId = null, promotedBy, promotedByUsername, autoMirrored = false,
-  releaseNote = null, breakingChanges = [],
-}) {
-  const { rows } = await client.query(
-    `INSERT INTO project_env_version_history
-       (project_id, environment_id, version, data_enc, data_key_version, source_environment_id,
-        action, rolled_back_from_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at,
-        release_note, breaking_changes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), $12, $13)
-     RETURNING id`,
-    [projectId, environmentId, version, dataEnc, dataKeyVersion, sourceEnvironmentId, action, rolledBackFromId, promotedBy, promotedByUsername, autoMirrored,
-      releaseNote, JSON.stringify(breakingChanges || [])]
-  );
-  return rows[0].id;
-}
-
-// Shared by the diff and snapshot routes below: resolves one pipeline
-// stage's endpoint data — the live draft for stage 0, otherwise whatever
-// (if anything) has been promoted into that stage's frozen copy.
-async function loadStageData(project, envId, stageIdx) {
-  if (stageIdx === 0) return decryptProjectData(project);
-  const { rows } = await pool.query(
-    `SELECT data_enc FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
-    [project.id, envId]
-  );
-  if (!rows.length) return { endpoints: [] };
-  return JSON.parse(dataCrypto.decryptField(rows[0].data_enc, `project-env:${project.id}:${envId}`));
+// Used by the snapshot route (and formerly the diff route, removed in an
+// earlier cluster) to resolve a pipeline stage's endpoint data. There is
+// only ever the live draft to return now — project_env_versions (promoted-
+// stage frozen copies) was dropped in an earlier cluster (see
+// migrations/sql/0007_drop_release_pipeline.sql), and with exactly one
+// environment left (environment collapse cluster) there is no separate
+// "promoted" stage left to distinguish anyway. Kept as its own
+// function/signature (rather than inlined) since pii.js still calls it.
+function loadStageData(project) {
+  return decryptProjectData(project);
 }
 
 // GET /api/workspace/projects/:id/snapshot?environmentId=X — read-only view
-// of exactly what's live in one pipeline stage (the frozen promoted copy,
-// or the live draft for stage 0). This is what the studio UI renders when
-// someone switches the environment switcher away from the draft stage —
-// browsing SIT/UAT/Staging/Production/etc. shows what was actually promoted
-// there, not the still-being-edited draft.
+// of a project's endpoints. Used to distinguish the live draft from a
+// frozen promoted copy when the studio UI's environment switcher pointed
+// somewhere other than Dev; now that there is only one environment, this
+// always returns the live draft — kept as a route (rather than folded into
+// GET /api/workspace) only because the client still calls it by name.
 //
-// This has to apply the exact same three gates as GET /api/workspace
-// (projectForViewer + applyDocLock above), or switching off the draft stage
-// silently bypasses all of them: (1) a private, non-owned, non-granted
-// project shouldn't be readable at all here just because the org matches;
-// (2) someone viewing purely via the public catalog should only ever see
-// endpoints marked public, promoted-stage snapshot or not; (3) whatever
-// endpoints survive that cut still need per-endpoint doc-access locking
-// unless the caller's role has blanket doc access.
+// Applies the same three gates GET /api/workspace does (projectForViewer +
+// applyDocLock above): (1) a private, non-owned, non-granted project isn't
+// readable here just because the org matches; (2) a public-catalog-only
+// viewer only ever sees endpoints marked public; (3) whatever endpoints
+// survive that cut still need per-endpoint doc-access locking unless the
+// caller's role has blanket doc access.
 router.get('/projects/:id/snapshot', async (req, res) => {
   try {
     const envKey = req.query.environmentId;
@@ -3110,7 +1662,7 @@ router.get('/projects/:id/snapshot', async (req, res) => {
     let grant = null;
     if (!isOwner) {
       const { rows: grantRows } = await pool.query(
-        `SELECT environments, permission FROM project_access WHERE project_id = $1 AND user_id = $2`,
+        `SELECT permission FROM project_access WHERE project_id = $1 AND user_id = $2`,
         [req.params.id, userId]
       );
       if (grantRows.length) grant = grantRows[0];
@@ -3122,33 +1674,15 @@ router.get('/projects/:id/snapshot', async (req, res) => {
       return res.status(404).json({ error: 'Project not found.' });
     }
 
-    const allEnvs = await getOrgEnvironments(project.organisation);
-    const stages = pipelineStages(allEnvs);
+    const stages = pipelineStages(await getOrgEnvironments(project.organisation));
     const idx = stages.findIndex((e) => e.id === envKey);
     if (idx < 0) return res.status(400).json({ error: 'Unknown environment.' });
+    // A project_access grant used to also name which environments it
+    // covered (grantCoversEnvironment) — grants are project-wide only now
+    // (environment collapse cluster), so any grant at all already covers
+    // this, the only environment there is.
 
-    // A project_access grant also names which environments this person may
-    // browse for this project (see projectForViewer's _grantedEnvironments) —
-    // enforce that here too, not just for Try It/Live Mode.
-    if (grant && !grantCoversEnvironment(grant.environments, envKey)) {
-      return res.status(403).json({ error: 'You do not have access to this environment for this project.' });
-    }
-
-    const isDraft = idx === 0;
-    let versionLabel = null, promotedAt = null, promotedBy = null;
-    if (!isDraft) {
-      const { rows: vRows } = await pool.query(
-        `SELECT version, promoted_at, promoted_by_username FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
-        [project.id, envKey]
-      );
-      if (vRows.length) {
-        versionLabel = `1.0.${vRows[0].version}`;
-        promotedAt = vRows[0].promoted_at;
-        promotedBy = vRows[0].promoted_by_username;
-      }
-    }
-
-    const stageData = await loadStageData(project, envKey, idx);
+    const stageData = loadStageData(project);
     let endpoints = Array.isArray(stageData.endpoints) ? stageData.endpoints : [];
 
     if (!isOwner && !grant) {
@@ -3164,22 +1698,19 @@ router.get('/projects/:id/snapshot', async (req, res) => {
     const orgRules = await getOrgPiiRules(project.organisation);
     endpoints = endpoints.map((ep) => piiMasking.maskEndpoint(ep, orgRules));
 
-    // Attachments are project-level, frozen into the stage snapshot exactly
-    // like endpoints are — so switching the environment switcher off the
-    // draft has to switch the Documents list too, not keep showing whatever
-    // is currently on the draft. Same visibility rule as projectForViewer's
-    // attachments field: a non-owner/non-grant viewer only sees them if the
-    // whole project is public, never per-endpoint-public.
+    // Attachments are project-level. Same visibility rule as
+    // projectForViewer's attachments field: a non-owner/non-grant viewer
+    // only sees them if the whole project is public, never per-endpoint-public.
     let attachments = Array.isArray(stageData.attachments) ? stageData.attachments : [];
     if (!isOwner && !grant && project.visibility !== 'public') attachments = [];
 
     res.json({
       environmentId: envKey,
       label: stages[idx].label,
-      isDraft,
-      versionLabel: isDraft ? `1.0.${project.release_version} (draft)` : versionLabel,
-      promotedAt,
-      promotedBy,
+      isDraft: true,
+      versionLabel: `1.0.${project.release_version} (draft)`,
+      promotedAt: null,
+      promotedBy: null,
       endpoints,
       attachments,
     });
@@ -3189,137 +1720,6 @@ router.get('/projects/:id/snapshot', async (req, res) => {
   }
 });
 
-// GET /api/workspace/projects/:id/diff?from=<environmentId>&to=<environmentId>
-// Any org member who can see the project may view a diff (same visibility as
-// GET /versions); only POST /promote itself is Admin-gated.
-// GET /api/workspace/projects/:id/diff?from=<environmentId>&to=<environmentId>
-// Any org member who can see the project may view a diff (same visibility as
-// GET /versions); only POST /promote itself is Admin-gated. "Can see the
-// project" is enforced the same way as the snapshot route just above — owner
-// or an explicit grant sees everything, everyone else only public endpoints,
-// further reduced to locked stubs without an active doc-access grant. This
-// used to skip all of that (org match only), so a diff could leak full
-// before/after bodies for private or doc-locked endpoints.
-router.get('/projects/:id/diff', async (req, res) => {
-  try {
-    const fromKey = req.query.from, toKey = req.query.to;
-    if (!fromKey || !toKey) return res.status(400).json({ error: 'from and to are required.' });
-
-    const { rows } = await pool.query(
-      `SELECT id, owner_id, organisation, visibility, has_public_endpoint, data, data_enc, release_version FROM projects WHERE id = $1`,
-      [req.params.id]
-    );
-    if (!rows.length) return res.status(404).json({ error: 'Project not found.' });
-    const project = rows[0];
-    if (project.organisation !== req.authUser.organisation) return res.status(404).json({ error: 'Project not found.' });
-
-    const userId = req.authUser.sub;
-    const isOwner = project.owner_id === userId;
-    let grant = null;
-    if (!isOwner) {
-      const { rows: grantRows } = await pool.query(
-        `SELECT environments, permission FROM project_access WHERE project_id = $1 AND user_id = $2`,
-        [req.params.id, userId]
-      );
-      if (grantRows.length) grant = grantRows[0];
-    }
-    if (!isOwner && !grant && project.visibility !== 'public' && !project.has_public_endpoint) {
-      return res.status(404).json({ error: 'Project not found.' });
-    }
-
-    const allEnvs = await getOrgEnvironments(project.organisation);
-    const stages = pipelineStages(allEnvs);
-    const stageById = new Map(stages.map((s, idx) => [s.id, { ...s, idx }]));
-    if (!stageById.has(fromKey) || !stageById.has(toKey)) {
-      return res.status(400).json({ error: 'Unknown environment.' });
-    }
-    if (grant && (!grantCoversEnvironment(grant.environments, fromKey) || !grantCoversEnvironment(grant.environments, toKey))) {
-      return res.status(403).json({ error: 'You do not have access to these environments for this project.' });
-    }
-
-    const [fromData, toData] = await Promise.all([
-      loadStageData(project, fromKey, stageById.get(fromKey).idx),
-      loadStageData(project, toKey, stageById.get(toKey).idx),
-    ]);
-    let fromEndpoints = fromData.endpoints || [];
-    let toEndpoints = toData.endpoints || [];
-
-    if (!isOwner && !grant) {
-      const filterAndLock = async (endpoints, envKey) => {
-        let filtered = endpoints.filter((ep) => ep && ep.visibility === 'public');
-        if (filtered.length && !userHasFullDocAccess(req.authUser)) {
-          const accessMap = await getDocAccessMap(project.organisation, userId, project.id, filtered.map((e) => e.id), envKey);
-          filtered = filtered.map((ep) => applyDocLock(ep, accessMap.get(ep.id)));
-        }
-        return filtered;
-      };
-      [fromEndpoints, toEndpoints] = await Promise.all([filterAndLock(fromEndpoints, fromKey), filterAndLock(toEndpoints, toKey)]);
-    }
-
-    // The diff-token hash has to match exactly what POST /promote recomputes
-    // at promotion time — and that recomputation reads the RAW (unmasked)
-    // stage content, since that's what's actually being written. Snapshot
-    // the access-filtered-but-unmasked lists here, before masking, so the
-    // token below is minted from the same content promote will hash.
-    // Without this, ANY promotion touching a "modified" endpoint whose
-    // masked fields differ from their raw values (a header example, a PII
-    // field, anything maskEndpoint touches) would mint a token that can
-    // never match — a real request would recompute the diff on raw data,
-    // get a different hash, and fail every single time with a false
-    // "diff has changed since you last viewed it" error.
-    // Per-endpoint Production gate: previewing a promotion INTO the last
-    // stage only shows what would actually go — ready endpoints, plus
-    // whatever's already frozen in Production for anything not ready yet
-    // (see partitionForFinalStagePromotion). Without this, the diff would
-    // show endpoints as "added" that a subsequent promotion-request would
-    // then silently leave out, which is confusing at best.
-    const fromIdxForGate = stageById.get(fromKey).idx, toIdxForGate = stageById.get(toKey).idx;
-    const isFinalStageTarget = toIdxForGate === stages.length - 1 && toIdxForGate === fromIdxForGate + 1;
-    const gate = isFinalStageTarget
-      ? partitionForFinalStagePromotion(fromEndpoints, toEndpoints)
-      : { endpoints: fromEndpoints, excluded: [] };
-    fromEndpoints = gate.endpoints;
-
-    const rawFromEndpoints = fromEndpoints;
-    const rawToEndpoints = toEndpoints;
-    const rawDiff = diffEndpointLists(rawFromEndpoints, rawToEndpoints);
-    const rawBreakingChanges = detectBreakingChanges(rawToEndpoints, rawFromEndpoints);
-
-    // SECURITY (Finding 4.2): same masking as GET /api/workspace and the
-    // snapshot route — a diff is still a full read path for example values.
-    // This masked copy is for the response payload the client actually
-    // displays; the diff token above is minted from the raw copy instead.
-    const orgRules = await getOrgPiiRules(project.organisation);
-    fromEndpoints = fromEndpoints.map((ep) => piiMasking.maskEndpoint(ep, orgRules));
-    toEndpoints = toEndpoints.map((ep) => piiMasking.maskEndpoint(ep, orgRules));
-
-    const diff = diffEndpointLists(fromEndpoints, toEndpoints);
-    const breakingChanges = detectBreakingChanges(toEndpoints, fromEndpoints);
-    const fromIdx = stageById.get(fromKey).idx, toIdx = stageById.get(toKey).idx;
-    const canMerge = toIdx === fromIdx + 1;
-
-    res.json({
-      from: { environmentId: fromKey, label: stageById.get(fromKey).label },
-      to: { environmentId: toKey, label: stageById.get(toKey).label, requiresApproval: !!stageById.get(toKey).requiresApproval },
-      canMerge,
-      // Only minted for an adjacent pair (the only pair POST /promote will
-      // ever accept) — see the diff-viewed gate above. A non-adjacent,
-      // purely-informational comparison (e.g. Dev vs Production) doesn't
-      // need one since it can never back a promote call anyway.
-      diffToken: canMerge ? mintDiffToken({ projectId: project.id, from: fromKey, to: toKey, diff: rawDiff, breakingChanges: rawBreakingChanges }) : null,
-      summary: { added: diff.added.length, removed: diff.removed.length, modified: diff.modified.length },
-      added: diff.added,
-      removed: diff.removed,
-      modified: diff.modified,
-      breakingChanges,
-      hasBreakingChanges: breakingChanges.length > 0,
-      excludedNotReady: gate.excluded,
-    });
-  } catch (err) {
-    console.error('GET project diff failed:', err);
-    res.status(500).json({ error: 'Could not compute diff.' });
-  }
-});
 
 // POST /api/workspace/projects/:id/openapi-link — mints a short-lived,
 // signed public URL for this project's full combined OpenAPI spec, meant to
@@ -3361,253 +1761,6 @@ router.post('/projects/:id/openapi-link', async (req, res) => {
   }
 });
 
-// ---- Rollback (item #6) ----
-// GET /api/workspace/projects/:id/versions/:environmentId/history — the last
-// N promotions (and rollbacks) made into one environment, newest first. Only
-// exposed to whoever could already see /versions for this project (owner,
-// grant, or public — same resolveAccessById check), since it's the same
-// class of metadata (promotion status), just historical instead of current.
-router.get('/projects/:id/versions/:environmentId/history', async (req, res) => {
-  try {
-    const { rows: projRows } = await pool.query(
-      `SELECT id, organisation FROM projects WHERE id = $1`,
-      [req.params.id]
-    );
-    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
-      return res.status(404).json({ error: 'Project not found.' });
-    }
-    const access = await resolveAccessById(req.authUser.sub, req.params.id, req.authUser.organisation);
-    if (!access.canView) return res.status(404).json({ error: 'Project not found.' });
-
-    const { rows } = await pool.query(
-      `SELECT id, version, action, source_environment_id, auto_mirrored,
-              promoted_by_username, promoted_at, rolled_back_from_id
-       FROM project_env_version_history
-       WHERE project_id = $1 AND environment_id = $2
-       ORDER BY id DESC
-       LIMIT 20`,
-      [req.params.id, req.params.environmentId]
-    );
-    res.json({ history: rows });
-  } catch (err) {
-    console.error('GET versions/history failed:', err);
-    res.status(500).json({ error: 'Could not load version history.' });
-  }
-});
-
-// POST /api/workspace/projects/:id/rollback — Body: { environmentId, historyId }
-// Re-applies a specific historical promotion as the environment's current
-// version — "one-click rollback instead of only forward promotion." Admin
-// only, same as promote: rolling back Production (say) is exactly as
-// consequential as promoting into it. Re-applying rather than deleting
-// forward means the rollback itself becomes a new, fully-audited history
-// entry (action='rollback', rolled_back_from_id pointing at what was live
-// just before) — the environment's real timeline is "promote, promote,
-// rollback," never silently rewritten.
-router.post('/projects/:id/rollback', async (req, res) => {
-  if (!isAdminUser(req)) return res.status(403).json({ error: 'Only Admins can roll back an environment.' });
-  const { environmentId, historyId } = req.body || {};
-  if (!environmentId || !historyId) return res.status(400).json({ error: 'environmentId and historyId are required.' });
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const { rows: projRows } = await client.query(
-      `SELECT id, organisation FROM projects WHERE id = $1 FOR UPDATE`,
-      [req.params.id]
-    );
-    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Project not found.' });
-    }
-    const project = projRows[0];
-
-    const { rows: currentRows } = await client.query(
-      `SELECT id FROM project_env_version_history WHERE project_id = $1 AND environment_id = $2 ORDER BY id DESC LIMIT 1`,
-      [project.id, environmentId]
-    );
-    const { rows: targetRows } = await client.query(
-      `SELECT id, version, data_enc, data_key_version, source_environment_id
-       FROM project_env_version_history WHERE id = $1 AND project_id = $2 AND environment_id = $3`,
-      [historyId, project.id, environmentId]
-    );
-    if (!targetRows.length) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'That version was not found in this environment\'s history.' });
-    }
-    const target = targetRows[0];
-    if (currentRows.length && currentRows[0].id === target.id) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'That version is already the one currently live in this environment.' });
-    }
-
-    await client.query(
-      `INSERT INTO project_env_versions
-         (project_id, environment_id, version, data_enc, data_key_version, source_environment_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, now())
-       ON CONFLICT (project_id, environment_id) DO UPDATE SET
-         version = EXCLUDED.version, data_enc = EXCLUDED.data_enc, data_key_version = EXCLUDED.data_key_version,
-         source_environment_id = EXCLUDED.source_environment_id, promoted_by = EXCLUDED.promoted_by,
-         promoted_by_username = EXCLUDED.promoted_by_username, auto_mirrored = false, promoted_at = now()`,
-      [project.id, environmentId, target.version, target.data_enc, target.data_key_version, target.source_environment_id, req.authUser.sub, req.authUser.username]
-    );
-    await recordEnvVersionHistory(client, {
-      projectId: project.id, environmentId, version: target.version,
-      dataEnc: target.data_enc, dataKeyVersion: target.data_key_version, sourceEnvironmentId: target.source_environment_id,
-      action: 'rollback', rolledBackFromId: currentRows[0]?.id || null,
-      promotedBy: req.authUser.sub, promotedByUsername: req.authUser.username, autoMirrored: false,
-      releaseNote: String(req.body?.note || '').trim().slice(0, 500) || `Rolled back to v1.0.${target.version}`,
-    });
-
-    await client.query('COMMIT');
-    await cache.invalidateOrg(project.organisation);
-
-    await recordAuditEvent(req.authUser, req, {
-      action: 'PROJECT_ROLLED_BACK',
-      resourceType: 'project',
-      resourceId: project.id,
-      entityName: environmentId,
-      details: `Rolled ${environmentId} back to v1.0.${target.version} (history #${target.id}).`,
-      severity: 'warning',
-      metadata: { environmentId, historyId: target.id, version: target.version },
-    });
-
-    res.json({ ok: true, environmentId, versionLabel: `1.0.${target.version}` });
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    console.error('POST rollback failed:', err);
-    res.status(500).json({ error: 'Could not roll back this environment.' });
-  } finally {
-    client.release();
-  }
-});
-
-// POST /api/workspace/projects/:id/environments/:environmentId/prune-endpoints
-// Body: { endpointIds: [...], releaseNote }. Admin-only.
-//
-// The release-readiness gate (see checkReleaseReadiness) stops a NEW
-// promotion from landing an unapproved endpoint in Production — it can't
-// undo one that landed before the gate existed, or reach in and pull a
-// single endpoint back out without redoing a whole release. This is that:
-// edits ONE environment's current promoted snapshot in place, removing just
-// the given endpoints, without touching the upstream stage it came from (so
-// the next real promotion still diffs correctly against the stage above).
-// Writes a normal, fully-audited history entry (action='prune') rather than
-// silently rewriting anything, and — same as a real promotion into the
-// pipeline's last stage — cascades to DR, since DR exists to mirror what
-// Production actually serves, not what an old promotion happened to include.
-router.post('/projects/:id/environments/:environmentId/prune-endpoints', async (req, res) => {
-  if (!isAdminUser(req)) return res.status(403).json({ error: 'Only Admins can edit a promoted environment.' });
-  const { environmentId } = req.params;
-  const endpointIds = Array.isArray(req.body?.endpointIds) ? req.body.endpointIds.filter((id) => typeof id === 'string' && id) : [];
-  if (!endpointIds.length) return res.status(400).json({ error: 'endpointIds is required.' });
-  const releaseNote = String(req.body?.releaseNote || '').trim().slice(0, 500);
-  if (!releaseNote || releaseNote.length < 10) {
-    return res.status(400).json({ error: 'A release note is required (at least 10 characters) explaining why these endpoints are being pulled.' });
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const { rows: projRows } = await client.query(
-      `SELECT id, organisation FROM projects WHERE id = $1 FOR UPDATE`,
-      [req.params.id]
-    );
-    if (!projRows.length || projRows[0].organisation !== req.authUser.organisation) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Project not found.' });
-    }
-    const project = projRows[0];
-
-    const allEnvs = await getOrgEnvironments(project.organisation);
-    const stages = pipelineStages(allEnvs);
-    const stageIdx = stages.findIndex((e) => e.id === environmentId);
-    if (stageIdx <= 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Unknown or non-editable environment.' });
-    }
-    const stage = stages[stageIdx];
-
-    const { rows: curRows } = await client.query(
-      `SELECT version, data_enc FROM project_env_versions WHERE project_id = $1 AND environment_id = $2 FOR UPDATE`,
-      [project.id, environmentId]
-    );
-    if (!curRows.length) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: `Nothing has been promoted to ${stage.label} yet.` });
-    }
-    const current = JSON.parse(dataCrypto.decryptField(curRows[0].data_enc, `project-env:${project.id}:${environmentId}`));
-    const removeSet = new Set(endpointIds);
-    const before = (current.endpoints || []).length;
-    const removed = (current.endpoints || []).filter((e) => e && removeSet.has(e.id));
-    if (!removed.length) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'None of the given endpoint ids are currently present in this environment.' });
-    }
-    current.endpoints = (current.endpoints || []).filter((e) => !e || !removeSet.has(e.id));
-
-    const dataEnc = dataCrypto.encryptField(JSON.stringify(current), `project-env:${project.id}:${environmentId}`);
-    const dataKeyVersion = dataCrypto.currentKeyVersion();
-    await client.query(
-      `UPDATE project_env_versions SET data_enc = $1, data_key_version = $2, promoted_by = $3, promoted_by_username = $4, auto_mirrored = false, promoted_at = now()
-       WHERE project_id = $5 AND environment_id = $6`,
-      [dataEnc, dataKeyVersion, req.authUser.sub, req.authUser.username, project.id, environmentId]
-    );
-    await recordEnvVersionHistory(client, {
-      projectId: project.id, environmentId, version: curRows[0].version, dataEnc, dataKeyVersion,
-      sourceEnvironmentId: null, action: 'prune', promotedBy: req.authUser.sub, promotedByUsername: req.authUser.username,
-      autoMirrored: false, releaseNote: `${releaseNote} (removed ${removed.length} of ${before} endpoints)`,
-    });
-
-    let mirrored = null;
-    const isLastStage = stageIdx === stages.length - 1;
-    if (isLastStage) {
-      const drEnv = allEnvs.find((e) => String(e.label || '').trim().toUpperCase() === 'DR');
-      if (drEnv) {
-        const mirrorEnc = dataCrypto.encryptField(JSON.stringify(current), `project-env:${project.id}:${drEnv.id}`);
-        const mirrorKeyVersion = dataCrypto.currentKeyVersion();
-        await client.query(
-          `INSERT INTO project_env_versions
-             (project_id, environment_id, version, data_enc, data_key_version, source_environment_id, promoted_by, promoted_by_username, auto_mirrored, promoted_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, now())
-           ON CONFLICT (project_id, environment_id) DO UPDATE SET
-             version = EXCLUDED.version, data_enc = EXCLUDED.data_enc, data_key_version = EXCLUDED.data_key_version,
-             source_environment_id = EXCLUDED.source_environment_id, promoted_by = EXCLUDED.promoted_by,
-             promoted_by_username = EXCLUDED.promoted_by_username, auto_mirrored = true, promoted_at = now()`,
-          [project.id, drEnv.id, curRows[0].version, mirrorEnc, mirrorKeyVersion, stage.id, req.authUser.sub, req.authUser.username]
-        );
-        await recordEnvVersionHistory(client, {
-          projectId: project.id, environmentId: drEnv.id, version: curRows[0].version,
-          dataEnc: mirrorEnc, dataKeyVersion: mirrorKeyVersion, sourceEnvironmentId: stage.id,
-          action: 'prune', promotedBy: req.authUser.sub, promotedByUsername: req.authUser.username, autoMirrored: true,
-          releaseNote: `Auto-mirrored from ${stage.label}: ${releaseNote} (removed ${removed.length} of ${before} endpoints)`,
-        });
-        mirrored = { environmentId: drEnv.id, label: drEnv.label };
-      }
-    }
-
-    await client.query('COMMIT');
-    await cache.invalidateOrg(project.organisation);
-
-    await recordAuditEvent(req.authUser, req, {
-      action: 'PROJECT_ENDPOINTS_PRUNED',
-      resourceType: 'project',
-      resourceId: project.id,
-      entityName: stage.label,
-      details: `Removed ${removed.length} endpoint${removed.length === 1 ? '' : 's'} from ${stage.label}: ${removed.map((e) => `${(e.method || '').toUpperCase()} ${e.path || ''}`).join(', ')}. ${releaseNote}`,
-      severity: 'warning',
-      metadata: { environmentId, removedEndpointIds: removed.map((e) => e.id), remainingCount: current.endpoints.length },
-    });
-
-    res.json({ ok: true, environmentId, removedCount: removed.length, remainingCount: current.endpoints.length, mirrored });
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    console.error('POST prune-endpoints failed:', err);
-    res.status(500).json({ error: 'Could not edit this environment.' });
-  } finally {
-    client.release();
-  }
-});
 
 module.exports = router;
 module.exports.MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_BYTES;
@@ -3620,7 +1773,5 @@ module.exports.loadStageData = loadStageData;
 module.exports.projectForViewer = projectForViewer;
 module.exports.applyDocLock = applyDocLock;
 module.exports.userHasFullDocAccess = userHasFullDocAccess;
-module.exports.composeWriterSegments = composeWriterSegments;
-module.exports.composeOneEnvironment = composeOneEnvironment;
 module.exports.duplicateEndpointError = duplicateEndpointError;
 module.exports.endpointFieldsError = endpointFieldsError;

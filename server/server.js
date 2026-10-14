@@ -10,7 +10,6 @@ const cookieParser = require('cookie-parser');
 const { initDb, pool } = require('./db');
 const { runMigrations } = require('./migrations/runner');
 const { startRetentionSchedule } = require('./retention');
-const { startAlertSchedule } = require('./alertEngine');
 const dataCrypto = require('./crypto');
 const workspaceCache = require('./cache');
 const openapiExport = require('./openapiExport');
@@ -20,12 +19,9 @@ const workspaceRoutes = require('./routes/workspace');
 const auditRoutes = require('./routes/audit');
 const piiRoutes = require('./routes/pii');
 const securityRoutes = require('./routes/security');
-const liveModeRoutes = require('./routes/liveMode');
 const docAccessRoutes = require('./routes/docAccess');
 const aiRoutes = require('./routes/ai');
 const notificationRoutes = require('./routes/notifications');
-const observabilityRoutes = require('./routes/observability');
-const alertRoutes = require('./routes/alerts');
 const adminAnalyticsRoutes = require('./routes/adminAnalytics');
 const ssoRoutes = require('./routes/sso');
 const compressionMiddleware = require('./middleware/compress');
@@ -155,9 +151,9 @@ app.use('/api', compressionMiddleware);
 // one is deliberately generous — its job is only to bound a runaway/buggy
 // client or a genuine flood, never to be felt by real usage. Per-IP rather
 // than per-org/user (matching every other limiter in this codebase), so it's
-// sized to tolerate many users and a few observability agents (pushing every
-// ~5s) sharing one corporate NAT IP: 1200 requests/minute is ~20/s, an order
-// of magnitude above what that traffic pattern needs.
+// sized to tolerate many users sharing one corporate NAT IP: 1200
+// requests/minute is ~20/s, an order of magnitude above what that traffic
+// pattern needs.
 const generalApiLimiter = createRateLimiter({
   windowMs: 60 * 1000,
   max: 1200,
@@ -183,22 +179,13 @@ app.use('/api/workspace', workspaceRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/pii', piiRoutes);
 app.use('/api/security', securityRoutes);
-app.use('/api/live-mode', liveModeRoutes);
 // Mounted under /api/workspace (not its own top-level prefix) purely so the
 // client's existing apiGet/apiSend helpers — hard-coded to the
 // '/api/workspace' base — can call it with no new fetch wrapper, and so it
 // automatically gets the same 25mb JSON body limit set above rather than
 // falling back to the tighter 20kb default. It's still its own router/file
-// (server/routes/docAccess.js), same separation as liveModeRoutes.
+// (server/routes/docAccess.js), same separation as the other route files.
 app.use('/api/workspace/doc-access', docAccessRoutes);
-// Mounted under /api/workspace for the same two reasons docAccess is: the
-// client's apiGet/apiSend helpers are hard-coded to that base, and the 25mb
-// JSON limit set above applies (an agent's rollup push for a busy interval is
-// far larger than the 20kb default). Its own router/file, same as the others.
-app.use('/api/workspace/observability', observabilityRoutes);
-// Alert rules sit beside the metrics they watch rather than under /security:
-// a threshold is observability configuration, not an access-control decision.
-app.use('/api/workspace/alerts', alertRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin/analytics', adminAnalyticsRoutes);
@@ -320,7 +307,6 @@ const studioTemplate = fs.readFileSync(path.join(__dirname, 'views', 'studio.htm
 const auditLogTemplate = fs.readFileSync(path.join(__dirname, 'views', 'auditlog.html'), 'utf8');
 const editorTemplate = fs.readFileSync(path.join(__dirname, 'views', 'editor.html'), 'utf8');
 const architectureStudioTemplate = fs.readFileSync(path.join(__dirname, 'views', 'architecture-studio.html'), 'utf8');
-const releasePipelineTemplate = fs.readFileSync(path.join(__dirname, 'views', 'release-pipeline.html'), 'utf8');
 
 // Cache-busting for every /js/... <script> tag in the templates above (see
 // __ASSET_VERSION__ in each view). None of those tags carried a version
@@ -416,9 +402,7 @@ app.get('/:orgToken/dashboard.html', requireAuth, (req, res) => {
 // a project on the bare dashboard URL rather than minting a link that would
 // route here instead.
 const SPECIAL_VIEW_ROUTES = {
-  'observability': 'observability',
   'security': 'security',
-  'release-pipeline': 'releasepipeline',
   'errors': 'errors',
   'profile': 'profile',
 };
@@ -534,42 +518,6 @@ app.get('/:orgToken/:projectSlug/architecture.studio', requireAuth, (req, res) =
   renderArchitectureStudio(req, res, { projectSlug: req.params.projectSlug });
 });
 
-// Release Pipeline v2 (server/views/release-pipeline.html) — the full-page,
-// GitHub-style promote/merge-history tool. Opens in its own tab from a
-// project's Project Settings, same session-cookie auth and same
-// never-decode-the-slug-server-side pattern as architecture.studio above:
-// the project is re-resolved client-side against GET /api/workspace, and
-// every actual read/write (versions, diff, promote, rollback, history) goes
-// through the existing Admin-gated /api/workspace/projects/:id/* routes —
-// this route only serves the shell.
-function renderReleasePipelinePage(req, res, { projectSlug = '' } = {}) {
-  const authUser = {
-    id: req.user.sub,
-    username: req.user.username,
-    organisation: req.user.organisation,
-    role: req.user.role,
-    accessSchedule: req.user.accessSchedule || null,
-    scheduleLocked: !!req.user.scheduleLocked,
-    ...(req.user.role === 'custom' ? { customPermissions: req.user.customPermissions || null } : {}),
-  };
-  const html = releasePipelineTemplate
-    .replace(/__CSP_NONCE__/g, res.locals.cspNonce)
-    .replace(/__ASSET_VERSION__/g, ASSET_VERSION)
-    .replace('__AUTH_USER_JSON__', JSON.stringify(authUser))
-    .replace(/__ORG_TOKEN__/g, tokenForUser(req.user))
-    .replace('__PROJECT_SLUG__', JSON.stringify(projectSlug));
-  res.set('Content-Type', 'text/html; charset=utf-8');
-  res.send(html);
-}
-
-app.get('/:orgToken/:projectSlug/release.pipeline', requireAuth, (req, res) => {
-  const org = dataCrypto.decryptOrgToken(req.params.orgToken);
-  if (org !== req.user.organisation) {
-    return res.redirect(`/${tokenForUser(req.user)}/${req.params.projectSlug}/release.pipeline`);
-  }
-  renderReleasePipelinePage(req, res, { projectSlug: req.params.projectSlug });
-});
-
 // Brand new endpoint, brand new project: /{orgToken}/edit.studio
 app.get('/:orgToken/edit.studio', requireAuth, (req, res) => {
   const org = dataCrypto.decryptOrgToken(req.params.orgToken);
@@ -627,11 +575,6 @@ initDb()
     app.listen(PORT, () => {
       console.log(`DocTracker auth service listening on port ${PORT}`);
       startRetentionSchedule();
-      // The alert sweep. Separate from ingest-triggered evaluation on
-      // purpose: a collector that has stopped sends nothing, so the one
-      // condition worth waking someone for is the one an event-driven
-      // evaluator can never see. See server/alertEngine.js.
-      startAlertSchedule();
     });
   })
   .catch((err) => {

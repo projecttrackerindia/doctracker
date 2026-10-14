@@ -126,7 +126,7 @@ function requireAdmin(req, res, next) {
 }
 
 // Mounted after authenticate() on any router whose whole surface counts as
-// "using the workspace" (docs data, live-mode calls, PII rules, audit log) —
+// "using the workspace" (docs data, PII rules, audit log) —
 // not on routes/users.js, since that's Admin-only already and an admin must
 // always be able to reach it to extend someone's window. Responds 423
 // (Locked, not 403 Forbidden) specifically so the frontend can tell "you're

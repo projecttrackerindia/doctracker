@@ -15,7 +15,6 @@ const STORAGE_KEY_KNOWLEDGE = {
   apiStudio_authorRole: { purpose:'Legacy pre-login display role (ignored once signed in — the real role always comes from the server session)', classification:'INTERNAL', risk:'Low' },
   apiStudio_profileColor: { purpose:'Avatar color preference — not app data', classification:'PUBLIC', risk:'Low' },
   apiStudio_sidebarCollapsed: { purpose:'Sidebar collapsed/expanded UI state', classification:'PUBLIC', risk:'Low' },
-  apiStudio_autoSectionOpen: { purpose:'Sidebar "Auto-discovered APIs" section collapsed/expanded UI state', classification:'PUBLIC', risk:'Low' },
   apiStudio_migratedToServer_v1: { purpose:'One-time flag: has this browser\'s old local data been migrated to Postgres yet', classification:'INTERNAL', risk:'Low' },
   apiStudio_workspace_v1: { purpose:'Pre-Postgres workspace cache — should be empty post-migration; if present, migration may not have completed for this browser', classification:'CONFIDENTIAL', risk:'Medium' },
   apiStudio_auditLog: { purpose:'Pre-Postgres audit log cache — should be empty post-migration (audit is now server-authoritative)', classification:'CONFIDENTIAL', risk:'Medium' },
@@ -138,7 +137,7 @@ function renderSecurityCenter(main){
   const activeRules = (PII_CONFIG.rules||[]).filter(r=>r.enabled!==false).length;
   // A project owner who isn't an Admin can only reach here at all to review
   // documentation-access requests for their own project (see requireAdminOrProjectOwner
-  // server-side) — every other tab (PII rules, encryption, storage, Live Mode,
+  // server-side) — every other tab (PII rules, encryption, storage,
   // AI Studio) is genuinely org-wide Admin configuration, not something owning
   // one project should unlock.
   const allTabs = [
@@ -146,7 +145,6 @@ function renderSecurityCenter(main){
     { id:'pii', label:'PII & Data Masking', icon:SEC_TAB_ICON.pii, count:activeRules },
     { id:'encryption', label:'Encryption Keys', icon:SEC_TAB_ICON.encryption },
     { id:'storage', label:'Data Storage', icon:SEC_TAB_ICON.storage, count:(riskyCount||null) },
-    { id:'livemode', label:'Live Mode Access', icon:SEC_TAB_ICON.livemode },
     { id:'docaccess', label:'Documentation Access', icon:SEC_TAB_ICON.docaccess },
     { id:'ai', label:'AI Studio', icon:SEC_TAB_ICON.ai },
     { id:'usage', label:'Usage', icon:SEC_TAB_ICON.usage },
@@ -181,11 +179,6 @@ function renderSecurityCenter(main){
   main.querySelectorAll('[data-sec-tab]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       if(btn.getAttribute('data-sec-tab') === state.securityTab) return;
-      if(state.securityTab === 'livemode' && typeof _liveModeGrantsDirty !== 'undefined' && _liveModeGrantsDirty){
-        const ok = await openConfirmModal({ title:'Discard unsaved changes?', message:"You've checked or unchecked access boxes here that haven't been saved yet. Leaving this tab now will lose them.", confirmLabel:'Discard changes' });
-        if(!ok) return;
-        _liveModeGrantsDirty = false;
-      }
       state.securityTab = btn.getAttribute('data-sec-tab');
       renderSecurityCenter(main);
     });
@@ -207,7 +200,6 @@ function renderSecurityCenter(main){
   if(tab === 'summary') renderSecuritySummaryTab(body);
   else if(tab === 'pii') renderPiiRulesTab(body);
   else if(tab === 'encryption') renderEncryptionKeysTab(body);
-  else if(tab === 'livemode') renderLiveModeAccessTab(body);
   else if(tab === 'docaccess') renderDocAccessTab(body);
   else if(tab === 'ai') renderAiSettingsTab(body);
   else if(tab === 'usage') renderUsageTab(body);
@@ -244,7 +236,6 @@ const SEC_TAB_ICON = {
   pii: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a19.9 19.9 0 0 1 4.22-5.06M9.9 4.24A10.4 10.4 0 0 1 12 5c7 0 11 7 11 7a19.86 19.86 0 0 1-2.34 3.36"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>',
   storage: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg>',
   encryption: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>',
-  livemode: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"></path></svg>',
   docaccess: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>',
   ai: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z"></path><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15z"></path></svg>',
   usage: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><rect x="7" y="13" width="3" height="5"></rect><rect x="12" y="9" width="3" height="9"></rect><rect x="17" y="5" width="3" height="13"></rect></svg>',
@@ -1369,9 +1360,8 @@ async function adminAnalyticsApi(path){
   return data;
 }
 
-// Admin-only view of DocTracker's OWN usage — distinct from the
-// Observability console (which is entirely about monitored Mule
-// endpoints). Sourced from audit_logs via GET /api/admin/analytics/overview,
+// Admin-only view of DocTracker's OWN usage. Sourced from audit_logs via
+// GET /api/admin/analytics/overview,
 // which only counts audit-worthy actions (endpoint edits, PII reveals,
 // logins, ...), not every HTTP request — the labels here say "activity",
 // not "requests", so the tab doesn't claim to measure more than it does.
@@ -1441,216 +1431,6 @@ function renderUsageTab(body){
     });
   }).catch(e=>{
     body.innerHTML = `<div class="al-loading" style="padding:40px 0;text-align:center;color:var(--text-faint);font-size:13px;">Could not load usage analytics. ${escapeHtml(e.message||'')}</div>`;
-  });
-}
-
-async function liveModeApi(method, path, body){
-  const res = await fetch('/api/live-mode'+path, {
-    method, credentials:'same-origin',
-    headers: body ? { 'Content-Type':'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(()=>({}));
-  if(!res.ok) throw new Error(data.error || ('Request failed ('+res.status+')'));
-  return data;
-}
-
-/* Admin-only grid: which org members may fire a REAL request from Try It,
-   and against which environments. Independent of role — a Viewer can be
-   granted DEV, an Editor withheld from PROD — see server/routes/liveMode.js. */
-let _liveModeGrantsDirty = false;
-if(!window._liveModeUnloadGuardBound){
-  window._liveModeUnloadGuardBound = true;
-  window.addEventListener('beforeunload', (e)=>{
-    if(!_liveModeGrantsDirty) return;
-    e.preventDefault();
-    e.returnValue = '';
-  });
-}
-function liveModeMatchesQuery(u, q){
-  if(!q) return true;
-  return `${u.username} ${u.role}`.toLowerCase().includes(q);
-}
-// Two independent checkboxes per environment cell now, not one: Browse
-// (may see/switch to this environment's docs) and Live (may fire a REAL
-// request against it) — see loadBrowseGrants/loadGrants in
-// server/routes/liveMode.js. A live-fire grant implies browse (you can't
-// usefully test-fire something you can't even look at), so checking Live
-// auto-checks Browse and un-checking Browse auto-unchecks Live — enforced
-// in the change handler below, not just visually here.
-function renderLiveModeTableRows(users, environments, grants, browseGrants, q){
-  const filtered = users.filter(u=>liveModeMatchesQuery(u, q));
-  if(!filtered.length){
-    return `<tr><td colspan="${environments.length+1}" style="text-align:center;padding:28px 16px;color:var(--text-faint);">No users match "${escapeHtml(q)}"</td></tr>`;
-  }
-  return filtered.map(u=>{
-    const isFullAccess = u.role === 'admin';
-    return `<tr data-live-row="${u.id}" data-live-role="${escapeHtml(u.role)}">
-      <td style="padding:12px 20px;border-bottom:1px solid var(--border);white-space:nowrap;position:sticky;left:0;background:var(--surface);">${escapeHtml(u.username)} <span class="hint" style="margin:0;">${escapeHtml(u.role)}</span></td>
-      ${environments.map(e=>{
-        if(isFullAccess){
-          return `<td style="text-align:center;padding:12px 20px;border-bottom:1px solid var(--border);" title="Admins always have full environment access">
-            <span class="hint" style="margin:0;">Full access</span>
-          </td>`;
-        }
-        const restricted = !!e.restricted;
-        const isBrowse = (browseGrants[String(u.id)]||[]).includes(e.id);
-        const isLive = (grants[String(u.id)]||[]).includes(e.id);
-        const disabledAttr = restricted ? 'disabled title="'+escapeHtml(e.label||e.id)+' is restricted to Admins — grant it from that role instead"' : '';
-        return `<td style="text-align:center;padding:10px 20px;border-bottom:1px solid var(--border);white-space:nowrap;">
-          <label style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:var(--text-faint);margin-right:10px;" title="May browse this environment's docs">
-            <input type="checkbox" data-browse-grant-user="${u.id}" data-browse-grant-env="${escapeHtml(e.id)}" ${isBrowse?'checked':''} ${disabledAttr}> Browse
-          </label>
-          <label style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:var(--delete);" title="May send REAL requests against this environment from Try It">
-            <input type="checkbox" data-live-grant-user="${u.id}" data-live-grant-env="${escapeHtml(e.id)}" ${isLive?'checked':''} ${disabledAttr}> Live
-          </label>
-        </td>`;
-      }).join('')}
-    </tr>`;
-  }).join('');
-}
-function renderLiveModeAccessTab(body){
-  body.innerHTML = `<div class="al-loading" style="padding:40px 0;text-align:center;color:var(--text-faint);font-size:13px;">Loading Live mode access…</div>`;
-  _liveModeGrantsDirty = false;
-  liveModeApi('GET', '/grants').then(({ grants, browseGrants, users, environments })=>{
-    if(!environments.length){
-      body.innerHTML = `<div class="sec-card"><div class="s">No environments are configured for this organisation yet — add one from Your Profile first.</div></div>`;
-      return;
-    }
-    const safeBrowseGrants = browseGrants || {};
-    body.innerHTML = `
-      <div class="section" style="margin-bottom:18px;max-width:760px;">
-        <div class="sec-card" style="--sc-accent:var(--accent);">
-          <div class="s" style="line-height:1.6;">
-            Two separate grants per environment: <strong>Browse</strong> lets that person see and switch to it at all in the top-right switcher; <strong>Live</strong> additionally lets them send <strong>real</strong> requests from Try It against it — not simulated ones. Checking Live auto-checks Browse (you can't usefully test-fire something you can't look at); un-checking Browse clears Live too.
-          </div>
-        </div>
-      </div>
-      <div class="section" style="margin-bottom:18px;max-width:760px;">
-        <div class="sec-card" style="--sc-accent:var(--delete);">
-          <div class="s" style="line-height:1.6;">
-            This app never stores real credentials — a Live grant just means they'll be asked to enter their own at send time. Production and DR stay Admin-only no matter what's checked here.
-          </div>
-        </div>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
-        <input type="text" id="liveModeSearch" placeholder="Search by user or role…" autocomplete="off"
-          style="width:100%;max-width:320px;background:var(--bg-elevated);border:1px solid var(--border);color:var(--text);font-size:12.5px;padding:9px 13px;border-radius:10px;font-family:var(--sans);">
-        <span id="liveModeDirtyBadge" class="hint" style="margin:0;color:var(--put);display:none;">● Unsaved changes</span>
-      </div>
-      <div class="al-table-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:auto;width:100%;">
-        <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
-          <thead>
-            <tr>
-              <th style="text-align:left;padding:12px 20px;border-bottom:1px solid var(--border);color:var(--text-faint);font-size:10px;text-transform:uppercase;position:sticky;left:0;background:var(--surface);">User</th>
-              ${environments.map(e=>`<th style="text-align:center;padding:12px 20px;border-bottom:1px solid var(--border);color:var(--text-faint);font-size:10px;text-transform:uppercase;white-space:nowrap;">${escapeHtml(e.label||e.id)}</th>`).join('')}
-            </tr>
-            <tr>
-              <th style="padding:6px 20px 10px;border-bottom:1px solid var(--border);position:sticky;left:0;background:var(--surface);font-weight:400;color:var(--text-faint);font-size:10px;">Select all</th>
-              ${environments.map(e=>`<th style="text-align:center;padding:6px 20px 10px;border-bottom:1px solid var(--border);white-space:nowrap;">
-                <label style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--text-faint);margin-right:8px;">
-                  <input type="checkbox" data-browse-grant-col="${escapeHtml(e.id)}" ${e.restricted?'disabled title="Restricted to Admins"':''}> Browse
-                </label>
-                <label style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--delete);">
-                  <input type="checkbox" data-live-grant-col="${escapeHtml(e.id)}" ${e.restricted?'disabled title="Restricted to Admins"':''}> Live
-                </label>
-              </th>`).join('')}
-            </tr>
-          </thead>
-          <tbody id="liveModeTableBody">${renderLiveModeTableRows(users, environments, grants, safeBrowseGrants, '')}</tbody>
-        </table>
-      </div>
-      <button type="button" class="primary" id="btnSaveLiveModeGrants" style="margin-top:16px;">Save access</button>
-    `;
-
-    const dirtyBadge = document.getElementById('liveModeDirtyBadge');
-    const markDirty = ()=>{ _liveModeGrantsDirty = true; dirtyBadge.style.display = ''; };
-    // A row's Live checkbox implies Browse — checking Live force-checks
-    // Browse; un-checking Browse force-unchecks Live. Applied via event
-    // delegation on the tbody (rows get replaced wholesale on every
-    // search/filter re-render, see the search handler below), not one
-    // listener per checkbox.
-    const wireRowCheckboxes = ()=>{
-      body.querySelectorAll('[data-live-grant-user], [data-browse-grant-user]').forEach(cb=>{
-        cb.addEventListener('change', ()=>{
-          const row = cb.closest('[data-live-row]');
-          if(!row) return;
-          if(cb.hasAttribute('data-live-grant-user') && cb.checked){
-            const browseCb = row.querySelector(`[data-browse-grant-env="${cb.getAttribute('data-live-grant-env')}"]`);
-            if(browseCb && !browseCb.checked) browseCb.checked = true;
-          }
-          if(cb.hasAttribute('data-browse-grant-user') && !cb.checked){
-            const liveCb = row.querySelector(`[data-live-grant-env="${cb.getAttribute('data-browse-grant-env')}"]`);
-            if(liveCb && liveCb.checked) liveCb.checked = false;
-          }
-        });
-      });
-      body.querySelectorAll('[data-live-grant-user], [data-browse-grant-user]').forEach(cb=>{
-        cb.addEventListener('change', markDirty);
-      });
-    };
-    wireRowCheckboxes();
-
-    // Column "select all" — only ever touches the currently-visible (search-
-    // filtered), non-admin, non-restricted checkboxes in that column, so it
-    // can't silently grant an environment to someone hidden by the filter.
-    // Checking the Live column header also force-checks that row's Browse
-    // box (via the change listener wired above); un-checking the Browse
-    // column header force-unchecks Live the same way.
-    body.querySelectorAll('[data-live-grant-col], [data-browse-grant-col]').forEach(colCb=>{
-      colCb.addEventListener('change', ()=>{
-        const isLive = colCb.hasAttribute('data-live-grant-col');
-        const envId = colCb.getAttribute(isLive ? 'data-live-grant-col' : 'data-browse-grant-col');
-        const selector = isLive ? `[data-live-grant-env="${envId}"]` : `[data-browse-grant-env="${envId}"]`;
-        body.querySelectorAll(selector).forEach(cb=>{
-          if(cb.disabled) return;
-          cb.checked = colCb.checked;
-          cb.dispatchEvent(new Event('change', { bubbles:false }));
-        });
-        markDirty();
-      });
-    });
-
-    const collectDraft = ()=>{
-      const grantsDraft = {}, browseDraft = {};
-      body.querySelectorAll('[data-live-grant-user]').forEach(cb=>{
-        if(!cb.checked) return;
-        (grantsDraft[cb.getAttribute('data-live-grant-user')] = grantsDraft[cb.getAttribute('data-live-grant-user')] || []).push(cb.getAttribute('data-live-grant-env'));
-      });
-      body.querySelectorAll('[data-browse-grant-user]').forEach(cb=>{
-        if(!cb.checked) return;
-        (browseDraft[cb.getAttribute('data-browse-grant-user')] = browseDraft[cb.getAttribute('data-browse-grant-user')] || []).push(cb.getAttribute('data-browse-grant-env'));
-      });
-      return { grantsDraft, browseDraft };
-    };
-
-    const searchInput = document.getElementById('liveModeSearch');
-    searchInput.addEventListener('input', ()=>{
-      // Collect in-progress (unsaved) checkbox state before re-rendering
-      // rows, so filtering never discards a change the admin just made.
-      const { grantsDraft, browseDraft } = collectDraft();
-      const q = searchInput.value.trim().toLowerCase();
-      document.getElementById('liveModeTableBody').innerHTML = renderLiveModeTableRows(users, environments, grantsDraft, browseDraft, q);
-      wireRowCheckboxes();
-    });
-
-    document.getElementById('btnSaveLiveModeGrants').addEventListener('click', async ()=>{
-      const btn = document.getElementById('btnSaveLiveModeGrants');
-      const { grantsDraft: next, browseDraft: nextBrowse } = collectDraft();
-      btn.disabled = true; btn.textContent = 'Saving…';
-      try{
-        await liveModeApi('PUT', '/grants', { grants: next, browseGrants: nextBrowse });
-        toast('Environment access updated');
-        _liveModeGrantsDirty = false;
-        dirtyBadge.style.display = 'none';
-      }catch(e){
-        toast(e.message || 'Could not save Live mode access');
-      } finally {
-        btn.disabled = false; btn.textContent = 'Save access';
-      }
-    });
-  }).catch(e=>{
-    body.innerHTML = `<div class="al-loading" style="padding:40px 0;text-align:center;color:var(--text-faint);font-size:13px;">Could not load Live mode access. ${escapeHtml(e.message||'')}</div>`;
   });
 }
 

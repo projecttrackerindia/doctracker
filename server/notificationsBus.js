@@ -3,21 +3,15 @@
 // changes, alert firing/resolving — anything that already goes through
 // server/notifications.js).
 //
-// Deliberately a SEPARATE module from server/observabilityBus.js rather than
-// a reuse of it, for two reasons:
-//   1. Notifications are scoped per RECIPIENT (`organisation:userId`), not
-//      per organisation — an org-wide channel would mean every open tab in
-//      the org receives every user's notification and has to filter its own
-//      out client-side, which is a data-exposure smell (e.g. "so-and-so's
-//      Live Mode grants changed" leaking to every browser in the org) for no
-//      real benefit, since the actual subscriber set is always one user.
-//   2. It keeps notification traffic off the same Redis channel/local Map as
-//      metrics traffic, so a busy Observability agent push and a quiet
-//      notification stream never contend for the same Set of callbacks.
+// Scoped per RECIPIENT (`organisation:userId`), not per organisation — an
+// org-wide channel would mean every open tab in the org receives every
+// user's notification and has to filter its own out client-side, which is a
+// data-exposure smell (e.g. "so-and-so's doc-access request was approved"
+// leaking to every browser in the org) for no real benefit, since the actual
+// subscriber set is always one user.
 //
-// Otherwise this is the exact same shape as observabilityBus.js: an
-// in-process Map of subscribers, relayed through Redis pub/sub when
-// REDIS_URL is set so a push landing on one instance still reaches a
+// Shape: an in-process Map of subscribers, relayed through Redis pub/sub
+// when REDIS_URL is set so a push landing on one instance still reaches a
 // subscriber connected to a different one, and pure in-process fan-out
 // (correct for a single-instance deploy) when it isn't.
 // ============================================================================

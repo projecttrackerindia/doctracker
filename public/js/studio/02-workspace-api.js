@@ -15,7 +15,7 @@ async function apiGet(path){
 // Production/...), not whether a project has a base URL saved for it. See
 // GET /api/workspace/environment-metrics. Cached on `state` and re-fetched
 // on demand; renderControlCenter() kicks this off and re-renders once it
-// lands, same "Loading…" -> fill-in pattern used by the release pipeline panel.
+// lands.
 async function loadEnvironmentMetrics(){
   state.envMetricsStatus = 'loading';
   try{
@@ -25,7 +25,7 @@ async function loadEnvironmentMetrics(){
     console.error('Failed to load environment metrics:', err);
     state.envMetricsStatus = 'error';
   }
-  if(state.selected.type === 'home' || state.selected.type === 'releasepipeline'){
+  if(state.selected.type === 'home'){
     renderMain();
   }
 }

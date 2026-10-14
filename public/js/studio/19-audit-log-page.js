@@ -1,6 +1,6 @@
 /* ==================== SECTION:TAB-LINKS ====================
    "Open in a new tab" URL-builders/launchers for the editor, Try It,
-   Architecture Studio, Release Pipeline, and the audit log — all sharing
+   Architecture Studio, and the audit log — all sharing
    the signed-in session cookie, authenticated the same way the main tab is
    (server.js), just addressed via a bookmarkable /<orgToken>/... URL
    instead of routed through this page's own SPA state. Renamed from
@@ -72,17 +72,6 @@ function buildArchitectureStudioUrl(proj){
 function openArchitectureStudioTab(proj){
   const w = window.open(buildArchitectureStudioUrl(proj), '_blank');
   if(!w){ toast('Please allow popups to open Architecture Studio in a new tab.'); }
-}
-// Release Pipeline v2 (server/views/release-pipeline.html) — opens in its
-// own tab the same way, from Project settings ▸ Release Pipeline. All the
-// actual promote/rollback/diff/history reads and writes go through the
-// existing /api/workspace/projects/:id/* routes; this is just the shell.
-function buildReleasePipelineUrl(proj){
-  return `/${ORG_TOKEN}/${slugify(proj.name)}/release.pipeline`;
-}
-function openReleasePipelineTab(proj){
-  const w = window.open(buildReleasePipelineUrl(proj), '_blank');
-  if(!w){ toast('Please allow popups to open the Release Pipeline in a new tab.'); }
 }
 // "Open in Swagger Editor" — mints a signed, 10-minute public link to this
 // project's combined OpenAPI spec (POST /projects/:id/openapi-link, see

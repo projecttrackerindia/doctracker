@@ -4,14 +4,13 @@ const { authenticate, requireAdmin, blockIfScheduleLocked } = require('../middle
 const { recordAuditEvent } = require('../auditService');
 const { createRateLimiter } = require('../rateLimitStore');
 const workspace = require('./workspace');
-const { grantCoversEnvironment } = require('../projectAccess');
 
 const router = express.Router();
 router.use(authenticate);
 router.use(blockIfScheduleLocked);
 
 // Tight — a real workflow reveals a handful of times per session, not
-// dozens; matches the caution already applied to Live Mode/AI generation.
+// dozens; matches the caution already applied to AI generation.
 const revealLimiter = createRateLimiter({
   windowMs: 60 * 1000,
   max: 20,
@@ -26,7 +25,11 @@ const STRATEGIES = ['full', 'last2', 'last4', 'first2last2', 'email', 'secret', 
 const DEFAULT_SETTINGS = {
   automaticProtection: true,
   revealTimeoutSeconds: 60,
-  environmentPolicy: { PROD: 'strict', PREPROD: 'strict', UAT: 'mask', SIT: 'mask', DEV: 'configurable' },
+  // Pre-collapse this was a map of five environment ids (PROD/PREPROD/UAT/
+  // SIT/DEV) to a masking strictness. There's only one environment now, so
+  // it defaults conservatively (same strictness the old PROD/PREPROD keys
+  // had) rather than carrying over the old multi-key shape.
+  environmentPolicy: { default: 'strict' },
   surfaces: { params: true, headers: true, body: true, pdfExport: true },
 };
 
@@ -172,7 +175,7 @@ router.post('/rules', requireAdmin, async (req, res) => {
         body.charsToKeep != null ? body.charsToKeep : 4,
         (body.maskChar || '*').slice(0, 1) || '*',
         JSON.stringify(Array.isArray(body.applyTo) ? body.applyTo : ['params', 'headers', 'body', 'pdfExport']),
-        JSON.stringify(Array.isArray(body.environments) ? body.environments : ['PROD', 'PREPROD', 'UAT', 'SIT', 'DEV']),
+        JSON.stringify(Array.isArray(body.environments) ? body.environments : ['default']),
         body.enabled !== false,
         req.authUser.sub,
       ]
@@ -211,7 +214,7 @@ router.put('/rules/:id', requireAdmin, async (req, res) => {
         body.charsToKeep != null ? body.charsToKeep : 4,
         (body.maskChar || '*').slice(0, 1) || '*',
         JSON.stringify(Array.isArray(body.applyTo) ? body.applyTo : ['params', 'headers', 'body', 'pdfExport']),
-        JSON.stringify(Array.isArray(body.environments) ? body.environments : ['PROD', 'PREPROD', 'UAT', 'SIT', 'DEV']),
+        JSON.stringify(Array.isArray(body.environments) ? body.environments : ['default']),
         body.enabled !== false,
         req.params.id,
         req.authUser.organisation,
@@ -287,7 +290,7 @@ router.post('/reveal/:projectId', revealLimiter, requireAdmin, async (req, res) 
     let grant = null;
     if (!isOwner) {
       const { rows: grantRows } = await pool.query(
-        `SELECT environments, permission FROM project_access WHERE project_id = $1 AND user_id = $2`,
+        `SELECT permission FROM project_access WHERE project_id = $1 AND user_id = $2`,
         [project.id, userId]
       );
       if (grantRows.length) grant = grantRows[0];
@@ -295,16 +298,15 @@ router.post('/reveal/:projectId', revealLimiter, requireAdmin, async (req, res) 
     if (!isOwner && !grant && project.visibility !== 'public' && !project.has_public_endpoint) {
       return res.status(404).json({ error: 'Project not found.' });
     }
-    if (grant && !grantCoversEnvironment(grant.environments, environmentId)) {
-      return res.status(403).json({ error: 'You do not have access to this environment for this project.' });
-    }
-
-    const allEnvs = await workspace.getOrgEnvironments(project.organisation);
-    const stages = workspace.pipelineStages(allEnvs);
-    const idx = stages.findIndex((e) => e.id === environmentId);
-    if (idx < 0) return res.status(400).json({ error: 'Unknown environment.' });
-
-    const stageData = await workspace.loadStageData(project, environmentId, idx);
+    // A project_access grant used to be scopeable to specific environments
+    // (grantCoversEnvironment) — now that there is only one environment, any
+    // grant at all covers it, so that check is gone (environment collapse
+    // cluster). `environmentId` is still accepted/echoed for client
+    // backward-compat but no longer resolves against a pipeline stage —
+    // there's only ever the one live draft to reveal (project_env_versions,
+    // the table that held promoted-stage snapshots, was dropped in an
+    // earlier cluster — see migrations/sql/0007_drop_release_pipeline.sql).
+    const stageData = workspace.loadStageData(project);
     let endpoints = Array.isArray(stageData.endpoints) ? stageData.endpoints : [];
 
     // Same visibility narrowing as the masked read paths — reveal makes

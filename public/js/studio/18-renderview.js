@@ -83,9 +83,8 @@ function tryItSetRespSize(text){
 /* ---------- Response tabs: Body / Headers / Test Results ----------
    Same idea as the request-side tabs, scoped to the result card. Headers
    and Test Results are only ever populated with real data — synthesized
-   from what this send actually produced (a real fetch's real headers in
-   Live mode, or the one thing we can honestly say about a simulated
-   response: what content type its documented body is) — never guessed. */
+   from the one thing we can honestly say about a simulated response: what
+   content type its documented body is — never guessed. */
 function activateTryItRespTab(name){
   document.querySelectorAll('#tryItRespTabs [data-resptab]').forEach(btn=>{
     btn.classList.toggle('active', btn.getAttribute('data-resptab') === name);
@@ -418,31 +417,11 @@ function openTryItModal(proj, ep, restoreFromSaved){
   // Params, matching what a person actually needs to look at first.
   activateTryItTab(namedRequestExamples.length ? 'body' : 'params');
 
-  // Live mode: only offered at all when an Admin has granted THIS user
-  // access to THIS environment (see /api/live-mode/my-access, loaded once at
-  // boot into state.liveModeEnvs) — never shown as a dead/disabled control
-  // to someone who couldn't use it anyway.
-  const liveWrap = document.getElementById('tryItLiveWrap');
-  const liveToggle = document.getElementById('tryItLiveToggle');
-  const canGoLive = Array.isArray(state.liveModeEnvs) && state.liveModeEnvs.includes(state.env);
-  liveWrap.style.display = canGoLive ? 'flex' : 'none';
-  liveToggle.checked = false; // always opens back to simulated — never remembers "live" as a default
   tryItContext.headerRows = buildInitialHeaderRows(proj, ep);
   renderTryItHeadersTable();
   renderTryItVariablesTable();
   closeTryItHistoryPanel();
   renderTryItHistoryBadge();
-  liveToggle.onchange = () => {
-    // Flipping the toggle either way clears any typed value for the secret
-    // (auth) row — this app never carries a real credential across modes,
-    // so re-entering Live always starts that field blank again.
-    tryItContext.headerRows.forEach(r=>{ if(r.isSecret) r.value = ''; });
-    renderTryItHeadersTable();
-    // Turning Live on means the very next thing this person needs to do is
-    // fill in a real credential — jump them straight to where that input
-    // lives instead of leaving them on whichever tab they happened to be on.
-    if(liveToggle.checked) activateTryItTab('headers');
-  };
 
   document.getElementById('tryItModal').classList.add('show');
 
@@ -488,14 +467,9 @@ function openTryItModal(proj, ep, restoreFromSaved){
    the cURL/code samples elsewhere in the app, so "documented headers" is
    never a second, drifting source of truth — but from there every cell
    (key/value/description), the checkbox, and an add/delete row are fully
-   live-editable, exactly like a real Postman request.
-     - simulated (Live off): values start as the documented example, masked
-       the same way as the rest of the app; editing them only changes what
-       the "Request sent" preview below shows.
-     - live (toggle on): the exact same table IS the outbound request. The
-       one row tied to this project's auth header is always blanked out
-       when Live turns on — this app never stores a real credential, so
-       that field is supplied fresh for this one send only. */
+   live-editable, exactly like a real Postman request. Values start as the
+   documented example, masked the same way as the rest of the app; editing
+   them only changes what the "Request sent" preview below shows. */
 function makeEmptyHeaderRow(){ return { key:'', value:'', description:'', enabled:true, deletable:true, isSecret:false, required:false, error:false, ghost:true }; }
 
 function buildInitialHeaderRows(proj, ep){
@@ -511,9 +485,7 @@ function renderTryItHeadersTable(){
   if(!tryItContext) return;
   const rows = tryItContext.headerRows;
   const tableEl = document.getElementById('tryItHeadersReadonly');
-  const liveOn = document.getElementById('tryItLiveToggle').checked;
   const genTok = tryItContext.generatedToken;
-  const proj = tryItContext.proj;
   const realCount = rows.filter(r=>!r.ghost && r.key).length;
 
   const countBadge = document.getElementById('tryItHeadersCount');
@@ -526,7 +498,7 @@ function renderTryItHeadersTable(){
       ${rows.map((r,i)=>{
         const isGhost = !!r.ghost;
         let shownVal = r.value;
-        if(!isGhost && r.isSecret && !liveOn && genTok){
+        if(!isGhost && r.isSecret && genTok){
           shownVal = maskSecretValue(r.value.toLowerCase().startsWith('bearer') ? `Bearer ${genTok}` : genTok);
         }
         return `<div class="tryit-headers-trow${(!isGhost && !r.enabled)?' disabled':''}${isGhost?' ghost':''}${r.error?' error':''}" data-row-idx="${i}">
@@ -535,22 +507,20 @@ function renderTryItHeadersTable(){
             <input type="text" class="tryit-table-input mono" data-hdr-field="key" placeholder="${isGhost?'Key':''}" value="${escapeHtml(r.key)}">
             ${(!isGhost && r.required) ? '<span class="req-star" title="This header is documented as required for this endpoint">*</span>' : ''}
           </div>
-          <input type="text" class="tryit-table-input mono" data-hdr-field="value" placeholder="${isGhost?'Value':(!isGhost && r.isSecret && liveOn ? authHeaderValue(proj) : '')}" value="${escapeHtml(shownVal)}">
+          <input type="text" class="tryit-table-input mono" data-hdr-field="value" placeholder="${isGhost?'Value':''}" value="${escapeHtml(shownVal)}">
           <input type="text" class="tryit-table-input" data-hdr-field="description" placeholder="${isGhost?'Description':''}" value="${escapeHtml(r.description)}">
           ${isGhost ? '<span></span>' : '<button type="button" class="tryit-row-delete" data-hdr-del title="Delete header">✕</button>'}
         </div>`;
       }).join('')}
     </div>
-    ${(proj.auth && proj.auth.headerName && liveOn) ? `<div class="tryit-live-banner">This app never stores real credentials — the <span class="mono">${escapeHtml(proj.auth.headerName)}</span> value you type above is used for this one send only, never saved.</div>` : ''}
   `;
 }
 
 // Collects the headers Try It will actually send: every non-ghost, enabled
 // row with a key, in table order, with any {{variable}} in the value
-// resolved. Used by both the simulated preview and the live-mode send, so
-// there is exactly one place that decides "what headers go out", not three
-// copies of the same filter. Returns copies (not the live rows) so
-// resolution never mutates what's shown in the editable table itself.
+// resolved — the one place that decides "what headers go out" for the
+// simulated preview. Returns copies (not the live rows) so resolution never
+// mutates what's shown in the editable table itself.
 function collectTryItHeaders(){
   if(!tryItContext) return [];
   const vars = tryitCollectionVariables();
@@ -913,7 +883,7 @@ function closeTryItModal(){
    (PER-USER, never shipped to any other user — see the tryitTeamVariables/
    tryitPersonalVariables comment above), organized by a freeform folder
    name. Never captures a real credential: the auth/secret header's value is
-   stripped the same way it already is every time Live mode is toggled on. */
+   always stripped before saving. */
 function tryitTeamSavedRequests(){
   return (state.tryitCollections && Array.isArray(state.tryitCollections.saved)) ? state.tryitCollections.saved : [];
 }
@@ -966,8 +936,8 @@ document.getElementById('tryItSaveReqOk').addEventListener('click', ()=>{
     projectId: proj.id, endpointId: ep.id, method: ep.method, path: ep.path,
     pathRows: (tryItContext.pathRows||[]).map(r=>({ key:r.key, value:r.value })),
     queryRows: (tryItContext.queryRows||[]).filter(r=>!r.ghost && r.key).map(r=>({ ...r })),
-    // Never save the real value of a secret/auth header — same "this app
-    // never stores a real credential" rule Live mode already follows.
+    // Never save the real value of a secret/auth header — this app never
+    // stores a real credential.
     headerRows: (tryItContext.headerRows||[]).filter(r=>!r.ghost && r.key).map(r=>({ ...r, value: r.isSecret ? '' : r.value })),
     bodyText: document.getElementById('tryItTabBtnBody').style.display !== 'none' ? document.getElementById('tryItBodyInput').value : '',
     scenarioName: tryItSelectedScenarioName() || null,
@@ -982,7 +952,7 @@ document.getElementById('tryItSaveReqOk').addEventListener('click', ()=>{
 // Loads a saved request back into Try It — the endpoint it was saved
 // against must still exist (a saved request references it by id, not a
 // standalone copy of its docs) since it's replayed against that endpoint's
-// current live documentation, params, and Live-mode eligibility.
+// current live documentation and params.
 function loadSavedTryItRequest(entry){
   const proj = state.projects[entry.projectId];
   const ep = proj && (proj.endpoints||[]).find(e=>e.id === entry.endpointId);
@@ -1068,12 +1038,7 @@ document.getElementById('tryItSidebarSaved').addEventListener('click', (e)=>{
    sidebar already calls) to load it, clicks the real Send button, waits for
    the simulated 450ms "network delay" sendTryIt() already uses, then reads
    the outcome straight off the same DOM sendTryIt() itself renders into.
-   Zero duplicated request-matching/scenario logic to drift out of sync.
-   Deliberately Simulated-only: openTryItModal() always reopens with the
-   Live toggle off (see its own comment), and Live mode requires a fresh,
-   hand-typed credential per send anyway — neither saved requests nor a
-   batch runner can carry a real credential forward, by the same rule Live
-   mode already enforces everywhere else in this file. */
+   Zero duplicated request-matching/scenario logic to drift out of sync. */
 async function tryitRunnerFireSingle(){
   const sendBtn = document.getElementById('tryItSend');
   if(sendBtn.disabled) return { outcome:'blocked' }; // a required field failed sendTryIt()'s own validation and toasted instead of sending
@@ -1152,7 +1117,7 @@ document.getElementById('tryItRunnerModal').addEventListener('click', (e)=>{ if(
    this response (e.g. a login's access_token) and reuse it in the next
    request — without running arbitrary JS. Works off whatever JSON the
    response card is currently showing (tryItLastResponseJson, set at the end
-   of both sendTryIt's matched branch and sendTryItLive). */
+   of sendTryIt's matched branch). */
 let tryItLastResponseJson = null;
 
 // Flattens a JSON value into dot-path leaf fields for the picker — e.g.
@@ -1463,15 +1428,6 @@ function sendTryIt(){
     }
   }
 
-  // Live mode takes a completely separate path — no scenario matching, no
-  // simulated latency, a real outbound call via the server-side proxy. See
-  // sendTryItLive(). Only reachable at all when the toggle is visible, which
-  // only happens when this user has a Live mode grant for this environment.
-  if(document.getElementById('tryItLiveToggle').checked){
-    sendTryItLive(proj, ep, typedBody);
-    return;
-  }
-
   sendBtn.disabled = true;
   sendBtn.classList.add('loading');
   document.getElementById('tryItSendLabel').textContent = 'Sending…';
@@ -1651,139 +1607,6 @@ function sendTryIt(){
 /* One-level field diff for the Try It "Not documented" empty state —
    deliberately shallow (nested objects/arrays are compared as whole values,
    not key-by-key) since this drives a human-readable summary, not a merge. */
-/* Live mode: an actual outbound HTTP call via the server-side proxy
-   (POST /api/live-mode/send), gated entirely server-side by that user's
-   grant for this environment — the toggle is only ever visible client-side
-   when state.liveModeEnvs already says they have one, but the server checks
-   again regardless. Deliberately its own code path rather than a branch
-   inside the simulate flow below: no scenario matching, no simulated
-   latency, and a visually distinct "not simulated" result so it can never
-   be mistaken for a documented example. */
-async function sendTryItLive(proj, ep, typedBody){
-  const sendBtn = document.getElementById('tryItSend');
-
-  // The auth header is never pre-filled with a real value (this app doesn't
-  // store one) — block before even asking for confirmation if it's still empty.
-  const headerRowsForSend = collectTryItHeaders();
-  const headersObj = {};
-  const secretHeaderNames = new Set();
-  let missingAuth = false;
-  headerRowsForSend.forEach(r=>{
-    if(r.isSecret) secretHeaderNames.add(r.key);
-    if(r.isSecret && !r.value.trim()) missingAuth = true;
-    else headersObj[r.key] = r.value;
-  });
-  if(missingAuth){ toast('Enter your real credential before sending live.'); renderTryItHeadersTable(); return; }
-
-  if(!state._liveModeConfirmedOnce){
-    const ok = await openConfirmModal({
-      title: `Send a REAL request to ${envMeta(state.env).label}?`,
-      message: `This leaves the simulator and hits the actual ${envMeta(state.env).label} endpoint — it can have real side effects (e.g. creating a real order). Every other Try It response is simulated; this one won't be.`,
-      confirmLabel: 'Send for real',
-    });
-    if(!ok) return;
-    state._liveModeConfirmedOnce = true;
-  }
-
-  if(!state._liveModeDeprecatedConfirmed) state._liveModeDeprecatedConfirmed = new Set();
-  if(DocMeta.endpointStatusOf(ep) === 'deprecated' && !state._liveModeDeprecatedConfirmed.has(ep.id)){
-    const ok = await openConfirmModal({
-      title: 'This endpoint is deprecated',
-      message: `${ep.method} ${ep.path} is marked Deprecated. It may still work, but shouldn't be used for new integrations — send anyway?`,
-      confirmLabel: 'Send anyway',
-    });
-    if(!ok) return;
-    state._liveModeDeprecatedConfirmed.add(ep.id);
-  }
-
-  sendBtn.disabled = true;
-  sendBtn.classList.add('loading');
-  document.getElementById('tryItSendLabel').textContent = 'Sending…';
-  const { pathParams, queryParams: queryParamPairs } = collectTryItParams();
-  const queryParams = {};
-  queryParamPairs.forEach(([k,v])=>{ queryParams[k] = v; });
-
-  const resultEl = document.getElementById('tryItResult');
-  const resultCardEl = document.getElementById('tryItResultCard');
-  const bodyEl = document.getElementById('tryItResponseBody');
-  const codeEl = document.getElementById('tryItStatusCode');
-  const latencyEl = document.getElementById('tryItLatency');
-  document.getElementById('tryItMatchNote').textContent = '';
-  document.getElementById('tryItNotDocCard').style.display = 'none';
-  resultCardEl.style.display = '';
-
-  // Never echo real credential values back onto the screen, even though they
-  // were just sent — same secret-masking strategy used everywhere else.
-  const previewHeaderLines = Object.entries(headersObj).map(([k,v])=>
-    `${k}: ${secretHeaderNames.has(k) ? maskSecretValue(v) : v}`
-  );
-  document.getElementById('tryItRequestPreview').textContent =
-    [`${ep.method} ${envVarToken(state.env)}${pathWithParams(ep)}`, ...previewHeaderLines, ...(typedBody!==null ? ['', JSON.stringify(typedBody, null, 2)] : [])].join('\n');
-
-  try{
-    const res = await fetch('/api/live-mode/send', {
-      method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ projectId: proj.id, endpointId: ep.id, environmentId: state.env, pathParams, queryParams, headers: headersObj, body: typedBody, confirmDeprecated: DocMeta.endpointStatusOf(ep) === 'deprecated' }),
-    });
-    const data = await res.json().catch(()=>({}));
-    tryItResetRespTabs();
-    if(!res.ok){
-      codeEl.textContent = String(res.status);
-      codeEl.className = 'code-pill ' + respClass(res.status);
-      resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(res.status)})`);
-      bodyEl.textContent = data.error || 'The live request failed.';
-      tryItLastResponseJson = null;
-      latencyEl.textContent = '';
-      tryItSetRespSize(bodyEl.textContent);
-      renderTryItResponseHeaders(data.headers || {});
-      renderTryItTestResults([
-        { name: 'Status code is 2xx', pass: false, detail: `Actually received ${res.status}.` },
-      ]);
-      pushTryItHistory(ep, {
-        method: ep.method, path: ep.path, status: res.status, timeMs: null,
-        note: `${ep.path} — 🔴 live, failed`, bodyText: bodyEl.textContent,
-        requestPreview: document.getElementById('tryItRequestPreview').textContent, timestamp: Date.now(),
-      });
-    } else {
-      codeEl.textContent = String(data.status);
-      codeEl.className = 'code-pill ' + respClass(data.status);
-      resultCardEl.style.setProperty('--item-accent', `var(${respColorVar(data.status)})`);
-      // A live response is real backend data, not a documented example — it
-      // gets the SAME field-name/value-shape PII masking as every other
-      // render surface in the app (maskJsonExampleDeep), not a free pass
-      // just because it came back from a real call. tryItLastResponseJson
-      // keeps the REAL value (needed for "Save response as variable" to be
-      // useful — a masked token is not a usable token) but the visible body
-      // and what gets written into the shared request-history blob are
-      // masked unless this viewer has already revealed sensitive values
-      // (sensitiveRevealed() — same Admin-only toggle used everywhere else).
-      tryItLastResponseJson = (data.body !== null && typeof data.body === 'object') ? data.body : null;
-      const displayBody = tryItLastResponseJson !== null ? maskJsonExampleDeep(tryItLastResponseJson) : data.body;
-      bodyEl.textContent = typeof data.body === 'string' ? data.body : JSON.stringify(displayBody, null, 2);
-      tryItSetRespSize(bodyEl.textContent);
-      latencyEl.textContent = `🔴 Live response from ${envMeta(state.env).label} · ${data.latencyMs} ms — not simulated`;
-      renderTryItResponseHeaders(data.headers || {});
-      renderTryItTestResults([
-        { name: 'Status code is 2xx', pass: data.status >= 200 && data.status < 300, detail: `Received ${data.status}.` },
-        { name: 'Response time is below 1000ms', pass: data.latencyMs < 1000, detail: `Actual: ${data.latencyMs} ms.` },
-        { name: 'Response has a body', pass: !!(bodyEl.textContent && bodyEl.textContent.trim()), detail: null },
-      ]);
-      pushTryItHistory(ep, {
-        method: ep.method, path: ep.path, status: data.status, timeMs: data.latencyMs,
-        note: `${ep.path} — 🔴 live`, bodyText: bodyEl.textContent,
-        requestPreview: document.getElementById('tryItRequestPreview').textContent, timestamp: Date.now(),
-      });
-    }
-    resultEl.style.display = '';
-    document.getElementById('tryItEmptyState').style.display = 'none';
-  }catch(e){
-    toast('The live request failed — ' + (e.message || 'network error'));
-  } finally {
-    sendBtn.disabled = false;
-    sendBtn.classList.remove('loading');
-    document.getElementById('tryItSendLabel').textContent = 'Send';
-  }
-}
 
 function describeJsonDiff(documented, sent){
   if(typeof documented !== 'object' || documented === null || typeof sent !== 'object' || sent === null) return [];
@@ -1813,9 +1636,8 @@ function buildTryItResolvedRequestPreview(proj, ep, typedBody){
   // Headers tab shows — this preview is never a second, drifting source of
   // truth for "what headers go out".
   const genTok = tryItContext && tryItContext.generatedToken;
-  const liveOn = document.getElementById('tryItLiveToggle').checked;
   const lines = [`${ep.method} ${url}`, ...collectTryItHeaders().map(r=>{
-    const shown = (r.isSecret && !liveOn && genTok)
+    const shown = (r.isSecret && genTok)
       ? maskSecretValue(r.value.toLowerCase().startsWith('bearer') ? `Bearer ${genTok}` : genTok)
       : r.value;
     return `${r.key}: ${shown}`;

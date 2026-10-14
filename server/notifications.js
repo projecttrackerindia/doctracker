@@ -4,7 +4,7 @@ const liveBus = require('./notificationsBus');
 // Single place that ever writes to `notifications` — same pattern as
 // auditService.recordAuditEvent, and deliberately called from the exact
 // spots that already call recordAuditEvent for these actions (doc-access
-// request/approve/deny/revoke, live-mode grant changes, project-access
+// request/approve/deny/revoke, project-access
 // shares, new accounts), so this is fan-out to a recipient's inbox, not a
 // new, separately-maintained instrumentation surface.
 //
@@ -22,8 +22,7 @@ async function notifyUser(userId, { organisation, type, title, body = null, link
   );
   const row = rows[0];
   // Fire-and-forget: a live-push failure must never turn an already-committed
-  // notification write into a reported error for the caller. Same discipline
-  // as observabilityBus.publish (see its own header comment).
+  // notification write into a reported error for the caller.
   try {
     liveBus.publish(organisation, userId, row);
   } catch (err) {

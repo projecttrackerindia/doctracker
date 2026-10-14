@@ -725,28 +725,6 @@ function insertAtCursor(textarea, text){
    URLs, the read-only cards on the Overview page) — it's just no longer
    editable from this modal. */
 
-/* ---------- Release Pipeline (Project settings ▸ Release Pipeline) ----------
-   The actual promote/diff/merge-history/rollback UI moved to its own
-   full-page tab (server/views/release-pipeline.html, opened via
-   openReleasePipelineTab() — same pattern as Architecture Studio). All
-   this modal shows now is a one-line status so it's obvious at a glance
-   whether anything needs attention before opening that tab. */
-async function renderReleaseStatus(proj){
-  const el = document.getElementById('projReleaseStatus');
-  if(!el) return;
-  el.textContent = 'Loading…';
-  let data;
-  try{ data = await apiGet(`/projects/${encodeURIComponent(proj.id)}/versions`); }
-  catch(e){
-    el.textContent = 'Could not load release pipeline status.';
-    return;
-  }
-  const stages = data.stages || [];
-  const summary = stages.map(s=> s.isDraftStage ? data.draftLabel : (s.versionLabel || 'nothing promoted')).join(' → ');
-  const lastPromoted = stages.slice().reverse().find(s=>!s.isDraftStage && s.promotedAt);
-  el.textContent = summary + (lastPromoted ? ` · last promotion: ${lastPromoted.label} by ${lastPromoted.promotedBy || 'unknown'}` : '');
-}
-
 
 /* ---------- Auth tab: request/response parameters (table view only) ---------- */
 // Auth's request/response parameter tables are edited from two surfaces now
@@ -863,7 +841,6 @@ function openProjectModal(projectId, initialTab){
   document.getElementById('projSubtitle').textContent = proj.name;
 
   renderProjectDocsList(proj);
-  renderReleaseStatus(proj);
   renderProjectEnvUrls(proj);
 
   const archStatusEl = document.getElementById('projArchStatus');

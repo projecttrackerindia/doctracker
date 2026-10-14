@@ -1,13 +1,11 @@
 // ============================================================================
 // Shared SSE connection lifecycle - was duplicated near-identically across
-// observability.js and notifications.js (and is about to be duplicated a
-// third time for workspace change events), with the same two gaps in both
-// copies: res.write()'s boolean back-pressure return value was never read
-// (no `drain` handling anywhere), and neither route capped concurrent
-// connections - the only ceiling was whatever the OS file-descriptor limit
-// allowed. Centralizing here means both existing gaps get fixed once, not
-// per-copy, and the next SSE route gets them for free instead of a third
-// chance to reintroduce the same bug.
+// several routes, with the same two gaps in each copy: res.write()'s
+// boolean back-pressure return value was never read (no `drain` handling
+// anywhere), and no route capped concurrent connections - the only ceiling
+// was whatever the OS file-descriptor limit allowed. Centralizing here means
+// those gaps get fixed once, not per-copy, and the next SSE route gets them
+// for free instead of a chance to reintroduce the same bug.
 // ============================================================================
 
 // A soft app-level guard, well below where the OS itself would start

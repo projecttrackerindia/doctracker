@@ -9,46 +9,16 @@ let state = {
   requestHistory: {},               // { [endpointId]: [ {method,url,status,statusText,timeMs,sizeBytes,timestamp,error} ] }
   tryitCollections: { variables: [], saved: [] }, // Postman-style Try It collection vars + saved requests — org-shared, see loadState()
   tryitPersonal: { variables: [], saved: [] },      // PER-USER Try It variables + saved requests — never shipped to any other user, see loadState()
-  endpointMetrics: {},              // { endpoints: { "METHOD /path": {totalRequests, statusBreakdown, errorRate, lastSeenAt, topSourceIps, sourceLog} }, agentHealth: {...} } — pushed by ops/sit-doc-agent, org-shared, see loadState() and observabilityData() in 23-observability.js (which also tolerates the older flat-map-only shape)
   authorName: '',                   // display name used to attribute added/modified endpoints — from AUTH_USER when signed in
   organisation: '',                 // from AUTH_USER when signed in
   sidebarCollapsed: false,          // desktop sidebar collapse (persisted) — separate from the mobile drawer's .show class
-  autoSectionOpen: false,           // sidebar's "Auto-discovered APIs" section — collapsed by default, per-viewer (persisted), see 09-render-sidebar.js
-  discoveryNewOnly: true,           // hide the auto-discovered endpoints that are already documented, so the sidebar shows each API once — per-viewer (persisted), see reconcileDiscovery() in 05-util.js
-  environments: [],                 // user-configurable environment list — see loadState()
+  environments: [],                 // single-element collapsed environment list — see loadState()/environments()
   auditLog: [],                     // who changed what, when — see logAudit()
   customFlowDirections: [],         // legacy org-shared flow-direction presets — kept only for resolveFlowDirection()'s back-compat fallback (public/js/studio/03-notifications.js), no longer written to
   branding: {},                     // org letterhead for PDF exports — { orgDisplayName, logoDataUrl, updatedAt, updatedBy }, see loadState() and Your Profile ▸ Organisation branding
   envUrlRevealed: {},                // { [envId]: true } — session-only, never persisted; Admin-role reveal toggle
   sensitiveRevealed: false,          // session-only Admin-role toggle: reveals real hosts & secret header values
-  envTableUI: { search:'', filterAccess:'', filterColor:'', sortBy:null, sortDir:'asc' },
   envTableStatus: 'ready',           // 'ready' | 'loading' | 'error' — see loadState()
   envMetrics: null,                  // GET /environment-metrics response cache — see loadEnvironmentMetrics()
   envMetricsStatus: 'idle',          // 'idle' | 'loading' | 'error' | 'ready'
-  liveModeEnvs: [],                  // envIds this user may fire a REAL request against — see 22-init.js / server/routes/liveMode.js
-  docBrowseEnvs: [],                 // envIds this user may browse docs for — separate grant from liveModeEnvs, see roleAllowedEnvs()
-
-  // ---- Observability console (time-series API — see 24-obs-api.js) ----
-  obsTab: 'overview',               // 'overview' | 'performance' | 'errors' | 'logs' | 'agent'
-  obsRange: { key: '24h' },         // { key } for a preset, or { from, to } ISO strings for a custom range
-  obsData: null,                    // last obsLoadAll() result — { current, previous, series, endpoints, coverage }
-  obsStatus: 'idle',                // 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
-  obsLastCheckedAt: 0,              // last availability probe — see OBS_AVAILABILITY_RECHECK_MS
-  obsForcePreview: false,           // show the rebuilt console before any rollup data exists (session-only)
-  obsLegacyView: false,             // opt back into the pre-rebuild console (session-only)
-  obsError: '',                     // message shown when obsStatus === 'error'
-  obsFilters: {},                   // drill-down: { statusFamily, endpointId, clientIp, correlationId, minLatencyMs }
-  obsRecords: null,                 // last /records page — { records, total, limit, offset }
-  obsRecordsPage: 1,
-  obsEndpointPage: 1,             // All endpoints table pager
-  obsEndpointSearch: '',          // All endpoints filter box
-  obsAlerts: null,                  // GET /api/workspace/alerts — { rules, settings, active, metrics, canEdit }
-  obsAlertsStatus: 'idle',          // 'idle' | 'loading' | 'ready' | 'error'
-  obsAlertsError: '',
-  obsAlertDraft: null,              // the rule currently open in the editor; null = editor closed
-  obsAlertHistory: null,            // GET /api/workspace/alerts/history — { incidents, hasMore }, loaded on demand
-  obsAlertHistoryStatus: 'idle',    // 'idle' | 'loading' | 'ready' | 'error'
-  obsAlertHistoryError: '',
-  obsAlertHistoryOldestId: null,    // cursor for "load more"
-  obsEnvOptions: [],                // environments that have actually reported — GET /observability/environments. Not a picker: the header switcher is the only one. Used to say so when the environment you're in has no agent.
 };

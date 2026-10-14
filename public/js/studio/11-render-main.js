@@ -2,7 +2,7 @@
 // Keeps the address bar matching whatever's on screen — so copying the URL
 // from a normal browsing session (not just a link someone constructs by
 // hand) reaches the same project/endpoint/view. Mirrors the :projectSlug/
-// :endpointSlug and observability dashboard.html routes in server.js and
+// :endpointSlug dashboard.html routes in server.js and
 // INITIAL_PROJECT_SLUG/INITIAL_ENDPOINT_SLUG/INITIAL_VIEW's handling in
 // boot() (22-init.js) — same slugify/endpointSlugFor functions, so a URL
 // built here resolves the same way a hand-typed one does. replaceState (not
@@ -13,9 +13,7 @@
 // literal segments ahead of its generic :projectSlug route, so they're
 // reserved words in the URL space.
 const SPECIAL_VIEW_SLUGS = {
-  observability: 'observability',
   security: 'security',
-  releasepipeline: 'release-pipeline',
   errors: 'errors',
   profile: 'profile',
 };
@@ -42,30 +40,12 @@ function syncUrlToSelection(){
 
 function renderMain(){
   syncUrlToSelection();
-  // Observability opens a live SSE stream (obsStartLive(), called every time
-  // renderObservability() runs - see 23-observability.js). Nothing ever
-  // closed it on navigating away: obsStopLive() existed but had no call
-  // site anywhere in the app, so leaving the page left the stream open,
-  // still calling renderMain() (force-re-rendering whatever page is
-  // currently on screen) and firing background refetches, for the rest of
-  // the session - only a full page reload actually stopped it. This is the
-  // one place every navigation path funnels through regardless of which of
-  // the ~30 call sites set state.selected, so it's the one place that can
-  // reliably catch "we just left Observability" without hooking each of
-  // them individually.
+  // Was done as a side-effect of renderEnvSwitcher() before the environment
+  // switcher was removed (environment collapse) — the FAB's label still
+  // needs to track which project (if any) is in view, so it's called here
+  // instead, since renderMain() already runs on every navigation.
+  updateFabIntent(currentProjectForEnvContext());
   const nowType = state.selected && state.selected.type;
-  if(state._obsStreamOpen && nowType !== 'observability' && typeof obsStopLive === 'function'){
-    obsStopLive();
-  }
-  state._obsStreamOpen = nowType === 'observability';
-  // QA regression (2026-09-26): the floating "New project"/"New endpoint" FAB
-  // is position:fixed at the bottom-right of the VIEWPORT on every page, and
-  // Observability's "Currently firing" alert rows put their own right-aligned
-  // "Acknowledged by ..." text in that exact corner - the two visibly
-  // overlapped. "New project" is also the least useful action on this page
-  // specifically (there's no project in view to disambiguate against), so
-  // it's hidden here rather than nudged aside.
-  document.body.classList.toggle('view-observability', nowType === 'observability');
   // The code-samples rail is an off-canvas drawer opened explicitly from an
   // endpoint page (see openCodeSamplesRail()) and never had anything closing
   // it on navigation - so browsing an endpoint, opening it, then switching to
@@ -138,22 +118,6 @@ function renderMain(){
     return;
   }
 
-  if(state.selected.type === 'releasepipeline'){
-    if(!isAdmin() && !ownsAnyProject()){ state.selected = { type:'home' }; renderControlCenter(main); return; }
-    renderReleasePipelineOverview(main);
-    return;
-  }
-
-  if(state.selected.type === 'observability'){
-    // Admin-only (2026-09-27, requested explicitly) - narrower than
-    // Security/Release Pipeline just above, which still let a non-admin
-    // project owner in. See the matching btnObservability gate in
-    // 22-init.js and the server-side requireAdmin in routes/observability.js.
-    if(!isAdmin()){ state.selected = { type:'home' }; renderControlCenter(main); return; }
-    renderObservability(main);
-    return;
-  }
-
   if(state.selected.type === 'overview'){
     renderProjectOverview(main, state.selected.projectId);
     return;
@@ -162,8 +126,8 @@ function renderMain(){
   const found = findEndpointForView(state.selected.id);
   if(!found){
     // A Try It deep link into a non-draft environment depends on that
-    // environment's release-pipeline snapshot, which loads asynchronously
-    // (see snapshotEntry) — give it a few renders to arrive before giving up.
+    // environment's snapshot, which loads asynchronously (see snapshotEntry)
+    // — give it a few renders to arrive before giving up.
     if(state.selected.tryIt){
       state.selected._tryItAttempts = (state.selected._tryItAttempts || 0) + 1;
       if(state.selected._tryItAttempts > 6){
@@ -200,129 +164,6 @@ function renderMain(){
     // instead of the "request access" page already rendered above.
     if(!found.ep._docLocked) openTryItModal(found.proj, found.ep);
   }
-}
-
-// Cross-project Release Pipeline overview — a real top-level nav destination
-// instead of the old "Open Release Pipeline" being buried in each project's
-// "…" actions menu (see openReleasePipelineTab). Shows every API's current
-// furthest stage plus every org-wide pending Production request in one
-// place; approving/cancelling/rolling back still happens on the existing
-// per-project pipeline page (openReleasePipelineTab) — this is the missing
-// map of "what needs my attention across all of them," not a rebuild of the
-// per-project page itself.
-async function loadReleasePipelineRequests(){
-  if(!isAdmin()){ state.rpRequestsStatus = 'not-admin'; return; }
-  state.rpRequestsStatus = 'loading';
-  try{
-    const res = await apiGet('/promotion-requests?status=pending');
-    state.rpRequests = res.requests || [];
-    state.rpRequestsStatus = 'ready';
-  }catch(err){
-    console.error('Failed to load org-wide promotion requests:', err);
-    state.rpRequestsStatus = 'error';
-  }
-  if(state.selected && state.selected.type === 'releasepipeline') renderMain();
-}
-
-function renderReleasePipelineOverview(main){
-  if(state.envMetricsStatus === 'idle') loadEnvironmentMetrics();
-  if(!state.rpRequestsStatus) loadReleasePipelineRequests();
-
-  const em = state.envMetrics;
-  const emLoading = state.envMetricsStatus === 'loading' && !em;
-  const perProjectById = new Map((em && em.perProject || []).map(p=>[p.projectId, p]));
-  const lastStage = em && em.stages && em.stages.length ? em.stages[em.stages.length-1] : null;
-  const projects = allProjects().slice().sort((a,b)=> (a.name||'').localeCompare(b.name||''));
-
-  const pendingCount = state.rpRequestsStatus === 'ready' ? state.rpRequests.length : 0;
-
-  const projRows = projects.length ? projects.map(p=>{
-    const pp = perProjectById.get(p.id);
-    const readyTotal = pp ? pp.readyTotal : 0;
-    const inLastStage = pp && lastStage ? (pp.byEnvironment[lastStage.id]||0) : 0;
-    const fullyPromoted = pp && pp.fullyPromoted;
-    let stageLabel, stageColor;
-    if(emLoading){ stageLabel = 'Loading…'; stageColor = 'var(--text-faint)'; }
-    else if(!readyTotal){ stageLabel = 'Nothing release-ready yet'; stageColor = 'var(--text-faint)'; }
-    else if(fullyPromoted){ stageLabel = `All ${readyTotal} ready endpoint${readyTotal===1?'':'s'} in ${lastStage.label}`; stageColor = 'var(--post)'; }
-    else if(inLastStage){ stageLabel = `${inLastStage}/${readyTotal} ready endpoints in ${lastStage.label}`; stageColor = 'var(--put)'; }
-    else { stageLabel = `${readyTotal} endpoint${readyTotal===1?'':'s'} ready, none in ${lastStage?lastStage.label:'the last stage'} yet`; stageColor = 'var(--put)'; }
-    return `<tr class="cc-proj-row" data-rp-proj="${p.id}">
-      <td><span class="cc-proj-name">${escapeHtml(p.name)}</span></td>
-      <td><span class="lc-badge lc-${p.lifecycle.toLowerCase().replace(/[^a-z]/g,'')}">${p.lifecycle}</span></td>
-      <td style="color:${stageColor};">${stageLabel}</td>
-      <td class="mono">${p.owner ? escapeHtml(p.owner) : '<span class="empty-field">—</span>'}</td>
-    </tr>`;
-  }).join('') : `<tr><td colspan="4" class="empty-field" style="padding:16px;">No APIs yet.</td></tr>`;
-
-  let reqRows;
-  if(state.rpRequestsStatus === 'not-admin'){
-    reqRows = `<tr><td colspan="6" class="empty-field" style="padding:16px;">Only Admins can see pending requests across every API — you can still see requests for projects you own from that project's own Release Pipeline.</td></tr>`;
-  } else if(state.rpRequestsStatus === 'loading' || !state.rpRequestsStatus){
-    reqRows = `<tr><td colspan="6" class="empty-field" style="padding:16px;">Loading pending requests…</td></tr>`;
-  } else if(state.rpRequestsStatus === 'error'){
-    reqRows = `<tr><td colspan="6" class="empty-field" style="padding:16px;">Couldn't load pending requests. <button type="button" id="rpRequestsRetry" style="background:none;border:none;color:var(--accent);cursor:pointer;text-decoration:underline;padding:0;font:inherit;">Retry</button></td></tr>`;
-  } else if(!state.rpRequests.length){
-    reqRows = `<tr><td colspan="6" class="empty-field" style="padding:16px;">No pending promotion requests right now.</td></tr>`;
-  } else {
-    reqRows = state.rpRequests.map(r=>`
-      <tr class="cc-proj-row" data-rp-proj="${r.projectId}">
-        <td><span class="cc-proj-name">${escapeHtml(r.projectName)}</span></td>
-        <td>${escapeHtml(r.fromEnvironmentLabel)} → ${escapeHtml(r.toEnvironmentLabel)}</td>
-        <td>${escapeHtml(r.requestedByUsername||'—')}</td>
-        <td class="mono" style="font-size:10.5px;color:var(--text-faint);">${formatDateTime(r.createdAt)}</td>
-        <td>${r.breakingChanges && r.breakingChanges.length ? `<span style="color:var(--delete);">${r.breakingChanges.length} breaking</span>` : '<span class="empty-field">—</span>'}</td>
-        <td>${r.canApprove ? '<span style="color:var(--post);">You can approve this</span>' : '<span class="empty-field">Requested by you — needs another Admin</span>'}</td>
-      </tr>`).join('');
-  }
-
-  main.innerHTML = `
-    <div class="crumb">Release Pipeline</div>
-    <div class="ctrl-hero" style="--ctrl-glow-bg:var(${pendingCount?'--put-bg':'--post-bg'});">
-      <div class="ctrl-hero-icon" style="--ctrl-icon-color:var(${pendingCount?'--put':'--post'});--ctrl-icon-bg:var(${pendingCount?'--put-bg':'--post-bg'});">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2.5"></circle><circle cx="5" cy="18" r="2.5"></circle><circle cx="19" cy="12" r="2.5"></circle><path d="M5 8.5v7M7.2 6.8L16.8 10.8M7.2 17.2L16.8 13.2"></path></svg>
-      </div>
-      <div class="ctrl-hero-copy">
-        <h1>Where every API stands in the pipeline</h1>
-        <p>A cross-project view of stage progress and pending Production requests. Approving, cancelling, or rolling back still happens on each API's own Release Pipeline — click any row to open it.</p>
-      </div>
-      <div class="ctrl-hero-stat">
-        <div class="n">${state.rpRequestsStatus==='ready' ? pendingCount : '…'}</div>
-        <div class="l">pending requests</div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Pending promotion requests</div>
-      <div class="table-scroll">
-      <table class="data-table">
-        <thead><tr><th>API</th><th>Stage move</th><th>Requested by</th><th>Opened</th><th>Breaking changes</th><th>Approval</th></tr></thead>
-        <tbody>${reqRows}</tbody>
-      </table>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Stage status by API</div>
-      <div class="hint" style="margin-top:-4px;">"Ready" endpoints are the ones that pass the Production gate (SecOps + VAPT + Log Mgmt signed off) — see each API's Review sign-off status for what's holding the rest back.</div>
-      <div class="table-scroll">
-      <table class="data-table cc-proj-table">
-        <thead><tr><th>Name</th><th>Lifecycle</th><th>Current stage</th><th>Owner</th></tr></thead>
-        <tbody>${projRows}</tbody>
-      </table>
-      </div>
-    </div>
-  `;
-
-  const retryBtn = document.getElementById('rpRequestsRetry');
-  if(retryBtn) retryBtn.addEventListener('click', ()=>{ state.rpRequestsStatus = null; renderMain(); });
-
-  main.querySelectorAll('[data-rp-proj]').forEach(row=>{
-    row.addEventListener('click', ()=>{
-      const proj = state.projects[row.getAttribute('data-rp-proj')];
-      if(proj) openReleasePipelineTab(proj);
-    });
-  });
 }
 
 // `filterId` (Control Center only — see CC_KPI_FILTERS) makes the card a
@@ -552,52 +393,6 @@ function renderControlCenter(main){
       </div>
     </div>` : '';
 
-  // Discovery coverage — the one number this page could not answer before:
-  // of everything the log agent watched running, how much is actually written
-  // up here. Both sides are in state.projects; reconcileDiscovery() matches
-  // them (see 05-util.js). Hidden entirely when no agent is reporting.
-  const ccRecon = reconcileDiscovery();
-  // Scoped to the currently selected environment, same as reconcileDiscovery()
-  // itself (see discoveryMatchesCurrentEnv() in 05-util.js) — otherwise this
-  // count pooled every environment's discovery projects even though ccRecon's
-  // OWN numbers were already correctly scoped, e.g. "75 app(s) discovered"
-  // staying identical and wrong after ccGaps below had already been filtered
-  // down to just the current environment's gaps.
-  const ccAutoProjects = allProjectsSorted.filter(p => !!p.discoveryEnvironment && discoveryMatchesCurrentEnv(p));
-  const ccGaps = ccAutoProjects
-    .map(p => ccRecon.byAutoId[p.id])
-    .filter(c => c && c.novel > 0)
-    .sort((a, b) => b.novel - a.novel);
-  const ccDiscoveredEndpoints = ccRecon.duplicateEndpoints + ccRecon.novelEndpoints;
-  const ccCoveredPct = ccDiscoveredEndpoints
-    ? Math.round((ccRecon.duplicateEndpoints / ccDiscoveredEndpoints) * 100) : 0;
-  const ccDiscoveryHtml = ccAutoProjects.length ? `
-    <div class="section">
-      <div class="section-title">Discovery coverage <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— what is running versus what is documented</span></div>
-      <div class="hint" style="margin-top:-4px;">The log agent reports every Mule app it sees serving traffic, with no
-        knowledge of what anyone has documented. These are the two lists compared: an app already in the Control
-        Center is not a second API, and the sidebar no longer lists it as one.</div>
-      <div class="sec-card" style="--sc-accent:var(${ccGaps.length ? '--put' : '--post'});margin-top:10px;">
-        <div class="v" style="font-size:14px;"><span class="dot"></span>${ccRecon.duplicateEndpoints} of
-          ${ccDiscoveredEndpoints} discovered endpoint${ccDiscoveredEndpoints === 1 ? '' : 's'} (${ccCoveredPct}%) are documented</div>
-        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;">
-          <span class="sec-status-dot"><span class="dot" style="background:var(--get);"></span>${ccAutoProjects.length} app(s) discovered</span>
-          <span class="sec-status-dot"><span class="dot" style="background:var(--post);"></span>${ccRecon.duplicateProjects} already in the Control Center</span>
-          <span class="sec-status-dot"><span class="dot" style="background:${ccRecon.novelEndpoints ? 'var(--put)' : 'var(--post)'};"></span>${ccRecon.novelEndpoints} endpoint(s) running but undocumented</span>
-        </div>
-        ${ccGaps.length ? `<div class="cc-digest" style="margin-top:12px;">
-          ${ccGaps.slice(0, 5).map(c => `
-            <div class="cc-digest-row" data-cc-discovery-proj="${escapeHtml(c.autoProj.id)}">
-              <span class="cc-digest-path mono">${escapeHtml(c.autoProj.name)}</span>
-              <span class="cc-digest-proj">${c.documented ? 'documented as ' + escapeHtml(c.documented.name) : 'no matching API'}</span>
-              <span class="mono cc-digest-pct cc-digest-new" style="color:var(--put);">${c.novel} new</span>
-            </div>`).join('')}
-        </div>
-        ${ccGaps.length > 5 ? `<div class="s" style="margin-top:8px;">…and ${ccGaps.length - 5} more app(s) with undocumented endpoints.</div>` : ''}`
-        : `<div class="s" style="margin-top:8px;">Everything the agent has seen running is documented.</div>`}
-      </div>
-    </div>` : '';
-
   main.innerHTML = `
     <div class="crumb">API Control Center</div>
     <div class="ctrl-hero" style="--ctrl-glow-bg:var(${ctrlBgVar});">
@@ -636,8 +431,6 @@ function renderControlCenter(main){
           : 'Every documented endpoint has SecOps, VAPT, and Log Mgmt all signed off. Whether they\'re actually live in Production is a separate question — check each project\'s Release Pipeline.'}</div>
       </div>
     </div>
-
-    ${ccDiscoveryHtml}
 
     ${ccDigestHtml}
 
@@ -708,7 +501,7 @@ function renderControlCenter(main){
   main.querySelectorAll('[data-cc-proj]').forEach(row=>{
     row.addEventListener('click', ()=>{
       state.selected = { type:'overview', projectId: row.getAttribute('data-cc-proj') };
-      renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
+      renderSidebar(); renderMain(); renderRail();
     });
   });
 
@@ -751,21 +544,4 @@ function renderControlCenter(main){
     });
   });
 
-  // A discovery gap opens that app's Overview, where the reconciliation panel
-  // lives (renderDiscoveryReconcilePanel in 14-users.js) — the place the gap
-  // is actually resolved, rather than a read-only number on this page.
-  main.querySelectorAll('[data-cc-discovery-proj]').forEach(row=>{
-    row.addEventListener('click', ()=>{
-      const id = row.getAttribute('data-cc-discovery-proj');
-      const proj = state.projects[id];
-      if(!proj) return;
-      // The panel only renders in the environment the traffic was observed in.
-      if(proj.discoveryEnvironment && envIds().includes(proj.discoveryEnvironment) && state.env !== proj.discoveryEnvironment){
-        state.env = proj.discoveryEnvironment;
-        saveEnv();
-      }
-      state.selected = { type:'overview', projectId: id };
-      renderAll();
-    });
-  });
 }

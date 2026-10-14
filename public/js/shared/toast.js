@@ -1,7 +1,7 @@
-/* Canonical toast() — previously reimplemented independently on 4 pages
-   (studio.html, editor.html, architecture-studio.html, release-pipeline.html)
-   with drifting timeouts (2600/2800/2800/3200ms) and, on release-pipeline.html,
-   no shared CSS class at all (inline styles built by hand). One DOM node,
+/* Canonical toast() — previously reimplemented independently across several
+   pages (studio.html, editor.html, architecture-studio.html) with drifting
+   timeouts and, on at least one of them, no shared CSS class at all (inline
+   styles built by hand). One DOM node,
    created lazily on first use, styled by the shared .toast/.toast.show rules
    in /css/components.css. Pages call the same global toast(msg) they already
    did — no call-site changes needed. */

@@ -1,5 +1,18 @@
 # Environment-scoped documentation access requests
 
+> **Superseded.** The environment-collapse cluster of the
+> observability/release-pipeline/live-mode/multi-env removal project
+> collapsed the app down to a single implicit environment, so the scoping
+> this document describes no longer applies: `POST /api/workspace/doc-access/requests`
+> is back to one request per endpoint (no `environmentId`/`environmentIds`),
+> and new rows no longer populate `environment_id`/`environment_label` (they
+> stay NULL, same as every pre-this-feature row already was). Existing rows
+> with a real `environment_id` are left alone as historical audit trail —
+> `getDocAccessMap` already treated a NULL `environment_id` as "applies to
+> every environment," which is exactly what's needed now that there's only
+> one. The rest of this document describes the feature as it existed before
+> that collapse.
+
 ## The bug
 
 `doc_access_requests` had no concept of environment. Approving a request

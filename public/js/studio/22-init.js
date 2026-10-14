@@ -33,19 +33,6 @@
   // project short of an Admin doing it for them, which is exactly the
   // bottleneck item #2 removes.
   document.getElementById('btnSecurityCenter').style.display = (isAdmin() || ownsAnyProject()) ? '' : 'none';
-  // Release Pipeline overview surfaces org-wide pending promotion requests
-  // (approve/cancel authority is Admin-only server-side — see the
-  // /promotion-requests org-wide route) — same visibility gate as Security.
-  document.getElementById('btnReleasePipeline').style.display = (isAdmin() || ownsAnyProject()) ? '' : 'none';
-  // Observability shows traffic auto-discovered from server logs (hit
-  // counts, error rates, client IPs) - an ops-facing view, not part of the
-  // docs a regular Editor/Viewer reads day to day. Admin-only (2026-09-27,
-  // requested explicitly): this used to also allow any non-admin project
-  // owner in, matching Security/Release Pipeline's looser rule - narrowed
-  // here specifically, see the matching guard in renderMain() and the
-  // server-side requireAdmin on every read route in routes/observability.js.
-  document.getElementById('btnObservability').style.display = isAdmin() ? '' : 'none';
-
   // Access-schedule banner/lock state — rendered immediately from the
   // server-injected AUTH_USER (so it's correct on first paint, before any
   // API call has round-tripped), then re-evaluated every 30s so a window
@@ -54,22 +41,6 @@
   // for the case that actually matters (a real API call being rejected).
   renderScheduleState();
   setInterval(renderScheduleState, 30000);
-
-  // Which environments (if any) this signed-in user may fire a REAL request
-  // against from Try It — see /api/live-mode and openTryItModal(). Failure
-  // here just means Live mode stays hidden (fails closed), never blocks boot.
-  try{
-    const res = await fetch('/api/live-mode/my-access', { credentials:'same-origin' });
-    state.liveModeEnvs = res.ok ? (await res.json()).environments || [] : [];
-  }catch(e){ state.liveModeEnvs = []; }
-  // Separate from the above — "may browse this environment's docs" is its
-  // own grant, independent of "may fire a real request against it" (see
-  // server/routes/liveMode.js's loadBrowseGrants). roleAllowedEnvs()
-  // (03-notifications.js) unions both, so either grant is enough to browse.
-  try{
-    const res = await fetch('/api/live-mode/my-browse-access', { credentials:'same-origin' });
-    state.docBrowseEnvs = res.ok ? (await res.json()).environments || [] : [];
-  }catch(e){ state.docBrowseEnvs = []; }
 
   // Landed here via a "Try it" new-tab link (see openTryItTab/buildTryItUrl) —
   // jump straight to that endpoint's docs with Try It already open, in

@@ -175,6 +175,16 @@ async function initDb() {
   // own separate localStorage keys (environments, try-it request history,
   // custom flow-direction presets). One row per organisation.
   //
+  // `environments`/`environments_enc`: as of the environment-collapse
+  // cluster, this catalog is expected to always hold exactly one entry
+  // (the implicit "default" environment, id/label fixed — see
+  // collapseEnvironmentsList() in server/routes/workspace.js). That's
+  // enforced in application code, not a DB constraint — the column stays
+  // plain JSONB (still just an array) so a pre-collapse row with more than
+  // one entry doesn't fail to read; getOrgEnvironments() self-heals it down
+  // to one on the next read (see migrations/sql/0009_collapse_environments.sql
+  // for why the SQL migration alone couldn't finish this for encrypted rows).
+  //
   // NOTE on `audit_log`: this JSONB column is DEPRECATED. It used to hold the
   // entire audit history as a single blob that the *frontend* overwrote wholesale
   // on every change — which meant a browser could forge actor names, timestamps,
@@ -215,40 +225,26 @@ async function initDb() {
   // Org-wide PII masking settings (Admin ▸ Security ▸ PII & Data Masking).
   // Kept separate from the per-rule table below since it's a single JSON blob
   // of switches, not a list of records.
+  // `environmentPolicy` used to be keyed by five environment ids (PROD/
+  // PREPROD/UAT/SIT/DEV) — this ADD COLUMN IF NOT EXISTS default only ever
+  // applies to a genuinely fresh database (existing rows already have the
+  // column and are untouched), so it's updated to the single-environment
+  // shape (same default server/routes/pii.js's DEFAULT_SETTINGS uses) rather
+  // than left pointing at environment ids that no longer exist.
   await pool.query(`
     ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS pii_settings JSONB NOT NULL DEFAULT '{
       "automaticProtection": true,
       "revealTimeoutSeconds": 60,
-      "environmentPolicy": {"PROD":"strict","PREPROD":"strict","UAT":"mask","SIT":"mask","DEV":"configurable"},
+      "environmentPolicy": {"default":"strict"},
       "surfaces": {"params":true,"headers":true,"body":true,"pdfExport":true}
     }'::jsonb;
   `);
 
-  // ---- Live Mode (Try It → real outbound calls) ----
-  // Per-user allow-list of environment ids that user may fire a REAL request
-  // against from Try It, managed entirely by an Admin (Security ▸ Live Mode
-  // Access) — deliberately independent of role, so an Admin can grant a
-  // Viewer access to DEV without touching their role, or withhold PROD from
-  // an Editor. Shape: { "<userId>": ["DEV","SIT"], ... }. Org-wide (like
-  // pii_settings above) rather than per-project, since the grant is about how
-  // much real-world blast radius a *person* is trusted with, not which
-  // project they happen to be looking at. See server/routes/liveMode.js.
-  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS live_mode_grants JSONB NOT NULL DEFAULT '{}';`);
-  // A SEPARATE grant from live_mode_grants above: "may browse this
-  // environment's docs" vs "may fire a real request against it". Previously
-  // the switcher reused live_mode_grants for both, which meant an Admin
-  // could not let a Viewer browse SIT without also handing them live-fire
-  // capability there. No secrets live in this list (just environment ids),
-  // so — like custom_flow_directions/custom_icons — it's plain JSONB, not
-  // encrypted the way live_mode_grants' sibling request_history is.
-  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS doc_browse_grants JSONB NOT NULL DEFAULT '{}';`);
-
   // Per-org SSO/OIDC configuration (issuer, client id, encrypted client
-  // secret, allowed email domain, enabled flag) — same shape as
-  // alert_settings' webhook config immediately above it in server/sso.js:
-  // one JSONB blob per org rather than a dedicated table, since this is
-  // exactly the same kind of thing (a handful of settings plus one secret)
-  // every other per-org config in this table already is.
+  // secret, allowed email domain, enabled flag) — see server/sso.js: one
+  // JSONB blob per org rather than a dedicated table, since this is exactly
+  // the same kind of thing (a handful of settings plus one secret) every
+  // other per-org config in this table already is.
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS sso_config JSONB NOT NULL DEFAULT '{}';`);
 
   // ---- Admin-managed sensitive-field masking rules (Admin ▸ Security ▸ PII & Data Masking) ----
@@ -269,6 +265,11 @@ async function initDb() {
       chars_to_keep INTEGER NOT NULL DEFAULT 4,
       mask_char TEXT NOT NULL DEFAULT '*',
       apply_to JSONB NOT NULL DEFAULT '["params","headers","body","pdfExport"]',
+      -- Pre-collapse default, kept as the column's DDL default for
+      -- historical accuracy — every existing row was rewritten to
+      -- '["default"]' by migrations/sql/0009_collapse_environments.sql, and
+      -- every new rule is created with that same single-entry value by
+      -- application code now that there's only one environment to scope to.
       environments JSONB NOT NULL DEFAULT '["PROD","PREPROD","UAT","SIT","DEV"]',
       enabled BOOLEAN NOT NULL DEFAULT true,
       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -353,59 +354,15 @@ async function initDb() {
   // variable value), so encrypted at rest the same way, org-shared.
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS tryit_collections_enc TEXT;`);
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS tryit_collections_key_version INTEGER;`);
-  // Endpoint traffic metrics (hit counts, status breakdown, error rate,
-  // client IPs, last-seen, agent self-health) pushed by the SIT log
-  // auto-discovery agent (ops/sit-doc-agent). Keyed by "METHOD /path",
-  // cross-referenced against real endpoints by the UI for display only -
-  // deliberately never written INTO a project's own endpoint data, so it
-  // can never conflict with a human editing that project concurrently.
-  // Encrypted at rest like request_history: client IPs are PII on their
-  // own. IMPORTANT: since the agent's CAPTURE_MODE=full opt-in (see
-  // AGENT_README.md's "Capture mode" section), this same blob can also
-  // hold a `logRecords` array of REAL per-request records, including real
-  // request/response field VALUES - the agent redacts anything named like
-  // a credential before ever sending it, but every other field value is
-  // real production data once that mode is on. CAPTURE_MODE defaults to
-  // "aggregate" (counts/types only, no field values) - full capture is an
-  // explicit, informed choice made per deployment, not this app's default.
-  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS endpoint_metrics_enc TEXT;`);
-  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS endpoint_metrics_key_version INTEGER;`);
 
-  // ---- Environment release pipeline ----
-  // `release_version` is the project-wide "cut number" (displayed as 1.0.N) —
-  // it increments once each time a new draft is promoted out of the first
-  // (Dev) stage. Moving that same release further down the pipeline
-  // (SIT -> UAT -> Staging -> Production) carries the version forward
-  // unchanged, same as a real release moving through environments.
+  // `release_version` is the project-wide "cut number" (displayed as 1.0.N),
+  // still read by GET /projects/:id/snapshot's draft label — kept even
+  // though the promotion pipeline that used to advance it was removed.
   await pool.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS release_version INTEGER NOT NULL DEFAULT 0;`);
-
-  // One row per (project, environment) = the environment's CURRENTLY pinned
-  // snapshot — overwritten on each promotion, not an unbounded history table.
-  // environment_id is a free-text org-configured id (see org_workspace.environments),
-  // not a foreign key, since environments live in that JSONB list rather than
-  // a normalized table. Encrypted the same way as projects.data — see
-  // server/crypto.js and the encrypt/decryptProjectData helpers in
-  // server/routes/workspace.js.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS project_env_versions (
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      environment_id TEXT NOT NULL,
-      version INTEGER NOT NULL,
-      data_enc TEXT NOT NULL,
-      data_key_version INTEGER NOT NULL,
-      source_environment_id TEXT,
-      promoted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      promoted_by_username TEXT,
-      auto_mirrored BOOLEAN NOT NULL DEFAULT false,
-      promoted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (project_id, environment_id)
-    );
-  `);
 
   // ---- Per-project, per-environment sharing grants ----
   // Fills the gap between `projects.visibility` ('private' = owner only,
-  // 'public' = entire organisation) and the org-wide `live_mode_grants`
-  // above: this is how an owner (or Admin) shares ONE private project with a
+  // 'public' = entire organisation): this is how an owner (or Admin) shares ONE private project with a
   // NAMED person, optionally restricted to specific environments, without
   // touching that person's global role or exposing the project to the whole
   // organisation. One row per (project, user) — not per (project, user,
@@ -413,9 +370,9 @@ async function initDb() {
   // of how many environments a project has; `environments` holds the scoped
   // list (or the literal ["*"] wildcard for "every environment this project
   // has"), same JSONB-list pattern already used by `custom_permissions.envs`
-  // and `pii_field_rules.environments`. Deliberately independent of role,
-  // same reasoning as live_mode_grants: an Admin can hand a Viewer edit
-  // access to one specific project without promoting them org-wide.
+  // and `pii_field_rules.environments`. Deliberately independent of role:
+  // an Admin can hand a Viewer edit access to one specific project without
+  // promoting them org-wide.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS project_access (
       id BIGSERIAL PRIMARY KEY,
@@ -545,196 +502,6 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications (user_id, created_at DESC) WHERE read_at IS NULL;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_id, created_at DESC);`);
 
-  // ---- Alerting (see server/alertEngine.js and ALERTING.md) ----
-  // Observability alerts were computed in the BROWSER and rendered on a page
-  // someone had to be looking at. An error rate of 40% at 2am produced
-  // nothing at all; the page simply showed it to whoever opened it next
-  // morning. These two tables move the evaluation server-side, where it can
-  // run whether or not anyone is watching.
-  //
-  // Split deliberately into configuration and state:
-  //
-  //   alert_rule   what an Admin configured. Edited by people, rarely.
-  //   alert_state  where each rule currently IS. Written by the engine on
-  //                every evaluation, many times a minute.
-  //
-  // Keeping them in one row would mean an Admin's edit and the engine's state
-  // write contending for the same row, and a rule's audit trail churning
-  // every few seconds. It also lets one rule hold INDEPENDENT state per
-  // endpoint: "error rate above 10% on any endpoint" is one rule and a
-  // hundred separate state machines, which is the only way a second endpoint
-  // going bad can raise its own alert while the first is still firing.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS alert_rule (
-      id BIGSERIAL PRIMARY KEY,
-      organisation TEXT NOT NULL,
-      name TEXT NOT NULL,
-      metric TEXT NOT NULL,
-      comparison TEXT NOT NULL DEFAULT 'above',
-      threshold DOUBLE PRECISION NOT NULL,
-      window_minutes INTEGER NOT NULL DEFAULT 10,
-      min_requests INTEGER NOT NULL DEFAULT 20,
-      for_minutes INTEGER NOT NULL DEFAULT 5,
-      cooldown_minutes INTEGER NOT NULL DEFAULT 60,
-      severity TEXT NOT NULL DEFAULT 'warning',
-      environment TEXT,
-      scope TEXT NOT NULL DEFAULT 'environment',
-      endpoint_id TEXT,
-      enabled BOOLEAN NOT NULL DEFAULT true,
-      notify_admins BOOLEAN NOT NULL DEFAULT true,
-      notify_user_ids JSONB NOT NULL DEFAULT '[]',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      created_by TEXT,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_by TEXT
-    );
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_alert_rule_org ON alert_rule (organisation) WHERE enabled;`);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS alert_state (
-      rule_id BIGINT NOT NULL REFERENCES alert_rule(id) ON DELETE CASCADE,
-      organisation TEXT NOT NULL,
-      environment TEXT NOT NULL,
-      endpoint_id TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'ok',
-      breached_since TIMESTAMPTZ,
-      firing_since TIMESTAMPTZ,
-      last_value DOUBLE PRECISION,
-      last_sample INTEGER,
-      last_notified_at TIMESTAMPTZ,
-      notify_count INTEGER NOT NULL DEFAULT 0,
-      -- Acknowledging says "a person has seen this and is on it" - it does
-      -- NOT stop evaluation, does NOT suppress re-notification, and does
-      -- NOT hide the row (an acknowledged-but-still-broken collector
-      -- disappearing from view would be worse than an unacknowledged one).
-      -- All it does is drop the row out of the tab badge count. Cleared
-      -- automatically whenever a FRESH incident starts (applyState() in
-      -- alertEngine.js) - an old acknowledgment must not silently cover a
-      -- new breach after the old one resolved.
-      acknowledged_at TIMESTAMPTZ,
-      acknowledged_by TEXT,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (rule_id, environment, endpoint_id)
-    );
-  `);
-  await pool.query(`ALTER TABLE alert_state ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE alert_state ADD COLUMN IF NOT EXISTS acknowledged_by TEXT;`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_alert_state_firing ON alert_state (organisation, status) WHERE status <> 'ok';`);
-
-  // Org-wide switches that sit ABOVE the individual rules: the master on/off,
-  // who hears about it by default, and quiet hours. Plaintext JSONB on
-  // org_workspace, same as branding/custom_icons - none of it is secret, and
-  // ALTER because org_workspace rows already exist in deployed databases.
-  await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS alert_settings JSONB NOT NULL DEFAULT '{}';`);
-
-  // ---- Environment promotion history (append-only) ----
-  // `project_env_versions` above is deliberately a single overwritten row per
-  // (project, environment) — "what's live there right now." This table is
-  // its append-only companion: one row per promotion (or rollback) EVER made
-  // into an environment, never overwritten, so a bad promotion can be rolled
-  // back to a specific prior version instead of only ever moving forward.
-  // `data_enc`/`data_key_version` reuse the exact ciphertext already written
-  // to project_env_versions for that promotion — no re-encryption needed to
-  // keep history, since the AAD (`project-env:<id>:<env>`) only binds to
-  // project+environment, not to "current" vs "historical".
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS project_env_version_history (
-      id BIGSERIAL PRIMARY KEY,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      environment_id TEXT NOT NULL,
-      version INTEGER NOT NULL,
-      data_enc TEXT NOT NULL,
-      data_key_version INTEGER NOT NULL,
-      source_environment_id TEXT,
-      action TEXT NOT NULL DEFAULT 'promote' CHECK (action IN ('promote', 'rollback')),
-      rolled_back_from_id BIGINT REFERENCES project_env_version_history(id) ON DELETE SET NULL,
-      promoted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      promoted_by_username TEXT,
-      auto_mirrored BOOLEAN NOT NULL DEFAULT false,
-      promoted_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_env_version_history_lookup ON project_env_version_history (project_id, environment_id, promoted_at DESC);`);
-  // Release Pipeline v2 (see server/views/release-pipeline.html): a short,
-  // required note captured at promote/rollback time ("why", not "what" —
-  // the "what" is already derivable from the diff), plus a frozen snapshot
-  // of the breaking changes that were reviewed and acknowledged for THIS
-  // specific promotion. Both are denormalized onto the history row rather
-  // than recomputed later — recomputing would mean re-diffing against
-  // whatever the adjacent stage's content happens to be *now*, which drifts
-  // over time as further promotions land; the whole point of a commit-style
-  // history is that each entry stays an honest record of what was true at
-  // that moment.
-  await pool.query(`ALTER TABLE project_env_version_history ADD COLUMN IF NOT EXISTS release_note TEXT;`);
-  await pool.query(`ALTER TABLE project_env_version_history ADD COLUMN IF NOT EXISTS breaking_changes JSONB NOT NULL DEFAULT '[]';`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_env_version_history_project_feed ON project_env_version_history (project_id, promoted_at DESC);`);
-
-  // Migration path for databases created before 'prune' existed as an action
-  // (see POST /projects/:id/environments/:environmentId/prune-endpoints in
-  // workspace.js — pulls specific endpoints back out of one promoted
-  // environment without a full re-promotion) — widens the CHECK constraint
-  // the same way the 'custom' user role was added above.
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'project_env_version_history_action_check') THEN
-        ALTER TABLE project_env_version_history DROP CONSTRAINT project_env_version_history_action_check;
-      END IF;
-      ALTER TABLE project_env_version_history ADD CONSTRAINT project_env_version_history_action_check CHECK (action IN ('promote', 'rollback', 'prune'));
-    END $$;
-  `);
-
-  // ---- Promotion requests (Release Pipeline "protected branch" workflow) ----
-  // GitHub's branch-protection model requires a SECOND person to approve a
-  // merge into a protected branch — the person who opened the PR can't also
-  // approve it. This is the equivalent for environments flagged
-  // `requiresApproval` in org_workspace.environments (see getOrgEnvironments
-  // in workspace.js — a plain boolean on each environment object, editable
-  // from Your Profile ▸ Environments same as color/access): promoting
-  // straight into such a stage is refused by POST /promote, and the caller
-  // must instead open a request here for a DIFFERENT Admin to approve.
-  // Approving actually performs the promotion (see applyPromotion in
-  // workspace.js) — this table never holds the "live" state itself, only
-  // the pending/decided request envelope around one promotion.
-  // `diff_snapshot`/`breaking_changes` are captured at request time (same
-  // reasoning as project_env_version_history.breaking_changes — an honest
-  // record of what was true when requested) and re-validated by hash at
-  // approval time (see checkDiffToken's sibling, checkRequestStillFresh) so
-  // a request can't be silently approved against content that has since
-  // moved out from under it.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS project_promotion_requests (
-      id BIGSERIAL PRIMARY KEY,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      from_environment_id TEXT NOT NULL,
-      to_environment_id TEXT NOT NULL,
-      diff_hash TEXT NOT NULL,
-      diff_snapshot JSONB NOT NULL,
-      breaking_changes JSONB NOT NULL DEFAULT '[]',
-      ack_breaking_changes BOOLEAN NOT NULL DEFAULT false,
-      release_note TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
-      requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      requested_by_username TEXT,
-      decided_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      decided_by_username TEXT,
-      decision_note TEXT,
-      decided_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_promotion_requests_project ON project_promotion_requests (project_id, status, created_at DESC);`);
-  // At most one pending request per (project, target environment) at a time —
-  // mirrors "one open PR against a branch for a given change" closely enough
-  // for this app's needs, and avoids two Admins racing to approve conflicting
-  // requests into the same stage.
-  await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_promotion_request_pending_target
-    ON project_promotion_requests (project_id, to_environment_id)
-    WHERE status = 'pending';
-  `);
-
   // ---- Org-wide AI configuration (AI Studio) ----
   // One row per organisation. `api_key_enc` is the org's own LLM API key,
   // field-encrypted with the same envelope scheme as everything else (see
@@ -757,216 +524,7 @@ async function initDb() {
     );
   `);
 
-  // ---- Observability time-series ----------------------------------------
-  // These two tables replace the single encrypted `endpoint_metrics_enc` blob
-  // as the storage for TIME-SERIES traffic data. The blob shape could not
-  // support any of: a month of retention, server-side date filtering,
-  // pagination, or reading one window without materialising everything - you
-  // cannot index or range-scan inside one ciphertext column.
-  //
-  // WHAT IS AND ISN'T ENCRYPTED HERE, and why that is not a downgrade:
-  // this follows the rule the project already set for users.email /
-  // organisation (see CHANGES_ENCRYPTION_AND_ROUTING.md) - columns the app
-  // must query on directly in SQL are plaintext; content that can hold real
-  // secrets stays encrypted. Concretely:
-  //   * `endpoint_id` is the agent's stable_id HASH, never the literal path,
-  //     so no API surface leaks into a plaintext column. Paths live only in
-  //     the already-encrypted project document and are joined at render time.
-  //   * rollup rows are counters + an opaque hash + a timestamp. There is
-  //     nothing secret in them BY CONSTRUCTION, which is a stronger property
-  //     than encrypting them would be - it does not depend on a key.
-  //   * raw per-request records keep the genuinely sensitive part - the
-  //     captured request/response FIELD VALUES from CAPTURE_MODE=full - in
-  //     `fields_enc`, under the same DEK/KEK envelope as everything else.
-  // Sums two counter-shaped JSONB objects key-by-key ({"100": 3} + {"100": 2,
-  // "250": 1} = {"100": 5, "250": 1}). This is what lets a rollup upsert merge
-  // latency histograms and per-IP counts INSIDE the single INSERT ... ON
-  // CONFLICT statement. Without it, merging those two columns would need a
-  // read-modify-write round trip per bucket - reintroducing exactly the
-  // read-then-write pattern this whole redesign exists to remove.
-  await pool.query(`
-    CREATE OR REPLACE FUNCTION jsonb_counter_merge(a jsonb, b jsonb)
-    RETURNS jsonb LANGUAGE sql IMMUTABLE AS $fn$
-      SELECT coalesce(jsonb_object_agg(k, v), '{}'::jsonb)
-      FROM (
-        SELECT k, sum(v::numeric) AS v
-        FROM (
-          SELECT key AS k, value AS v FROM jsonb_each_text(coalesce(a, '{}'::jsonb))
-          UNION ALL
-          SELECT key AS k, value AS v FROM jsonb_each_text(coalesce(b, '{}'::jsonb))
-        ) merged
-        GROUP BY k
-      ) summed;
-    $fn$;
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS endpoint_metrics_rollup (
-      organisation   TEXT NOT NULL,
-      environment    TEXT NOT NULL,
-      endpoint_id    TEXT NOT NULL,
-      bucket_start   TIMESTAMPTZ NOT NULL,
-      request_count  INTEGER NOT NULL DEFAULT 0,
-      status_2xx     INTEGER NOT NULL DEFAULT 0,
-      status_3xx     INTEGER NOT NULL DEFAULT 0,
-      status_4xx     INTEGER NOT NULL DEFAULT 0,
-      status_5xx     INTEGER NOT NULL DEFAULT 0,
-      status_unknown INTEGER NOT NULL DEFAULT 0,
-      latency_sum    BIGINT  NOT NULL DEFAULT 0,
-      latency_count  INTEGER NOT NULL DEFAULT 0,
-      latency_min    INTEGER,
-      latency_max    INTEGER,
-      latency_buckets JSONB NOT NULL DEFAULT '{}',
-      source_ips     JSONB NOT NULL DEFAULT '{}',
-      PRIMARY KEY (organisation, environment, endpoint_id, bucket_start)
-    );
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_rollup_org_env_bucket
-    ON endpoint_metrics_rollup (organisation, environment, bucket_start DESC);
-  `);
-  // Supports "the whole org, any environment, this date range" without having
-  // to name an environment - the All-scope console view.
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_rollup_org_bucket
-    ON endpoint_metrics_rollup (organisation, bucket_start DESC);
-  `);
-
-  // ---- Hourly tier -------------------------------------------------------
-  // 1-minute buckets are the right resolution for recent data and the wrong
-  // one for a year of it: at sustained production volume, 1-minute rows for
-  // 400 days runs to tens of gigabytes, nearly all of it read at a resolution
-  // no chart can draw (a 90-day view at 1-minute is 129,600 points for ~400
-  // pixels).
-  //
-  // So minute rows are rolled up into hourly ones once they age past
-  // OBS_ROLLUP_MINUTE_RETENTION_DAYS and the minute rows are then deleted -
-  // see downsampleOldRollups() in server/retention.js. The two tables are
-  // therefore DISJOINT by construction, which is what lets every read query
-  // simply UNION them without risking double-counting.
-  //
-  // Same columns as the minute table so the union needs no column mapping,
-  // and so the downsample is a plain aggregate rather than a reshaping.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS endpoint_metrics_rollup_hourly (
-      organisation   TEXT NOT NULL,
-      environment    TEXT NOT NULL,
-      endpoint_id    TEXT NOT NULL,
-      bucket_start   TIMESTAMPTZ NOT NULL,
-      request_count  INTEGER NOT NULL DEFAULT 0,
-      status_2xx     INTEGER NOT NULL DEFAULT 0,
-      status_3xx     INTEGER NOT NULL DEFAULT 0,
-      status_4xx     INTEGER NOT NULL DEFAULT 0,
-      status_5xx     INTEGER NOT NULL DEFAULT 0,
-      status_unknown INTEGER NOT NULL DEFAULT 0,
-      latency_sum    BIGINT  NOT NULL DEFAULT 0,
-      latency_count  INTEGER NOT NULL DEFAULT 0,
-      latency_min    INTEGER,
-      latency_max    INTEGER,
-      latency_buckets JSONB NOT NULL DEFAULT '{}',
-      source_ips     JSONB NOT NULL DEFAULT '{}',
-      PRIMARY KEY (organisation, environment, endpoint_id, bucket_start)
-    );
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_rollup_hourly_org_env_bucket
-    ON endpoint_metrics_rollup_hourly (organisation, environment, bucket_start DESC);
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_rollup_hourly_org_bucket
-    ON endpoint_metrics_rollup_hourly (organisation, bucket_start DESC);
-  `);
-
-  // Raw per-request records. RANGE-partitioned by day so retention is a
-  // DROP TABLE of one partition (instant, no bloat, no vacuum storm) rather
-  // than a DELETE of millions of rows on a schedule, which would slowly
-  // degrade the table it is trying to keep healthy.
-  //
-  // No PRIMARY KEY on `id` alone: Postgres requires every unique constraint
-  // on a partitioned table to include the partition key, so the identity is
-  // (id, ts). `id` is still a BIGSERIAL for stable ordering within a bucket.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS endpoint_log_records (
-      id             BIGSERIAL,
-      organisation   TEXT NOT NULL,
-      environment    TEXT NOT NULL,
-      endpoint_id    TEXT NOT NULL,
-      ts             TIMESTAMPTZ NOT NULL,
-      status_code    SMALLINT,
-      latency_ms     INTEGER,
-      client_ip      TEXT,
-      correlation_id TEXT,
-      flow_name      TEXT,
-      fields_enc     TEXT,
-      key_version    INTEGER,
-      PRIMARY KEY (id, ts)
-    ) PARTITION BY RANGE (ts);
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_logrec_org_env_ts
-    ON endpoint_log_records (organisation, environment, ts DESC);
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_logrec_org_corr
-    ON endpoint_log_records (organisation, correlation_id);
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_logrec_org_endpoint_ts
-    ON endpoint_log_records (organisation, endpoint_id, ts DESC);
-  `);
-  // A partitioned table with no partition covering `now()` rejects every
-  // INSERT outright, so the very first ones are created here at boot rather
-  // than waiting for the retention sweep's first run.
-  await ensureLogRecordPartitions(3);
-
-  // The collector's own heartbeat, separate from the rollup/record tables
-  // above on purpose. Those only gain a row when a push carries actual
-  // TRAFFIC - a genuinely healthy agent watching a genuinely quiet
-  // environment (nobody called the API for an hour) writes nothing to them
-  // either, which is indistinguishable from the agent being dead if that is
-  // what "is the collector silent" is measured against. This table is
-  // touched on every PUT /observability/ingest UNCONDITIONALLY, whether or
-  // not that push had anything new to report - see touchHeartbeat() in
-  // observabilityStore.js - so it answers "did the agent push at all",
-  // which is what the agent_silent alert (server/alertEngine.js) actually
-  // needs to ask.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS agent_heartbeat (
-      organisation  TEXT NOT NULL,
-      environment   TEXT NOT NULL,
-      last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (organisation, environment)
-    );
-  `);
-
   console.log('Database schema ready.');
 }
 
-// Creates the daily partitions for [today - 1, today + aheadDays]. Idempotent
-// (IF NOT EXISTS), so the boot call and the daily retention sweep can both run
-// it harmlessly. Yesterday is included because an agent catching up on a
-// backlog can legitimately push records timestamped before midnight.
-async function ensureLogRecordPartitions(aheadDays = 3) {
-  const day = 24 * 60 * 60 * 1000;
-  const startOfUtcDay = (ms) => {
-    const d = new Date(ms);
-    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-  };
-  const created = [];
-  for (let offset = -1; offset <= aheadDays; offset += 1) {
-    const from = startOfUtcDay(Date.now() + offset * day);
-    const to = new Date(from.getTime() + day);
-    const suffix = from.toISOString().slice(0, 10).replace(/-/g, '_');
-    const name = `endpoint_log_records_${suffix}`;
-    // Identifiers cannot be parameterised, so `name` is built here from a
-    // date we computed - never from user input.
-    await pool.query(
-      `CREATE TABLE IF NOT EXISTS ${name} PARTITION OF endpoint_log_records
-       FOR VALUES FROM ('${from.toISOString()}') TO ('${to.toISOString()}');`
-    );
-    created.push(name);
-  }
-  return created;
-}
-
-module.exports = { pool, initDb, ensureLogRecordPartitions };
+module.exports = { pool, initDb };

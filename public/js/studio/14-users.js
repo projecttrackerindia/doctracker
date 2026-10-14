@@ -522,275 +522,6 @@ function roleHintText(roleId){
   return `Read-only. Can browse and try endpoints in ${envList}, but can't create, edit, or delete anything.`;
 }
 
-// Release health section — breaking-changes-per-release sparkline (see
-// releaseHealthSparklineSvg in 10-metrics.js and releaseHealthEntry's fetch
-// in 05-util.js). Renders nothing but a loading placeholder until the fetch
-// resolves; renderAll() re-runs once it does.
-function releaseHealthSectionHtml(projId){
-  const entry = releaseHealthEntry(projId);
-  let body;
-  if(entry.status === 'loading'){
-    body = `<div class="empty-field">Loading release history…</div>`;
-  } else if(entry.status === 'error'){
-    body = `<div class="empty-field">Could not load release health.</div>`;
-  } else if(!entry.points || entry.points.length < 2){
-    body = `<div class="empty-field">Not enough release history yet — this fills in once a few releases have reached ${escapeHtml(entry.lastStageLabel || 'the last stage')}.</div>`;
-  } else {
-    const totalBreaking = entry.points.reduce((sum,p)=>sum+p.breakingChangesCount, 0);
-    body = `
-      <div style="display:flex; align-items:flex-end; gap:16px; flex-wrap:wrap;">
-        ${releaseHealthSparklineSvg(entry.points)}
-        <div class="hint" style="margin:0;">${totalBreaking
-          ? `${totalBreaking} breaking change${totalBreaking===1?'':'s'} across the last ${entry.points.length} releases into ${escapeHtml(entry.lastStageLabel)}.`
-          : `No breaking changes across the last ${entry.points.length} releases into ${escapeHtml(entry.lastStageLabel)} — clean run.`}</div>
-      </div>`;
-  }
-  return `
-    <div class="section">
-      <div class="section-title">Release health <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— breaking changes per release into production</span></div>
-      ${body}
-    </div>`;
-}
-
-// ----------------------------------------------------------------------------
-// Discovery reconciliation panel — shown on an auto-discovered project's
-// Overview. The sidebar only says "this is a duplicate"; this is where you do
-// something about it: confirm or correct which documented API it belongs to,
-// and pull the endpoints nobody has written up yet into that API.
-//
-// It never edits the discovered project and never writes discovery INTO a
-// curated one behind your back — promoting is one endpoint at a time, on a
-// button, attributed to whoever pressed it. The discovered record stays as it
-// is, because it is evidence of what is running, not a draft.
-// ----------------------------------------------------------------------------
-const DISCOVERY_MATCH_REASONS = {
-  linked: 'because someone linked them',
-  name: 'matched on name',
-  endpoints: 'matched on the endpoints they share — the names differ',
-};
-
-function renderDiscoveryReconcilePanel(proj){
-  if(!proj.discoveryEnvironment) return '';
-  const cov = discoveryCoverage(proj);
-  const docProjects = allProjects().filter(p => !p.discoveryEnvironment && !p._readonly);
-  // canEdit(), not canEditHere(). An auto-discovered project is only visible in
-  // the environment it was observed in (see viewEndpoints) — SIT, never the
-  // draft — so canEditHere() is false on this page by construction and would
-  // disable the button permanently. Documentation is always authored in the
-  // draft regardless of which environment you are looking at, so the promoted
-  // endpoint lands there and goes through the Release Pipeline like any other.
-  // The panel says so rather than leaving you to discover it.
-  const canPromote = canEdit();
-  const draftLabel = envMeta(draftEnvId()).label;
-
-  const novelEps = (proj.endpoints || []).filter(ep => cov.novelIds.has(ep.id));
-  const matchedRows = (proj.endpoints || [])
-    .map(ep => ({ ep, m: cov.matches.get(ep.id) }))
-    .filter(x => x.m);
-
-  const header = cov.documented
-    ? `<div class="dr-verdict dr-verdict-dup">
-        <span class="dr-verdict-ic">⇄</span>
-        <div>
-          <div class="dr-verdict-t">Already documented as
-            <a href="#" class="dr-link" data-dr-open="${escapeHtml(cov.documented.id)}">${escapeHtml(cov.documented.name)}</a></div>
-          <div class="dr-verdict-s">${escapeHtml(DISCOVERY_MATCH_REASONS[cov.reason] || '')} ·
-            ${cov.covered} of ${cov.total} discovered endpoint(s) are in that API already.</div>
-        </div>
-      </div>`
-    : `<div class="dr-verdict dr-verdict-new">
-        <span class="dr-verdict-ic">＋</span>
-        <div>
-          <div class="dr-verdict-t">Nothing in the API Control Center matches this app</div>
-          <div class="dr-verdict-s">All ${cov.total} discovered endpoint(s) are undocumented — or this app is
-            documented under a name too different to match. Link it below if so.</div>
-        </div>
-      </div>`;
-
-  const linkRow = `<div class="dr-linkrow">
-      <label for="drLinkSelect">${cov.documented ? 'Belongs to' : 'Link to a documented API'}</label>
-      <select id="drLinkSelect">
-        <option value="">${cov.documented ? '— clear the link —' : '— not linked —'}</option>
-        ${docProjects.map(p => `<option value="${escapeHtml(p.id)}"${cov.documented && cov.documented.id === p.id ? ' selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
-      </select>
-      <button type="button" class="ghost" id="drApplyLink">Apply</button>
-      ${cov.documented && cov.reason !== 'linked'
-        ? `<button type="button" class="ghost" id="drReject" title="Record that these are different APIs that happen to share a name, so this stops being reported as a duplicate.">Not the same API</button>`
-        : ''}
-    </div>`;
-
-  const novelList = novelEps.length ? `
-    <div class="dr-sub">
-      <span style="flex:1;">Not documented anywhere — ${novelEps.length} endpoint(s)</span>
-      ${cov.documented && canPromote ? `<button type="button" class="ghost" id="drPromoteAll">Add all to ${escapeHtml(cov.documented.name)}</button>` : ''}
-    </div>
-    <div class="dr-list">
-      ${novelEps.map(ep => `<div class="dr-row">
-        <span class="badge ${methodClass(ep.method)}">${escapeHtml(ep.method)}</span>
-        <span class="mono dr-path">${escapeHtml(ep.path)}</span>
-        ${cov.documented
-          ? (canPromote
-              ? `<button type="button" class="ghost dr-promote" data-dr-promote="${escapeHtml(ep.id)}" title="Adds this endpoint to &quot;${escapeHtml(cov.documented.name)}&quot; in ${escapeHtml(draftLabel)}, unreviewed and in draft.">Add to docs</button>`
-              : `<span class="empty-field">Your role (${escapeHtml(roleMeta(state.authorRole).label)}) is read-only</span>`)
-          : `<span class="empty-field">Link an API above first</span>`}
-      </div>`).join('')}
-    </div>` : `<div class="dr-sub"><span style="flex:1;">Not documented anywhere — none</span></div>
-      <div class="empty-field" style="margin:0 0 4px;">Every endpoint this agent found is already written up.</div>`;
-
-  const matchedList = matchedRows.length ? `
-    <details class="dr-details">
-      <summary>Already documented — ${matchedRows.length} endpoint(s)</summary>
-      <div class="dr-list">
-        ${matchedRows.map(({ ep, m }) => `<div class="dr-row dr-row-dim">
-          <span class="badge ${methodClass(ep.method)}">${escapeHtml(ep.method)}</span>
-          <span class="mono dr-path">${escapeHtml(ep.path)}</span>
-          <span class="dr-arrow">→</span>
-          <a href="#" class="dr-link mono" data-dr-open-ep="${escapeHtml(m.ep.id)}">${escapeHtml(m.ep.path)}</a>
-          <span class="dr-conf" title="${m.confidence === 'exact'
-            ? 'Same method and path shape.'
-            : 'Same method, and one path is the tail of the other — Mule\'s APIkit logs the router flow with the listener base path stripped.'}">${m.confidence === 'exact' ? 'exact' : 'path shape'}</span>
-        </div>`).join('')}
-      </div>
-    </details>` : '';
-
-  return `<div class="section dr-section">
-    <div class="section-title">
-      <span style="flex:1;">Reconciliation <span style="color:var(--text-faint); font-weight:500; text-transform:none;">— what the agent found that you already have</span></span>
-    </div>
-    <div class="dr-card">
-      ${header}
-      ${linkRow}
-      ${novelList}
-      ${matchedList}
-      <div class="dr-foot">The agent has no visibility into the API Control Center, so it pushes every Mule app
-        it sees running, documented or not. This page is where the two sides are compared. Nothing here is written
-        into your documentation unless you press a button — and what you add lands in
-        <strong>${escapeHtml(draftLabel)}</strong> as an unreviewed draft, to be promoted through the Release
-        Pipeline like anything else. The discovered record itself is never changed: it is evidence of what is
-        running, not a draft.</div>
-    </div>
-  </div>`;
-}
-
-function promoteDiscoveredEndpoint(autoProjId, epId, docProjId, opts){
-  const silent = opts && opts.silent;
-  if(!canEdit()){
-    toast(`Your role (${roleMeta(state.authorRole).label}) is read-only`);
-    return false;
-  }
-  const autoProj = state.projects[autoProjId];
-  const docProj = state.projects[docProjId];
-  if(!autoProj || !docProj) return false;
-  if(docProj._readonly){
-    if(!silent) toast(`"${docProj.name}" is shared read-only by someone else.`);
-    return false;
-  }
-  const src = (autoProj.endpoints || []).find(e => e.id === epId);
-  if(!src) return false;
-  // Re-check rather than trust the button: the list was rendered before this
-  // click, and "Add all" walks it one at a time.
-  const shape = discoveryEndpointKey(src.method, src.path);
-  if((docProj.endpoints || []).some(e => discoveryEndpointKey(e.method, e.path) === shape)){
-    if(!silent) toast('Already documented there');
-    return false;
-  }
-  const copy = JSON.parse(JSON.stringify(src));
-  copy.id = uid();                       // a fresh id — the auto- id belongs to the discovery record
-  copy.name = '';                        // "(auto-discovered)" is not a name for a documented endpoint
-  copy.summary = '';
-  copy.description = `Observed running in ${autoProj.discoveryEnvironment || 'an environment'} by the log discovery agent and added here for documentation. Nothing below has been reviewed — the field names and types are what the agent saw on the wire, not a contract.`;
-  copy.version = '0.0.1-draft';
-  copy.status = 'in_development';
-  // Review sign-offs belong to the reviewer, never to a copy.
-  ['secOps', 'vapt', 'logMgmt'].forEach(k => {
-    copy[k + 'Status'] = 'none'; copy[k + 'StatusBy'] = ''; copy[k + 'StatusAt'] = '';
-  });
-  const now = new Date().toISOString();
-  copy.createdAt = now; copy.createdBy = state.authorName || 'unknown';
-  copy.updatedAt = now; copy.updatedBy = state.authorName || 'unknown';
-  copy.tag = src.tag && src.tag !== 'Auto-discovered' ? src.tag : 'Discovered';
-  docProj.endpoints.push(copy);
-  logAudit('created', 'endpoint', `${copy.method} ${copy.path}`,
-    `Promoted from the "${autoProj.name}" auto-discovery record (observed in ${autoProj.discoveryEnvironment || 'an environment'}) — unreviewed`,
-    docProj.name);
-  if(!silent){ saveState(); renderAll(); toast(`Added to ${docProj.name}`); }
-  return true;
-}
-
-function setDiscoveryLink(autoProjId, docProjId, verdict){
-  // PUT /projects silently skips a project you don't own, so a verdict written
-  // onto someone else's shared project would appear to save and then be gone
-  // on the next load. Say so instead.
-  const target = docProjId ? state.projects[docProjId] : null;
-  if(target && target._readonly){
-    toast(`"${target.name}" is shared read-only by someone else — ask its owner to link it.`);
-    return false;
-  }
-  // The verdict lives on the DOCUMENTED project, which the agent never
-  // rewrites — putting it on the discovered one would risk an agent push
-  // clearing a human's decision.
-  for(const p of allProjects()){
-    if(p.discoveryEnvironment || !p.discoveryLinks) continue;
-    if(p.discoveryLinks[autoProjId] && p.id !== docProjId) delete p.discoveryLinks[autoProjId];
-  }
-  if(docProjId && state.projects[docProjId]){
-    const p = state.projects[docProjId];
-    p.discoveryLinks = p.discoveryLinks || {};
-    p.discoveryLinks[autoProjId] = verdict;
-  }
-  saveState();
-  renderAll();
-  return true;
-}
-
-function wireDiscoveryReconcile(main, proj){
-  main.querySelectorAll('[data-dr-open]').forEach(a => a.addEventListener('click', (e) => {
-    e.preventDefault();
-    state.selected = { type:'overview', projectId: a.getAttribute('data-dr-open') };
-    renderAll();
-  }));
-  main.querySelectorAll('[data-dr-open-ep]').forEach(a => a.addEventListener('click', (e) => {
-    e.preventDefault();
-    state.selected = { type:'endpoint', id: a.getAttribute('data-dr-open-ep') };
-    renderAll();
-  }));
-  const apply = document.getElementById('drApplyLink');
-  if(apply) apply.addEventListener('click', () => {
-    const sel = document.getElementById('drLinkSelect');
-    if(setDiscoveryLink(proj.id, sel.value || null, 'linked')){
-      toast(sel.value ? `Linked to ${state.projects[sel.value].name}` : 'Link cleared');
-    }
-  });
-  const reject = document.getElementById('drReject');
-  if(reject) reject.addEventListener('click', () => {
-    const cov = discoveryCoverage(proj);
-    if(!cov.documented) return;
-    if(setDiscoveryLink(proj.id, cov.documented.id, 'separate')) toast('Recorded as a different API');
-  });
-  main.querySelectorAll('[data-dr-promote]').forEach(btn => btn.addEventListener('click', () => {
-    const cov = discoveryCoverage(proj);
-    if(!cov.documented) return;
-    promoteDiscoveredEndpoint(proj.id, btn.getAttribute('data-dr-promote'), cov.documented.id);
-  }));
-  const all = document.getElementById('drPromoteAll');
-  if(all) all.addEventListener('click', async () => {
-    const cov = discoveryCoverage(proj);
-    if(!cov.documented) return;
-    const ids = [...cov.novelIds];
-    const ok = await openConfirmModal({
-      title: `Add ${ids.length} endpoint(s) to "${cov.documented.name}"?`,
-      message: `These are the endpoints the agent found running that nobody has documented. They arrive unreviewed and in draft — field names and types are what was observed on the wire, not a contract.`,
-      confirmLabel: 'Add to documentation',
-    });
-    if(!ok) return;
-    // One save and one render for the whole batch, not per endpoint.
-    const added = ids.reduce((n, id) => n + (promoteDiscoveredEndpoint(proj.id, id, cov.documented.id, { silent:true }) ? 1 : 0), 0);
-    saveState();
-    renderAll();
-    toast(added ? `Added ${added} endpoint(s) to ${cov.documented.name}` : 'Nothing to add');
-  });
-}
-
 function renderProjectOverview(main, projectId){
   const proj = state.projects[projectId];
   if(!proj){ state.selected = null; renderMain(); return; }
@@ -917,12 +648,6 @@ function renderProjectOverview(main, projectId){
                   <span>Open Architecture Studio</span>
                 </span>
               </button>
-              <button type="button" class="ep-actions-item proj-actions-item" id="btnOpenReleasePipelineMenu" role="menuitem">
-                <span class="item-label">
-                  <span class="item-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg></span>
-                  <span>Open Release Pipeline</span>
-                </span>
-              </button>
               <div class="ep-actions-divider"></div>
               <button type="button" class="ep-actions-item proj-actions-item" id="btnExportPdf" role="menuitem">
                 <span class="item-label">
@@ -958,8 +683,6 @@ function renderProjectOverview(main, projectId){
       </div>
     </div>
 
-    ${renderDiscoveryReconcilePanel(proj)}
-
     <div class="section">
       <div class="section-title">Lifecycle</div>
       <div class="lc-card">
@@ -973,8 +696,6 @@ function renderProjectOverview(main, projectId){
         ${lifecycleWheelSvg(proj.lifecycle)}
       </div>
     </div>
-
-    ${releaseHealthSectionHtml(proj.id)}
 
     <div class="section">
       <div class="section-title">
@@ -1054,10 +775,6 @@ function renderProjectOverview(main, projectId){
     document.getElementById('projActionsDD').classList.remove('open');
     openArchitectureStudioTab(proj);
   });
-  document.getElementById('btnOpenReleasePipelineMenu').addEventListener('click', ()=>{
-    document.getElementById('projActionsDD').classList.remove('open');
-    openReleasePipelineTab(proj);
-  });
   document.getElementById('btnExportPostman').addEventListener('click', ()=>{
     document.getElementById('projActionsDD').classList.remove('open');
     exportProjectAsPostmanCollection(proj.id);
@@ -1082,7 +799,6 @@ function renderProjectOverview(main, projectId){
   main.querySelectorAll('[data-header-reveal]').forEach(btn=>{
     btn.addEventListener('click', ()=> toggleSensitiveRevealed());
   });
-  wireDiscoveryReconcile(main, proj);
   const notesArea = document.getElementById('projNotes');
   notesArea.addEventListener('blur', ()=>{
     proj.notes = notesArea.value;
@@ -1207,39 +923,40 @@ function docAccessEnvStatusLabel(status, endDate){
   if(status === 'expired' || status === 'revoked') return 'Previously expired';
   return '';
 }
+// Used to show a per-environment status checklist here (pick which of
+// several environments to request) — removed along with the environment
+// picker itself (environment collapse cluster): with only one environment
+// left, a request either applies or it's already covered, so this just
+// disables the form and explains why instead.
 async function openDocAccessRequestModal(proj, ep){
   _docAccessModalCtx = { projectId: proj.id, endpointId: ep.id };
   document.getElementById('docAccessModalSubtitle').textContent = `${ep.method} ${ep.path}${ep.summary ? ' — '+ep.summary : ''}`;
   document.getElementById('docAccessReason').value = '';
   document.getElementById('docAccessModalError').style.display = 'none';
-  const listEl = document.getElementById('docAccessEnvironmentList');
-  listEl.innerHTML = `<div class="hint" style="margin:8px;">Loading environments…</div>`;
+  const statusEl = document.getElementById('docAccessStatusNote');
+  const submitBtn = document.getElementById('docAccessModalSubmit');
+  if(statusEl) statusEl.textContent = 'Checking your current access…';
+  submitBtn.disabled = true;
   applyDocAccessPreset(30); // a sensible default window — still fully editable before sending
   document.getElementById('docAccessRequestModal').classList.add('show');
 
   // Fetched fresh every time the modal opens (rather than reusing whatever's
   // in state) so a grant approved five minutes ago already shows as
   // "Already have access" instead of letting the person re-request it.
-  let envStatuses;
+  let status = 'none', endDate = null;
   try{
     const data = await apiGet(`/doc-access/endpoint-status?projectId=${encodeURIComponent(proj.id)}&endpointId=${encodeURIComponent(ep.id)}`);
-    envStatuses = data.environments || [];
+    status = data.status || 'none';
+    endDate = data.endDate || null;
   }catch(e){
-    listEl.innerHTML = `<div class="hint" style="margin:8px;color:var(--delete);">Could not load environment status — you can still pick below.</div>`;
-    envStatuses = environments().filter(e=>String(e.label||'').trim().toUpperCase()!=='DR').map(e=>({id:e.id, label:e.label, status:'none'}));
+    // leave status at its 'none' default — the form just won't pre-know
+    // whether this endpoint is already covered.
   }
   if(_docAccessModalCtx?.projectId !== proj.id || _docAccessModalCtx?.endpointId !== ep.id) return; // modal moved on while this was in flight
 
-  listEl.innerHTML = envStatuses.map(e=>{
-    const locked = e.status === 'active' || e.status === 'pending';
-    const checked = !locked && e.id === state.env; // default to whatever they were looking at when they hit the lock
-    const statusText = docAccessEnvStatusLabel(e.status, e.endDate);
-    return `<label class="doc-access-env-row status-${e.status}${locked?' disabled':''}">
-      <input type="checkbox" value="${escapeHtml(e.id)}" ${checked?'checked':''} ${locked?'disabled':''}>
-      <span class="env-label">${escapeHtml(e.label)}</span>
-      ${statusText ? `<span class="env-status">${escapeHtml(statusText)}</span>` : ''}
-    </label>`;
-  }).join('');
+  const locked = status === 'active' || status === 'pending';
+  submitBtn.disabled = locked;
+  if(statusEl) statusEl.textContent = docAccessEnvStatusLabel(status, endDate);
 }
 function closeDocAccessRequestModal(){
   document.getElementById('docAccessRequestModal').classList.remove('show');
@@ -1275,15 +992,9 @@ document.getElementById('docAccessModalSubmit').addEventListener('click', async 
   const btn = document.getElementById('docAccessModalSubmit');
   const errEl = document.getElementById('docAccessModalError');
   errEl.style.display = 'none';
-  const environmentIds = Array.from(document.querySelectorAll('#docAccessEnvironmentList input[type="checkbox"]:checked:not(:disabled)')).map(cb=>cb.value);
   const startDate = document.getElementById('docAccessStart').value;
   const endDate = document.getElementById('docAccessEnd').value;
   const reason = document.getElementById('docAccessReason').value.trim();
-  if(!environmentIds.length){
-    errEl.textContent = 'Pick at least one environment you need access for.';
-    errEl.style.display = 'block';
-    return;
-  }
   if(!startDate || !endDate){
     errEl.textContent = 'Pick both a start and end date.';
     errEl.style.display = 'block';
@@ -1292,16 +1003,8 @@ document.getElementById('docAccessModalSubmit').addEventListener('click', async 
   const ctx = _docAccessModalCtx;
   btn.disabled = true; btn.textContent = 'Sending…';
   try{
-    const result = await apiSend('POST', '/doc-access/requests', { projectId: ctx.projectId, endpointId: ctx.endpointId, environmentIds, startDate, endDate, reason: reason || undefined });
-    const createdLabels = (result.created||[]).map(r=>r.environment_label);
-    const skippedLabels = (result.skipped||[]).map(s=>s.environmentLabel);
-    if(createdLabels.length && !skippedLabels.length){
-      toast(`Request sent for ${createdLabels.join(', ')} — an Admin will review it`);
-    } else if(createdLabels.length && skippedLabels.length){
-      toast(`Request sent for ${createdLabels.join(', ')}. Skipped ${skippedLabels.join(', ')} — already covered.`);
-    } else {
-      toast(`Nothing new to send — you already have or are waiting on ${skippedLabels.join(', ')}.`);
-    }
+    await apiSend('POST', '/doc-access/requests', { projectId: ctx.projectId, endpointId: ctx.endpointId, startDate, endDate, reason: reason || undefined });
+    toast('Request sent — an Admin will review it');
     closeDocAccessRequestModal();
     await loadState(); // pulls this endpoint's fresh "_docAccessStatus: pending" from the server
     renderMain();

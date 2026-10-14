@@ -127,9 +127,9 @@ router.get('/events', async (req, res) => {
 });
 
 // GET /api/audit/stream — SSE. Same plain-HTTP/cookie-auth/native-reconnect
-// pattern as /api/notifications/stream and /api/workspace/observability/stream
-// (see attachSseStream's own header comment for the shared connection-ceiling
-// and backpressure handling). Every 'workspace' event just means "re-check
+// pattern as /api/notifications/stream (see attachSseStream's own header
+// comment for the shared connection-ceiling and backpressure handling).
+// Every 'workspace' event just means "re-check
 // the newest audit events" — the client decides what, if anything, to
 // refetch; the payload itself (see workspaceEventsBus.publish in
 // auditService.js) is a hint, not the data.
