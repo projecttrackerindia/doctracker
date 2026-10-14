@@ -52,96 +52,18 @@ function updateFabIntent(ctxProj){
   }
 }
 
-function renderEnvSwitcher(){
-  const el = document.getElementById('envSwitcher');
-  const current = envMeta(state.env);
-  const ctxProj = currentProjectForEnvContext();
-  updateFabIntent(ctxProj);
-  el.innerHTML = `
-    <div class="env-dd" id="envDD">
-      <button type="button" class="env-dd-btn" id="envDDBtn" aria-haspopup="listbox" aria-expanded="false" aria-controls="envDDPanel" title="Switch environment">
-        <span class="env-dd-dot"></span>
-        <span class="env-dd-label">${escapeHtml(current.label)}</span>
-        <span class="env-dd-chev">▾</span>
-      </button>
-      <div class="env-dd-panel" id="envDDPanel" role="listbox" aria-label="Environment" tabindex="-1">
-        ${environments().map(e=>{
-          // The environment's actual base URL is sensitive and is intentionally never printed
-          // in this switcher — only the env variable token (e.g. "{{SIT-DNS}}") is shown, with
-          // a masked hint on hover. The real value only ever appears in Profile ▸ Environments,
-          // and only for the Admin role after an explicit reveal.
-          const url = ctxProj ? ctxProj.environments[e.id] : '';
-          const locked = !roleAllowsEnv(e.id);
-          const hoverHint = locked
-            ? (e.restricted
-                ? `${e.label} is restricted to Admins`
-                : `An Admin hasn't granted you access to ${e.label} yet`)
-            : (url ? `Endpoint: ${maskEndpointUrl(url)}` : '');
-          return `
-          <div class="env-dd-opt${e.id===state.env?' sel':''}${locked?' locked':''}" role="option" aria-selected="${e.id===state.env}" aria-disabled="${locked}" data-env="${e.id}"
-               title="${escapeHtml(hoverHint)}"
-               style="--opt-accent:${envAccentColor(e.id)};--opt-accent-bg:${envBgColor(e.id)};${locked?'opacity:.45;cursor:not-allowed;':''}">
-            <span class="env-dd-opt-dot"></span>
-            <span class="env-dd-opt-main">
-              <span class="env-dd-opt-label">${escapeHtml(e.label)}</span>
-              ${url ? `<span class="env-dd-opt-url">${escapeHtml(envVarToken(e.id))}</span>` : ''}
-            </span>
-            ${locked ? '<span class="env-dd-check" title="Restricted by role">🔒</span>' : (e.id===state.env?'<span class="env-dd-check">✓</span>':'')}
-          </div>`;
-        }).join('')}
-      </div>
-    </div>`;
-}
-
-function closeEnvDropdown(){
-  const dd = document.getElementById('envDD');
-  if(!dd) return;
-  dd.classList.remove('open');
-  const btn = document.getElementById('envDDBtn');
-  if(btn) btn.setAttribute('aria-expanded','false');
-}
-function openEnvDropdown(){
-  const dd = document.getElementById('envDD');
-  if(!dd) return;
-  dd.classList.add('open');
-  const btn = document.getElementById('envDDBtn');
-  if(btn) btn.setAttribute('aria-expanded','true');
-  dd.querySelectorAll('.env-dd-opt').forEach(o=>o.classList.remove('kbd-focus'));
-  const sel = dd.querySelector('.env-dd-opt.sel') || dd.querySelector('.env-dd-opt');
-  if(sel) sel.classList.add('kbd-focus');
-}
-function selectEnvironment(envId){
-  if(!envIds().includes(envId)) return;
-  if(!roleAllowsEnv(envId)){
-    const meta = envMeta(envId);
-    toast(meta.restricted ? `${meta.label} is restricted to Admins` : `An Admin hasn't granted you access to ${meta.label} yet`);
-    return;
-  }
-  state.env = envId;
-  saveEnv();
-  applyEnvAccent();
-  applyRoleGatedUI();
-  renderEnvSwitcher();
-  // renderSidebar() was missing here, so the endpoint tree kept showing
-  // whichever environment was rendered last (e.g. SIT's promoted endpoints)
-  // until something else happened to trigger a full renderAll() — like a
-  // manual page reload. renderSidebar() calls viewEndpoints() per project,
-  // which is already environment-aware (draft vs. snapshotEntry(proj.id) for
-  // state.env), so calling it here is enough to make the switch immediate:
-  // it shows "Loading…" / "Nothing promoted" right away instead of stale
-  // endpoints from the previous environment, then fills in once the new
-  // environment's snapshot resolves.
-  renderSidebar();
-  renderMain();
-  renderRail();
-}
+// renderEnvSwitcher()/openEnvDropdown()/closeEnvDropdown()/selectEnvironment()
+// used to live here (the topbar environment switcher). Removed as part of
+// the environment-collapse cluster: there is now exactly one implicit
+// environment, so there's nothing left to switch between. The FAB-label
+// side effect renderEnvSwitcher() used to carry (updateFabIntent) now runs
+// from renderMain() instead (see 11-render-main.js).
 
 function renderAll(){
   applyTheme();
   applyEnvAccent();
   applySidebarCollapsed();
   renderAuthorLabel();
-  renderEnvSwitcher();
   renderSidebar();
   renderMain();
   renderRail();

@@ -320,24 +320,21 @@ function profileColor(name){
   return PROFILE_COLORS[hashStr(name) % PROFILE_COLORS.length];
 }
 
-// Environments used to be a hardcoded list. They're now a user-configurable list
-// (add/delete from Your Profile), persisted separately from the rest of the workspace
-// so they're available regardless of which project you're looking at. `restricted`
-// replaces the old per-role env allowlist — Admin always sees everything, other roles
-// are blocked only from environments flagged restricted (Prod/DR by default).
+// Environments used to be a user-configurable list (add/delete from Your
+// Profile) — collapsed to a single implicit "default" environment
+// (environment-collapse cluster). `environments()` is kept as a
+// single-element-array accessor (rather than a plain object) so the many
+// call sites across the app that iterate "every environment" keep working
+// unchanged; it will only ever hold one entry from here on.
 const ENVIRONMENTS_KEY = 'apiStudio_environments';
-// `access` is a descriptive label (Admin/User/Read Only/Restricted) shown on the endpoint
-// table — independent of `restricted`, which still gates the environment switcher the way
-// it always has. `url` is the environment's own endpoint (separate from the per-project base
-// URLs configured in Project settings ▸ Environments) and is sensitive: masked by default,
-// only an Admin *role* can reveal it, see maskEndpointUrl()/canRevealSensitive().
+// `access`/`restricted` are kept on the one environment's own settings
+// (Profile ▸ Environment) even though there's no longer a second role-gated
+// environment to contrast it with — `url` is the environment's own endpoint
+// (separate from the per-project base URLs configured in Project settings),
+// sensitive, masked by default, only an Admin *role* can reveal it (see
+// maskEndpointUrl()/canRevealSensitive()).
 const DEFAULT_ENVIRONMENTS = [
-  { id:'DEV',     label:'Dev',      color:'#ef5c6e', restricted:false, access:'admin',      url:'https://dev.example.com' },
-  { id:'SIT',     label:'SIT',      color:'#4fa3f7', restricted:false, access:'user',       url:'https://qa.example.com' },
-  { id:'UAT',     label:'UAT',      color:'#8b7cf6', restricted:false, access:'user',       url:'' },
-  { id:'PREPROD', label:'Staging',  color:'#35c491', restricted:false, access:'admin',      url:'https://staging.example.com' },
-  { id:'PROD',    label:'Production', color:'#c4529a', restricted:true, access:'restricted', url:'https://prod.example.com' },
-  { id:'DR',      label:'DR',       color:'#8a97b3', restricted:true,  access:'restricted', url:'' },
+  { id:'default', label:'Default', color:'#4fa3f7', restricted:false, access:'user', url:'' },
 ];
 function environments(){
   return (state.environments && state.environments.length) ? state.environments : DEFAULT_ENVIRONMENTS;
@@ -379,81 +376,21 @@ function saveEnvironments(){
   apiSend('PUT', '/environments', { environments: state.environments })
     .catch(e=>{ console.error('Save environments failed', e); toast('Could not save environments to the server.'); });
 }
-function envIdFromLabel(label){
-  return String(label||'').trim().toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/^_+|_+$/g,'') || uid().toUpperCase();
-}
-function addEnvironment(label, color, access, url, hostIps){
-  const trimmed = (label||'').trim();
-  if(!trimmed) return { ok:false, error:'Environment name is required.' };
-  let id = envIdFromLabel(trimmed);
-  if(environments().some(e=>e.id===id)) id = id + '_' + uid().slice(0,4).toUpperCase();
-  if(environments().some(e=>e.label.toLowerCase()===trimmed.toLowerCase())) return { ok:false, error:'That environment already exists.' };
-  const accessId = ENV_ACCESS_LEVELS.some(a=>a.id===access) ? access : 'user';
-  const env = {
-    id, label: trimmed,
-    color: color || ENV_COLOR_PALETTE[environments().length % ENV_COLOR_PALETTE.length],
-    access: accessId,
-    restricted: accessId === 'restricted',
-    url: (url||'').trim(),
-    hostIps: Array.isArray(hostIps) ? hostIps : [],
-  };
-  state.environments = environments().slice();
-  state.environments.push(env);
-  saveEnvironments();
-  logAudit('created', 'environment', env.label, `Added environment "${env.label}" (${accessMeta(accessId).label} access)`);
-  return { ok:true, env };
-}
-function updateEnvironment(id, patch){
-  const list = environments();
-  const idx = list.findIndex(e=>e.id===id);
-  if(idx < 0) return { ok:false, error:'Environment not found.' };
-  const next = { ...list[idx], ...patch };
+// addEnvironment()/updateEnvironment()/moveEnvironment()/reorderEnvironments()/
+// deleteEnvironmentById() used to live here — full CRUD over a list of
+// environments. Removed (environment collapse cluster): there's only ever
+// one environment now, so there's nothing to add, reorder, or delete.
+// updateDefaultEnvironment() is the one thing still needed — editing that
+// single environment's own settings (label/url/color/access/hostIps) from
+// Profile ▸ Environment (see 13-endpoint-table.js).
+function updateDefaultEnvironment(patch){
+  const current = environments()[0] || DEFAULT_ENVIRONMENTS[0];
+  const next = { ...current, ...patch, id:'default' };
   if(patch.access) next.restricted = patch.access === 'restricted';
-  state.environments = list.slice();
-  state.environments[idx] = next;
+  state.environments = [next];
   saveEnvironments();
-  logAudit('updated', 'environment', next.label, `Updated "${next.label}" environment`);
+  logAudit('updated', 'environment', next.label, `Updated the environment settings`);
   return { ok:true, env: next };
-}
-function moveEnvironment(id, dir){
-  const list = environments().slice();
-  const idx = list.findIndex(e=>e.id===id);
-  if(idx < 0) return { ok:false };
-  const [item] = list.splice(idx, 1);
-  if(dir === 'top') list.unshift(item);
-  else if(dir === 'bottom') list.push(item);
-  else return { ok:false };
-  state.environments = list;
-  saveEnvironments();
-  logAudit('updated', 'environment', item.label, `Moved "${item.label}" to the ${dir}`);
-  return { ok:true };
-}
-function reorderEnvironments(draggedId, targetId, placeAfter){
-  const list = environments().slice();
-  const fromIdx = list.findIndex(e=>e.id===draggedId);
-  if(fromIdx < 0) return { ok:false };
-  const [item] = list.splice(fromIdx, 1);
-  let toIdx = list.findIndex(e=>e.id===targetId);
-  if(toIdx < 0) toIdx = list.length;
-  else if(placeAfter) toIdx += 1;
-  list.splice(toIdx, 0, item);
-  state.environments = list;
-  saveEnvironments();
-  return { ok:true };
-}
-function deleteEnvironmentById(id){
-  const list = environments();
-  if(list.length <= 1) return { ok:false, error:"Can't delete the last remaining environment." };
-  const env = list.find(e=>e.id===id);
-  if(!env) return { ok:false, error:'Environment not found.' };
-  state.environments = list.filter(e=>e.id!==id);
-  saveEnvironments();
-  if(state.env === id){
-    state.env = state.environments[0].id;
-    saveEnv();
-  }
-  logAudit('deleted', 'environment', env.label, `Removed environment "${env.label}"`);
-  return { ok:true };
 }
 
 /* ---------- Endpoint table support: access levels, named colors, masking ---------- */
@@ -998,21 +935,13 @@ function isAdmin(){ return state.authorRole === 'admin'; }
 function ownsAnyProject(){
   return Object.values(state.projects || {}).some(p => p && p._owned);
 }
-// Which environments a given role may even see/switch to in the top-right
-// switcher. Admins always see everything.
-//
-// INTERMEDIATE STATE (Cluster A of the removal project — Live Mode proxy
-// removed, environment collapse not yet done): this used to also allow a
-// non-admin role to see an environment via either the Live Mode grant
-// matrix or the separate doc-browse grant matrix. Both grant matrices and the endpoints that
-// populated them are gone as of this cluster, and `state` no longer even
-// sets those two fields, so that branch is removed outright here (rather
-// than left reading `undefined`) and non-custom, non-seesAll roles fail
-// closed to "no environments" below. The real fix — a single implicit
-// environment every role can always see — lands in the environment-collapse
-// cluster; until then this is deliberately conservative, not a regression
-// a real user would hit today (Live Mode's removal means there's no
-// grant left to honor anyway).
+// Which environments a given role may see. Pre-collapse this gated access
+// to the full multi-environment list via role/grant matrices (Live Mode
+// grants, doc-browse grants — both removed in an earlier cluster); now that
+// there's exactly one implicit environment (environment collapse cluster),
+// every non-custom role sees it unconditionally — there's nothing left to
+// restrict. 'custom' keeps its own customPermissions.envs filter, which now
+// trivially matches against the single environment id.
 function roleAllowedEnvs(roleId){
   if(roleId === 'custom'){
     if(AUTH_USER && AUTH_USER.role === 'custom' && AUTH_USER.customPermissions){
@@ -1021,9 +950,7 @@ function roleAllowedEnvs(roleId){
     }
     return [];
   }
-  const role = roleMeta(roleId);
-  if(role.seesAll) return environments();
-  return [];
+  return environments();
 }
 function roleAllowsEnv(envId){ return roleAllowedEnvs(state.authorRole).some(e=>e.id===envId); }
 

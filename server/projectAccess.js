@@ -1,11 +1,17 @@
-// Single source of truth for "can this user see/edit this project, and which
-// of its environments." Centralizes the three independent layers that decide
-// project access, checked in this order:
+// Single source of truth for "can this user see/edit this project." Centralizes
+// the three independent layers that decide project access, checked in this
+// order:
 //
-//   1. Owner            -> full access, every environment, no query needed.
-//   2. project_access    -> a named grant to THIS project (see db.js). Scoped
-//                          to specific environments unless the grant says
-//                          ["*"] (every environment the project has).
+//   1. Owner                                   -> full access, no query needed.
+//   2. project_access                          -> a named grant to THIS project
+//                                                  (see db.js). Project-wide —
+//                                                  there is no per-environment
+//                                                  scoping any more (environment
+//                                                  collapse cluster: the app has
+//                                                  exactly one implicit
+//                                                  environment, so a grant either
+//                                                  covers the project or it
+//                                                  doesn't).
 //   3. visibility='public' / has_public_endpoint -> org-wide fallback, same
 //                          rule workspace.js already applied everywhere.
 //                          View-only, and (per projectForViewer()) only
@@ -14,6 +20,10 @@
 // Call sites should use this instead of re-deriving owner/visibility checks
 // inline, so a project-level grant only has to be taught to the access model
 // once and every read path picks it up.
+//
+// `allowedEnvironments` is kept on the returned shape (always 'all' now) for
+// call-site compatibility rather than removed outright — environmentAllowed()
+// below still works unchanged for anything still calling it.
 const { pool } = require('./db');
 
 const NO_ACCESS = Object.freeze({ canView: false, canEdit: false, allowedEnvironments: [] });
@@ -40,17 +50,21 @@ async function resolveAccess(userId, projectRow, callerOrg) {
   }
 
   const { rows } = await pool.query(
-    `SELECT environments, permission FROM project_access WHERE project_id = $1 AND user_id = $2`,
+    `SELECT permission FROM project_access WHERE project_id = $1 AND user_id = $2`,
     [projectRow.id, userId]
   );
   if (rows.length) {
-    const grant = rows[0];
-    const envs = Array.isArray(grant.environments) ? grant.environments : [];
-    const allowedEnvironments = envs.includes('*') ? 'all' : envs;
+    // Grants are project-wide only now (environment collapse cluster) — a
+    // project_access row used to carry its own `environments` scope
+    // (`["*"]` or a specific subset), but with exactly one environment left
+    // in the whole app, any grant at all already covers "every environment
+    // there is." The column itself is left in place in project_access
+    // (always `["*"]` as of the collapse migration) only so existing rows
+    // don't need a schema change; nothing reads it any more.
     return {
       canView: true,
-      canEdit: grant.permission === 'edit',
-      allowedEnvironments,
+      canEdit: rows[0].permission === 'edit',
+      allowedEnvironments: 'all',
     };
   }
 
@@ -75,23 +89,20 @@ async function resolveAccessById(userId, projectId, callerOrg) {
   return resolveAccess(userId, rows[0], callerOrg);
 }
 
-// True if `environmentId` is one this access grant covers.
+// True if `environmentId` is one this access grant covers. Trivial now that
+// allowedEnvironments is always 'all' or [] (environment collapse cluster),
+// but kept as its own function/signature since callers still read as "is
+// this environment covered," and `canView` alone would be a less honest name
+// for what they're checking.
 function environmentAllowed(access, environmentId) {
   if (!access || !access.canView) return false;
   return access.allowedEnvironments === 'all' || access.allowedEnvironments.includes(environmentId);
 }
 
-// The same "is this environment covered by this grant" predicate as
-// environmentAllowed() above, but for call sites that already have a raw
-// project_access.environments array in hand (from their own query) rather
-// than a resolveAccess() result — this was independently re-implemented as
-// `envs.includes('*') || envs.includes(environmentId)` in pii.js and
-// workspace.js (twice), so a future change to the matching rule (e.g. a
-// new wildcard alias) would have had to be made in multiple places to
-// actually take effect everywhere.
-function grantCoversEnvironment(environments, environmentId) {
-  const envs = Array.isArray(environments) ? environments : [];
-  return envs.includes('*') || envs.includes(environmentId);
-}
-
-module.exports = { resolveAccess, resolveAccessById, environmentAllowed, grantCoversEnvironment, NO_ACCESS };
+// grantCoversEnvironment() used to live here — a standalone "does this raw
+// project_access.environments array cover this environment" check, used by
+// pii.js and workspace.js against a grant row they'd already fetched
+// themselves. Removed: grants are project-wide only now (see resolveAccess
+// above), so both call sites dropped the check entirely rather than call a
+// function that could only ever return true.
+module.exports = { resolveAccess, resolveAccessById, environmentAllowed, NO_ACCESS };

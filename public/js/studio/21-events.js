@@ -186,7 +186,7 @@ document.querySelectorAll('.pinned-row').forEach(row=>{
   row.addEventListener('click', ()=>{
     const nav = row.getAttribute('data-nav');
     state.selected = { type: nav };
-    renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
+    renderSidebar(); renderMain(); renderRail();
     closeMobileSidebar();
   });
 });
@@ -201,7 +201,7 @@ document.getElementById('btnTheme').addEventListener('click', ()=>{
 
 document.getElementById('btnAuthor').addEventListener('click', ()=>{
   state.selected = { type: 'profile' };
-  renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
+  renderSidebar(); renderMain(); renderRail();
   closeMobileSidebar();
 });
 
@@ -315,49 +315,11 @@ document.querySelector('[data-nav="home"]').addEventListener('click', ()=>{
   if(state.sidebarCollapsed) expandSidebarThen(false);
 });
 
-/* ---------- Environment dropdown (delegated — #envSwitcher itself persists across re-renders) ---------- */
-document.getElementById('envSwitcher').addEventListener('click', (e)=>{
-  if(e.target.closest('#envDDBtn')){
-    const dd = document.getElementById('envDD');
-    dd.classList.contains('open') ? closeEnvDropdown() : openEnvDropdown();
-    return;
-  }
-  const opt = e.target.closest('.env-dd-opt');
-  if(opt){
-    selectEnvironment(opt.getAttribute('data-env'));
-    closeEnvDropdown();
-    document.getElementById('envDDBtn').focus();
-  }
-});
-document.getElementById('envSwitcher').addEventListener('keydown', (e)=>{
-  const dd = document.getElementById('envDD');
-  if(!dd) return;
-  const isOpen = dd.classList.contains('open');
-  const opts = Array.from(dd.querySelectorAll('.env-dd-opt'));
-  const focusedIdx = opts.findIndex(o=>o.classList.contains('kbd-focus'));
-  if(e.key === 'Enter' || e.key === ' '){
-    e.preventDefault();
-    if(!isOpen){ openEnvDropdown(); return; }
-    const target = opts[focusedIdx] || opts.find(o=>o.classList.contains('sel'));
-    if(target){ selectEnvironment(target.getAttribute('data-env')); closeEnvDropdown(); document.getElementById('envDDBtn').focus(); }
-    return;
-  }
-  if(e.key === 'Escape' && isOpen){
-    e.preventDefault(); closeEnvDropdown(); document.getElementById('envDDBtn').focus(); return;
-  }
-  if(e.key === 'ArrowDown' || e.key === 'ArrowUp'){
-    e.preventDefault();
-    if(!isOpen){ openEnvDropdown(); return; }
-    let next = focusedIdx;
-    if(e.key === 'ArrowDown') next = focusedIdx < 0 ? 0 : Math.min(opts.length-1, focusedIdx+1);
-    else next = focusedIdx < 0 ? opts.length-1 : Math.max(0, focusedIdx-1);
-    opts.forEach(o=>o.classList.remove('kbd-focus'));
-    if(opts[next]) opts[next].classList.add('kbd-focus');
-  }
-});
+// The environment dropdown's delegated click/keydown handlers used to live
+// here (#envSwitcher). Removed along with the switcher itself as part of the
+// environment-collapse cluster — there's only one implicit environment now,
+// so there's nothing to switch between.
 document.addEventListener('click', (e)=>{
-  const dd = document.getElementById('envDD');
-  if(dd && dd.classList.contains('open') && !dd.contains(e.target)) closeEnvDropdown();
   const epDD = document.getElementById('epActionsDD');
   if(epDD && epDD.classList.contains('open') && !epDD.contains(e.target)) epDD.classList.remove('open');
   const projDD = document.getElementById('projActionsDD');
@@ -374,12 +336,6 @@ document.addEventListener('click', (e)=>{
   if(usersState.rowMenu.id !== null){
     const openUserDD = document.querySelector(`.row-actions-dd[data-urow-dd="${usersState.rowMenu.id}"]`);
     if(openUserDD && !openUserDD.contains(e.target)){ usersState.rowMenu = { id:null }; renderUsersTableSection(); }
-  }
-  const envAddForm = document.getElementById('envAddForm');
-  const envAddBtnEl = document.getElementById('envTableAddBtn');
-  const envAddBtnEmptyEl = document.getElementById('envTableAddBtnEmpty');
-  if(envAddFormOpen && envAddForm && !envAddForm.contains(e.target) && e.target!==envAddBtnEl && e.target!==envAddBtnEmptyEl){
-    envAddFormOpen = false; renderEnvTableSection();
   }
   const toggleProjVisBtn = e.target.closest('[data-toggle-proj-visibility]');
   if(toggleProjVisBtn){ toggleProjectVisibility(toggleProjVisBtn.getAttribute('data-toggle-proj-visibility')); }

@@ -5,7 +5,7 @@ const { recordAuditEvent } = require('../auditService');
 const dataCrypto = require('../crypto');
 const storage = require('../storage');
 const cache = require('../cache');
-const { resolveAccessById, environmentAllowed, grantCoversEnvironment } = require('../projectAccess');
+const { resolveAccessById, environmentAllowed } = require('../projectAccess');
 const { notifyUser } = require('../notifications');
 const piiMasking = require('../piiMasking');
 const { validateOutboundUrlSync } = require('../urlSafety');
@@ -339,14 +339,17 @@ function projectForViewer(row, viewerId, data, grant) {
     return { ...data, id: row.id, visibility: row.visibility, _owned: true, _rev: rev };
   }
   if (grant) {
-    const envs = Array.isArray(grant.environments) ? grant.environments : [];
+    // Grants are project-wide only now (environment collapse cluster) — a
+    // project_access row used to carry its own `environments` scope, but
+    // with exactly one environment left in the app, any grant at all
+    // already covers "every environment there is."
     return {
       ...data,
       id: row.id,
       visibility: row.visibility,
       _owned: false,
       _readonly: grant.permission !== 'edit',
-      _grantedEnvironments: envs.includes('*') ? 'all' : envs,
+      _grantedEnvironments: 'all',
       _rev: rev,
     };
   }
@@ -475,11 +478,13 @@ router.get('/', async (req, res) => {
     // project that isn't the caller's own, instead of fetching and decrypting
     // all of them just to discard most in projectForViewer() afterwards.
     // The LEFT JOIN both pulls in this user's own grants (pa.user_id = $1 in
-    // the WHERE) AND carries the grant's environments/permission along for
+    // the WHERE) AND carries the grant's permission along for
     // projectForViewer to apply — one query instead of an N+1 per project.
+    // (Used to also carry pa.environments — grants are project-wide only
+    // now, see projectForViewer's grant branch, environment collapse cluster.)
     const { rows } = await pool.query(
       `SELECT p.id, p.owner_id, p.organisation, p.visibility, p.name, p.data, p.data_enc, p.updated_at,
-              pa.environments AS grant_environments, pa.permission AS grant_permission
+              pa.permission AS grant_permission
        FROM projects p
        LEFT JOIN project_access pa ON pa.project_id = p.id AND pa.user_id = $1
        WHERE p.owner_id = $1
@@ -498,7 +503,7 @@ router.get('/', async (req, res) => {
     const publicViewProjectIds = []; // ids seen only via the org-wide public catalog — the one branch doc-locking applies to
     rows.forEach((row) => {
       const data = decryptProjectData(row);
-      const grant = row.grant_permission ? { environments: row.grant_environments, permission: row.grant_permission } : null;
+      const grant = row.grant_permission ? { permission: row.grant_permission } : null;
       const viewed = projectForViewer(row, userId, data, grant);
       // Admin-only (2026-09-27, requested explicitly): raw auto-discovered
       // projects (mule_doc_agent.py's build_app_projects(), tagged
@@ -748,16 +753,18 @@ async function requireOwnerOrAdmin(req, res, projectId) {
   return project;
 }
 
-// GET /api/workspace/projects/:id/access — current grants + org roster/env
-// catalog, everything the "Share" UI needs in one call.
+// GET /api/workspace/projects/:id/access — current grants + org roster,
+// everything the "Share" UI needs in one call. Used to also return the org's
+// environment catalog so a grant could be scoped to a subset — grants are
+// project-wide only now (environment collapse cluster), so that's gone.
 router.get('/projects/:id/access', async (req, res) => {
   try {
     const project = await requireOwnerOrAdmin(req, res, req.params.id);
     if (!project) return;
 
-    const [grantsResult, usersResult, environments] = await Promise.all([
+    const [grantsResult, usersResult] = await Promise.all([
       pool.query(
-        `SELECT pa.user_id, u.username, u.role, pa.environments, pa.permission, pa.granted_at,
+        `SELECT pa.user_id, u.username, u.role, pa.permission, pa.granted_at,
                 gb.username AS granted_by_username
          FROM project_access pa
          JOIN users u ON u.id = pa.user_id
@@ -770,7 +777,6 @@ router.get('/projects/:id/access', async (req, res) => {
         `SELECT id, username, role FROM users WHERE organisation = $1 AND id != $2 ORDER BY username ASC`,
         [req.authUser.organisation, project.owner_id]
       ),
-      getOrgEnvironments(req.authUser.organisation),
     ]);
 
     res.json({
@@ -778,7 +784,6 @@ router.get('/projects/:id/access', async (req, res) => {
       projectName: project.name,
       grants: grantsResult.rows,
       shareableUsers: usersResult.rows,
-      environments,
     });
   } catch (err) {
     console.error('GET project access failed:', err);
@@ -786,14 +791,20 @@ router.get('/projects/:id/access', async (req, res) => {
   }
 });
 
-// POST /api/workspace/projects/:id/access — create or update one user's grant.
-// Body: { userId, environments: ["DEV","SIT"] | ["*"], permission: 'view'|'edit' }
+// POST /api/workspace/projects/:id/access — create or update one user's
+// grant. Body: { userId, permission: 'view'|'edit' }. Used to also take an
+// `environments` scope (["DEV","SIT"] or ["*"]) — grants are project-wide
+// only now (environment collapse cluster: there's only one environment
+// left, so "which environments" was never a real choice any more), stored
+// in the DB as the fixed `["*"]` for compatibility with the existing
+// project_access.environments column/projectAccess.js rather than dropping
+// the column outright.
 router.post('/projects/:id/access', async (req, res) => {
   try {
     const project = await requireOwnerOrAdmin(req, res, req.params.id);
     if (!project) return;
 
-    const { userId, environments, permission } = req.body || {};
+    const { userId, permission } = req.body || {};
     const targetUserId = Number(userId);
     if (!Number.isInteger(targetUserId)) {
       return res.status(400).json({ error: 'userId is required.' });
@@ -803,19 +814,6 @@ router.post('/projects/:id/access', async (req, res) => {
     }
     if (permission !== 'view' && permission !== 'edit') {
       return res.status(400).json({ error: "permission must be 'view' or 'edit'." });
-    }
-    if (!Array.isArray(environments) || environments.length === 0) {
-      return res.status(400).json({ error: 'Pick at least one environment, or ["*"] for all.' });
-    }
-
-    // Silently drop anything invalid rather than failing the whole save over
-    // one stale entry.
-    const wildcard = environments.includes('*');
-    let cleanEnvs = ['*'];
-    if (!wildcard) {
-      const validEnvIds = new Set((await getOrgEnvironments(req.authUser.organisation)).map((e) => e.id));
-      cleanEnvs = [...new Set(environments.filter((e) => typeof e === 'string' && validEnvIds.has(e)))];
-      if (!cleanEnvs.length) return res.status(400).json({ error: 'None of the given environments exist for this organisation.' });
     }
 
     // Confirm the target user is actually in the same organisation before
@@ -828,12 +826,12 @@ router.post('/projects/:id/access', async (req, res) => {
 
     const { rows } = await pool.query(
       `INSERT INTO project_access (project_id, user_id, environments, permission, granted_by)
-       VALUES ($1, $2, $3::jsonb, $4, $5)
+       VALUES ($1, $2, '["*"]'::jsonb, $3, $4)
        ON CONFLICT (project_id, user_id)
-       DO UPDATE SET environments = EXCLUDED.environments, permission = EXCLUDED.permission,
+       DO UPDATE SET permission = EXCLUDED.permission,
                       granted_by = EXCLUDED.granted_by, granted_at = now()
-       RETURNING user_id, environments, permission, granted_at`,
-      [req.params.id, targetUserId, JSON.stringify(cleanEnvs), permission, req.authUser.sub]
+       RETURNING user_id, permission, granted_at`,
+      [req.params.id, targetUserId, permission, req.authUser.sub]
     );
 
     await cache.invalidateOrg(req.authUser.organisation);
@@ -842,9 +840,9 @@ router.post('/projects/:id/access', async (req, res) => {
       resourceType: 'project',
       resourceId: req.params.id,
       projectName: project.name,
-      details: `Granted ${targetRows[0].username} ${permission} access (${cleanEnvs.join(', ')})`,
+      details: `Granted ${targetRows[0].username} ${permission} access`,
       severity: 'warning',
-      metadata: { targetUserId, environments: cleanEnvs, permission },
+      metadata: { targetUserId, permission },
     });
     // Same blind spot as doc-access requests: the person who was just given
     // (or had regranted) access to someone else's project had no way to
@@ -853,7 +851,7 @@ router.post('/projects/:id/access', async (req, res) => {
       organisation: req.authUser.organisation,
       type: 'PROJECT_ACCESS_GRANTED',
       title: `You were given ${permission} access to ${project.name}`,
-      body: cleanEnvs.includes('*') ? 'All environments' : cleanEnvs.join(', '),
+      body: project.name,
       link: { view: 'project', projectId: req.params.id },
     });
 
@@ -1075,10 +1073,21 @@ async function upsertEncryptedOrgWorkspace(org, purpose, value) {
   );
 }
 
+// PUT /api/workspace/environments — repurposed by the environment-collapse
+// cluster: this used to be CRUD over an org's whole environment list
+// (add/reorder/delete), now it just edits the one environment's own
+// settings (label, base URL, color, access level, host IPs). The client
+// still sends `{ environments: [...] }` (see saveEnvironments() in
+// 03-notifications.js) so this keeps accepting that shape rather than
+// force a client-side contract change, but always collapses whatever
+// comes in down to the single entry (collapseEnvironmentsList) before it's
+// stored — so even a stale/multi-entry client payload can't resurrect a
+// second environment.
 router.put('/environments', async (req, res) => {
   if (!Array.isArray(req.body?.environments)) return res.status(400).json({ error: 'Expected { environments: [] }.' });
   try {
-    await upsertEncryptedOrgWorkspace(req.authUser.organisation, 'environments', req.body.environments);
+    const collapsed = collapseEnvironmentsList(req.body.environments);
+    await upsertEncryptedOrgWorkspace(req.authUser.organisation, 'environments', collapsed);
     await cache.invalidateOrg(req.authUser.organisation);
     res.json({ ok: true });
   } catch (err) {
@@ -1317,7 +1326,11 @@ router.post('/migrate', async (req, res) => {
       return arr;
     };
 
-    const mergedEnvironments = mergeById(current.environments, body.environments);
+    // Collapsed to the single environment (environment collapse cluster) —
+    // an old browser's localStorage could still hand this route a
+    // multi-entry list (pre-Postgres, pre-collapse data); merging it in
+    // unchanged would resurrect a second environment in org_workspace.
+    const mergedEnvironments = collapseEnvironmentsList(mergeById(current.environments, body.environments));
     const mergedFlowDirections = mergeById(current.custom_flow_directions, body.customFlowDirections);
     const mergedHistory = { ...(current.request_history || {}) };
     if (isPlainObject(body.requestHistory)) {
@@ -1380,18 +1393,44 @@ router.post('/migrate', async (req, res) => {
 });
 
 // ============================================================================
-// Environment stages: Dev (live draft) plus whatever other environments the
-// org has configured, each non-Dev stage potentially holding a frozen
-// snapshot (project_env_versions) read by GET /environment-metrics and
-// GET /projects/:id/snapshot below.
-//
-// The stage order comes from the org's OWN environments list (org_workspace
-// .environments — user-configurable, see the environment settings UI), not a
-// hardcoded list, since orgs can rename/reorder/add environments freely. One
-// convention: an environment labeled "DR" (case-insensitive) is never a
-// manual stage — it mirrors whatever's currently in the last stage.
+// Environment collapse (see migrations/sql/0009_collapse_environments.sql):
+// there is now exactly one environment, read from org_workspace.environments
+// (self-healing on read, see collapseEnvironmentsList/getOrgEnvironments
+// below). Before this cluster there was a user-configurable list of
+// environments, each a "pipeline stage" potentially holding its own frozen
+// promoted snapshot (project_env_versions — dropped entirely in an earlier
+// cluster, see migrations/sql/0007_drop_release_pipeline.sql) read by
+// GET /environment-metrics and GET /projects/:id/snapshot below; both now
+// report on the one live draft only.
 // ============================================================================
 
+// Picks the one environment to keep from a (possibly still multi-entry,
+// pre-collapse) environments list, using the exact same decision rule the
+// data migration used (see server/migrations/sql/0009_collapse_environments.sql):
+// an entry explicitly flagged default/primary/prod if the shape ever had
+// one (as of this schema it doesn't — see that migration's header comment
+// for what was actually inferred), otherwise the list's own first entry
+// (its existing order already represented the org's priority). Always
+// returns exactly one entry with a fixed synthetic id/label, so
+// project_access's `["*"]` and pii_field_rules' `["default"]` (and the
+// client's envIds()) have one stable id to agree on across every org.
+function collapseEnvironmentsList(list) {
+  const arr = Array.isArray(list) ? list : [];
+  const kept = arr.find((e) => e && (e.isDefault || e.isProd || e.primary)) || arr[0] || {};
+  return [{ ...kept, id: 'default', label: 'Default' }];
+}
+
+// Reads the org's environment catalog, self-healing it to the single
+// collapsed entry on the way out. The SQL migration already collapsed the
+// plaintext legacy `environments` column, but `environments_enc` is
+// encrypted with this org's DEK (see server/crypto.js) — a plain SQL
+// UPDATE can't transform ciphertext it can't decrypt, so any org whose
+// catalog was already encrypted before the collapse migration ran would
+// otherwise keep decrypting to its old multi-environment shape forever.
+// Collapsing here, the first time anything reads it post-migration, and
+// writing the result straight back finishes that migration in application
+// code instead (same split the removal plan anticipated for endpoint-level
+// per-environment data — see migrateProject/migrateEndpoint client-side).
 async function getOrgEnvironments(org) {
   const { rows } = await pool.query(
     `SELECT environments, environments_enc FROM org_workspace WHERE organisation = $1`,
@@ -1399,15 +1438,25 @@ async function getOrgEnvironments(org) {
   );
   const ws = rows[0] || {};
   const list = decryptOrgBlob(ws.environments_enc, ws.environments, org, 'environments', []);
-  return Array.isArray(list) ? list : [];
+  const raw = Array.isArray(list) ? list : [];
+  if (raw.length === 1 && raw[0] && raw[0].id === 'default') return raw;
+  const collapsed = collapseEnvironmentsList(raw);
+  try {
+    await upsertEncryptedOrgWorkspace(org, 'environments', collapsed);
+  } catch (err) {
+    console.error(`Failed to persist self-healed environment collapse for org ${org}:`, err);
+  }
+  return collapsed;
 }
 
-// The pipeline is every configured environment EXCEPT ones labeled "DR" —
-// those mirror the last pipeline stage automatically instead of being
-// manually promoted to. Stage 0 is always the live draft (projects.data),
-// never a project_env_versions row.
+// Used to filter out "DR" (auto-mirrored) stages from the Release Pipeline's
+// list of manually-promotable environments. The pipeline itself is gone
+// (see migrations/sql/0007_drop_release_pipeline.sql) and there is only one
+// environment left to report on, so this is now the identity function —
+// kept only so docAccess.js's existing `pipelineStages(await
+// getOrgEnvironments(org))` call keeps working unchanged.
 function pipelineStages(allEnvironments) {
-  return allEnvironments.filter((e) => String(e.label || '').trim().toUpperCase() !== 'DR');
+  return allEnvironments;
 }
 
 // GET /api/workspace/environment-metrics — workspace-wide rollup of how many
@@ -1447,6 +1496,14 @@ function mergeByStatus(target, addition) {
   return target;
 }
 
+// With the environment collapse (and, before it, Release Pipeline's removal
+// — see migrations/sql/0007_drop_release_pipeline.sql) there is exactly one
+// environment and no separate "promoted snapshot" table any more; everything
+// below counts the live draft only. The response shape (stages/mirrors/
+// perProject/...) is kept unchanged so the API Control Center dashboard
+// cards (public/js/studio/11-render-main.js) keep rendering without their
+// own rewrite — `mirrors` is now always empty and every per-project entry
+// has exactly one stage (always the draft).
 router.get('/environment-metrics', async (req, res) => {
   try {
     const userId = req.authUser.sub;
@@ -1460,19 +1517,14 @@ router.get('/environment-metrics', async (req, res) => {
       [userId, org]
     );
 
-    const allEnvs = await getOrgEnvironments(org);
-    const stages = pipelineStages(allEnvs);
+    const stages = pipelineStages(await getOrgEnvironments(org)); // always exactly one entry — the collapsed default environment
     if (!stages.length) return res.json({ stages: [], mirrors: [], totalProjects: rows.length, baselineTotal: 0 });
 
-    // Stage 0 (the live draft) — counts (and now per-status tallies) come
-    // straight from each project's current data, filtered down to what this
-    // viewer is allowed to see.
     const draftCounts = new Map(); // projectId -> count
     const draftByStatus = new Map(); // projectId -> {statusId: count}
-    // How many of this project's draft endpoints are actually release-ready
-    // right now (see endpointReadinessProblem) — needed below so "fully
-    // promoted" means "every endpoint that's ready IS live," not "literally
-    // every endpoint the project has ever documented."
+    // How many of this project's endpoints are actually release-ready right
+    // now (see endpointReadinessProblem) — used below for the "fully
+    // promoted" repurposing.
     const draftReadyCounts = new Map(); // projectId -> count
     rows.forEach((row) => {
       const viewerData = projectForViewer(row, userId, decryptProjectData(row));
@@ -1482,101 +1534,57 @@ router.get('/environment-metrics', async (req, res) => {
       draftReadyCounts.set(row.id, endpoints.filter((ep) => !endpointReadinessProblem(ep)).length);
     });
 
-    // Promoted stages — one query for every frozen snapshot across these
-    // projects, decrypted and counted (and tallied by status) the same
-    // viewer-scoped way.
-    const promotedCounts = new Map(); // `${projectId}:${environmentId}` -> count
-    const promotedByStatus = new Map(); // `${projectId}:${environmentId}` -> {statusId: count}
-    const projectIds = rows.map((r) => r.id);
-    if (projectIds.length) {
-      const { rows: verRows } = await pool.query(
-        `SELECT project_id, environment_id, data_enc FROM project_env_versions WHERE project_id = ANY($1::text[])`,
-        [projectIds]
-      );
-      const rowById = new Map(rows.map((r) => [r.id, r]));
-      verRows.forEach((v) => {
-        const projRow = rowById.get(v.project_id);
-        if (!projRow) return;
-        let count = 0;
-        let byStatus = {};
-        try {
-          const stageData = JSON.parse(dataCrypto.decryptField(v.data_enc, `project-env:${v.project_id}:${v.environment_id}`));
-          const endpoints = Array.isArray(stageData.endpoints) ? stageData.endpoints : [];
-          const isOwner = projRow.owner_id === userId;
-          const visible = isOwner ? endpoints : endpoints.filter((ep) => ep && ep.visibility === 'public');
-          count = visible.length;
-          byStatus = tallyByStatus(visible);
-        } catch (err) {
-          console.error('Failed to decrypt env snapshot for environment-metrics:', err);
-        }
-        promotedCounts.set(`${v.project_id}:${v.environment_id}`, count);
-        promotedByStatus.set(`${v.project_id}:${v.environment_id}`, byStatus);
-      });
-    }
-
     const baselineTotal = Array.from(draftCounts.values()).reduce((s, n) => s + n, 0);
 
-    const buildStageMetric = (env, idx) => {
+    const buildStageMetric = (env) => {
       let totalEndpoints = 0, projectsWithEndpoints = 0;
       const byStatus = {};
       rows.forEach((row) => {
-        const count = idx === 0 ? (draftCounts.get(row.id) || 0) : (promotedCounts.get(`${row.id}:${env.id}`) || 0);
-        const statusTally = idx === 0 ? (draftByStatus.get(row.id) || {}) : (promotedByStatus.get(`${row.id}:${env.id}`) || {});
+        const count = draftCounts.get(row.id) || 0;
         totalEndpoints += count;
         if (count > 0) projectsWithEndpoints++;
-        mergeByStatus(byStatus, statusTally);
+        mergeByStatus(byStatus, draftByStatus.get(row.id) || {});
       });
       return {
         environmentId: env.id,
         label: env.label,
         color: env.color,
-        isDraftStage: idx === 0,
+        isDraftStage: true,
         totalEndpoints,
         projectsWithEndpoints,
         totalProjects: rows.length,
-        percentOfBaseline: baselineTotal ? Math.round((totalEndpoints / baselineTotal) * 100) : (idx === 0 ? 0 : 0),
+        percentOfBaseline: baselineTotal ? Math.round((totalEndpoints / baselineTotal) * 100) : 0,
         byStatus,
       };
     };
 
-    const stageMetrics = stages.map((env, idx) => buildStageMetric(env, idx));
+    const stageMetrics = stages.map(buildStageMetric);
 
-    // "DR" environments auto-mirror the pipeline's last stage rather than
-    // being a manual pipeline stage — see pipelineStages() above — but they
-    // still hold their own project_env_versions rows, so they're reported
-    // the same way, just kept in a separate list.
-    const drEnvs = allEnvs.filter((e) => String(e.label || '').trim().toUpperCase() === 'DR');
-    const mirrorMetrics = drEnvs.map((env) => buildStageMetric(env, -1)); // idx -1 => never the draft stage
-
-    // Per-project breakdown — same counts, just grouped by project instead
-    // of summed across the workspace. Lets the "APIs" table show each
-    // project's own promotion progress instead of the old "has a base URL"
-    // checkbox count.
+    // Per-project breakdown. There's nowhere left to promote to, so
+    // "fullyPromoted" is repurposed as the closest honest equivalent: every
+    // endpoint in the project is actually release-ready (see
+    // endpointReadinessProblem) rather than "reached the last pipeline
+    // stage." stagesReached is always 0 — there are no stages past the
+    // draft any more.
     const perProject = rows.map((row) => {
-      const byEnvironment = {};
-      stages.forEach((env, idx) => {
-        byEnvironment[env.id] = idx === 0 ? (draftCounts.get(row.id) || 0) : (promotedCounts.get(`${row.id}:${env.id}`) || 0);
-      });
       const draftTotal = draftCounts.get(row.id) || 0;
       const readyTotal = draftReadyCounts.get(row.id) || 0;
-      const stagesReached = stages.filter((env, idx) => idx > 0 && (byEnvironment[env.id] || 0) > 0).length;
-      const lastStage = stages[stages.length - 1];
-      // "Fully promoted" means every endpoint that's actually release-ready
-      // (see endpointReadinessProblem) has reached the last stage — NOT every
-      // endpoint the project has ever documented, so a project intentionally
-      // leaving not-yet-ready endpoints out of the last stage can still show
-      // as fully promoted once its ready subset is all live.
-      const fullyPromoted = readyTotal > 0 && lastStage && byEnvironment[lastStage.id] === readyTotal;
-      // Draft-stage status mix — this is the "current/API-level" breakdown
-      // (what's live in the editable doc right now), as opposed to the
-      // per-environment byStatus above which is scoped to a promoted snapshot.
-      const byStatus = draftByStatus.get(row.id) || {};
-      return { projectId: row.id, byEnvironment, draftTotal, readyTotal, stagesReached, fullyPromoted, byStatus };
+      const byEnvironment = {};
+      stages.forEach((env) => { byEnvironment[env.id] = draftTotal; });
+      return {
+        projectId: row.id,
+        byEnvironment,
+        draftTotal,
+        readyTotal,
+        stagesReached: 0,
+        fullyPromoted: draftTotal > 0 && readyTotal === draftTotal,
+        byStatus: draftByStatus.get(row.id) || {},
+      };
     });
 
     res.json({
       stages: stageMetrics,
-      mirrors: mirrorMetrics,
+      mirrors: [],
       totalProjects: rows.length,
       baselineTotal,
       pipelineStageCount: stages.length,
@@ -1610,34 +1618,31 @@ function endpointReadinessProblem(ep) {
   return null;
 }
 
-// Shared by the diff and snapshot routes below: resolves one pipeline
-// stage's endpoint data — the live draft for stage 0, otherwise whatever
-// (if anything) has been promoted into that stage's frozen copy.
-async function loadStageData(project, envId, stageIdx) {
-  if (stageIdx === 0) return decryptProjectData(project);
-  const { rows } = await pool.query(
-    `SELECT data_enc FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
-    [project.id, envId]
-  );
-  if (!rows.length) return { endpoints: [] };
-  return JSON.parse(dataCrypto.decryptField(rows[0].data_enc, `project-env:${project.id}:${envId}`));
+// Used by the snapshot route (and formerly the diff route, removed in an
+// earlier cluster) to resolve a pipeline stage's endpoint data. There is
+// only ever the live draft to return now — project_env_versions (promoted-
+// stage frozen copies) was dropped in an earlier cluster (see
+// migrations/sql/0007_drop_release_pipeline.sql), and with exactly one
+// environment left (environment collapse cluster) there is no separate
+// "promoted" stage left to distinguish anyway. Kept as its own
+// function/signature (rather than inlined) since pii.js still calls it.
+function loadStageData(project) {
+  return decryptProjectData(project);
 }
 
 // GET /api/workspace/projects/:id/snapshot?environmentId=X — read-only view
-// of exactly what's live in one pipeline stage (the frozen promoted copy,
-// or the live draft for stage 0). This is what the studio UI renders when
-// someone switches the environment switcher away from the draft stage —
-// browsing SIT/UAT/Staging/Production/etc. shows what was actually promoted
-// there, not the still-being-edited draft.
+// of a project's endpoints. Used to distinguish the live draft from a
+// frozen promoted copy when the studio UI's environment switcher pointed
+// somewhere other than Dev; now that there is only one environment, this
+// always returns the live draft — kept as a route (rather than folded into
+// GET /api/workspace) only because the client still calls it by name.
 //
-// This has to apply the exact same three gates as GET /api/workspace
-// (projectForViewer + applyDocLock above), or switching off the draft stage
-// silently bypasses all of them: (1) a private, non-owned, non-granted
-// project shouldn't be readable at all here just because the org matches;
-// (2) someone viewing purely via the public catalog should only ever see
-// endpoints marked public, promoted-stage snapshot or not; (3) whatever
-// endpoints survive that cut still need per-endpoint doc-access locking
-// unless the caller's role has blanket doc access.
+// Applies the same three gates GET /api/workspace does (projectForViewer +
+// applyDocLock above): (1) a private, non-owned, non-granted project isn't
+// readable here just because the org matches; (2) a public-catalog-only
+// viewer only ever sees endpoints marked public; (3) whatever endpoints
+// survive that cut still need per-endpoint doc-access locking unless the
+// caller's role has blanket doc access.
 router.get('/projects/:id/snapshot', async (req, res) => {
   try {
     const envKey = req.query.environmentId;
@@ -1657,7 +1662,7 @@ router.get('/projects/:id/snapshot', async (req, res) => {
     let grant = null;
     if (!isOwner) {
       const { rows: grantRows } = await pool.query(
-        `SELECT environments, permission FROM project_access WHERE project_id = $1 AND user_id = $2`,
+        `SELECT permission FROM project_access WHERE project_id = $1 AND user_id = $2`,
         [req.params.id, userId]
       );
       if (grantRows.length) grant = grantRows[0];
@@ -1669,33 +1674,15 @@ router.get('/projects/:id/snapshot', async (req, res) => {
       return res.status(404).json({ error: 'Project not found.' });
     }
 
-    const allEnvs = await getOrgEnvironments(project.organisation);
-    const stages = pipelineStages(allEnvs);
+    const stages = pipelineStages(await getOrgEnvironments(project.organisation));
     const idx = stages.findIndex((e) => e.id === envKey);
     if (idx < 0) return res.status(400).json({ error: 'Unknown environment.' });
+    // A project_access grant used to also name which environments it
+    // covered (grantCoversEnvironment) — grants are project-wide only now
+    // (environment collapse cluster), so any grant at all already covers
+    // this, the only environment there is.
 
-    // A project_access grant also names which environments this person may
-    // browse for this project (see projectForViewer's _grantedEnvironments) —
-    // enforce that here too, not just for Try It.
-    if (grant && !grantCoversEnvironment(grant.environments, envKey)) {
-      return res.status(403).json({ error: 'You do not have access to this environment for this project.' });
-    }
-
-    const isDraft = idx === 0;
-    let versionLabel = null, promotedAt = null, promotedBy = null;
-    if (!isDraft) {
-      const { rows: vRows } = await pool.query(
-        `SELECT version, promoted_at, promoted_by_username FROM project_env_versions WHERE project_id = $1 AND environment_id = $2`,
-        [project.id, envKey]
-      );
-      if (vRows.length) {
-        versionLabel = `1.0.${vRows[0].version}`;
-        promotedAt = vRows[0].promoted_at;
-        promotedBy = vRows[0].promoted_by_username;
-      }
-    }
-
-    const stageData = await loadStageData(project, envKey, idx);
+    const stageData = loadStageData(project);
     let endpoints = Array.isArray(stageData.endpoints) ? stageData.endpoints : [];
 
     if (!isOwner && !grant) {
@@ -1711,22 +1698,19 @@ router.get('/projects/:id/snapshot', async (req, res) => {
     const orgRules = await getOrgPiiRules(project.organisation);
     endpoints = endpoints.map((ep) => piiMasking.maskEndpoint(ep, orgRules));
 
-    // Attachments are project-level, frozen into the stage snapshot exactly
-    // like endpoints are — so switching the environment switcher off the
-    // draft has to switch the Documents list too, not keep showing whatever
-    // is currently on the draft. Same visibility rule as projectForViewer's
-    // attachments field: a non-owner/non-grant viewer only sees them if the
-    // whole project is public, never per-endpoint-public.
+    // Attachments are project-level. Same visibility rule as
+    // projectForViewer's attachments field: a non-owner/non-grant viewer
+    // only sees them if the whole project is public, never per-endpoint-public.
     let attachments = Array.isArray(stageData.attachments) ? stageData.attachments : [];
     if (!isOwner && !grant && project.visibility !== 'public') attachments = [];
 
     res.json({
       environmentId: envKey,
       label: stages[idx].label,
-      isDraft,
-      versionLabel: isDraft ? `1.0.${project.release_version} (draft)` : versionLabel,
-      promotedAt,
-      promotedBy,
+      isDraft: true,
+      versionLabel: `1.0.${project.release_version} (draft)`,
+      promotedAt: null,
+      promotedBy: null,
       endpoints,
       attachments,
     });

@@ -130,7 +130,7 @@ function renderSidebar(){
     el.addEventListener('click', (e)=>{
       e.stopPropagation();
       state.selected = { type:'overview', projectId: el.getAttribute('data-overview') };
-      renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
+      renderSidebar(); renderMain(); renderRail();
       closeMobileSidebar();
     });
   });
@@ -180,7 +180,7 @@ function renderSidebar(){
   list.querySelectorAll('[data-ep]').forEach(el=>{
     el.addEventListener('click', ()=>{
       state.selected = { type:'endpoint', id: el.getAttribute('data-ep') };
-      renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
+      renderSidebar(); renderMain(); renderRail();
       closeMobileSidebar();
     });
   });

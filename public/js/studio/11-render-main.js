@@ -40,6 +40,11 @@ function syncUrlToSelection(){
 
 function renderMain(){
   syncUrlToSelection();
+  // Was done as a side-effect of renderEnvSwitcher() before the environment
+  // switcher was removed (environment collapse) — the FAB's label still
+  // needs to track which project (if any) is in view, so it's called here
+  // instead, since renderMain() already runs on every navigation.
+  updateFabIntent(currentProjectForEnvContext());
   const nowType = state.selected && state.selected.type;
   // The code-samples rail is an off-canvas drawer opened explicitly from an
   // endpoint page (see openCodeSamplesRail()) and never had anything closing
@@ -496,7 +501,7 @@ function renderControlCenter(main){
   main.querySelectorAll('[data-cc-proj]').forEach(row=>{
     row.addEventListener('click', ()=>{
       state.selected = { type:'overview', projectId: row.getAttribute('data-cc-proj') };
-      renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
+      renderSidebar(); renderMain(); renderRail();
     });
   });
 

@@ -254,7 +254,6 @@ function setAuthorRole(roleId){
     saveEnv();
   }
   renderAuthorLabel();
-  renderEnvSwitcher();
   renderMain();
   renderRail();
   toast(`Role set to ${roleMeta(roleId).label}`);

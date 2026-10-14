@@ -4,7 +4,7 @@ const { authenticate, blockIfScheduleLocked } = require('../middleware/authGuard
 const { recordAuditEvent } = require('../auditService');
 const { notifyUser, notifyUsers, adminUserIds } = require('../notifications');
 const cache = require('../cache');
-const { decryptProjectData, getDocAccessMap, getOrgEnvironments, pipelineStages } = require('./workspace');
+const { decryptProjectData, getDocAccessMap } = require('./workspace');
 
 const router = express.Router();
 router.use(authenticate);
@@ -139,20 +139,18 @@ async function afterCommit(label, fn) {
 
 // POST /api/workspace/doc-access/requests — a Viewer (or a 'custom' role
 // without edit rights) asking for time-boxed access to one locked
-// endpoint's documentation, scoped to one or more pipeline environments
-// (Dev/SIT/UAT/...) — a grant for SIT should never quietly unlock the same
-// endpoint's docs in every other environment too. One row is written per
-// requested environment; any environment where the caller already has an
-// active grant or a pending request is skipped rather than erroring out the
-// whole batch, so asking for ["SIT","UAT"] when SIT is already covered
-// still gets UAT submitted.
-// Body: { projectId, endpointId, environmentIds: [...], startDate: 'YYYY-MM-DD', endDate: 'YYYY-MM-DD', reason? }
+// endpoint's documentation. Used to be scoped to one or more pipeline
+// environments (Dev/SIT/UAT/...) — a grant for SIT would never quietly
+// unlock the same endpoint's docs in every other environment too — but
+// with exactly one environment left (environment collapse cluster) that
+// scoping has nothing left to do, so this is back to one row per request.
+// `environment_id`/`environment_label` are no longer written (left NULL,
+// same as every pre-environment-scoping row already was — see db.js and
+// getDocAccessMap, which already treats NULL as "applies everywhere").
+// Body: { projectId, endpointId, startDate: 'YYYY-MM-DD', endDate: 'YYYY-MM-DD', reason? }
 router.post('/requests', async (req, res) => {
-  const { projectId, endpointId, environmentIds, environmentId, startDate, endDate, reason } = req.body || {};
+  const { projectId, endpointId, startDate, endDate, reason } = req.body || {};
   if (!projectId || !endpointId) return res.status(400).json({ error: 'projectId and endpointId are required.' });
-  // environmentId (singular) still accepted for anyone hitting the API directly / old clients.
-  const envIds = [...new Set(Array.isArray(environmentIds) ? environmentIds : (environmentId ? [environmentId] : []))];
-  if (!envIds.length) return res.status(400).json({ error: 'Pick at least one environment you need documentation access for.' });
   const start = parseDateOnly(startDate);
   const end = parseDateOnly(endDate);
   if (!start || !end) return res.status(400).json({ error: 'startDate and endDate must be dates in YYYY-MM-DD form.' });
@@ -180,70 +178,40 @@ router.post('/requests', async (req, res) => {
     const ep = (project.endpoints || []).find((e) => e.id === endpointId);
     if (!ep) return res.status(404).json({ error: 'Endpoint not found.' });
 
-    // Every environment must be a real stage in this org's pipeline. DR is
-    // excluded the same way it is from promotion — it auto-mirrors the last
-    // stage rather than being something anyone requests access to directly.
-    const stages = pipelineStages(await getOrgEnvironments(org));
-    const stageById = new Map(stages.map((s) => [s.id, s]));
-    const unknown = envIds.filter((id) => !stageById.has(id));
-    if (unknown.length) return res.status(400).json({ error: 'Unknown environment.' });
-
     const label = `${(ep.method || 'GET').toUpperCase()} ${ep.path || ''}`.trim();
-    const created = [];
-    const skipped = [];
 
-    for (const envId of envIds) {
-      const envMeta = stageById.get(envId);
-      const existingMap = await getDocAccessMap(org, userId, projectId, [endpointId], envId);
-      const existing = existingMap.get(endpointId);
-      if (existing && existing.is_active) {
-        skipped.push({ environmentId: envId, environmentLabel: envMeta.label, reason: `already have access until ${existing.end_date}` });
-        continue;
-      }
-      if (existing && existing.status === 'pending') {
-        skipped.push({ environmentId: envId, environmentLabel: envMeta.label, reason: 'already have a pending request' });
-        continue;
-      }
-      try {
-        const { rows } = await pool.query(
-          `INSERT INTO doc_access_requests
-            (organisation, project_id, endpoint_id, endpoint_label, environment_id, environment_label, requested_by, requested_by_username, reason, start_date, end_date)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-           RETURNING id, status, environment_id, environment_label, to_char(start_date,'YYYY-MM-DD') AS start_date, to_char(end_date,'YYYY-MM-DD') AS end_date, created_at`,
-          [org, projectId, endpointId, label, envId, envMeta.label, userId, req.authUser.username, (reason || '').trim() || null, startDate, endDate]
-        );
-        created.push(rows[0]);
-      } catch (err) {
-        // The check above (existingMap lookup) is check-then-insert and
-        // inherently racy — two rapid clicks, two open tabs, or a retry can
-        // both pass it before either has committed. uq_doc_access_pending_per_scope
-        // (see db.js) is the real guard against that race; if we lose the
-        // race and hit it, treat it exactly like the check above would have,
-        // instead of failing the whole batch over one already-covered
-        // environment.
-        if (err.code === '23505') {
-          skipped.push({ environmentId: envId, environmentLabel: envMeta.label, reason: 'already have a pending request' });
-          continue;
-        }
-        throw err;
-      }
+    const existingMap = await getDocAccessMap(org, userId, projectId, [endpointId], null);
+    const existing = existingMap.get(endpointId);
+    if (existing && existing.is_active) {
+      return res.status(409).json({ error: `You already have access until ${existing.end_date}.` });
+    }
+    if (existing && existing.status === 'pending') {
+      return res.status(409).json({ error: 'You already have a pending request for this endpoint.' });
     }
 
-    if (!created.length) {
-      // Every requested environment was already covered — nothing new to
-      // submit. Not a hard error: the caller's UI should read this as "you're
-      // already set" rather than a failure.
-      return res.status(409).json({
-        error: skipped.map((s) => `${s.environmentLabel}: ${s.reason}`).join('; '),
-        skipped,
-      });
+    let created;
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO doc_access_requests
+          (organisation, project_id, endpoint_id, endpoint_label, requested_by, requested_by_username, reason, start_date, end_date)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING id, status, to_char(start_date,'YYYY-MM-DD') AS start_date, to_char(end_date,'YYYY-MM-DD') AS end_date, created_at`,
+        [org, projectId, endpointId, label, userId, req.authUser.username, (reason || '').trim() || null, startDate, endDate]
+      );
+      created = rows[0];
+    } catch (err) {
+      // existingMap lookup above is check-then-insert and inherently racy
+      // (two rapid clicks, two open tabs, a retry) — treat losing that race
+      // the same as the check above would have.
+      if (err.code === '23505') {
+        return res.status(409).json({ error: 'You already have a pending request for this endpoint.' });
+      }
+      throw err;
     }
 
-    const envList = created.map((r) => r.environment_label).join(', ');
-
-    // The requests above are already committed — everything past this
-    // point is audit/notification bookkeeping and must not turn a
-    // successful submission into a reported failure (see afterCommit).
+    // The request above is already committed — everything past this point
+    // is audit/notification bookkeeping and must not turn a successful
+    // submission into a reported failure (see afterCommit).
     await afterCommit('DOC_ACCESS_REQUESTED', async () => {
       await recordAuditEvent(req.authUser, req, {
         action: 'DOC_ACCESS_REQUESTED',
@@ -251,7 +219,7 @@ router.post('/requests', async (req, res) => {
         resourceId: String(endpointId),
         entityName: label,
         projectName: project.name,
-        details: `Requested documentation access to ${envList} from ${startDate} to ${endDate}`,
+        details: `Requested documentation access from ${startDate} to ${endDate}`,
         severity: 'info',
       });
       await cache.invalidateOrg(org);
@@ -267,12 +235,12 @@ router.post('/requests', async (req, res) => {
         organisation: org,
         type: 'DOC_ACCESS_REQUESTED',
         title: `${req.authUser.username} requested documentation access`,
-        body: `${label} in ${project.name} (${envList})`,
+        body: `${label} in ${project.name}`,
         link: { view: 'security', tab: 'docaccess' },
       });
     });
 
-    res.json({ created, skipped });
+    res.json({ created: [created], skipped: [] });
   } catch (err) {
     console.error('POST /api/workspace/doc-access/requests failed:', err);
     res.status(500).json({ error: 'Could not submit the request.' });
@@ -281,51 +249,18 @@ router.post('/requests', async (req, res) => {
 
 // GET /api/workspace/doc-access/endpoint-status?projectId=&endpointId= — for
 // the request modal: this caller's current status (none/pending/active/
-// denied/expired) against THIS endpoint, broken out per pipeline
-// environment, so the UI can grey out or label environments they already
-// have covered instead of letting them file a request that just gets
-// rejected as a duplicate.
+// denied/expired) against THIS endpoint. Used to be broken out per pipeline
+// environment (so the UI could grey out environments already covered) —
+// with exactly one environment left there is just the one status now.
 router.get('/endpoint-status', async (req, res) => {
   const { projectId, endpointId } = req.query || {};
   if (!projectId || !endpointId) return res.status(400).json({ error: 'projectId and endpointId are required.' });
   try {
     const org = req.authUser.organisation;
     const userId = req.authUser.sub;
-    const stages = pipelineStages(await getOrgEnvironments(org));
-
-    const { rows } = await pool.query(
-      `SELECT environment_id, status,
-              to_char(start_date,'YYYY-MM-DD') AS start_date,
-              to_char(end_date,'YYYY-MM-DD') AS end_date,
-              (status = 'approved' AND start_date <= CURRENT_DATE AND end_date >= CURRENT_DATE) AS is_active,
-              created_at
-       FROM doc_access_requests
-       WHERE organisation = $1 AND requested_by = $2 AND project_id = $3 AND endpoint_id = $4
-       ORDER BY created_at DESC`,
-      [org, userId, projectId, endpointId]
-    );
-
-    // Newest-first, so the first row seen per environment_id (or the first
-    // NULL-environment / legacy row) is the one that counts — same
-    // "exact environment wins, otherwise fall back to a pre-migration
-    // environment-less grant" rule getDocAccessMap uses elsewhere.
-    const byEnv = new Map();
-    let legacyRow = null;
-    rows.forEach((r) => {
-      if (r.environment_id) {
-        if (!byEnv.has(r.environment_id)) byEnv.set(r.environment_id, r);
-      } else if (!legacyRow) {
-        legacyRow = r;
-      }
-    });
-
-    const environments = stages.map((s) => {
-      const row = byEnv.get(s.id) || legacyRow || null;
-      const { status, endDate } = deriveDocAccessDisplayStatus(row);
-      return { id: s.id, label: s.label, status, endDate };
-    });
-
-    res.json({ environments });
+    const accessMap = await getDocAccessMap(org, userId, projectId, [endpointId], null);
+    const { status, endDate } = deriveDocAccessDisplayStatus(accessMap.get(endpointId) || null);
+    res.json({ status, endDate });
   } catch (err) {
     console.error('GET /api/workspace/doc-access/endpoint-status failed:', err);
     res.status(500).json({ error: 'Could not load access status.' });

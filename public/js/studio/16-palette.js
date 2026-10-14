@@ -175,5 +175,5 @@ function selectPaletteItem(i){
     : it.kind==='overview' ? { type:'overview', projectId: it.projectId }
     : { type: it.kind };
   closePalette();
-  renderEnvSwitcher(); renderSidebar(); renderMain(); renderRail();
+  renderSidebar(); renderMain(); renderRail();
 }

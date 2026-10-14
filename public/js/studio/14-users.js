@@ -923,39 +923,40 @@ function docAccessEnvStatusLabel(status, endDate){
   if(status === 'expired' || status === 'revoked') return 'Previously expired';
   return '';
 }
+// Used to show a per-environment status checklist here (pick which of
+// several environments to request) — removed along with the environment
+// picker itself (environment collapse cluster): with only one environment
+// left, a request either applies or it's already covered, so this just
+// disables the form and explains why instead.
 async function openDocAccessRequestModal(proj, ep){
   _docAccessModalCtx = { projectId: proj.id, endpointId: ep.id };
   document.getElementById('docAccessModalSubtitle').textContent = `${ep.method} ${ep.path}${ep.summary ? ' — '+ep.summary : ''}`;
   document.getElementById('docAccessReason').value = '';
   document.getElementById('docAccessModalError').style.display = 'none';
-  const listEl = document.getElementById('docAccessEnvironmentList');
-  listEl.innerHTML = `<div class="hint" style="margin:8px;">Loading environments…</div>`;
+  const statusEl = document.getElementById('docAccessStatusNote');
+  const submitBtn = document.getElementById('docAccessModalSubmit');
+  if(statusEl) statusEl.textContent = 'Checking your current access…';
+  submitBtn.disabled = true;
   applyDocAccessPreset(30); // a sensible default window — still fully editable before sending
   document.getElementById('docAccessRequestModal').classList.add('show');
 
   // Fetched fresh every time the modal opens (rather than reusing whatever's
   // in state) so a grant approved five minutes ago already shows as
   // "Already have access" instead of letting the person re-request it.
-  let envStatuses = [];
+  let status = 'none', endDate = null;
   try{
     const data = await apiGet(`/doc-access/endpoint-status?projectId=${encodeURIComponent(proj.id)}&endpointId=${encodeURIComponent(ep.id)}`);
-    envStatuses = data.environments || [];
+    status = data.status || 'none';
+    endDate = data.endDate || null;
   }catch(e){
-    listEl.innerHTML = `<div class="hint" style="margin:8px;color:var(--delete);">Could not load environment status — you can still pick below.</div>`;
-    envStatuses = environments().filter(e=>String(e.label||'').trim().toUpperCase()!=='DR').map(e=>({id:e.id, label:e.label, status:'none'}));
+    // leave status at its 'none' default — the form just won't pre-know
+    // whether this endpoint is already covered.
   }
   if(_docAccessModalCtx?.projectId !== proj.id || _docAccessModalCtx?.endpointId !== ep.id) return; // modal moved on while this was in flight
 
-  listEl.innerHTML = envStatuses.map(e=>{
-    const locked = e.status === 'active' || e.status === 'pending';
-    const checked = !locked && e.id === state.env; // default to whatever they were looking at when they hit the lock
-    const statusText = docAccessEnvStatusLabel(e.status, e.endDate);
-    return `<label class="doc-access-env-row status-${e.status}${locked?' disabled':''}">
-      <input type="checkbox" value="${escapeHtml(e.id)}" ${checked?'checked':''} ${locked?'disabled':''}>
-      <span class="env-label">${escapeHtml(e.label)}</span>
-      ${statusText ? `<span class="env-status">${escapeHtml(statusText)}</span>` : ''}
-    </label>`;
-  }).join('');
+  const locked = status === 'active' || status === 'pending';
+  submitBtn.disabled = locked;
+  if(statusEl) statusEl.textContent = docAccessEnvStatusLabel(status, endDate);
 }
 function closeDocAccessRequestModal(){
   document.getElementById('docAccessRequestModal').classList.remove('show');
@@ -991,15 +992,9 @@ document.getElementById('docAccessModalSubmit').addEventListener('click', async 
   const btn = document.getElementById('docAccessModalSubmit');
   const errEl = document.getElementById('docAccessModalError');
   errEl.style.display = 'none';
-  const environmentIds = Array.from(document.querySelectorAll('#docAccessEnvironmentList input[type="checkbox"]:checked:not(:disabled)')).map(cb=>cb.value);
   const startDate = document.getElementById('docAccessStart').value;
   const endDate = document.getElementById('docAccessEnd').value;
   const reason = document.getElementById('docAccessReason').value.trim();
-  if(!environmentIds.length){
-    errEl.textContent = 'Pick at least one environment you need access for.';
-    errEl.style.display = 'block';
-    return;
-  }
   if(!startDate || !endDate){
     errEl.textContent = 'Pick both a start and end date.';
     errEl.style.display = 'block';
@@ -1008,16 +1003,8 @@ document.getElementById('docAccessModalSubmit').addEventListener('click', async 
   const ctx = _docAccessModalCtx;
   btn.disabled = true; btn.textContent = 'Sending…';
   try{
-    const result = await apiSend('POST', '/doc-access/requests', { projectId: ctx.projectId, endpointId: ctx.endpointId, environmentIds, startDate, endDate, reason: reason || undefined });
-    const createdLabels = (result.created||[]).map(r=>r.environment_label);
-    const skippedLabels = (result.skipped||[]).map(s=>s.environmentLabel);
-    if(createdLabels.length && !skippedLabels.length){
-      toast(`Request sent for ${createdLabels.join(', ')} — an Admin will review it`);
-    } else if(createdLabels.length && skippedLabels.length){
-      toast(`Request sent for ${createdLabels.join(', ')}. Skipped ${skippedLabels.join(', ')} — already covered.`);
-    } else {
-      toast(`Nothing new to send — you already have or are waiting on ${skippedLabels.join(', ')}.`);
-    }
+    await apiSend('POST', '/doc-access/requests', { projectId: ctx.projectId, endpointId: ctx.endpointId, startDate, endDate, reason: reason || undefined });
+    toast('Request sent — an Admin will review it');
     closeDocAccessRequestModal();
     await loadState(); // pulls this endpoint's fresh "_docAccessStatus: pending" from the server
     renderMain();

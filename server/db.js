@@ -175,6 +175,16 @@ async function initDb() {
   // own separate localStorage keys (environments, try-it request history,
   // custom flow-direction presets). One row per organisation.
   //
+  // `environments`/`environments_enc`: as of the environment-collapse
+  // cluster, this catalog is expected to always hold exactly one entry
+  // (the implicit "default" environment, id/label fixed — see
+  // collapseEnvironmentsList() in server/routes/workspace.js). That's
+  // enforced in application code, not a DB constraint — the column stays
+  // plain JSONB (still just an array) so a pre-collapse row with more than
+  // one entry doesn't fail to read; getOrgEnvironments() self-heals it down
+  // to one on the next read (see migrations/sql/0009_collapse_environments.sql
+  // for why the SQL migration alone couldn't finish this for encrypted rows).
+  //
   // NOTE on `audit_log`: this JSONB column is DEPRECATED. It used to hold the
   // entire audit history as a single blob that the *frontend* overwrote wholesale
   // on every change — which meant a browser could forge actor names, timestamps,
@@ -215,11 +225,17 @@ async function initDb() {
   // Org-wide PII masking settings (Admin ▸ Security ▸ PII & Data Masking).
   // Kept separate from the per-rule table below since it's a single JSON blob
   // of switches, not a list of records.
+  // `environmentPolicy` used to be keyed by five environment ids (PROD/
+  // PREPROD/UAT/SIT/DEV) — this ADD COLUMN IF NOT EXISTS default only ever
+  // applies to a genuinely fresh database (existing rows already have the
+  // column and are untouched), so it's updated to the single-environment
+  // shape (same default server/routes/pii.js's DEFAULT_SETTINGS uses) rather
+  // than left pointing at environment ids that no longer exist.
   await pool.query(`
     ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS pii_settings JSONB NOT NULL DEFAULT '{
       "automaticProtection": true,
       "revealTimeoutSeconds": 60,
-      "environmentPolicy": {"PROD":"strict","PREPROD":"strict","UAT":"mask","SIT":"mask","DEV":"configurable"},
+      "environmentPolicy": {"default":"strict"},
       "surfaces": {"params":true,"headers":true,"body":true,"pdfExport":true}
     }'::jsonb;
   `);
@@ -249,6 +265,11 @@ async function initDb() {
       chars_to_keep INTEGER NOT NULL DEFAULT 4,
       mask_char TEXT NOT NULL DEFAULT '*',
       apply_to JSONB NOT NULL DEFAULT '["params","headers","body","pdfExport"]',
+      -- Pre-collapse default, kept as the column's DDL default for
+      -- historical accuracy — every existing row was rewritten to
+      -- '["default"]' by migrations/sql/0009_collapse_environments.sql, and
+      -- every new rule is created with that same single-entry value by
+      -- application code now that there's only one environment to scope to.
       environments JSONB NOT NULL DEFAULT '["PROD","PREPROD","UAT","SIT","DEV"]',
       enabled BOOLEAN NOT NULL DEFAULT true,
       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,

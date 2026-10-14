@@ -12,13 +12,12 @@ let state = {
   authorName: '',                   // display name used to attribute added/modified endpoints — from AUTH_USER when signed in
   organisation: '',                 // from AUTH_USER when signed in
   sidebarCollapsed: false,          // desktop sidebar collapse (persisted) — separate from the mobile drawer's .show class
-  environments: [],                 // user-configurable environment list — see loadState()
+  environments: [],                 // single-element collapsed environment list — see loadState()/environments()
   auditLog: [],                     // who changed what, when — see logAudit()
   customFlowDirections: [],         // legacy org-shared flow-direction presets — kept only for resolveFlowDirection()'s back-compat fallback (public/js/studio/03-notifications.js), no longer written to
   branding: {},                     // org letterhead for PDF exports — { orgDisplayName, logoDataUrl, updatedAt, updatedBy }, see loadState() and Your Profile ▸ Organisation branding
   envUrlRevealed: {},                // { [envId]: true } — session-only, never persisted; Admin-role reveal toggle
   sensitiveRevealed: false,          // session-only Admin-role toggle: reveals real hosts & secret header values
-  envTableUI: { search:'', filterAccess:'', filterColor:'', sortBy:null, sortDir:'asc' },
   envTableStatus: 'ready',           // 'ready' | 'loading' | 'error' — see loadState()
   envMetrics: null,                  // GET /environment-metrics response cache — see loadEnvironmentMetrics()
   envMetricsStatus: 'idle',          // 'idle' | 'loading' | 'error' | 'ready'
