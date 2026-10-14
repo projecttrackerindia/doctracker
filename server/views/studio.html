@@ -20,7 +20,7 @@
 /* ============================================================
    TOKENS — canonical dark/light palette now lives in
    /css/design-tokens.css (linked in <head>), shared with the
-   audit log and release-pipeline pages.
+   audit log page.
    ============================================================ */
 
 /* ============================================================
@@ -1484,8 +1484,8 @@ pre.code-block{
 .modal-overlay{ position:fixed; inset:0; background:rgba(4,7,12,.6); backdrop-filter:blur(2px); display:none; align-items:center; justify-content:center; z-index:50; padding:20px; }
 .modal-overlay.show{ display:flex; }
 /* BUGFIX: confirmModal is opened FROM WITHIN other already-open modals (e.g.
-   the Release Pipeline's Merge/Roll-back confirmations inside Project
-   Settings). With equal z-index, later-in-DOM elements paint on top — since
+   confirmations inside Project Settings). With equal z-index, later-in-DOM
+   elements paint on top — since
    projectModal/others are defined after confirmModal in this file, the
    confirm dialog was rendering invisibly behind them. Force it above every
    other overlay regardless of source order. */
@@ -1578,8 +1578,8 @@ body.tryit-standalone #tryItClose{ display:none; }
 .modal.wide{ width:1040px; max-width:96vw; }
 /* min-height keeps the dialog a consistent size across tabs — otherwise a
    short tab like Architecture (a couple lines + one button) collapses the
-   whole modal to a fraction of General/Release Pipeline's height, and the
-   dialog visibly jumps size every time you switch tabs. */
+   whole modal to a fraction of another tab's height, and the dialog visibly
+   jumps size every time you switch tabs. */
 .modal.xwide{ width:1180px; max-width:96vw; max-height:92vh; min-height:600px; padding:32px 36px; display:flex; flex-direction:column; }
 .modal.xwide .modal-pane.active{ flex:1; }
 .field-grid-2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
@@ -1677,105 +1677,6 @@ body.tryit-standalone #tryItClose{ display:none; }
 .env-settings-summary .n{ color:var(--text); font-weight:700; }
 .env-settings-summary .bar{ flex:1; height:4px; border-radius:99px; background:var(--surface-2); overflow:hidden; }
 .env-settings-summary .bar-fill{ height:100%; background:var(--get); border-radius:99px; transition:width .2s ease; }
-
-/* ---------- Release Pipeline (Project settings ▸ Release Pipeline) ---------- */
-/* Compact read-only strip across the top — orientation only, not the primary
-   interaction anymore (that's the from/to diff panel below it). */
-.rp-strip{ display:flex; align-items:center; flex-wrap:wrap; gap:0; margin-bottom:18px; }
-.rp-strip-chip{
-  display:flex; align-items:center; gap:7px; background:var(--surface); border:1px solid var(--border);
-  border-left:3px solid var(--rp-accent, var(--border-strong)); border-radius:9px; padding:7px 12px;
-}
-.rp-strip-chip-label{ font-family:var(--mono); font-size:11.5px; font-weight:800; color:var(--text); }
-.rp-strip-chip-version{ font-size:11px; color:var(--text-faint); }
-.rp-strip-chip-version.empty{ font-style:italic; }
-.rp-draft-pill{ font-family:var(--sans); font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--accent); background:var(--accent-soft); padding:2px 7px; border-radius:999px; }
-.rp-history-toggle{ font-family:var(--sans); font-size:10.5px; font-weight:650; color:var(--accent); background:none; border:none; cursor:pointer; padding:0; margin-top:2px; text-align:left; }
-.rp-history-toggle:hover{ text-decoration:underline; }
-.rp-history-list{ margin:10px 0 16px; padding:12px 14px; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); }
-.rp-history-title{ font-size:12px; font-weight:700; margin-bottom:8px; }
-.rp-history-row{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:7px 0; border-top:1px solid var(--border); }
-.rp-history-row:first-of-type{ border-top:none; }
-.rp-history-row.current{ opacity:.85; }
-.rp-history-row-main{ display:flex; flex-direction:column; gap:2px; font-size:12px; }
-.rp-history-empty{ font-size:12px; color:var(--text-faint); }
-.rp-strip-arrow{ color:var(--text-faint); padding:0 6px; display:flex; }
-.rp-mirror-inline{
-  display:flex; align-items:center; gap:6px; margin-left:14px; padding-left:14px; border-left:1px dashed var(--border);
-  font-size:11px; color:var(--text-faint);
-}
-.rp-mirror-inline b{ color:var(--text-dim); font-family:var(--mono); }
-
-/* From/To diff panel */
-.rp-diffbar{ display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
-.rp-diffbar .field{ margin:0; flex:1; min-width:180px; }
-.rp-diffbar .field label{ font-size:10.5px; }
-.rp-diffbar select{
-  width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--border);
-  background:var(--bg-elevated); color:var(--text); font-size:12.5px;
-}
-.rp-diffbar-swap{
-  flex-shrink:0; width:32px; height:32px; border-radius:8px; border:1px solid var(--border); background:var(--surface-2);
-  color:var(--text-dim); cursor:pointer; display:flex; align-items:center; justify-content:center; margin-bottom:1px;
-}
-.rp-diffbar-swap:hover{ border-color:var(--accent); color:var(--accent); }
-
-.rp-diff-summary{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
-.rp-diff-count{ font-size:12px; font-weight:700; display:flex; align-items:center; gap:5px; }
-.rp-diff-count.added{ color:#2e9e5b; }
-.rp-diff-count.removed{ color:var(--danger); }
-.rp-diff-count.modified{ color:var(--accent); }
-.rp-diff-count .swatch{ width:9px; height:9px; border-radius:2px; background:currentColor; }
-.rp-diff-nochanges{ font-size:12.5px; color:var(--text-faint); padding:22px 0; text-align:center; }
-.rp-breaking-callout{ background:rgba(224,168,62,.10); border:1px solid rgba(224,168,62,.35); border-radius:8px; padding:12px 14px; margin-bottom:14px; }
-.rp-breaking-head{ font-size:13px; font-weight:700; color:#c98a1f; display:flex; align-items:center; gap:7px; margin-bottom:8px; }
-.rp-breaking-icon{ font-size:14px; }
-.rp-breaking-list{ margin:0 0 10px 0; padding-left:20px; font-size:12px; color:var(--text-dim); line-height:1.6; }
-.rp-breaking-list li{ margin-bottom:2px; }
-.rp-breaking-ack{ display:flex; align-items:flex-start; gap:8px; font-size:12px; font-weight:600; color:var(--text); cursor:pointer; }
-.rp-breaking-ack input{ margin-top:2px; }
-
-.rp-diff-list{ display:flex; flex-direction:column; gap:8px; }
-.rp-diff-ep{ border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--surface); }
-.rp-diff-ep-head{
-  display:flex; align-items:center; gap:10px; padding:10px 13px; cursor:pointer; user-select:none;
-}
-.rp-diff-ep.added .rp-diff-ep-head{ background:color-mix(in srgb, #2e9e5b 8%, transparent); }
-.rp-diff-ep.removed .rp-diff-ep-head{ background:color-mix(in srgb, var(--danger) 8%, transparent); }
-.rp-diff-ep.modified .rp-diff-ep-head{ background:color-mix(in srgb, var(--accent) 7%, transparent); }
-.rp-diff-marker{ font-family:var(--mono); font-weight:800; font-size:13px; width:14px; text-align:center; flex-shrink:0; }
-.rp-diff-ep.added .rp-diff-marker{ color:#2e9e5b; }
-.rp-diff-ep.removed .rp-diff-marker{ color:var(--danger); }
-.rp-diff-ep.modified .rp-diff-marker{ color:var(--accent); }
-.rp-diff-ep-method{ font-family:var(--mono); font-size:10.5px; font-weight:800; padding:2px 6px; border-radius:5px; background:var(--surface-2); color:var(--text-dim); flex-shrink:0; }
-.rp-diff-ep-path{ font-family:var(--mono); font-size:12.5px; color:var(--text); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.rp-diff-ep-summary{ font-size:11px; color:var(--text-faint); flex-shrink:0; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.rp-diff-ep-count{ font-size:10.5px; color:var(--text-faint); flex-shrink:0; }
-.rp-diff-ep-caret{ color:var(--text-faint); flex-shrink:0; transition:transform .12s ease; }
-.rp-diff-ep.open .rp-diff-ep-caret{ transform:rotate(90deg); }
-.rp-diff-ep-body{ display:none; border-top:1px solid var(--border); padding:4px 0; }
-.rp-diff-ep.open .rp-diff-ep-body{ display:block; }
-.rp-diff-field{ padding:7px 13px 7px 37px; font-size:11.5px; border-bottom:1px solid var(--border); }
-.rp-diff-field:last-child{ border-bottom:none; }
-.rp-diff-field-path{ font-family:var(--mono); color:var(--text-dim); margin-bottom:3px; }
-.rp-diff-line{ font-family:var(--mono); font-size:11px; padding:2px 8px; border-radius:4px; white-space:pre-wrap; word-break:break-word; margin-bottom:2px; }
-.rp-diff-line.rm{ background:var(--danger-soft); color:var(--danger); }
-.rp-diff-line.add{ background:color-mix(in srgb, #2e9e5b 14%, transparent); color:#2e9e5b; }
-.rp-diff-line.rm::before{ content:"− "; }
-.rp-diff-line.add::before{ content:"+ "; }
-
-.rp-mergebar{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:18px; padding-top:16px; border-top:1px dashed var(--border); flex-wrap:wrap; }
-.rp-mergebar-note{ font-size:11.5px; color:var(--text-faint); }
-.rp-merge-btn{
-  font-size:12.5px; font-weight:700; padding:9px 18px; border-radius:999px;
-  background:var(--accent); border:1px solid var(--accent); color:var(--accent-contrast, #fff); cursor:pointer;
-}
-.rp-merge-btn:hover:not(:disabled){ opacity:.9; }
-.rp-merge-btn:disabled{ opacity:.4; cursor:not-allowed; background:var(--surface-2); border-color:var(--border); color:var(--text-faint); }
-@media (max-width:700px){
-  .rp-diffbar{ flex-direction:column; align-items:stretch; }
-  .rp-diffbar-swap{ align-self:center; transform:rotate(90deg); }
-}
 
 /* Read-only banner shown on overview/endpoint pages while browsing a
    non-draft environment (SIT/UAT/Staging/Production/DR) — the content shown
@@ -3067,13 +2968,6 @@ pre.json-raw{ max-height:360px; margin:0; }
           <span class="nav-count-badge" id="securityBadge" style="display:none;"></span>
         </div>
 
-        <div class="nav-btn-wrap">
-          <button class="icon" id="btnReleasePipeline" title="Release Pipeline — every API's stage and pending promotion requests" style="display:none;">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2.5"></circle><circle cx="5" cy="18" r="2.5"></circle><circle cx="19" cy="12" r="2.5"></circle><path d="M5 8.5v7M7.2 6.8L16.8 10.8M7.2 17.2L16.8 13.2"></path></svg>
-          </button>
-          <span class="nav-count-badge" id="releasePipelineBadge" style="display:none;"></span>
-        </div>
-
       </div>
 
 
@@ -3969,20 +3863,14 @@ pre.json-raw{ max-height:360px; margin:0; }
 <div class="modal-overlay" id="projectModal" role="dialog" aria-modal="true" aria-labelledby="projectModalTitle">
   <div class="modal xwide">
     <h2 id="projectModalTitle">Project settings</h2>
-    <div class="modal-sub" id="projSubtitle">Release pipeline, documents and architecture for this project.</div>
+    <div class="modal-sub" id="projSubtitle">Environments, documents and architecture for this project.</div>
     <div class="modal-tabs">
-      <div class="modal-tab active" data-mtab="release">Release Pipeline</div>
-      <div class="modal-tab" data-mtab="environments">Environments</div>
+      <div class="modal-tab active" data-mtab="environments">Environments</div>
       <div class="modal-tab" data-mtab="docs">Documents</div>
       <div class="modal-tab" data-mtab="architecture">Architecture</div>
     </div>
-    <div class="modal-pane active" data-mpane="release">
-      <div class="hint" style="margin-top:0;">Promote between environments, review breaking changes, and see the full merge history — a dedicated tool that opens in its own tab, same as Architecture Studio.</div>
-      <div class="ad-modal-status" id="projReleaseStatus" style="margin:14px 0; font-size:12px; color:var(--text-dim);">Loading…</div>
-      <button type="button" class="primary" id="btnOpenReleasePipelineSettings">Open Release Pipeline →</button>
-    </div>
-    <div class="modal-pane" data-mpane="environments">
-      <div class="hint" style="margin-top:0;">The base URL this project actually points to in each environment — used for "Try it", the OpenAPI export's server list, and the API Control Center's endpoint-coverage metrics. This doesn't affect what's promoted through the release pipeline, just where requests are sent.</div>
+    <div class="modal-pane active" data-mpane="environments">
+      <div class="hint" style="margin-top:0;">The base URL this project actually points to in each environment — used for "Try it", the OpenAPI export's server list, and the API Control Center's endpoint-coverage metrics.</div>
       <div id="projEnvUrlList" style="display:flex;flex-direction:column;gap:10px;"></div>
     </div>
     <div class="modal-pane" data-mpane="docs">
@@ -4160,7 +4048,7 @@ const ORG_TOKEN = '__ORG_TOKEN__';
 // this session already has access to, never trusted server-side.
 const INITIAL_PROJECT_SLUG = __PROJECT_SLUG__;
 const INITIAL_ENDPOINT_SLUG = __ENDPOINT_SLUG__;
-// Non-project views (security, release-pipeline, errors, profile) that get
+// Non-project views (security, errors, profile) that get
 // their own bookmarkable/refreshable URL - see server.js's SPECIAL_VIEW_ROUTES
 // and its handling in 22-init.js's boot().
 const INITIAL_VIEW = __INITIAL_VIEW__;

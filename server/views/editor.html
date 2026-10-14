@@ -29,7 +29,7 @@
   --warn:#e8a33d; --warn-soft:rgba(232,163,61,.14);
   --ok:#38c793; --ok-soft:rgba(56,199,147,.14);
   --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
-  /* Method colors match Studio/audit-log/release-pipeline's canonical
+  /* Method colors match Studio/audit-log's canonical
      values (design-tokens.css) — these used to be independently picked
      here, so the same GET endpoint rendered blue on Studio and green on
      this tab. Same meaning, must be the same color everywhere. */
@@ -551,7 +551,7 @@ html{ scroll-behavior:smooth; }
 
   <!-- Project details — shared across every endpoint in this project. Editing
        these here updates the same project record (Project settings only
-       covers Release Pipeline, Documents and Architecture now). -->
+       covers Environments, Documents and Architecture now). -->
   <div class="card section-anchor" id="cardProjectDetails">
     <div class="card-head"><div class="card-title">Project details</div></div>
     <div class="hint" style="margin-bottom:12px;">Shared across every endpoint in this project.</div>
@@ -1040,7 +1040,7 @@ wireMdPreviewToggle('fApiDescPreviewToggle', 'fApiDesc', 'fApiDescPreview');
    same project record. Mirrors server/views/studio.html's now-removed
    Project settings ▸ General/Auth tabs; this editor tab is now the one place
    these shared project fields are created or edited (Project settings only
-   covers Release Pipeline, Documents and Architecture). */
+   covers Environments, Documents and Architecture). */
 const LIFECYCLE_STAGES = ['DRAFT','DESIGN','DEVELOPMENT','SIT','UAT','PRE-PROD','PRODUCTION','DEPRECATED','RETIRED'];
 // Request flow direction: a plain pattern ('1-way'/'2-way', which the
 // request-flow SVG needs to draw arrows) plus a free-text label, stored

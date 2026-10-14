@@ -12,10 +12,6 @@ document.getElementById('btnSecurityCenter').addEventListener('click', ()=>{
   state.securityTab = state.securityTab || (isAdmin() ? 'summary' : 'docaccess');
   renderMain();
 });
-document.getElementById('btnReleasePipeline').addEventListener('click', ()=>{
-  state.selected = { type:'releasepipeline' };
-  renderMain();
-});
 // The FAB used to always call openEditorTab(currentProjectForEnvContext(), null) —
 // meaning if you'd last viewed (or were viewing) some project, EVERY field shared
 // across that project (name, owner, team, auth type, auth params, everything under
@@ -138,10 +134,6 @@ document.getElementById('pgCancel').addEventListener('click', closeProjectModal)
 document.getElementById('btnOpenArchStudioSettings').addEventListener('click', ()=>{
   if(editingProjectId && state.projects[editingProjectId]) openArchitectureStudioTab(state.projects[editingProjectId]);
 });
-document.getElementById('btnOpenReleasePipelineSettings').addEventListener('click', ()=>{
-  if(editingProjectId && state.projects[editingProjectId]) openReleasePipelineTab(state.projects[editingProjectId]);
-});
-
 /* Request flows (one or more diagrams per project) are edited by the shared
    FlowEditor (public/js/flow-editor.js) mounted on #mFlowsRoot in the endpoint
    modal's "Project details" section — populated by hydrateEndpointProjectFields

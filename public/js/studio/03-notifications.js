@@ -50,9 +50,6 @@ function navigateToNotifLink(link){
   } else if(link.view === 'project' && link.projectId){
     state.selected = { type:'project', id: link.projectId };
     renderMain();
-  } else if(link.view === 'release-pipeline' && link.projectId){
-    const p = state.projects[link.projectId];
-    if(p) openReleasePipelineTab(p); else toast('That project could not be found.');
   } else if(link.view === 'tryit'){
     // Live Mode access changed — nothing more specific to jump to than the
     // home view; the person can open Try It on whichever endpoint they need.
@@ -77,18 +74,6 @@ async function refreshSecurityBadge(){
   if(!isAdmin() && !ownsAnyProject()){ el.style.display = 'none'; return; }
   try{
     const { count } = await apiGet('/doc-access/pending-count');
-    if(count > 0){ el.textContent = count > 99 ? '99+' : String(count); el.style.display = ''; }
-    else el.style.display = 'none';
-  }catch(e){ /* best-effort */ }
-}
-
-async function refreshReleasePipelineBadge(){
-  const el = document.getElementById('releasePipelineBadge');
-  if(!el) return;
-  if(!isAdmin()){ el.style.display = 'none'; return; } // org-wide pending count is Admin-only server-side
-  try{
-    const { requests } = await apiGet('/promotion-requests?status=pending');
-    const count = (requests||[]).length;
     if(count > 0){ el.textContent = count > 99 ? '99+' : String(count); el.style.display = ''; }
     else el.style.display = 'none';
   }catch(e){ /* best-effort */ }
@@ -174,19 +159,16 @@ document.addEventListener('click', (e)=>{
 function refreshAllNotifBadges(){
   refreshNotifBadge();
   refreshSecurityBadge();
-  refreshReleasePipelineBadge();
   if(_notifPanelOpen) loadNotifPanel();
 }
 
 // Live push: plain SSE, cookie auth, EventSource's native auto-reconnect
 // (no retry loop of our own). This opens once at boot and stays open for
 // the session, since the bell/badges are visible everywhere in the SPA
-// chrome, not just on one page. Any single
-// event could in principle mean any of the three badges changed (a doc-access
-// approval affects the bell AND the Security badge, a promotion affects the
-// bell AND the Release Pipeline badge), so the simplest correct handling is
-// to refresh all three on every event rather than routing by `type` — each
-// refresh is one cheap GET.
+// chrome, not just on one page. Any single event could in principle mean
+// either badge changed (a doc-access approval affects the bell AND the
+// Security badge), so the simplest correct handling is to refresh both on
+// every event rather than routing by `type` — each refresh is one cheap GET.
 function notifStartLive(){
   if(_notifEventSource) return;
   if(typeof EventSource === 'undefined'){
@@ -220,7 +202,6 @@ function notifStartLive(){
 function initNotifications(){
   refreshNotifBadge();
   refreshSecurityBadge();
-  refreshReleasePipelineBadge();
   notifStartLive();
   wsEventsStartLive();
 }

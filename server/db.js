@@ -353,36 +353,10 @@ async function initDb() {
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS tryit_collections_enc TEXT;`);
   await pool.query(`ALTER TABLE org_workspace ADD COLUMN IF NOT EXISTS tryit_collections_key_version INTEGER;`);
 
-  // ---- Environment release pipeline ----
-  // `release_version` is the project-wide "cut number" (displayed as 1.0.N) —
-  // it increments once each time a new draft is promoted out of the first
-  // (Dev) stage. Moving that same release further down the pipeline
-  // (SIT -> UAT -> Staging -> Production) carries the version forward
-  // unchanged, same as a real release moving through environments.
+  // `release_version` is the project-wide "cut number" (displayed as 1.0.N),
+  // still read by GET /projects/:id/snapshot's draft label — kept even
+  // though the promotion pipeline that used to advance it was removed.
   await pool.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS release_version INTEGER NOT NULL DEFAULT 0;`);
-
-  // One row per (project, environment) = the environment's CURRENTLY pinned
-  // snapshot — overwritten on each promotion, not an unbounded history table.
-  // environment_id is a free-text org-configured id (see org_workspace.environments),
-  // not a foreign key, since environments live in that JSONB list rather than
-  // a normalized table. Encrypted the same way as projects.data — see
-  // server/crypto.js and the encrypt/decryptProjectData helpers in
-  // server/routes/workspace.js.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS project_env_versions (
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      environment_id TEXT NOT NULL,
-      version INTEGER NOT NULL,
-      data_enc TEXT NOT NULL,
-      data_key_version INTEGER NOT NULL,
-      source_environment_id TEXT,
-      promoted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      promoted_by_username TEXT,
-      auto_mirrored BOOLEAN NOT NULL DEFAULT false,
-      promoted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (project_id, environment_id)
-    );
-  `);
 
   // ---- Per-project, per-environment sharing grants ----
   // Fills the gap between `projects.visibility` ('private' = owner only,
@@ -526,113 +500,6 @@ async function initDb() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications (user_id, created_at DESC) WHERE read_at IS NULL;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_id, created_at DESC);`);
-
-  // ---- Environment promotion history (append-only) ----
-  // `project_env_versions` above is deliberately a single overwritten row per
-  // (project, environment) — "what's live there right now." This table is
-  // its append-only companion: one row per promotion (or rollback) EVER made
-  // into an environment, never overwritten, so a bad promotion can be rolled
-  // back to a specific prior version instead of only ever moving forward.
-  // `data_enc`/`data_key_version` reuse the exact ciphertext already written
-  // to project_env_versions for that promotion — no re-encryption needed to
-  // keep history, since the AAD (`project-env:<id>:<env>`) only binds to
-  // project+environment, not to "current" vs "historical".
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS project_env_version_history (
-      id BIGSERIAL PRIMARY KEY,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      environment_id TEXT NOT NULL,
-      version INTEGER NOT NULL,
-      data_enc TEXT NOT NULL,
-      data_key_version INTEGER NOT NULL,
-      source_environment_id TEXT,
-      action TEXT NOT NULL DEFAULT 'promote' CHECK (action IN ('promote', 'rollback')),
-      rolled_back_from_id BIGINT REFERENCES project_env_version_history(id) ON DELETE SET NULL,
-      promoted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      promoted_by_username TEXT,
-      auto_mirrored BOOLEAN NOT NULL DEFAULT false,
-      promoted_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_env_version_history_lookup ON project_env_version_history (project_id, environment_id, promoted_at DESC);`);
-  // Release Pipeline v2 (see server/views/release-pipeline.html): a short,
-  // required note captured at promote/rollback time ("why", not "what" —
-  // the "what" is already derivable from the diff), plus a frozen snapshot
-  // of the breaking changes that were reviewed and acknowledged for THIS
-  // specific promotion. Both are denormalized onto the history row rather
-  // than recomputed later — recomputing would mean re-diffing against
-  // whatever the adjacent stage's content happens to be *now*, which drifts
-  // over time as further promotions land; the whole point of a commit-style
-  // history is that each entry stays an honest record of what was true at
-  // that moment.
-  await pool.query(`ALTER TABLE project_env_version_history ADD COLUMN IF NOT EXISTS release_note TEXT;`);
-  await pool.query(`ALTER TABLE project_env_version_history ADD COLUMN IF NOT EXISTS breaking_changes JSONB NOT NULL DEFAULT '[]';`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_env_version_history_project_feed ON project_env_version_history (project_id, promoted_at DESC);`);
-
-  // Migration path for databases created before 'prune' existed as an action
-  // (see POST /projects/:id/environments/:environmentId/prune-endpoints in
-  // workspace.js — pulls specific endpoints back out of one promoted
-  // environment without a full re-promotion) — widens the CHECK constraint
-  // the same way the 'custom' user role was added above.
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'project_env_version_history_action_check') THEN
-        ALTER TABLE project_env_version_history DROP CONSTRAINT project_env_version_history_action_check;
-      END IF;
-      ALTER TABLE project_env_version_history ADD CONSTRAINT project_env_version_history_action_check CHECK (action IN ('promote', 'rollback', 'prune'));
-    END $$;
-  `);
-
-  // ---- Promotion requests (Release Pipeline "protected branch" workflow) ----
-  // GitHub's branch-protection model requires a SECOND person to approve a
-  // merge into a protected branch — the person who opened the PR can't also
-  // approve it. This is the equivalent for environments flagged
-  // `requiresApproval` in org_workspace.environments (see getOrgEnvironments
-  // in workspace.js — a plain boolean on each environment object, editable
-  // from Your Profile ▸ Environments same as color/access): promoting
-  // straight into such a stage is refused by POST /promote, and the caller
-  // must instead open a request here for a DIFFERENT Admin to approve.
-  // Approving actually performs the promotion (see applyPromotion in
-  // workspace.js) — this table never holds the "live" state itself, only
-  // the pending/decided request envelope around one promotion.
-  // `diff_snapshot`/`breaking_changes` are captured at request time (same
-  // reasoning as project_env_version_history.breaking_changes — an honest
-  // record of what was true when requested) and re-validated by hash at
-  // approval time (see checkDiffToken's sibling, checkRequestStillFresh) so
-  // a request can't be silently approved against content that has since
-  // moved out from under it.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS project_promotion_requests (
-      id BIGSERIAL PRIMARY KEY,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      from_environment_id TEXT NOT NULL,
-      to_environment_id TEXT NOT NULL,
-      diff_hash TEXT NOT NULL,
-      diff_snapshot JSONB NOT NULL,
-      breaking_changes JSONB NOT NULL DEFAULT '[]',
-      ack_breaking_changes BOOLEAN NOT NULL DEFAULT false,
-      release_note TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
-      requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      requested_by_username TEXT,
-      decided_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      decided_by_username TEXT,
-      decision_note TEXT,
-      decided_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_promotion_requests_project ON project_promotion_requests (project_id, status, created_at DESC);`);
-  // At most one pending request per (project, target environment) at a time —
-  // mirrors "one open PR against a branch for a given change" closely enough
-  // for this app's needs, and avoids two Admins racing to approve conflicting
-  // requests into the same stage.
-  await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_promotion_request_pending_target
-    ON project_promotion_requests (project_id, to_environment_id)
-    WHERE status = 'pending';
-  `);
 
   // ---- Org-wide AI configuration (AI Studio) ----
   // One row per organisation. `api_key_enc` is the org's own LLM API key,
